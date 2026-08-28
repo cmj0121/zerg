@@ -85,7 +85,12 @@ other chapter relies on. Read it first.
 The scalar primitives every program starts from — `bool`, `byte`, `rune`, `int`, `uint`, `float`,
 `str` — and the **product** (`struct`) and **sum** (`enum`) types, tuples, and strong-typedefs you
 build on them: how a type is declared, constructed, and converted (always written, always by
-re-construction, never a reinterpret). See **[Types](core/types.md)**.
+re-construction, never a reinterpret).
+
+**A name never decides what a thing is.** What a name means is what declared it: `Point` is a type
+because a `struct Point` says so, and `pub` — never a spelling — is what exposes a declaration
+beyond its module. Case, leading underscores and the rest are the author's business, and the
+compiler enforces none of them. See **[Types](core/types.md)**.
 
 ## Specs & Generics
 

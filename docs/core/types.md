@@ -223,13 +223,20 @@ Unconstrained, an integer literal defaults to `int` and a fractional/exponent li
 
 Declare your own **product types** (`struct`) and **sum types** (`enum`), each generic over `[...]`.
 
-**A declared type's name begins with an upper-case letter** ([GRAMMAR#type-ident](../../GRAMMAR)), and
-that is a rule rather than a convention: the case of the first letter is the whole of how the language
-separates its two namespaces. `Point(1, 2)` constructs and `point(1, 2)` calls; `cli.Opt` qualifies a
-module and `It.Item` projects an associated type. Those are decided before any name is resolved, so a
-`struct lower` — or a `struct _Box`, since `_` has no case and is therefore in neither namespace — is
-refused at the declaration, as `E2060`. A **use** is not constrained the same way: the built-in type
-names (`int`, `str`, `list`, the fixed-width members) are lower case, and no declaration introduces one.
+**A declared type's name is an ordinary identifier** ([GRAMMAR#type-ident](../../GRAMMAR)): a name does
+not decide what a thing is. What makes `Point` a type is the `struct Point` that declared it, and what
+makes `point` one is a `struct point`; `struct _Box` is a type for the same reason. PascalCase for types
+is a **convention** this library follows and the compiler does not enforce.
+
+`Point(1, 2)` constructs and `point(1, 2)` calls because of what each name was **declared** as, not how
+it is spelled — the two share one namespace, so declaring `struct Fine` and `fn Fine` together is an
+error naming both, and at most one meaning of a name is ever in scope. A call to a name nothing declares
+is an undefined name (`E4016`); a call to a declared type that is not a `struct` says which kind it is
+(`E4064`).
+
+Until 0.2.0 the first letter WAS the rule, and it cost more than it bought: `fn Fine` was a legal
+declaration that could not be called, a type could not be named `_Box` for the accident that `_` has no
+case at all, and `point(1, 2)` was refused by naming a type the program had never written.
 
 **Visibility (`pub`)** — every declaration (a type, a field, a function) is **private to its module
 by default**; prefix it with `pub` to export it for use elsewhere. Mutability is a separate axis and

@@ -423,6 +423,33 @@ pub fn chk_ns_bound(mut &em: emit.Emitter, ns: str) {
 # `fn take(c: bogus.Counter)` and `fn make() -> bogus.Counter` all built and ran. The
 # expression side has always called that an undefined name; a type position was asking a
 # weaker question about the same text. It is the same rule and now the same sentence.
+# chk_assoc_projections refuses `It.Item` — a type projected out of a SPEC rather than named
+# inside a module (GRAMMAR#base-type). It is a form the language has and this compiler has not
+# built, and until the namespace rule retired it was refused in the PARSER, which told a spec
+# from a module by case: snake_case was a module, PascalCase a spec.
+#
+# A NAME NO LONGER DECIDES WHAT A THING IS, so the question moved to a layer that can look. It
+# reads `f.specs` rather than the emitter type table because of WHEN it has to run: the table
+# is filled after signatures resolve, and a signature is exactly where a projection is written
+# — `fn take(x: It.Item)` would already have reported _no type named `Item`_, the message a
+# misspelling gets, for a form GRAMMAR derives.
+pub fn chk_assoc_projections(mut &em: emit.Emitter, f: ast.File) {
+	for q in f.ty_quals {
+		continue if q.ns == ""
+
+		for sp in f.specs {
+			continue if sp.name != q.ns
+
+			# IT RAISES RATHER THAN COLLECTING. `c_build_sigs` runs next and RAISES _no type
+			# named `Item`_ on the same signature, and a raise ends the run — so a collected
+			# finding here would be gathered, discarded, and the reader would meet the
+			# misspelling message anyway. A refusal that spells its code into the sentence is
+			# what a raise is for, and the gates hold the code either way.
+			raise emit.c_diag_at(q.path, q.line, q.col, rule.Rule.NotYetAssocTypeProjection, f"NotImplemented: an associated type projection `{q.ns}.{q.member}` — GRAMMAR lets a spec name a type its implementer supplies and a signature project it, and this compiler has no associated types at all")
+		}
+	}
+}
+
 pub fn chk_ty_quals(mut &em: emit.Emitter, f: ast.File) {
 	for q in f.ty_quals {
 		em.at_path = q.path

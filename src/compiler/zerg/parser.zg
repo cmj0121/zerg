@@ -472,6 +472,18 @@ fn p_prelude_role(lx: str) -> str {
 # `<builtin>` is exempt because the toolchain's own injected source is not a program: the
 # emitter parses `spec Eq` and `spec Into` from a string (emit.zg's ZG_BUILTIN_SPECS) and it
 # is the very declaration this rule reserves the name for.
+# p_bound_is_concrete reports whether a type parameter's bound names a CONCRETE TYPE rather
+# than a spec — which is what makes the parameter a compile-time value (GRAMMAR#type-param).
+#
+# The concrete names a bound can spell are the built-in ones, and `p_prelude_role` already
+# knows them by name. The error carriers are deliberately NOT among them: `T: Err` is not a
+# value parameter in anybody's reading, and it answered "no spec named `Err`" before this
+# rule changed shape, which is the answer it should keep.
+fn p_bound_is_concrete(bound: str) -> bool {
+	role := p_prelude_role(bound)
+	return role == "a built-in scalar type" or role == "a built-in list alias" or role == "a built-in container type"
+}
+
 fn p_decl_name(mut &p: Parser, what: str) -> str {
 	return p_reserved_name(p, p_prelude_role(cur(p).lexeme), what)
 }
@@ -523,44 +535,20 @@ fn p_fn_name(mut &p: Parser, recv: str) -> str {
 	return p_reserved_name(p, p_prelude_callee_role(cur(p).lexeme), "a function")
 }
 
-# p_type_name is the name slot of a DECLARATION THAT INTRODUCES A TYPE — a struct, an enum,
-# a spec, a `type X = Y` (GRAMMAR#type-ident). It is p_decl_name plus the one rule that
-# separates the two namespaces this language has: a type's name begins with an UPPER-CASE
-# LETTER, and a value's does not.
+# p_type_name is the name slot of a DECLARATION THAT INTRODUCES A TYPE — a struct, an enum, a
+# spec, a `type X = Y` (GRAMMAR#type-ident). It is p_decl_name and nothing more.
 #
-# THAT RULE IS LEXICAL, AND EVERYTHING DEPENDS ON IT. `name_is_type` is how a construction is
-# told from a call, how `cli.Opt` the module qualifier is told from `It.Item` the associated
-# type, and how a generic bound naming a spec is told from one naming a concrete type. The
-# last two are asked by the PARSER, which has resolved nothing and has no table to consult —
-# so a `struct _Box` or a `struct lower` cannot be made to work by teaching the constructor
-# alone. It would be legal in one position and misread in three.
+# IT USED TO CARRY THE NAMESPACE RULE: a declared type's name had to begin with an upper-case
+# letter, and that one lexical fact told a construction from a call, `cli.Opt` from `It.Item`,
+# and a spec bound from a concrete one. The rule is retired — a name does not decide what a
+# thing is — and each of those three questions now goes to the place that has a table to
+# answer it. The comment that used to live here argued the parser could not do without it;
+# what it could not do without was an ANSWER, and it was asking the wrong layer for one.
 #
-# It used to be legal in NONE and said so wrongly: `_Box(1)` on a declared `struct _Box`
-# answered `E4016 undefined function`, which is false about the program — the name is a type,
-# and the reader declared it eight lines up. The seed builds all of them, so this is a
-# LANGUAGE decision rather than a gap: the upper-case letter is what the declaration owes,
-# and GRAMMAR#type-ident now derives it.
-#
-# A leading `_` is refused by the same rule and not by one of its own. `_` has no case, so it
-# is neither namespace, and a name that is in neither is exactly what this asks about.
-#
-# THE CASE RULE IS ASKED BEFORE THE PRELUDE ONE, and `struct list` is the name that decides
-# it: both rules are true of it, and only one of the two answers is a repair. PascalCasing a
-# lower-case prelude name leaves the prelude alone — `Int`, `List`, `Map`, `Str` and every
-# other one of them is a name p_prelude_role does not know — so the case rule's advice
-# satisfies both rules in one edit, while "pick another name" says nothing about the letter
-# and lets the second attempt be refused again for a reason the first refusal never mentioned.
-# The reverse order costs a round trip and buys nothing; a name that is BOTH gets the finding
-# that ends the matter.
-#
-# It reads the token WITHOUT consuming it, which is what lets it be asked first, and it asks
-# only of an identifier: a reserved word and a token that is no name at all are p_name's E2013
-# and E2054, and they arrive at a slot that has not been told a type is wanted yet.
+# The prelude rule below is untouched and is now the only thing this slot refuses. It used to
+# be asked second, and `struct list` was the name that noticed: both rules were true of it and
+# the case rule answered first. Now there is one rule and it is the one that is about the name.
 fn p_type_name(mut &p: Parser, what: str) -> str {
-	t := cur(p)
-
-	raise p_diag_at(p, t.line, t.col, rule.Rule.TypeNameNotUpper, f"`{t.lexeme}` cannot name {what} — a declared type's name begins with an UPPER-CASE LETTER (GRAMMAR#type-ident), which is how the language tells a type from a value: `{t.lexeme}(…)` would read as a call to a function of that name, and `{t.lexeme}.X` as a module qualifier. Write it in PascalCase") if p_at(p, token.Kind.Ident) and not token.name_is_type(t.lexeme)
-
 	return p_decl_name(p, what)
 }
 
@@ -806,15 +794,16 @@ fn parse_base_type(mut &p: Parser) -> ast.Ty {
 	# the parser consults is a symbol table.
 	mut quals: list[str] = []
 	for p_at(p, token.Kind.Dot) {
-		# AN ASSOCIATED TYPE IS NOT A MODULE QUALIFIER, and dropping the qualifier made them the
-		# same thing: `I.Item` PROJECTS a type the implementer of `I` supplies (GRAMMAR#base-type,
-		# chainable as `I.Item.Sub`), so keeping only `Item` left it reading as an undeclared
-		# type — the message a misspelling gets.
+		# AN ASSOCIATED TYPE IS NOT A MODULE QUALIFIER: `I.Item` PROJECTS a type the implementer
+		# of `I` supplies (GRAMMAR#base-type, chainable as `I.Item.Sub`), where `cli.Opt` names
+		# a type inside a module.
 		#
-		# The two are told apart by CASE, which the language already decides: a module is named
-		# by its directory and is snake_case, a spec is PascalCase. So `cli.Opt` is a qualifier
-		# and `It.Item` is a projection.
-		raise p_diag(p, rule.Rule.NotYetAssocTypeProjection, f"NotImplemented: an associated type projection `{name}.{peek_lexeme(p, 1)}` — GRAMMAR lets a spec name a type its implementer supplies and a signature project it, and this compiler has no associated types at all") if token.name_is_type(name)
+		# THE PARSER NO LONGER GUESSES WHICH. It used to tell them apart by CASE — a module is
+		# snake_case, a spec is PascalCase — and that retired with the namespace rule. The
+		# question needs to know whether `I` is a spec, which is a TABLE, and `layering` is
+		# explicit that an accumulator the parser consults is a symbol table. So the qualifier
+		# is recorded either way and the refusal is raised where the tables are, by
+		# `c_assoc_projection` in the emitter.
 
 		# THE QUALIFIER IS RESOLVED AWAY AND WRITTEN DOWN. Dropping it is right for
 		# resolution — the last segment IS the name here — and it is also the moment the
@@ -2669,9 +2658,16 @@ fn p_type_params(mut &p: Parser, mut &names: list[str], mut &bounds: list[str]) 
 			# a spec named `int` — and the call site `f[3]()` then reported "calling index",
 			# two steps from the form and naming neither the parameter nor the argument.
 			#
-			# Spec or concrete is told by CASE, the same distinction an associated type uses:
-			# a spec is PascalCase, and every concrete type this language spells is not.
-			raise p_diag(p, rule.Rule.NotYetValueGenericParam, f"NotImplemented: a value generic parameter `{nm}: {bound}` — GRAMMAR lets a concrete-type bound make a parameter a compile-time value (`fn f[N: int]`, applied as `f[3]()`), and this compiler has type parameters only") if not token.name_is_type(bound)
+			# SPEC OR CONCRETE IS TOLD BY THE PRELUDE, not by case. It used to be case — a spec
+			# was PascalCase and every concrete type this language spells is not — and that
+			# retired with the namespace rule. What replaces it is a TABLE the parser already
+			# consults for its own refusals: the concrete types a bound can name are the
+			# built-in ones, and `p_prelude_role` is what knows them.
+			#
+			# A bound naming anything else is a SPEC bound, exactly as before: a user type in
+			# that slot was read as a spec of that name then and is now, and the checker
+			# answers it the same way — _E3013 no spec named `MyStruct`_.
+			raise p_diag(p, rule.Rule.NotYetValueGenericParam, f"NotImplemented: a value generic parameter `{nm}: {bound}` — GRAMMAR lets a concrete-type bound make a parameter a compile-time value (`fn f[N: int]`, applied as `f[3]()`), and this compiler has type parameters only") if p_bound_is_concrete(bound)
 		}
 		names.append(nm)
 		bounds.append(bound)

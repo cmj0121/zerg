@@ -3414,6 +3414,18 @@ pub fn c_is_typedef(mut &em: Emitter, nm: str) -> bool {
 	return c_ty_kind(em, nm) == TK_TYPEDEF
 }
 
+# c_ty_kind_word names what a declared type IS, for a sentence that has to say so. It answers
+# the article with the word because every caller reads it mid-sentence.
+fn c_ty_kind_word(mut &em: Emitter, nm: str) -> str {
+	k := c_ty_kind(em, nm)
+
+	return "a spec" if k == TK_SPEC
+	return "an enum" if k == TK_ENUM
+	return "a type alias" if k == TK_TYPEDEF
+
+	return "a type"
+}
+
 fn c_is_spec_name(mut &em: Emitter, nm: str) -> bool {
 	return c_ty_kind(em, nm) == TK_SPEC
 }
@@ -3470,6 +3482,22 @@ pub fn c_scalar_repr(mut &em: Emitter, t: ast.Ty) -> ast.Ty {
 pub fn c_is_type_name(mut &em: Emitter, nm: str) -> bool {
 	k := c_ty_kind(em, nm)
 	return k == TK_STRUCT or k == TK_ENUM or k == TK_TYPEDEF
+}
+
+# c_names_a_type reports whether the PROGRAM declared a type of this name — a struct, an
+# enum, a spec or a `type X = Y`. It replaces the lexical test `token.name_is_type`, which
+# answered the same question from the first letter of the name.
+#
+# THE TABLE WAS ALWAYS HERE. `c_ty_kind` is the emitter's own record of every declared type
+# and answers TK_NONE for a name that is not one, so telling a construction from a call needs
+# no help from the spelling. What the case rule bought was an answer BEFORE resolution, which
+# the parser needed and this layer never did.
+#
+# A BUILT-IN TYPE NAME IS NOT IN IT, and must not be: `int(x)` is a conversion with its own
+# path, and `int` is a name no declaration introduces. TK_NONE keeps it on that path, which is
+# where it was when the test was lexical and `int` was lower-case.
+fn c_names_a_type(mut &em: Emitter, nm: str) -> bool {
+	return c_ty_kind(em, nm) != TK_NONE
 }
 
 fn c_is_struct_name(mut &em: Emitter, nm: str) -> bool {
@@ -5263,7 +5291,7 @@ fn c_place(mut &em: Emitter) -> str {
 # and the declaration carries its own. The other runs in a pass with no Emitter at all: the
 # `#[derive]` expansion is source-to-source and happens before one exists, so it takes no `em`
 # and answers from the declaration it is expanding.
-fn c_diag_at(path: str, line: int, col: int, code: rule.Rule, msg: str) -> str {
+pub fn c_diag_at(path: str, line: int, col: int, code: rule.Rule, msg: str) -> str {
 	return f"{rule.rule_code(code)} {msg}" + "\n" + ast.place_line(path, line, col)
 }
 
@@ -8084,7 +8112,7 @@ fn c_call(mut &em: Emitter, name: str, args: list[ast.Expr], sb: Subst) -> str {
 		c_not_callable(em, name, bt)
 	}
 
-	if token.name_is_type(name) {
+	if c_names_a_type(em, name) or c_is_variant(em, name) {
 		if c_is_variant(em, name) {
 			c_bare_variant(em, name)
 
@@ -8113,13 +8141,20 @@ fn c_call(mut &em: Emitter, name: str, args: list[ast.Expr], sb: Subst) -> str {
 			return c_typedef_conv(em, name, args[0], sb)
 		}
 
-		# A PascalCase call that names no declared type is not a constructor of anything.
-		# It used to emit a compound literal of that name anyway, which cc rejected against
-		# generated C.
+		# A DECLARED TYPE THAT IS NOT A STRUCT IS NOT CONSTRUCTED BY A CALL. Reaching here means
+		# the name IS a type — that is what the branch above asked — so a spec, or an enum with
+		# no such constructor, arrives with a shape only a struct answers.
+		#
+		# THE SENTENCE USED TO SAY THE TYPE DID NOT EXIST, which was true of the population it
+		# had when a name was a type BY ITS CAPITAL: any PascalCase call naming nothing landed
+		# here. Now an undeclared name is not a type at all and never reaches this branch — it
+		# is an undefined name at the call — so the old wording had become false about every
+		# case that is left: `S(1)` on a declared `spec S` reported that no type named `S`
+		# existed, eight lines under the declaration.
 		if not c_is_struct_name(em, name) {
 			c_builtin_check(em, name)
 
-			raise c_diag(em, rule.Rule.NoSuchTypeToConstruct, f"no type named `{name}` to construct")
+			raise c_diag(em, rule.Rule.NoSuchTypeToConstruct, f"`{name}` is {c_ty_kind_word(em, name)} and a call does not construct one — a construction names a `struct`")
 		}
 
 		# A CONSTRUCTION NAMES THE TYPE, which is the value position the declaration walk
@@ -9475,7 +9510,7 @@ fn c_infer_call(mut &em: Emitter, name: str, args: list[ast.Expr]) -> ast.Ty {
 	# type with a kind tag, which is what makes `e is ValueError` a comparison rather than a
 	# cast, and what lets a bound Err be re-raised or handed to `from`.
 	return ast.Ty.TErr if c_err_kind(name) > 0
-	return ast.Ty.TNamed(name) if token.name_is_type(name)
+	return ast.Ty.TNamed(name) if c_names_a_type(em, name)
 
 	# A BINDING HOLDING A FUNCTION answers the function type's result. `g := double; n :=
 	# g(21)` typed the call from the SIGNATURE table, which has no `g` in it, so the answer
@@ -14992,6 +15027,13 @@ fn c_emit_unit(prog0: ast.File, own0: ast.File, ms: Mods, whole: bool, want_lint
 	# the wrong thing. The pass that knows what the pair was gets to say it first.
 	c_build_intos(em, f)
 	c_build_impls(em, f)
+
+	# BEFORE THE SIGNATURES, because a signature is where a projection is written and
+	# `c_build_sigs` resolves `It.Item` down to a bare `Item` and reports _no type named
+	# `Item`_ — the message a misspelling gets. It reads `f.specs` rather than the type table
+	# for the same reason it runs here: the table is filled by `c_build_specs`, three passes
+	# further down, and the fact this needs is in the File already.
+	check.chk_assoc_projections(em, f)
 	c_build_sigs(em, f)
 	c_build_typedefs(em, f)
 	c_build_structs(em, f)

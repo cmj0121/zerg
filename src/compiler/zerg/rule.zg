@@ -91,7 +91,6 @@ pub enum Rule {
 	IsWantsTypeName = 2057
 	FStringTextMalformed = 2058
 	FStringHoleManyExprs = 2059
-	TypeNameNotUpper = 2060
 	PreludeNameAsName = 2061
 	DecoratorOnStatement = 2062
 	SecondDecorator = 2063

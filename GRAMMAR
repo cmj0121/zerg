@@ -134,7 +134,7 @@ identifier ::= ( letter | '_' ) ( letter | digit | '_' )*
 # together is an error naming both, so at most one of them is ever in scope.
 # THE PATTERN GRAMMAR ALREADY WORKED THIS WAY and is the precedent: 'capitalization was
 # never what decided this', so a variant pattern is told from a binding by the '.' and
-# the payload parentheses, and it parses without a symbol table.
+# the payload parentheses — by the shape written down, which is all this file describes.
 # A USE is not constrained either (type-name, group 4): the built-in type names —
 # 'int', 'uint', 'float', 'str', 'list', 'map', the fixed-width members — are stdlib
 # names in lower case, and no declaration in a program introduces them.

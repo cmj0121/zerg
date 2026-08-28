@@ -2375,13 +2375,24 @@ fn parse_decorator(mut &p: Parser, mut &pending: list[str]) {
 # to be scanned past and dropped, which cost more than it looks: `#[derive(Eq)]` on a type
 # meant nothing, so `==` on it either was refused or — on an enum — silently compared tags.
 fn parse_deco_item(mut &p: Parser, mut &pending: list[str]) {
-	name := cur(p).lexeme
+	# GRAMMAR#deco-item OPENS WITH AN `identifier`, and this read was `cur(p).lexeme` —
+	# whatever token happened to stand there. So every arm below asked its question of a
+	# string that was never a name, and the fall-through answered `NotImplemented: the
+	# decorator `#[…]``: E9005 says the form is Zerg and this compiler has not built it, and
+	# `#[42]`, `#[+]` and `#["derive"]` are not decorators in any Zerg. The worst of them
+	# quoted a decorator the source does not contain — a `#[` at a line end read the KEYWORD
+	# on the next line as the name and reported `#[struct]` — which is the defect the comment
+	# on p_deco_says was written about, one decorator over.
+	#
+	# `p_name` is the one name-slot rule (E2013 for a reserved word, E2054 for anything else),
+	# and it CONSUMES the name, which is why no arm below advances past it.
+	nt := cur(p)
+	name := p_name(p, "a decorator")
 
 	# `#[obj]` takes no arguments and goes on a `spec`. It rides the same pending list as a
 	# derive, under a marker no spec name can be — a `#` is not an identifier character — so
 	# the two never compete for a name while sharing one attachment mechanism.
 	if name == "obj" {
-		p_advance(p)
 		pending.append("#obj")
 		return
 	}
@@ -2395,7 +2406,6 @@ fn parse_deco_item(mut &p: Parser, mut &pending: list[str]) {
 	# seed has recognised it since 1i. Refusing it here would have made `zerg` the compiler
 	# that cannot read its own test files.
 	if name == "test" {
-		p_advance(p)
 		pending.append("#test")
 		return
 	}
@@ -2404,7 +2414,6 @@ fn parse_deco_item(mut &p: Parser, mut &pending: list[str]) {
 	# the same reason as `#[test]`: it names a function `zerg test` calls and `zerg build` never
 	# reaches, so it too has to reach a parse somewhere.
 	if name == "fixture" {
-		p_advance(p)
 		pending.append("#fixture")
 		return
 	}
@@ -2420,8 +2429,7 @@ fn parse_deco_item(mut &p: Parser, mut &pending: list[str]) {
 	# An empty list after it is therefore exactly true, and it is what lets `#[allow(…)]` lead
 	# a statement while `#[derive(…)]` may not.
 	if name == "allow" {
-		at := cur(p)
-		p_advance(p)
+		at := nt
 
 		# `#[allow]` and `#[allow()]` SUPPRESS NOTHING while reading as though they suppressed
 		# something — E4051's argument one decorator over, and the same answer.
@@ -2447,13 +2455,9 @@ fn parse_deco_item(mut &p: Parser, mut &pending: list[str]) {
 	# compiler "reads `#[derive(…)]` and `#[obj]`, and no other" answers a question they did
 	# not ask. What they need to know is that the word is the right one and the behaviour is
 	# not built, so nothing is protecting the constructor they thought they had sealed.
-	nt := cur(p)
-
 	raise p_diag_at(p, nt.line, nt.col, rule.Rule.NotYetSealed, f"NotImplemented: the decorator `#[sealed]` — it is a reserved decorator (GRAMMAR group 7 gives it a meaning: the field-wise `T(…)` constructor becomes module-private) and this compiler does not build it, so the constructor stays public rather than being sealed in silence") if name == "sealed"
 
 	raise p_diag(p, rule.Rule.NotYetDecorator, f"NotImplemented: the decorator `#[{name}]` — this compiler reads `#[derive(…)]`, `#[obj]`, `#[test]`, `#[fixture]` and `#[allow(…)]`, and no other") if name != "derive"
-
-	p_advance(p)
 
 	# `#[derive]` AND `#[derive()]` ASK FOR NOTHING, and were given it: the arguments are what
 	# a derive IS — the specs to generate — so a bare one was read, dropped, and the type went

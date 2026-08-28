@@ -80,7 +80,11 @@ Phase-1 bootstrap 實作其子集，所以每個特性都帶一個**狀態標記
 
 每個程式起步的純量 primitive——`bool`、`byte`、`rune`、`int`、`uint`、`float`、`str`——以及你在其上建立的**積型別**
 （`struct`）與**和型別**（`enum`）、tuple 與 strong-typedef：一個型別如何宣告、建構,以及如何轉換（一律寫出來、一律
-re-construction、絕不 reinterpret）。見 **[型別](core/types.zh-TW.md)**。
+re-construction、絕不 reinterpret）。
+
+**名字永遠不決定一個東西是什麼。** 一個名字的意思,是宣告它的那個東西給的:`Point` 是型別,因為有一個 `struct Point`
+這麼說;而把一個宣告露出到 module 之外的是 `pub`,不是任何一種拼法。大小寫、前導底線之類都是作者自己的事,編譯器
+一條都不強制。見 **[型別](core/types.zh-TW.md)**。
 
 ## Spec 與 Generics（Specs & Generics）
 

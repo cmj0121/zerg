@@ -466,6 +466,8 @@ list-pat-elem ::= pattern | '..' identifier?
   and which of them a bare name meant was decided by whatever happened to be in scope, so declaring a variant
   in one file could silently change what a pattern in another file matched. Names are **case-free**, and
   capitalization was never what decided this. The pattern grammar therefore parses without a symbol table.
+  Since 0.2.0 that is true of the whole language rather than of patterns alone: a declared type's name is
+  an ordinary identifier, and what a name means is what declared it ([Types](../core/types.md)).
 - **The qualification must be true.** `Color.Apple` names a variant of another enum and is an error — and now
   it can only be an error, never a fresh binding. So is `Nope.Red`, whose qualifier names no enum at all:
   the first is _E4018_ and the second _E4074_, because what is checked is the NAME that was written and

@@ -132,12 +132,6 @@ jobs:
       # A `[deviation]` is the specification saying the compiler does something else and we
       # know. The failure mode this guards is not the marker, it is the silence: a release
       # that meets "no deviations" by deleting markers rather than by fixing compilers.
-      # `productions` asks whether every form PARSES; this asks whether the ones this compiler
-      # builds actually RUN. The refusal side of the language had a ledger end to end and the
-      # built side had a corpus with nothing mapping it to the surface.
-      - name: Every form this compiler builds has a program that runs it
-        run: make behaviour
-
       - name: Every deviation names a ticket, and the inherited list is honest
         run: make deviation-check
 
@@ -414,6 +408,18 @@ jobs:
       - name: Every GRAMMAR production is read, or refused by name
         if: steps.corpus_fetch.outputs.available == 'true'
         run: make productions
+
+      # --- 7c''. and the ones it BUILDS run ---------------------------------------
+      #
+      # `productions` above is the AST stage and says so in its own summary; this is the half
+      # that runs the form. It sits HERE, behind `corpus_fetch`, and not in the docs job where
+      # it was first written: that job never fetches the corpus, so the gate reported
+      # "test-data/behaviour is not there — nothing checked", exited 0, and turned green on its
+      # first CI run having measured nothing. The absent-corpus exit is right for a private
+      # submodule and is exactly why the step has to be where the corpus is.
+      - name: Every form this compiler builds has a program that runs it
+        if: steps.corpus_fetch.outputs.available == 'true'
+        run: make behaviour
 
       # --- 7c'''. and what GRAMMAR does NOT derive is refused ---------------------
       # Every step above asks about programs that ARE Zerg, so none of them can see an

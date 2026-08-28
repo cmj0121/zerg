@@ -63,11 +63,13 @@ DIR=${DIR:-test-data/counterexamples}
 # assertion is per-case, so an empty corpus passes them all — that is what MIN_CASES is for.
 # And a corpus that kept its case count while collapsing onto one production would still
 # answer "what does GRAMMAR#tuple-lit refuse" for exactly one production, which is what
-# MIN_PRODUCTIONS is for. 40 cases over 30 productions, against the 57 over 44 written the
-# day this gate landed — the gap is room to retire a case whose rule moved, and nowhere near
-# the handful a wrong-commit or shallow checkout leaves behind.
-MIN_CASES=${MIN_CASES:-40}
-MIN_PRODUCTIONS=${MIN_PRODUCTIONS:-30}
+# MIN_PRODUCTIONS is for. 100 cases over 90 productions, against the 129 over 114 the corpus
+# holds after the coverage pass — the gap is room to retire cases whose rule moved, and
+# nowhere near the handful a wrong-commit or shallow checkout leaves behind. They were 40 and
+# 30 when the corpus was 57 over 44, and a floor left at a third of the corpus is a floor that
+# stops catching the thing it is for.
+MIN_CASES=${MIN_CASES:-100}
+MIN_PRODUCTIONS=${MIN_PRODUCTIONS:-90}
 
 # The corpus is a private submodule, so an absent one is not a failure — it is a checkout
 # that did not ask for it. The floors above are what catch a directory that IS there and
@@ -203,6 +205,77 @@ for d in "$DIR"/*/; do
 	done
 done
 
+# --- every production is ASKED ABOUT, and not merely every directory named ---------------
+#
+# The loop above holds each DIRECTORY to a production. That is one direction, and the open
+# one was the direction that mattered: a production with no directory was not asked about at
+# all, and 130 of 176 were in that state while this gate reported its case count and looked
+# healthy. The INVENTORY closes it — every production has a row, and a row that is not `has`
+# says WHY, in a form this gate can re-confirm.
+INVENTORY=${INVENTORY:-$DIR/INVENTORY}
+if [ ! -f "$INVENTORY" ]; then
+	echo "counterexample-check: $INVENTORY is not there — a corpus with no inventory explains no absence"
+	fail=$((fail + 1))
+else
+	inv_tmp=$(mktemp -d)
+	grep -v '^#' "$INVENTORY" | grep . | cut -f1 | sort -u >"$inv_tmp/rows"
+	comm -23 "$tmp/productions" "$inv_tmp/rows" >"$inv_tmp/missing"
+	comm -13 "$tmp/productions" "$inv_tmp/rows" >"$inv_tmp/extra"
+	if [ -s "$inv_tmp/missing" ]; then
+		echo "counterexample-check: a production with no row — nothing says whether it has a counterexample:"
+		sed 's/^/          /' "$inv_tmp/missing"
+		fail=$((fail + 1))
+	fi
+	if [ -s "$inv_tmp/extra" ]; then
+		echo "counterexample-check: a row naming no production:"
+		sed 's/^/          /' "$inv_tmp/extra"
+		fail=$((fail + 1))
+	fi
+
+	while IFS='	' read -r iname iverdict idetail; do
+		case "$iname" in '' | '#'*) continue ;; esac
+		case "$iverdict" in
+		has)
+			if [ ! -d "$DIR/$iname" ]; then
+				echo "counterexample-check: $iname says \`has\` and there is no directory of cases"
+				fail=$((fail + 1))
+			fi
+			;;
+		refused)
+			# RE-CONFIRMED AGAINST THE COMPILER, so a form that starts being BUILT fails here.
+			sample="test-data/productions/$iname.zg"
+			if [ ! -f "$sample" ]; then
+				echo "counterexample-check: $iname says \`refused\` and $sample is not there to be refused"
+				fail=$((fail + 1))
+			else
+				got=$("$ZERG" build --emit ast "$sample" 2>&1 >/dev/null | grep -oE 'E[0-9]{4}' | head -1)
+				[ -n "$got" ] || got=$("$ZERG" build --emit check "$sample" 2>&1 | grep -oE 'E[0-9]{4}' | head -1)
+				if [ -z "$got" ]; then
+					echo "counterexample-check: $iname says \`refused\` ($idetail) and the compiler accepts it — give it cases"
+					fail=$((fail + 1))
+				elif [ "$got" != "$idetail" ]; then
+					echo "counterexample-check: $iname says \`refused\` with $idetail and the compiler answers $got"
+					fail=$((fail + 1))
+				fi
+			fi
+			;;
+		spelled-by | no-boundary)
+			# THE POINTER MUST RESOLVE. A row that sends a reader to a production GRAMMAR does
+			# not derive is the same stale citation `grammar-cites` exists for.
+			if ! grep -qx "$idetail" "$tmp/productions"; then
+				echo "counterexample-check: $iname says \`$iverdict $idetail\` and $idetail is not a production"
+				fail=$((fail + 1))
+			fi
+			;;
+		*)
+			echo "counterexample-check: $iname has the verdict \`$iverdict\`, which is none of the four"
+			fail=$((fail + 1))
+			;;
+		esac
+	done < <(grep -v '^#' "$INVENTORY" | grep .)
+	rm -rf "$inv_tmp"
+fi
+
 n=$((refused + late + open))
 
 if [ "$n" -lt "$MIN_CASES" ]; then
@@ -230,5 +303,13 @@ echo "counterexample-check: $n programs GRAMMAR does not derive over $prods prod
 # think of, and there is no mechanical way to know a production has run out of them. So the
 # number above is a floor on the work, never a claim about the grammar, and a reader who is
 # told "46 productions" without the denominator will hear the second thing. Print it.
+# NO SILENT CAP, and the shape of it changed. This line used to say "N of 176 productions have
+# no counterexample — a near-miss of one is unchecked", which was true and is no longer the
+# whole truth: every one of those N now carries a row saying WHY, and three of the four reasons
+# are permanent. What is worth printing is the split, so a reader can see that the only number
+# which can shrink is the one that should.
 all_prods=$(grep -c . "$tmp/productions" || true)
-echo "counterexample-check: $((all_prods - prods)) of $all_prods productions have no counterexample — a near-miss of one is unchecked"
+if [ -f "$INVENTORY" ]; then
+	inv_n() { grep -v '^#' "$INVENTORY" | grep -c "	$1	*" || true; }
+	echo "counterexample-check: $all_prods productions — $(inv_n has) have cases, $(inv_n refused) are refused forms, $(inv_n spelled-by) are atoms of a token that has them, $(inv_n no-boundary) have no edge of their own"
+fi

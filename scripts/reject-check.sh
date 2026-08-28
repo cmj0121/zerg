@@ -7137,45 +7137,6 @@ EOF
 # is resolved and there is no table to consult. So a lower-case type name cannot be made to
 # work by teaching the constructor alone: it would be legal in one position and misread in
 # three.
-#
-# It used to be legal in NONE and said so wrongly. `_Box(1)` on a declared `struct _Box`
-# answered `E4016 undefined function`, which is false about a program that declares the type
-# eight lines up — the constructor dispatch is `name_is_type`, and `_` is not upper-case.
-# The leading underscore needs no rule of its own: `_` has no case, so a name that starts
-# with one is in neither namespace, which is exactly what this asks about.
-#
-# The seed resolves the name against its symbol table and builds all three (`seed-gap`).
-reject a-struct-named-with-a-leading-underscore E2060 '`_Box` cannot name a struct' seed-gap <<'EOF'
-struct _Box {
-	pub v: int
-}
-
-fn main() {
-	b := _Box(1)
-	print b.v
-}
-EOF
-
-reject a-struct-named-in-lower-case E2060 '`lower` cannot name a struct' seed-gap <<'EOF'
-struct lower {
-	pub v: int
-}
-
-fn main() {
-	b := lower(1)
-	print b.v
-}
-EOF
-
-reject an-enum-named-with-a-leading-underscore E2060 '`_E` cannot name an enum' seed-gap <<'EOF'
-enum _E {
-	A
-}
-
-fn main() {
-	print int(_E.A)
-}
-EOF
 
 
 # --- the emitter's own rules, one case per code -------------------------------------------
@@ -7618,9 +7579,25 @@ fn main() {
 }
 EOF
 
-reject construct-a-name-no-declaration-carries E4064 <<'EOF'
+# A NAME NO DECLARATION CARRIES is an undefined NAME, and the call shape is what it is met by.
+# It used to be `E4064 no type named Zork to construct`, because a capital made a name a type
+# before anything was resolved; with the namespace rule retired, `Zork` is a type only if the
+# program declared one, so a call to nothing is the same finding whatever the letter.
+reject construct-a-name-no-declaration-carries E4016 'undefined function `Zork`' <<'EOF'
 fn main() {
 	print Zork(1)
+}
+EOF
+
+# AND `E4064` KEPT A POPULATION, which is why it did not retire with the rule: reaching it now
+# means the name IS a declared type and a call is not how one of THAT kind is built.
+reject construct-a-spec E4064 '`S` is a spec' <<'EOF'
+spec S {
+	fn f() -> int
+}
+
+fn main() {
+	print S(1)
 }
 EOF
 
@@ -7895,14 +7872,12 @@ fn main() {
 }
 EOF
 
-# AND `struct list` IS BOTH — a prelude name and a lower-case one — so it is the case that
-# pins WHICH of the two rules answers. The case rule does, and that is a decision rather than
-# an accident: PascalCasing a lower-case prelude name leaves the prelude alone (`List` is a
-# name the reserved set does not hold, and so is every other one of them), so `E2060`'s advice
-# clears both rules in one edit where `E2061`'s — pick another name — says nothing about the
-# letter and lets the second attempt be refused again for a reason the first never mentioned.
-# Swap the two and this case reports `E2061`.
-reject a-lower-case-prelude-name-at-a-type-declaration E2060 'begins with an UPPER-CASE LETTER' at=1:8 <<'EOF'
+# AND `struct list` USED TO BE BOTH — a prelude name and a lower-case one — so it was the case
+# that pinned WHICH of two rules answered, and the case rule answered first. There is one rule
+# now. `E2060` retired with the namespace rule it enforced, and what refuses this is `E2061`,
+# which is about the NAME rather than about its first letter: `list` is taken, and PascalCasing
+# it was only ever advice about a rule that no longer exists.
+reject a-lower-case-prelude-name-at-a-type-declaration E2061 'is a prelude name' at=1:8 <<'EOF'
 struct list {
 	pub n: int
 }

@@ -259,7 +259,33 @@ else
 				fi
 			fi
 			;;
-		spelled-by | no-boundary)
+		no-boundary)
+			# A NO-BOUNDARY CLAIM IS CHECKABLE: a production that derives exactly what its
+			# alternatives derive carries no terminal of its own. Five rows written by hand
+			# said `no-boundary` over a right-hand side holding `??`, `<-`, `.`, `fn` and `|`,
+			# and every one of those is an edge a program can miss. `keyword-set` is the
+			# verdict for an alternation over reserved words, which carries terminals and
+			# still has no near-miss — another word is a valid identifier.
+			if grammar_productions "$GRAMMAR" | awk -F'\t' -v n="$iname" '$1 == n { print $2 }' | grep -qE "'[^']*'|\\["; then
+				echo "counterexample-check: $iname says \`no-boundary\` and its right-hand side carries a terminal — it has an edge, or it is a \`keyword-set\`"
+				fail=$((fail + 1))
+			fi
+			if ! grep -qx "$idetail" "$tmp/productions"; then
+				echo "counterexample-check: $iname says \`$iverdict $idetail\` and $idetail is not a production"
+				fail=$((fail + 1))
+			fi
+			;;
+		keyword-set)
+			# NO DETAIL, because there is nowhere to point. A `spelled-by` row names the token
+			# whose case covers it; a keyword set has no such neighbour — the near-miss of
+			# `'true' | 'false'` is another word, and another word is a valid identifier
+			# reported as an undefined name. Requiring a pointer here would mean inventing one.
+			if [ -n "$idetail" ]; then
+				echo "counterexample-check: $iname says \`keyword-set $idetail\` — a keyword set points nowhere"
+				fail=$((fail + 1))
+			fi
+			;;
+		spelled-by)
 			# THE POINTER MUST RESOLVE. A row that sends a reader to a production GRAMMAR does
 			# not derive is the same stale citation `grammar-cites` exists for.
 			if ! grep -qx "$idetail" "$tmp/productions"; then

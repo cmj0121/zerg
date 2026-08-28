@@ -213,6 +213,9 @@ done
 # healthy. The INVENTORY closes it — every production has a row, and a row that is not `has`
 # says WHY, in a form this gate can re-confirm.
 INVENTORY=${INVENTORY:-$DIR/INVENTORY}
+
+# inv_verdict <production> — the verdict its row carries, or nothing if it has no row.
+inv_verdict() { grep -v '^#' "$INVENTORY" | awk -F'\t' -v n="$1" '$1 == n { print $2 }'; }
 if [ ! -f "$INVENTORY" ]; then
 	echo "counterexample-check: $INVENTORY is not there — a corpus with no inventory explains no absence"
 	fail=$((fail + 1))
@@ -263,11 +266,11 @@ else
 			# A NO-BOUNDARY CLAIM IS CHECKABLE: a production that derives exactly what its
 			# alternatives derive carries no terminal of its own. Five rows written by hand
 			# said `no-boundary` over a right-hand side holding `??`, `<-`, `.`, `fn` and `|`,
-			# and every one of those is an edge a program can miss. `keyword-set` is the
-			# verdict for an alternation over reserved words, which carries terminals and
-			# still has no near-miss — another word is a valid identifier.
+			# and every one of those is an edge a program can miss. `near-miss-of` is the
+			# verdict for a right-hand side that carries terminals and still has no near-miss,
+			# because a miss of it is a derivation of the production it names.
 			if grammar_productions "$GRAMMAR" | awk -F'\t' -v n="$iname" '$1 == n { print $2 }' | grep -qE "'[^']*'|\\["; then
-				echo "counterexample-check: $iname says \`no-boundary\` and its right-hand side carries a terminal — it has an edge, or it is a \`keyword-set\`"
+				echo "counterexample-check: $iname says \`no-boundary\` and its right-hand side carries a terminal — it has an edge, or it is a \`near-miss-of\`"
 				fail=$((fail + 1))
 			fi
 			if ! grep -qx "$idetail" "$tmp/productions"; then
@@ -275,13 +278,24 @@ else
 				fail=$((fail + 1))
 			fi
 			;;
-		keyword-set)
-			# NO DETAIL, because there is nowhere to point. A `spelled-by` row names the token
-			# whose case covers it; a keyword set has no such neighbour — the near-miss of
-			# `'true' | 'false'` is another word, and another word is a valid identifier
-			# reported as an undefined name. Requiring a pointer here would mean inventing one.
-			if [ -n "$idetail" ]; then
-				echo "counterexample-check: $iname says \`keyword-set $idetail\` — a keyword set points nowhere"
+		near-miss-of)
+			# A MISS OF THIS PRODUCTION IS A DERIVATION OF THAT ONE, so there is no malformed
+			# program to write and the boundary is tested where the miss lands. This was
+			# `keyword-set`, which said the same thing about one neighbour and could not say it
+			# about any other: the near-miss of `'true' | 'false'` is another word and another
+			# word is a valid `identifier`, and by exactly that argument the near-miss of
+			# `'##' [^\n]*` is a `#`, which is a valid `COMMENT`. One idea, so one verdict, and
+			# naming the neighbour is what makes it checkable rather than an assertion.
+			if ! grep -qx "$idetail" "$tmp/productions"; then
+				echo "counterexample-check: $iname says \`$iverdict $idetail\` and $idetail is not a production"
+				fail=$((fail + 1))
+				continue
+			fi
+
+			# AND THE NEIGHBOUR MUST HAVE THE CASES. Pointing at a production that is itself
+			# excused moves the boundary somewhere nobody tests it.
+			if [ "$(inv_verdict "$idetail")" != "has" ]; then
+				echo "counterexample-check: $iname says \`near-miss-of $idetail\` and $idetail has no cases of its own — the boundary lands where nothing tests it"
 				fail=$((fail + 1))
 			fi
 			;;
@@ -290,6 +304,22 @@ else
 			# not derive is the same stale citation `grammar-cites` exists for.
 			if ! grep -qx "$idetail" "$tmp/productions"; then
 				echo "counterexample-check: $iname says \`$iverdict $idetail\` and $idetail is not a production"
+				fail=$((fail + 1))
+				continue
+			fi
+
+			# AND IT MUST POINT AT THE TOKEN THAT SPELLS IT. Resolving was the whole of the
+			# check, so the claim itself — this atom is a piece of that token, and the near-miss
+			# is therefore that token to write — went unread: three rows named a production that
+			# does not mention them. `COMMENT spelled-by stmt-sep` over `stmt-sep ::= NEWLINE |
+			# ";"`, `DOC-COMMENT spelled-by COMMENT`, and `keyword spelled-by identifier` — the
+			# last of which is backwards, since `keyword` is exactly what an identifier may NOT
+			# be. All three had a counterexample waiting to be written. A token that spells an
+			# atom names it on its right-hand side; if it does not, the pointer is decoration.
+			if ! grammar_productions "$GRAMMAR" |
+				awk -F'\t' -v n="$idetail" '$1 == n { print $2 }' |
+				grep -qE "(^|[^A-Za-z0-9-])$iname([^A-Za-z0-9-]|$)"; then
+				echo "counterexample-check: $iname says \`spelled-by $idetail\` and $idetail does not mention it — the atom is not part of that token"
 				fail=$((fail + 1))
 			fi
 			;;
@@ -336,6 +366,16 @@ echo "counterexample-check: $n programs GRAMMAR does not derive over $prods prod
 # which can shrink is the one that should.
 all_prods=$(grep -c . "$tmp/productions" || true)
 if [ -f "$INVENTORY" ]; then
-	inv_n() { grep -v '^#' "$INVENTORY" | grep -c "	$1	*" || true; }
-	echo "counterexample-check: $all_prods productions — $(inv_n has) have cases, $(inv_n refused) are refused forms, $(inv_n spelled-by) are atoms of a token that has them, $(inv_n no-boundary) have no edge of their own"
+	# THE SPLIT IS DERIVED, NOT LISTED. This line named four verdicts and the file held five,
+	# so `keyword-set`'s rows were in the total and in none of the buckets — a summary that
+	# does not add up, which is the shape of every finding this gate has made. The verdicts
+	# come out of the file and the sum is asserted against the grammar.
+	verdicts=$(grep -v '^#' "$INVENTORY" | grep . | cut -f2 | sort | uniq -c |
+		awk '{ printf "%s%s %s", sep, $1, $2; sep = ", " } END { print "" }')
+	rows=$(grep -v '^#' "$INVENTORY" | grep -c . || true)
+	echo "counterexample-check: $all_prods productions — $verdicts"
+	if [ "$rows" -ne "$all_prods" ]; then
+		echo "counterexample-check: $rows rows for $all_prods productions — the split does not add up"
+		exit 1
+	fi
 fi

@@ -8,7 +8,7 @@ is never silently ignored. Each decorator binds to the statement that follows it
 
 ## Shape
 
-Three rules hold for every decorator, whatever it names.
+Four rules hold for every decorator, whatever it names.
 
 - **It leads a statement**, and a declaration is one — so `#[derive(Eq)]` above a `struct` and
   `#[allow(L103)]` above a binding are the same form (`statement`, `decorated-decl`,
@@ -22,6 +22,12 @@ Three rules hold for every decorator, whatever it names.
   to remove, and it cannot remove one once both are legal.
 - **It stands on its own line.** A decorator is an item of the statement list like any other, so a
   separator divides it from what it leads; `#[derive(Eq)] struct P` on one line is not a form.
+- **It names a name.** The slot between `#[` and `]` is an `identifier` (`deco-item`,
+  [`GRAMMAR`](../../GRAMMAR) group 7), so a token that is not one is refused as a **name** and not as an
+  unknown decorator — `#[42]` is _E2054 a decorator needs a name, and `42` is not one_, and `#[mut]` is
+  _E2013 `mut` is a reserved word and cannot name a decorator_. The two answers are different on purpose:
+  the unknown-decorator arm below reports **NotImplemented**, and telling a reader who wrote `#[+]` that
+  this compiler does not build that decorator names a form no Zerg has.
 
 ## The set
 

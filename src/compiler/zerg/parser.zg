@@ -410,7 +410,7 @@ pub fn reserved_word(lx: str) -> bool {
 # `what` names the slot, because one code covers every one of them and a reader who meets it
 # has to be told which name the parser was waiting for.
 fn p_not_a_name(mut &p: Parser, what: str) -> str {
-	return p_diag(p, rule.Rule.NameExpected, f"{what} needs a name, and `{cur(p).lexeme}` is not one")
+	return p_diag(p, rule.Rule.NameExpected, f"{what} needs a name, and `{token.says(cur(p))}` is not one")
 }
 
 fn p_name(mut &p: Parser, what: str) -> str {
@@ -560,7 +560,7 @@ fn p_type_name(mut &p: Parser, what: str) -> str {
 # name, a `chan` with no element type, an unclosed `{`. The first complaint came from cc,
 # about a file under .zerg-cache, and it named nothing the programmer had written.
 fn expect(mut &p: Parser, k: token.Kind) {
-	raise p_diag(p, rule.Rule.ExpectedFound, f"expected `{token.kind_name(k)}`, found `{cur(p).lexeme}`") if not p_at(p, k)
+	raise p_diag(p, rule.Rule.ExpectedFound, f"expected `{token.kind_name(k)}`, found `{token.says(cur(p))}`") if not p_at(p, k)
 	p_advance(p)
 }
 
@@ -589,7 +589,7 @@ fn p_stmt_sep(mut &p: Parser, end: token.Kind) {
 	return if p.pos != at or p_at(p, end) or p_at(p, token.Kind.Eof)
 
 	t := cur(p)
-	raise p_diag_at(p, t.line, t.col, rule.Rule.ExpectedStatementEnd, f"expected a newline or `;` to separate statements, found `{t.lexeme}`")
+	raise p_diag_at(p, t.line, t.col, rule.Rule.ExpectedStatementEnd, f"expected a newline or `;` to separate statements, found `{token.says(t)}`")
 }
 
 # ident_name extracts the identifier spelling from an EIdent expression (the assignment
@@ -1204,7 +1204,7 @@ pub fn parse_at(src: str, path: str) -> ast.File {
 		# refusal hung off the arms that do not want one — the arms are nine and the rule is
 		# one. `pub` is already consumed because a decorator LEADS it (GRAMMAR#decorated-decl),
 		# and `Hash` is allowed through so decorators stack.
-		raise p_diag_at(p, deco_line, deco_col, rule.Rule.DecoratorOnNonType, f"`{p_deco_says(pending[0])}` applies to the {p_deco_leads(pending)} that follows it, and what follows is `{cur(p).lexeme}` — a decorator changes what a DECLARATION means, so it may not lead one it has nothing to say about") if pending.len() > 0 and not p_deco_may_lead(p, pending)
+		raise p_diag_at(p, deco_line, deco_col, rule.Rule.DecoratorOnNonType, f"`{p_deco_says(pending[0])}` applies to the {p_deco_leads(pending)} that follows it, and what follows is `{token.says(cur(p))}` — a decorator changes what a DECLARATION means, so it may not lead one it has nothing to say about") if pending.len() > 0 and not p_deco_may_lead(p, pending)
 
 		if p_at(p, token.Kind.Import) {
 			# a re-export puts the marker on the import-spec (GRAMMAR#import-spec), so a leading
@@ -1961,14 +1961,14 @@ fn parse_spec(mut &p: Parser, is_pub: bool) -> ast.SpecDecl {
 		} else if p_at(p, token.Kind.Type) {
 			raise p_diag(p, rule.Rule.AssocTypeNotSpecMember, "an associated type is not a `spec` member — a spec carries BEHAVIOUR and nothing else (GRAMMAR#spec-member), so `type Item` names a type nothing here binds. Take the type as a parameter of the spec instead")
 		} else if p_at(p, token.Kind.Ident) and peek_kind(p, 1) == token.Kind.Colon {
-			raise p_diag(p, rule.Rule.AssocValueNotSpecMember, f"an associated value is not a `spec` member — a spec carries BEHAVIOUR and nothing else (GRAMMAR#spec-member), so `{cur(p).lexeme}: T` asks each impl for a constant nothing here binds. A per-type constant is an `impl` item")
+			raise p_diag(p, rule.Rule.AssocValueNotSpecMember, f"an associated value is not a `spec` member — a spec carries BEHAVIOUR and nothing else (GRAMMAR#spec-member), so `{token.says(cur(p))}: T` asks each impl for a constant nothing here binds. A per-type constant is an `impl` item")
 		} else {
 			# ANYTHING ELSE IS NOT A MEMBER, and this used to advance one token and carry on.
 			# `spec Buf { SIZE := 4096 }` was therefore accepted in silence and the member
 			# vanished: no impl had to supply it, and nothing said so. A spec's members are
 			# what GRAMMAR#spec-member derives, and a token that starts none of them is the
 			# program saying something this language has no room for.
-			raise p_diag(p, rule.Rule.SpecMemberNeitherSigNorBody, f"`{cur(p).lexeme}` does not start a `spec` member — a spec carries BEHAVIOUR (GRAMMAR#spec-member): a required signature, or a provided method")
+			raise p_diag(p, rule.Rule.SpecMemberNeitherSigNorBody, f"`{token.says(cur(p))}` does not start a `spec` member — a spec carries BEHAVIOUR (GRAMMAR#spec-member): a required signature, or a provided method")
 		}
 		skip_semis(p)
 	}
@@ -2375,13 +2375,24 @@ fn parse_decorator(mut &p: Parser, mut &pending: list[str]) {
 # to be scanned past and dropped, which cost more than it looks: `#[derive(Eq)]` on a type
 # meant nothing, so `==` on it either was refused or — on an enum — silently compared tags.
 fn parse_deco_item(mut &p: Parser, mut &pending: list[str]) {
-	name := cur(p).lexeme
+	# GRAMMAR#deco-item OPENS WITH AN `identifier`, and this read was `cur(p).lexeme` —
+	# whatever token happened to stand there. So every arm below asked its question of a
+	# string that was never a name, and the fall-through answered `NotImplemented: the
+	# decorator `#[…]``: E9005 says the form is Zerg and this compiler has not built it, and
+	# `#[42]`, `#[+]` and `#["derive"]` are not decorators in any Zerg. The worst of them
+	# quoted a decorator the source does not contain — a `#[` at a line end read the KEYWORD
+	# on the next line as the name and reported `#[struct]` — which is the defect the comment
+	# on p_deco_says was written about, one decorator over.
+	#
+	# `p_name` is the one name-slot rule (E2013 for a reserved word, E2054 for anything else),
+	# and it CONSUMES the name, which is why no arm below advances past it.
+	nt := cur(p)
+	name := p_name(p, "a decorator")
 
 	# `#[obj]` takes no arguments and goes on a `spec`. It rides the same pending list as a
 	# derive, under a marker no spec name can be — a `#` is not an identifier character — so
 	# the two never compete for a name while sharing one attachment mechanism.
 	if name == "obj" {
-		p_advance(p)
 		pending.append("#obj")
 		return
 	}
@@ -2395,7 +2406,6 @@ fn parse_deco_item(mut &p: Parser, mut &pending: list[str]) {
 	# seed has recognised it since 1i. Refusing it here would have made `zerg` the compiler
 	# that cannot read its own test files.
 	if name == "test" {
-		p_advance(p)
 		pending.append("#test")
 		return
 	}
@@ -2404,7 +2414,6 @@ fn parse_deco_item(mut &p: Parser, mut &pending: list[str]) {
 	# the same reason as `#[test]`: it names a function `zerg test` calls and `zerg build` never
 	# reaches, so it too has to reach a parse somewhere.
 	if name == "fixture" {
-		p_advance(p)
 		pending.append("#fixture")
 		return
 	}
@@ -2420,8 +2429,7 @@ fn parse_deco_item(mut &p: Parser, mut &pending: list[str]) {
 	# An empty list after it is therefore exactly true, and it is what lets `#[allow(…)]` lead
 	# a statement while `#[derive(…)]` may not.
 	if name == "allow" {
-		at := cur(p)
-		p_advance(p)
+		at := nt
 
 		# `#[allow]` and `#[allow()]` SUPPRESS NOTHING while reading as though they suppressed
 		# something — E4051's argument one decorator over, and the same answer.
@@ -2447,13 +2455,9 @@ fn parse_deco_item(mut &p: Parser, mut &pending: list[str]) {
 	# compiler "reads `#[derive(…)]` and `#[obj]`, and no other" answers a question they did
 	# not ask. What they need to know is that the word is the right one and the behaviour is
 	# not built, so nothing is protecting the constructor they thought they had sealed.
-	nt := cur(p)
-
 	raise p_diag_at(p, nt.line, nt.col, rule.Rule.NotYetSealed, f"NotImplemented: the decorator `#[sealed]` — it is a reserved decorator (GRAMMAR group 7 gives it a meaning: the field-wise `T(…)` constructor becomes module-private) and this compiler does not build it, so the constructor stays public rather than being sealed in silence") if name == "sealed"
 
 	raise p_diag(p, rule.Rule.NotYetDecorator, f"NotImplemented: the decorator `#[{name}]` — this compiler reads `#[derive(…)]`, `#[obj]`, `#[test]`, `#[fixture]` and `#[allow(…)]`, and no other") if name != "derive"
-
-	p_advance(p)
 
 	# `#[derive]` AND `#[derive()]` ASK FOR NOTHING, and were given it: the arguments are what
 	# a derive IS — the specs to generate — so a bare one was read, dropped, and the type went
@@ -2604,11 +2608,11 @@ fn parse_impl(mut &p: Parser, mut &fns: list[ast.FnDecl], mut &impls: list[ast.I
 		} else if p_at(p, token.Kind.Ident) and peek_kind(p, 1) == token.Kind.Walrus {
 			# `LIMIT := 5` — an associated VALUE binding (GRAMMAR#val-bind). It was skipped a token
 			# at a time, so the name reached the emitter undeclared and cc reported it.
-			raise p_diag(p, rule.Rule.NotYetImplAssocValue, f"NotImplemented: an associated value binding `{cur(p).lexeme} := …` in an `impl`")
+			raise p_diag(p, rule.Rule.NotYetImplAssocValue, f"NotImplemented: an associated value binding `{token.says(cur(p))} := …` in an `impl`")
 		} else if p_at(p, token.Kind.Type) {
 			raise p_diag(p, rule.Rule.NotYetImplAssocType, "NotImplemented: an associated type binding `type … = …` in an `impl`")
 		} else {
-			raise p_diag(p, rule.Rule.NotYetImplItem, f"NotImplemented: `{cur(p).lexeme}` as an `impl` item — this compiler reads methods and nothing else")
+			raise p_diag(p, rule.Rule.NotYetImplItem, f"NotImplemented: `{token.says(cur(p))}` as an `impl` item — this compiler reads methods and nothing else")
 		}
 		skip_semis(p)
 	}
@@ -2916,7 +2920,7 @@ fn parse_stmt_node(mut &p: Parser) -> ast.Stmt {
 	# word and calling it one is a sentence the reader cannot act on. Both spellings are
 	# checked, since only the walrus one used to be and the two diverged.
 	if k != token.Kind.Ident and (peek_kind(p, 1) == token.Kind.Walrus or (peek_kind(p, 1) == token.Kind.Colon and is_stmt_kw(k))) {
-		raise p_diag(p, rule.Rule.ReservedWordAsBinding, f"`{cur(p).lexeme}` is a reserved word and cannot name a binding") if token.lookup_keyword(cur(p).lexeme) != token.Kind.Ident
+		raise p_diag(p, rule.Rule.ReservedWordAsBinding, f"`{token.says(cur(p))}` is a reserved word and cannot name a binding") if token.lookup_keyword(cur(p).lexeme) != token.Kind.Ident
 		raise p_not_a_name(p, "a binding")
 	}
 
@@ -2934,7 +2938,7 @@ fn parse_stmt_node(mut &p: Parser) -> ast.Stmt {
 	#
 	# A TUPLE pattern is the same form one bracket over: `(a, b) := f()` read as a tuple
 	# EXPRESSION, so the names in it came out undefined rather than bound.
-	raise p_diag(p, rule.Rule.NotYetStructPattern, f"NotImplemented: a struct pattern `{cur(p).lexeme}{{…}}` — this compiler destructures with field access, not with a pattern") if k == token.Kind.Ident and is_pascal(cur(p).lexeme) and peek_kind(p, 1) == token.Kind.LBrace
+	raise p_diag(p, rule.Rule.NotYetStructPattern, f"NotImplemented: a struct pattern `{token.says(cur(p))}{{…}}` — this compiler destructures with field access, not with a pattern") if k == token.Kind.Ident and is_pascal(cur(p).lexeme) and peek_kind(p, 1) == token.Kind.LBrace
 
 	# A DESTRUCTURING BINDING OR ASSIGNMENT — `(a, b) := e`, `mut (a, b) := e`, `(a, b) = e`
 	# (GRAMMAR#binding, GRAMMAR#bind-target, GRAMMAR#assign-target). It is named HERE, where the
@@ -3606,7 +3610,7 @@ fn parse_coalesce(mut &p: Parser) -> ast.Expr {
 		# has no meaning to lower — so it is named here, before a tree exists to miscompile.
 		t := cur(p)
 		s := parse_stmt(p)
-		raise p_diag_at(p, t.line, t.col, rule.Rule.CoalesceDivergeGuard, f"a `??` right-hand `{t.lexeme}` takes no trailing `if` — the postfix guard belongs to the STATEMENT form of a diverge (GRAMMAR#raise-stmt), and written here it reads as the coalesce's condition rather than the `{t.lexeme}`'s: when it is false nothing diverges, and the `??` still owes the value it never produced. Guard the whole statement instead, or bind the coalesce first and guard what follows it") if p_jump_is_guarded(s)
+		raise p_diag_at(p, t.line, t.col, rule.Rule.CoalesceDivergeGuard, f"a `??` right-hand `{token.says(t)}` takes no trailing `if` — the postfix guard belongs to the STATEMENT form of a diverge (GRAMMAR#raise-stmt), and written here it reads as the coalesce's condition rather than the `{token.says(t)}`'s: when it is false nothing diverges, and the `??` still owes the value it never produced. Guard the whole statement instead, or bind the coalesce first and guard what follows it") if p_jump_is_guarded(s)
 		jump.append(s)
 		return ast.Expr.ECoalesce(left, ast.Expr.ENil, jump)
 	}
@@ -3680,7 +3684,7 @@ fn parse_cmp(mut &p: Parser) -> ast.Expr {
 		# The right side is a bare name, not an expression: reading it as one would make
 		# `e is StopIteration` an ident lookup for a name nothing declares. Refusing here
 		# is what keeps a malformed test from reaching the emitter as something else.
-		raise p_diag(p, rule.Rule.IsWantsTypeName, f"`is` wants a type name on its right, found `{cur(p).lexeme}`") if not p_at(p, token.Kind.Ident)
+		raise p_diag(p, rule.Rule.IsWantsTypeName, f"`is` wants a type name on its right, found `{token.says(cur(p))}`") if not p_at(p, token.Kind.Ident)
 		name := cur(p).lexeme
 		p_advance(p)
 		return ast.Expr.EIs(left, name)
@@ -4049,7 +4053,7 @@ fn parse_call_args(mut &p: Parser) -> list[ast.Expr] {
 		# positional-only, and the `:` reached parse_primary, which answered "`:` is not an
 		# expression this compiler reads" — a token, about a form the language specifies and
 		# the seed builds. An argument list is where the form is recognizable.
-		raise p_diag(p, rule.Rule.NotYetNamedArgument, f"NotImplemented: the named argument `{cur(p).lexeme}:` — this compiler binds arguments by position only") if p_at(p, token.Kind.Ident) and peek_kind(p, 1) == token.Kind.Colon
+		raise p_diag(p, rule.Rule.NotYetNamedArgument, f"NotImplemented: the named argument `{token.says(cur(p))}:` — this compiler binds arguments by position only") if p_at(p, token.Kind.Ident) and peek_kind(p, 1) == token.Kind.Colon
 
 		args.append(parse_expr(p))
 		p_list_sep(p, token.Kind.RParen, ")", "an argument list")
@@ -4153,8 +4157,8 @@ fn parse_primary(mut &p: Parser) -> ast.Expr {
 			p_advance(p)
 			args := parse_call_args(p)
 
-			raise p_diag(p, rule.Rule.ArrayConvNoValue, f"`{t.lexeme}(…)` converts a VALUE and was given none — it is the str-to-list bridge, not a constructor; `[]` builds an empty list") if args.len() == 0
-			raise p_diag(p, rule.Rule.ArrayConvManyValues, f"`{t.lexeme}(…)` converts one value, and this gives {strconv.to_string(args.len(), 10)}") if args.len() > 1
+			raise p_diag(p, rule.Rule.ArrayConvNoValue, f"`{token.says(t)}(…)` converts a VALUE and was given none — it is the str-to-list bridge, not a constructor; `[]` builds an empty list") if args.len() == 0
+			raise p_diag(p, rule.Rule.ArrayConvManyValues, f"`{token.says(t)}(…)` converts one value, and this gives {strconv.to_string(args.len(), 10)}") if args.len() > 1
 
 			return ast.Expr.EConv(ast.Ty.TList(elem), args[0], "list")
 		}
@@ -4270,7 +4274,7 @@ fn parse_primary(mut &p: Parser) -> ast.Expr {
 	# first thing anyone writes — where the statement used to be consumed as NOTHING: the
 	# arm yielded 0, and the tokens after it were read as a further arm. That is a program
 	# that compiles and is not the one that was written, so it is named instead.
-	raise p_diag(p, rule.Rule.NotYetStatementAsExpr, f"NotImplemented: `{t.lexeme}` is a statement, and an expression is wanted here") if is_stmt_kw(k)
+	raise p_diag(p, rule.Rule.NotYetStatementAsExpr, f"NotImplemented: `{token.says(t)}` is a statement, and an expression is wanted here") if is_stmt_kw(k)
 
 	# TWO TOKENS ARRIVE HERE AS THE SIGN OF A FORM, not as themselves. A `:=` means the
 	# line was a DESTRUCTURING binding — `(a, b) := (1, 2)` — whose left side read as a
@@ -4287,7 +4291,7 @@ fn parse_primary(mut &p: Parser) -> ast.Expr {
 	# know became the number zero, silently: a rune literal `'A'` was 0, and so was anything
 	# else that ever reached here. A form the compiler cannot read is named; it is never a
 	# value it did not write.
-	raise p_diag(p, rule.Rule.NotYetExprForm, f"NotImplemented: `{t.lexeme}` is not an expression this compiler reads")
+	raise p_diag(p, rule.Rule.NotYetExprForm, f"NotImplemented: `{token.says(t)}` is not an expression this compiler reads")
 }
 
 # parse_close reads `close ( expr )`, the channel's one built-in statement. `at_exit` is
@@ -4331,7 +4335,7 @@ fn parse_if_expr(mut &p: Parser) -> ast.Expr {
 	# `e` is present. It is grammatical in expression position and this compiler unwraps an
 	# optional in the STATEMENT form only, so the `:=` reached the condition's expression
 	# parser and reported itself.
-	raise p_diag_at(p, t.line, t.col, rule.Rule.NotYetIfExprBindingHead, f"NotImplemented: a binding head in an `if` EXPRESSION — `if {t.lexeme} := …` unwraps an optional, and this compiler does that in the statement form only; bind it before the expression, or use `??`") if p_at(p, token.Kind.Ident) and peek_kind(p, 1) == token.Kind.Walrus
+	raise p_diag_at(p, t.line, t.col, rule.Rule.NotYetIfExprBindingHead, f"NotImplemented: a binding head in an `if` EXPRESSION — `if {token.says(t)} := …` unwraps an optional, and this compiler does that in the statement form only; bind it before the expression, or use `??`") if p_at(p, token.Kind.Ident) and peek_kind(p, 1) == token.Kind.Walrus
 
 	cond := parse_expr(p)
 	then_e := parse_if_branch(p)
@@ -4475,7 +4479,7 @@ fn parse_arm(mut &p: Parser) -> ast.Arm {
 					pt := cur(p)
 					nested := p_at(p, token.Kind.Ident) and peek_kind(p, 1) == token.Kind.Dot
 					if (nested or not p_at(p, token.Kind.Ident)) and not reserved_word(pt.lexeme) {
-						raise p_diag_at(p, pt.line, pt.col, rule.Rule.NotYetSubPatternInPayload, f"NotImplemented: a sub-pattern inside a variant payload, beginning at `{pt.lexeme}` — GRAMMAR#variant-pat takes a `pattern-list` there and this compiler takes a binding name or `_`. Match one level, bind the payload, and `match` the binding in turn") if pt.lexeme != "_"
+						raise p_diag_at(p, pt.line, pt.col, rule.Rule.NotYetSubPatternInPayload, f"NotImplemented: a sub-pattern inside a variant payload, beginning at `{token.says(pt)}` — GRAMMAR#variant-pat takes a `pattern-list` there and this compiler takes a binding name or `_`. Match one level, bind the payload, and `match` the binding in turn") if pt.lexeme != "_"
 					}
 					binds.append(p_name(p, "a pattern binding"))
 					p_list_sep(p, token.Kind.RParen, ")", "a pattern list")

@@ -132,6 +132,12 @@ jobs:
       # A `[deviation]` is the specification saying the compiler does something else and we
       # know. The failure mode this guards is not the marker, it is the silence: a release
       # that meets "no deviations" by deleting markers rather than by fixing compilers.
+      # `productions` asks whether every form PARSES; this asks whether the ones this compiler
+      # builds actually RUN. The refusal side of the language had a ledger end to end and the
+      # built side had a corpus with nothing mapping it to the surface.
+      - name: Every form this compiler builds has a program that runs it
+        run: make behaviour
+
       - name: Every deviation names a ticket, and the inherited list is honest
         run: make deviation-check
 

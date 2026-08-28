@@ -156,6 +156,18 @@ pub struct Token {
 	pub col: int
 }
 
+# says renders a token AS A DIAGNOSTIC SHOULD QUOTE IT: its text, or the name of its kind when
+# it has none. `Eof` is the one token the lexer emits with an empty lexeme, and every refusal
+# that quoted the token it stopped at reached straight for `.lexeme` — so a program that ends
+# early was told `expected `)`, found ``, and `is` wants a type name on its right, found ``.
+# Two sites, one defect, and nineteen more that quote a token the same way; this is one
+# function because the next site added will not remember either.
+pub fn says(t: Token) -> str {
+	return kind_name(t.kind) if t.lexeme == ""
+
+	return t.lexeme
+}
+
 # kind_name renders a kind exactly as the bootstrap's token.Kind.String, so the
 # `--emit tokens` output matches byte-for-byte.
 pub fn kind_name(k: Kind) -> str {

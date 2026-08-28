@@ -7,7 +7,7 @@
 
 ## 形狀
 
-無論指名什麼,每個 decorator 都受這三條規則約束。
+無論指名什麼,每個 decorator 都受這四條規則約束。
 
 - **它領一個 statement**,而宣告也是 statement——所以 `struct` 上的 `#[derive(Eq)]` 與一個綁定上的
   `#[allow(L103)]` 是同一種形式（`statement`、`decorated-decl`,[`GRAMMAR`](../../GRAMMAR) group 1）。**哪一個**
@@ -19,6 +19,11 @@
   一件事兩種寫法正是 `zerg fmt` 存在的理由,而兩種都合法之後它就無從移除。
 - **它自成一行。** decorator 和其他項目一樣是 statement list 的一個項目,所以有分隔符把它和它所領的項目分開;
   `#[derive(Eq)] struct P` 寫在同一行不是一種形式。
+- **它指名一個名字。** `#[` 與 `]` 之間那格是 `identifier`（`deco-item`,[`GRAMMAR`](../../GRAMMAR) group 7）,
+  所以不是名字的 token 會以**名字**被拒,而不是以未知 decorator 被拒——`#[42]` 得到 _E2054 a decorator needs a
+  name, and `42` is not one_,`#[mut]` 得到 _E2013 `mut` is a reserved word and cannot name a decorator_。
+  兩種答案不同是刻意的:下面那條未知 decorator 的分支報的是 **NotImplemented**,而告訴一個寫了 `#[+]` 的讀者
+  「本編譯器沒有實作這個 decorator」,是在指名一個任何 Zerg 都沒有的形式。
 
 ## 集合
 

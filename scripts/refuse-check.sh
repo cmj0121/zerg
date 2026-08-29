@@ -957,6 +957,32 @@ fn main() {
 }
 EOF
 
+# THE THIRD OF THE THREE. `docs/code/errors.md` marks `UnwrapError`, `MatchError` and
+# `AliasError` **[not yet]** together, so all three are pinned together: they live in
+# `c_err_kinds_unbuilt` for one reason, which is that the split below must not read them as
+# names nothing declares.
+expect "$ZERG" is-unwraperror E9078 'is UnwrapError' <<'EOF'
+fn main() {
+	e := ValueError("x")
+	print e is UnwrapError
+}
+EOF
+
+# THE OTHER HALF OF THAT NUMBER (#87). `kind == 0` was asked before any "does this name a
+# type" question, so a `spec` the file declares two lines up and a name nothing declares
+# anywhere were one raise — and `NotImplemented:` is true of the first and false of the
+# second. A type position already knows how to answer the second, and now does.
+expect "$ZERG" is-a-name-nothing-declares E4056 'no type named `Banana`' <<'EOF'
+struct P {
+	pub a: int
+}
+
+fn main() {
+	p := P(1)
+	print p is Banana
+}
+EOF
+
 # `for mut` OVER A MAP. The case below walks a list; docs/code/collections.md says the binding
 # is unbuilt for every element type, and a map is the other container it has.
 expect "$ZERG" for-mut-over-a-map E9025 'for mut' <<'EOF'

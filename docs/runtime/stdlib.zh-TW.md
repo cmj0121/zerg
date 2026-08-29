@@ -307,8 +307,9 @@ fn main() {
 （見 [Formatting](format.zh-TW.md)），所以叫這兩個名字的方法必須回傳「這個值顯示成的 `str`」——`E3059` 會拒絕一個叫
 `debug` 的等級方法。這條規則只管**方法**，所以上面那個自由函式 `log.debug()` 用的就是等級本來的名字、而且被接受；
 在 instance 上第六個等級寫成 `lg.at_level(log.Level.DEBUG)`。它叫 `at_level` 而不是 `at`、`parse_level` 而不是
-`parse`，都是因為 `pub` 名字沒有 package 可以讓它唯一：自由的 `pub at` 會與編譯器自己那個有 module 私有 `at` 的
-lexer 撞上 `E9081`，而這裡的 `pub parse` 會跟任何 import `log` 的程式裡那個 module 私有的 `parse` 相撞。
+`parse`，是因為光一個 `at` 或 `parse` 說不出它在哪個等級、剖析什麼——這些名字是選的，不是被逼的。它們曾經是被逼
+的：`pub` 名字過去是全程式唯一的，所以自由的 `pub at` 會撞上編譯器自己那個 module 私有的 `at`，而那已經不成立了
+（#92）。
 
 **只有一個會改狀態的函式，而且它收下一整個 logger。** `set_level` / `set_format` / `set_colour` / `set_sink`
 這一家是被**刪掉**而不是改名的：模組本來就有四個純 builder，所以那些 setter 只是把同一件事再說一次，順便把共享狀態

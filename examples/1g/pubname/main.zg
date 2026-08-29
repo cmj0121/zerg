@@ -1,0 +1,25 @@
+# Two modules declaring the same PUBLIC top-level name.
+#   zerg build examples/1g/pubname/main.zg
+# Expected output:
+#   2
+#   3
+#
+# VISIBILITY IS THE FILE'S AND A PUBLIC NAME IS NOT PROGRAM-GLOBAL (#92). Both modules declare
+# `helper`, and the specification says they are two different names — `docs/runtime/package.md`
+# declines a global registry on purpose, so there is nothing for a public name to be unique
+# WITHIN. What used to collide was the C symbol, and only that: a PRIVATE name two modules both
+# declare has been told apart by a module tag all along, and the tag was simply not given to a
+# public one.
+#
+# The qualified call is what chooses. `a.helper` and `b.helper` name the module out loud, so the
+# row read for visibility and the symbol emitted are the NAMESPACE's — not the caller's, which
+# is what every call site asked for before and is right only for a private name.
+import (
+	"./one"
+	"./two"
+)
+
+fn main() {
+	print one.helper(1)
+	print two.helper(1)
+}

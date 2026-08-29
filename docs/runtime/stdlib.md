@@ -333,9 +333,9 @@ renderings every value has ([Formatting](format.md)), so a method by either name
 value shows as — `E3059` refuses a level method called `debug`. It is a rule about **methods**, so the free
 `log.debug()` above is the level's own name and is accepted; on an instance the sixth level is
 `lg.at_level(log.Level.DEBUG)`. `at_level` is spelled that way rather than `at`, and `parse_level` rather
-than `parse`, because a `pub` name has no package to be unique within: a free `pub at` is `E9081` against the
-compiler's own lexer, which has a module-private `at`, and a `pub parse` here would collide with a
-module-private `parse` in any program that imports `log`.
+than `parse`, because a bare `at` or `parse` says nothing about what it is at or what it parses — the names
+are chosen, not forced. They were forced once: a `pub` name used to be program-global, so a free `pub at`
+collided with the compiler's own module-private `at`, and that is no longer true (#92).
 
 **There is one mutating function and it takes a whole logger.** The `set_level` / `set_format` / `set_colour`
 / `set_sink` family was **deleted**, not renamed: the module already had four pure builders, so the setters

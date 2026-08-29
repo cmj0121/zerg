@@ -81,10 +81,11 @@ a claim a build-and-run loop cannot check: it can only report that the build fai
 a typo does too. So these two are held to the sentence they must be refused with, the way
 `make reject` holds its own cases:
 
-| Example                         | Refused with                             |
-| ------------------------------- | ---------------------------------------- |
-| [`1g/private/`](1g/private)     | `… is not a public member of module …`   |
-| [`1g/privconst/`](1g/privconst) | the same rule, for a module **constant** |
+| Example                         | Refused with                               |
+| ------------------------------- | ------------------------------------------ |
+| [`1g/private/`](1g/private)     | `… is not a public member of module …`     |
+| [`1g/pubname/`](1g/pubname)     | two modules declaring the same public name |
+| [`1g/privconst/`](1g/privconst) | the same rule, for a module **constant**   |
 
 If you compile one of these and get an error, that **is** the example.
 

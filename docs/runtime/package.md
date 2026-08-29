@@ -32,28 +32,27 @@ Keeping encapsulation/naming (`file`, `module`) and distribution/API (`package`)
 > build error, not a silence — _E5002 cannot resolve import `name` under any source root_ — reported before
 > a byte of it is lexed.
 >
-> **[deviation]** A public name is still **program-global**. Visibility is the file's and is checked as
-> the table says — a function, a module constant, a type and a struct's fields each with a place (_E3001
-> `helper` is not a public member of `lib/two.zg`_, _E5010 `secret` is not a public field of `P`_) — but
-> the C symbols are one flat space, so two modules cannot declare the same PUBLIC top-level name. That is
-> a mangling that has not caught up with the layers, not a rule the language wants (#92). See Visibility
-> below.
->
-> **[not yet]** Two modules that declare the same **public** top-level name are refused by name —
-> _E9081 NotImplemented: two modules both define `helper` and at least one is `pub` — a public name has
-> no package to be unique within_. (`E4077` is its neighbour and a different rule: two declarations under
-> ONE directory, which are ONE module however many files they are spread over. That question is asked
-> FIRST, because asking it second made this sentence a lie about half the programs that met it — two
-> public files of one directory were told there were two modules.) A
-> **private** one is not: nothing outside a module can reach its private names, so a bare call always means
-> the caller's own, and the two only have to be told apart in C — where each gets a module tag, its
-> position in a sorted list of the program's modules. Sorted rather than first-seen because that name has
-> to be the same on every run.
->
-> The public case has nowhere to be unique. This page declines a global registry on purpose (below), so
-> what a public collision would need is a compile error plus a **link-name override** — and that override
-> is an **open question** in [FFI](ffi.md), not a thing either chapter specifies. It waits on the package
-> layer either way: there is no unit for a name to be unique within until one exists.
+> **A public name is not program-global.** Two modules may each declare `pub fn helper`, and the
+> specification says they are two different names — this page declines a global registry on purpose, so
+> there is nothing for a public name to be unique WITHIN. What used to collide was the C symbol and only
+> that, and the fix was to stop withholding a tag that already existed: a **private** name two modules both
+> declare has been told apart all along by a module tag, its position in a sorted list of the program's
+> modules. Sorted rather than first-seen because that name has to be the same on every run. A public one now
+> takes the same tag (`examples/1g/pubname`, #92).
+
+**The qualified call is what chooses.** `a.helper()` names the module out loud, so the row read for
+visibility and the symbol emitted are the NAMESPACE's. Every call site used to ask for the CALLER's module,
+which is right for a private name — a bare call always means the caller's own — and is the reason a
+public collision could not be told apart.
+
+Two declarations under ONE directory are a different rule and are still refused: they are ONE module
+however many files they are spread over, and no tag separates them — _E4077 `a.zg` and `b.zg` both define
+`work`_. That question is asked FIRST.
+
+> Nothing can name a `pub` symbol from C today, which is what made the tag free to apply: [FFI](ffi.md)
+> marks the whole export edge unbuilt, `--emit lib` writes objects and no header, and nothing reports which
+> declarations a header would carry. When that edge lands it brings the **link-name override** that page
+> already reserves, and that is the opt-out a foreign caller needs.
 
 ### Programs & the entry point
 
@@ -607,8 +606,7 @@ fixture: two declarations of one name in one scope are refused as the collision 
 
 **The scope is the package, not the session.** `pkg/sub` and `pkg/sub2` each build their **own** instance
 of an inherited fixture, because each is one driver in one process — pytest's `scope="package"`. Session
-scope is deliberately not wanted and is anyway unreachable: `E9081` refuses two modules both defining a
-`pub` name, so one driver over a whole tree cannot be built, and a live value does not cross a process
+scope is deliberately not wanted and is anyway unreachable: a live value does not cross a process
 boundary. Likewise, when a test ends the process and the remainder is re-run one process each, each of
 those processes enters only the levels its own test is under.
 
@@ -651,5 +649,6 @@ matching scheme is a build-tool detail, **deferred**.
 
 > **[not yet]** No suffix is recognized. Every `.zg` file in a module directory is compiled into the
 > build, so a module holding `plat_linux.zg` and `plat_darwin.zg` is two declarations of one name and is
-> refused as a collision, _E9081_ — which is a clearer failure than picking the wrong one, and is still not
-> the feature.
+> refused as a collision, _E4073 `plat` is declared twice in this file_ or _E4077 both define `plat`_
+> depending on how they are spread — which is a clearer failure than picking the wrong one, and is still
+> not the feature.

@@ -475,7 +475,7 @@ n_cells=$(grep -cE '^	mut [a-z_]+ := ' "$WORK/log.cell")
 cell=$(sed -n 's/^	mut \([a-z_]*\) := .*/\1/p' "$WORK/log.cell")
 case "$cell" in
 log_*) ;;
-*) note "the cell is called \`$cell\`; name it after the module — two modules that both call theirs \`process\` are E9082, private or not" ;;
+*) note "the cell is called \`$cell\`; name it after the module — two modules that both call theirs \`process\` are E4077, private or not" ;;
 esac
 
 # EVERY MENTION OF THE CELL IS ONE OF THREE THINGS: the declaration, the ONE assignment inside

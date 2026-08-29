@@ -10,7 +10,10 @@ Zerg package 如何與 **C ABI** 交界——這是唯一一處 Zerg 值變成 C
 > 上面那些 binding 用來拼寫的 **`unsafe fn` 型別**同樣如此（`E9073`）——import 那條邊也就一起沒了。出貨的標準
 > 函式庫裡沒有 `ffi` 模組，所以 `import "ffi"` 就在 import 那一步失敗——_E5002 cannot resolve import `ffi` under
 > any source root_——而不是拖到該 binding 需要的那個 `unsafe` 上。module 層級的
-> **分組**是有建的那一種形式，為的是它的 `mut` binding；它的 `fn` 在裡面能做什麼，仍是一項一項被拒絕。export
+> **分組**是有建的那一種形式，為的是它的 `mut` binding；一個既沒開分組、也沒標記 `fn` 的頂層 `unsafe` 是一個
+> 畸形的分組，而且會這樣說——_E2075 a top-level `unsafe` opens a GROUP or marks a `fn`_，那是一個 parse 的拒絕、
+> 指名的不是任何未建形式，因為 `unsafe struct P { … }` 在這個文法的任何位置都推不出來。分組的 `fn` 在裡面能做
+> 什麼，仍是一項一項被拒絕。export
 > 那條邊，`--emit lib` 只寫出 object、**不產生 header**，也沒有任何東西回報哪些 `pub` 宣告會被排除在 header
 > 之外。
 >

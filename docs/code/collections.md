@@ -71,9 +71,12 @@ author owns the contract the compiler can't check: **equal ⇒ same hash**. Beca
 frozen snapshot, even a `mut` collection is usable as one.
 
 > **Status.** The intended rule — **any `Eq + Hash` type** as a key — is **[not yet]**. This phase a `map`
-> key is restricted to **`int`** or **`str`**: anything else is _E9052 NotImplemented: a map key of type … —
-> a key needs `Hash`, and this compiler has one for `int` and for `str`_. `derive(Hash)` and general keyed
-> types are not built.
+> key is restricted to **`int`** or **`str`**: a `byte`, a `rune` or a `derive(Hash)` type is _E9052
+> NotImplemented: a map key of type … — a key needs `Hash`, and this compiler has one for `int` and for
+> `str`_. `derive(Hash)` and general keyed types are not built. A **`float`** key is a different answer and
+> not a `[not yet]` one: [Derive & Default Behavior](../core/derive.md) refuses `Hash` on any `float` field,
+> so there is no day it retires on — _E4079 a map key of type float — a key needs `Hash`, and a `float` has
+> no equality a hash can agree with_.
 
 ## Access — `[]` asserts, `.get` checks
 
@@ -134,12 +137,18 @@ materializing a `str` only when it keeps a token.
 > slice needs an upper bound — `xs[a..xs.len()]`_, which is the spelling to write meanwhile. Found by the
 > 0.2.0 re-measurement (#74).
 >
-> The mirror shape is refused with its own sentence: a range with no LOWER bound is _E9022
-> NotImplemented: a range with no lower bound — write `xs[0..n]`_, which also names the list PATTERN
-> `[a, ..rest]` as a different form this compiler does not have.
+> The mirror shape is refused with its own sentence, and it is not the same kind of refusal: a lower bound
+> is MANDATORY in `GRAMMAR#range-expr`, so `xs[..2]` is not a form waiting to be built — it is _E2071 a range
+> with no lower bound — write `xs[0..n]`_, which also names the list PATTERN `[a, ..rest]` as a different
+> form this compiler does not have.
 >
-> **[not yet]** A growth method needs a PLACE and not a value: `f().append(1)` is _E9049 NotImplemented:
-> `append` MUTATES its list, and … is a value rather than a place — bind it to a name first_. And a map
+> **[not yet]** A growth method needs a PLACE, and a MAP INDEX is one this compiler cannot take the
+> address of: `m["a"].append(3)` is _E9049 NotImplemented: `append` MUTATES its list, and `a map index` is
+> a value rather than a place_. A list index already is a place — `xs[0].append(3)` edits in place — and
+> nothing here makes a map's element different. A **slice**, a **call result** and a **literal** are not
+> waiting for anything, because a subrange is a read-only value and a written value has no storage at all:
+> _E4081 `append` MUTATES its list, and `a slice` is a value rather than a place — bind it to a name
+> first_. And a map
 > is built with the literal and not by calling its type: `map[str, int](…)` is _E9067 NotImplemented:
 > `map[…](…)` as a constructor — this compiler builds an empty map with the literal `{:}`_.
 

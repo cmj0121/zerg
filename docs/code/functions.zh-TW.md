@@ -8,9 +8,11 @@
 一個 **generic** 函式
 **在實例化之前不是一等值**:未實例化的 generic 名字本身不是值——唯有它的型別引數在使用點被固定後才成為值。
 
-> **[not yet]** 只把引數寫出來、不呼叫,也一樣不會實例化:`f := id[int]` 是 _E9030 NotImplemented:
-> `id[…]` with no call after it — this compiler instantiates a generic at the call_。被實例化的那個值這一期
-> 沒有自己的拼法;把呼叫包進 closure,或指名一個具體的函式。
+> 只把引數寫出來、不呼叫,也一樣不會實例化,而且它不是一個等著被建的形式:後綴 `[ … ]` **永遠**是索引
+> ([`GRAMMAR`](../../GRAMMAR)),所以沒有任何導得出的東西會到這裡。`m := map[str, int]` 是 _E2072 `map[…]`
+> with no call after it — this compiler instantiates a generic at the call, so its type arguments have to
+> arrive with the arguments_。被實例化的那個值這一期沒有自己的拼法;把呼叫包進 closure,或指名一個具體的
+> 函式。(`f := id[int]` 又是另一個答案——generic 函式的名字不是值,_E3069 undefined name `id`_。)
 
 函式型別寫成 `fn(P...) -> R`；參數的 `mut &` 是**型別的一部分**，所以 `fn(mut &int) -> bool` 與 `fn(int) -> bool` 是不同型別
 （兩者 calling convention 不同——就地 by-ref vs 複製）。可見性**不**屬於型別：`pub` 匯出的是 top-level 函式的

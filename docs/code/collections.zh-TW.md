@@ -66,8 +66,11 @@ compiler 無法檢查的契約：**equal ⇒ same hash**。因為 key 是用凍�
 collection 也能拿來當 key。
 
 > **狀態。** 預期的規則——**任何 `Eq + Hash` 型別**皆可當 key——是 **[not yet]**。這個階段 `map` 的 key 僅限
-> **`int`** 或 **`str`**:其他一律是 _E9052 NotImplemented: a map key of type … — a key needs `Hash`, and this
-> compiler has one for `int` and for `str`_。`derive(Hash)` 與一般的 keyed 型別尚未建置。
+> **`int`** 或 **`str`**:`byte`、`rune` 或 `derive(Hash)` 型別是 _E9052 NotImplemented: a map key of type … —
+> a key needs `Hash`, and this compiler has one for `int` and for `str`_。`derive(Hash)` 與一般的 keyed 型別
+> 尚未建置。**`float`** key 是另一個答案,而且不是 `[not yet]` 那一種:[Derive 與預設行為](../core/derive.zh-TW.md)
+> 在任何 `float` 欄位上都拒絕 `Hash`,所以它沒有退場的那一天——_E4079 a map key of type float — a key needs
+> `Hash`, and a `float` has no equality a hash can agree with_。
 
 ## 存取——`[]` 斷言、`.get` 檢查
 
@@ -119,11 +122,16 @@ semantics，而唯讀情況維持**零拷貝**；COW 是與 copy-elision、move 
 > 但 `xs[2..]` 會得到 _E9050 NotImplemented: an open-ended range has no upper bound here — a slice needs an
 > upper bound — `xs[a..xs.len()]`_,那也就是目前該寫的拼法。由 0.2.0 的重新量測掃出(#74)。
 >
-> 反過來的形狀有自己的句子：沒有**下界**的 range 是 _E9022 NotImplemented: a range with no lower bound —
-> write `xs[0..n]`_，它同時指出 list **pattern** `[a, ..rest]` 是這個編譯器也沒有的另一種形式。
+> 反過來的形狀有自己的句子，而且不是同一種拒絕：`GRAMMAR#range-expr` 的下界是**必要的**，所以 `xs[..2]`
+> 不是一個等著被建的形式——它是 _E2071 a range with no lower bound — write `xs[0..n]`_，它同時指出 list
+> **pattern** `[a, ..rest]` 是這個編譯器也沒有的另一種形式。
 >
-> **[not yet]** 增長方法要的是一個**位置**而不是一個值：`f().append(1)` 是 _E9049 NotImplemented: `append`
-> MUTATES its list, and … is a value rather than a place — bind it to a name first_。而 map 用字面量建、不是
+> **[not yet]** 增長方法要的是一個**位置**，而 **map index** 正是一個這個編譯器取不到位址的位置：
+> `m["a"].append(3)` 是 _E9049 NotImplemented: `append` MUTATES its list, and `a map index` is a value
+> rather than a place_。list index 本來就是位置——`xs[0].append(3)` 會就地修改——而這裡沒有任何東西讓 map 的
+> 元素有所不同。**slice**、**呼叫結果**與**字面量**則不在等任何東西，因為子範圍是唯讀值，而寫下來的值根本
+> 沒有儲存空間：_E4081 `append` MUTATES its list, and `a slice` is a value rather than a place — bind it to
+> a name first_。而 map 用字面量建、不是
 > 呼叫它的型別：`map[str, int](…)` 是 _E9067 NotImplemented: `map[…](…)` as a constructor — this compiler
 > builds an empty map with the literal `{:}`_。
 

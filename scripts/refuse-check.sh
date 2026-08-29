@@ -699,8 +699,21 @@ impl B {
 fn main() { print 1 }
 EOF
 
-expect "$ZERG" unknown-decorator E9005 <<'EOF'
+# ONE NUMBER, TWO QUESTIONS (#87). `#[repr]`, `#[packed]` and `#[align]` are RESERVED on
+# docs/core/decorators.md and unbuilt here, which is what E9xxx is for; every other name is not
+# a decorator in any Zerg, because the set is closed and compiler-owned, so there is no day its
+# code retires on. The page said in as many words that the distinction was lost.
+expect "$ZERG" unknown-decorator E2076 <<'EOF'
 #[dyn]
+struct P {
+	pub x: int
+}
+
+fn main() { print 1 }
+EOF
+
+expect "$ZERG" a-reserved-layout-decorator E9005 <<'EOF'
+#[repr]
 struct P {
 	pub x: int
 }
@@ -908,7 +921,7 @@ EOF
 # same shape docs/code/functions.md records for a parameter default reading an earlier
 # parameter. The default is materialised at the construction, where a field is not a name in
 # scope — so with a module constant of the same name it would quietly read that instead.
-expect "$ZERG" field-default-reading-a-field E9071 <<'EOF'
+expect "$ZERG" field-default-reading-an-earlier-field E9071 <<'EOF'
 a := 100
 
 struct P {
@@ -917,6 +930,20 @@ struct P {
 }
 
 fn main() { print P(3).b }
+EOF
+
+# THE OTHER HALF OF THAT NUMBER (#87). `fnames` is every field including this one and the ones
+# after it, so a default reading ITSELF and one reading a LATER field both wore the same
+# `NotImplemented:` — and evaluation is left to right, so neither has a value to read in any
+# order. There is no day that code would have retired on.
+expect "$ZERG" field-default-reading-a-later-field E4080 <<'EOF'
+struct P {
+	pub a: int = 1
+	pub b: int = c
+	pub c: int = 3
+}
+
+fn main() { print P().b }
 EOF
 
 expect "$ZERG" struct-pattern-binding E9008 <<'EOF'
@@ -954,6 +981,32 @@ expect "$ZERG" is-matcherror E9078 'is MatchError' <<'EOF'
 fn main() {
 	e := ValueError("x")
 	print e is MatchError
+}
+EOF
+
+# THE THIRD OF THE THREE. `docs/code/errors.md` marks `UnwrapError`, `MatchError` and
+# `AliasError` **[not yet]** together, so all three are pinned together: they live in
+# `c_err_kinds_unbuilt` for one reason, which is that the split below must not read them as
+# names nothing declares.
+expect "$ZERG" is-unwraperror E9078 'is UnwrapError' <<'EOF'
+fn main() {
+	e := ValueError("x")
+	print e is UnwrapError
+}
+EOF
+
+# THE OTHER HALF OF THAT NUMBER (#87). `kind == 0` was asked before any "does this name a
+# type" question, so a `spec` the file declares two lines up and a name nothing declares
+# anywhere were one raise — and `NotImplemented:` is true of the first and false of the
+# second. A type position already knows how to answer the second, and now does.
+expect "$ZERG" is-a-name-nothing-declares E4056 'no type named `Banana`' <<'EOF'
+struct P {
+	pub a: int
+}
+
+fn main() {
+	p := P(1)
+	print p is Banana
 }
 EOF
 
@@ -1096,7 +1149,7 @@ EOF
 
 # A module's last segment is BOUND AS AN IDENTIFIER. All 45 reserved words are legal package
 # names by the character grammar, and this used to be reported at the USE — `match.hit()` read
-# as the keyword, answering _E9040 `.` is not an expression this compiler reads_, which is a
+# as the keyword, answering _E2074 `.` is not an expression this compiler reads_, which is a
 # true sentence about a line that is not the mistake.
 expect "$ZERG" an-import-named-for-a-reserved-word E5012 'is a reserved word' <<'EOF'
 import "./match"
@@ -1400,13 +1453,30 @@ impl B {
 fn main() { print 1 }
 EOF
 
-expect "$ZERG" impl-item-that-is-not-a-method E9007 <<'EOF'
+expect "$ZERG" impl-item-that-is-not-a-method E2077 <<'EOF'
 struct B {
 	pub n: int
 }
 
 impl B {
 	print 1
+}
+
+fn main() { print 1 }
+EOF
+
+# THE OTHER HALF OF THAT NUMBER (#87). GRAMMAR#fn-decl spells `'pub'? 'unsafe'? 'mut'? 'fn'`
+# and GRAMMAR#impl-item takes a fn-decl, so an `unsafe fn` method IS a form — and its writer
+# was told this compiler "reads methods and nothing else", about a method they did write.
+expect "$ZERG" an-unsafe-method-in-an-impl E9109 <<'EOF'
+struct B {
+	pub n: int
+}
+
+impl B {
+	unsafe fn m() {
+		nop
+	}
 }
 
 fn main() { print 1 }
@@ -1420,6 +1490,25 @@ fn main() {
 	m["a"] = [1, 2]
 	m["a"].append(3)
 	print m["a"].len()
+}
+EOF
+
+# THE OTHER HALF OF THAT NUMBER (#87). A map index is a place this compiler cannot take the
+# address of — a LIST index already is one — so that really is an unbuilt form. A slice, a call
+# result and a literal are not waiting for anything: `docs/code/collections.md` calls a subrange
+# a read-only value, and a written value has no storage anywhere in the program.
+expect "$ZERG" mutating-method-on-a-slice E4081 'a slice' <<'EOF'
+fn main() {
+	mut xs := [1, 2, 3]
+	xs[0..2].append(9)
+	print 1
+}
+EOF
+
+expect "$ZERG" mutating-method-on-a-literal E4081 'a literal' <<'EOF'
+fn main() {
+	[1, 2].append(3)
+	print 1
 }
 EOF
 
@@ -2037,6 +2126,17 @@ fn main() {
 }
 EOF
 
+# THE OTHER HALF OF THAT NUMBER (#87). A `byte` key is `collections.md`'s intended rule and
+# waits for it; a `float` key waits for nothing, because `docs/core/derive.md` refuses `Hash`
+# on any `float` field — a float has no equality a hash can agree with — so there is no day
+# `NotImplemented:` was promising.
+expect "$ZERG" map-key-that-can-never-hash E4079 <<'EOF'
+fn main() {
+	m := {1.5: 1}
+	print m.len()
+}
+EOF
+
 # THE REST OF THE `[not yet]` TABLE in docs/surface/grammar.md. That table claims a case
 # holds every entry; half of them had none, so the claim was the third unsynchronised copy
 # of a list that already lives in the parser's raises and in this file.
@@ -2251,7 +2351,7 @@ fn main() {
 }
 EOF
 
-expect "$ZERG" open-range-with-no-lower-bound E9022 <<'EOF'
+expect "$ZERG" open-range-with-no-lower-bound E2071 <<'EOF'
 fn main() {
 	xs: list[int] = [1, 2, 3]
 	print xs[..2].len()
@@ -3119,7 +3219,7 @@ EOF
 # GRAMMAR#postfix puts type arguments in the postfix chain, so `f[A, B]` with no call is
 # grammatical. This compiler instantiates a generic at the call and has nothing for a bare
 # one to be.
-expect "$ZERG" type-arguments-with-no-call E9030 <<'EOF'
+expect "$ZERG" type-arguments-with-no-call E2072 <<'EOF'
 fn main() {
 	m := map[str, int]
 	print 1
@@ -3248,6 +3348,21 @@ fn main() {
 }
 EOF
 
+# THE OTHER HALF OF THAT NUMBER. A top-level `unsafe` opens a GROUP or marks a `fn`, and a
+# third thing used to fall through to the statement fallback, be read as an EXPRESSION, and
+# meet E9011 above — an answer describing a form the file does not contain (there is no
+# expression in `unsafe struct P`) under a code that says the language HAS the form. GRAMMAR
+# derives no `unsafe struct` in any position, so the split leaves E9011's sentence true (#87).
+expect "$ZERG" a-top-level-unsafe-that-opens-neither E2075 <<'EOF'
+unsafe struct P {
+	pub x: int
+}
+
+fn main() {
+	print 1
+}
+EOF
+
 expect "$ZERG" inline-assembly E9033 <<'EOF'
 fn main() {
 	asm("nop")
@@ -3280,7 +3395,7 @@ EOF
 # The second item is an UNKNOWN name and not `sealed`, which is what it used to be: `sealed`
 # now has a code of its own (E9079, a reserved decorator that is not built), so asserting E9005
 # through it would have stopped testing the unknown-decorator rule the moment it got one.
-expect "$ZERG" second-decorator-in-a-comma-list E9005 <<'EOF'
+expect "$ZERG" second-decorator-in-a-comma-list E2076 <<'EOF'
 #[derive(Eq), frobnicate]
 struct P {
 	pub v: int
@@ -3399,6 +3514,18 @@ fn main() {
 		[]
 	}
 	print xs.len()
+}
+EOF
+
+# THE OTHER HALF OF THAT NUMBER. `c_infer_ident` answers TUnknown for a name nothing bound —
+# silently, because inference is not where a name is checked — so a bare undefined name as a
+# block's value arrived at the raise above and was told the BLOCK has no nameable type. That is
+# a wrong program wearing a `NotImplemented:` prefix, and everywhere else the same mistake is
+# this sentence (#87).
+expect "$ZERG" a-block-whose-value-is-an-undefined-name E3069 <<'EOF'
+fn main() {
+	x := { bogus }
+	print x
 }
 EOF
 
@@ -3619,14 +3746,14 @@ EOF
 # the split docs/conformance.md names; the permanent half is in reject-check.sh under the
 # same heading.
 
-expect "$ZERG" a-statement-where-an-expression-is-wanted E9039 <<'EOF'
+expect "$ZERG" a-statement-where-an-expression-is-wanted E2073 <<'EOF'
 fn main() {
 	x := break
 	print x
 }
 EOF
 
-expect "$ZERG" a-token-that-opens-no-expression E9040 <<'EOF'
+expect "$ZERG" a-token-that-opens-no-expression E2074 <<'EOF'
 fn main() {
 	x := =
 	print x

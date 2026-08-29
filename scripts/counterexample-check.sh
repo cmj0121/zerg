@@ -201,6 +201,23 @@ for d in "$DIR"/*/; do
 			continue
 		fi
 
+		# AND IT MUST BE REFUSED FOR THE RIGHT KIND OF REASON. Everything above asks only
+		# WHETHER the program was turned away, so a case could be green on a sentence that
+		# contradicts it — and 24 of them were. `E9xxx` says the LANGUAGE has this form and
+		# this compiler has not built it; every program in this directory is one GRAMMAR does
+		# not derive, so no case here can honestly meet that answer. `deco-item/not-a-name.zg`
+		# writes `#[1]` to prove a decorator names a word and was green on *NotImplemented: the
+		# decorator `#[1]`*, and 21 more met `E9040`'s catch-all the same way (#87).
+		#
+		# A LATE case is exempt and asks its own question: the marker names the code, and the
+		# clause below compares it. A KNOWN-OPEN case never reaches here at all.
+		if printf '%s\n' "$out" | head -1 | grep -qE '^E9[0-9]{3}'; then
+			echo "NOTAFORM  $name — refused as an UNBUILT FORM, and GRAMMAR does not derive this program"
+			echo "  $(printf '%s\n' "$out" | head -1)"
+			fail=$((fail + 1))
+			continue
+		fi
+
 		refused=$((refused + 1))
 	done
 done

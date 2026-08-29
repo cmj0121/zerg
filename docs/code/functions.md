@@ -11,10 +11,12 @@ local function. A **generic** function is **not first-class until instantiated**
 generic name is not itself a value — it becomes one only once its type arguments are **inferred** at a
 use site.
 
-> **[not yet]** Writing the arguments WITHOUT a call does not instantiate one either: `f := id[int]` is
-> _E9030 NotImplemented: `id[…]` with no call after it — this compiler instantiates a generic at the
-> call_. The instantiated value has no spelling of its own this phase; wrap the call in a closure or
-> name a concrete function.
+> Writing the arguments WITHOUT a call does not instantiate one either, and it is not a form waiting to be
+> built: a postfix `[ … ]` is ALWAYS an index ([`GRAMMAR`](../../GRAMMAR)), so nothing derived reaches this.
+> `m := map[str, int]` is _E2072 `map[…]` with no call after it — this compiler instantiates a generic at the
+> call, so its type arguments have to arrive with the arguments_. The instantiated value has no spelling of
+> its own this phase; wrap the call in a closure or name a concrete function. (`f := id[int]` is a different
+> answer again — a generic function's name is not a value, _E3069 undefined name `id`_.)
 
 A function type is written `fn(P...) -> R`; a parameter's
 `mut &` is **part of the type**, so `fn(mut &int) -> bool` and `fn(int) -> bool` are distinct types (they

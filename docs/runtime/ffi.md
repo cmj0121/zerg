@@ -13,7 +13,10 @@ the public-surface rules in [Modules, Packages & Programs](package.md). Also in 
 > operand list (GRAMMAR#asm-operand)_. There is no `ffi` module in the shipped
 > standard library, so `import "ffi"` fails at the import itself — _E5002 cannot resolve import `ffi` under any source
 > root_ — rather than later, at the `unsafe` the binding would have needed. The module-level **group** is the shape
-> that IS built, for its `mut` bindings; what its `fn` may do inside is still refused, one operation at a time. On the
+> that IS built, for its `mut` bindings; a top-level `unsafe` that opens neither it nor a `fn` is a malformed group
+> and says so — _E2075 a top-level `unsafe` opens a GROUP or marks a `fn`_, which is a parse refusal and names no
+> unbuilt form, because `unsafe struct P { … }` is not a shape this grammar derives anywhere. What the group's `fn`
+> may do inside is still refused, one operation at a time. On the
 > export edge a `--emit lib` build writes an object and **no header**, and nothing reports which `pub` declarations
 > would have been left out of one. >
 > Nothing in this chapter reaches `cc` any more. `handle` is a name no declaration in a `zerg` program

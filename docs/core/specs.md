@@ -328,8 +328,11 @@ impl per argument (`Indexable[K, V]`, above) where an associated type was one ou
 > **[not yet]** Both halves are refused by name and neither is a form waiting to be built: writing one
 > in an `impl` is _E9015 NotImplemented: an associated type binding `type … = …` in an `impl`_, and
 > projecting one is _E9028 NotImplemented: an associated type projection `T.Item` — GRAMMAR lets a spec
-> name a type its implementer supplies_. A non-method item in an `impl` at all is _E9007 NotImplemented:
-> `…` as an `impl` item — this compiler reads methods and nothing else_.
+> name a type its implementer supplies_. An `unsafe fn` METHOD is a third — _E9109 NotImplemented: an
+> `unsafe fn` METHOD in an `impl`_ — because GRAMMAR#fn-decl spells the marker and this compiler does not
+> enforce the trust boundary it stands for. What is left in an `impl` is not an item at all and says so
+> without promising anything: _E2077 `…` is not an `impl` item — GRAMMAR#impl-item derives a method, an
+> associated value and an associated type_.
 
 The cost lands on a **single-output protocol**. `Iterable[T]` can be implemented at several `T` where a
 fixed `Item` could not, so what pins the element type is **coherence** — at most one such impl per type,

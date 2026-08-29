@@ -3882,7 +3882,7 @@ EOF
 # made to state rather than absorb.
 # TWO FILES of one module declaring a type, which is what E3078's sentence is about: the
 # module flattening it names is a thing the reader can only have done across files. The
-# same-file half is E4073 below, and the pair mirrors E9082 / E4073 for functions — a rule
+# same-file half is E4073 below, and the pair mirrors E4077 / E4073 for functions — a rule
 # whose two halves have different LIFETIMES is two rules, and types had one.
 reject two-files-of-one-module-declaring-a-struct E3078 'flattens into one namespace' <<'EOF'
 import "./one"
@@ -7233,9 +7233,34 @@ EOF
 # TWO FILES of one module declaring a name. Two DIFFERENT modules each declaring a private one
 # is legal — they take a module tag in C — so what this pins is the collision no tag can
 # separate. The sentence is pinned because the case below it shares the shape and not the rule:
-# what E9082 has to say here is that there are two FILES, which is the thing this compiler
+# what E4077 has to say here is that there are two FILES, which is the thing this compiler
 # cannot tell from two modules and used to assert it could.
-reject two-files-of-one-module-declaring-a-function E9082 'both define `work`' <<'EOF'
+# TWO `pub` FILES OF ONE MODULE ARE ONE MODULE (#87). The `pub` test used to be asked before
+# the same-module test, so this program was told "two modules both define `work`" — which sends
+# a reader looking for a second module that is not there. The two rules also have different
+# LIFETIMES: the flat namespace is what this compiler does today, and a public name having no
+# package to be unique within is what the package layer retires.
+reject two-public-files-of-one-module E4077 'both define `work`' <<'EOF'
+import "./one"
+
+fn main() {
+	print one.first()
+}
+--- one/a.zg
+pub fn work() -> int {
+	return 1
+}
+--- one/b.zg
+pub fn work() -> int {
+	return 2
+}
+--- one/mod.zg
+pub fn first() -> int {
+	return 1
+}
+EOF
+
+reject two-files-of-one-module-declaring-a-function E4077 'both define `work`' <<'EOF'
 import "./one"
 
 fn main() {
@@ -7259,8 +7284,8 @@ import pub "./b"
 EOF
 
 # ONE FILE declaring a name twice, which is the other half of the same collision and is a
-# different RULE: E9082 is a `NotImplemented` the package layer retires, and this is refused by
-# every compiler there will ever be. It was reported as E9082 — "two modules both define
+# different RULE: E4077 is a `NotImplemented` the package layer retires, and this is refused by
+# every compiler there will ever be. It was reported as E4077 — "two modules both define
 # `test_same`" about two `#[test]` functions in one file — and a reader following that sentence
 # goes looking for a second module.
 #
@@ -7682,14 +7707,18 @@ fn main() {
 }
 EOF
 
-reject spawn-of-something-that-is-not-a-call E9098 <<'EOF'
+reject spawn-of-something-that-is-not-a-call E4078 <<'EOF'
 fn main() {
 	x := 1
 	spawn x
 }
 EOF
 
-reject spawn-of-a-method-the-receiver-does-not-declare E9099 <<'EOF'
+# ONE NUMBER, TWO QUESTIONS (#87). A named type has a complete method table, so a miss is a
+# WRONG PROGRAM and gets the ordinary call's sentence; a built-in receiver answers through a
+# dispatch the thunk does not reach, and THAT is the unbuilt form. The old code said
+# "not a function, a method, or a namespaced function" to both, which is false of both.
+reject spawn-of-a-method-the-receiver-does-not-declare E3131 <<'EOF'
 struct P {
 	pub v: int
 }
@@ -7697,6 +7726,14 @@ struct P {
 fn main() {
 	p := P(1)
 	spawn p.nope()
+}
+EOF
+
+reject defer-of-a-method-on-a-built-in-receiver E9099 <<'EOF'
+fn main() {
+	mut xs := [1, 2]
+	defer xs.append(3)
+	print xs.len()
 }
 EOF
 

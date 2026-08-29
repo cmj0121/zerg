@@ -88,14 +88,16 @@ Four names are **specified and unbuilt**, and only one of them is a name the com
   enforce an invariant. **[not yet]**, with a code of its own: `E9079`.
 - **`#[repr]`** / **`#[packed]`** / **`#[align]`** — the memory-**layout** decorators, for in-memory
   width, padding and alignment against an external ABI (see _Kept rare_ and
-  [Values & Memory](memory.md)). **[not yet]**, and with no code of its own: what a reader meets is the
-  unknown-decorator arm's _E9005_ (below).
+  [Values & Memory](memory.md)). **[not yet]**, under `E9005`, which is now theirs alone (below).
 
-> **[not yet]** The layout three are **reserved on this page and nowhere in the compiler**. `#[repr]` has
-> no rule of its own: it falls into the unknown-decorator arm and gets _E9005 … this compiler reads
-> `#[derive(…)]`, `#[obj]`, `#[test]`, `#[fixture]` and `#[allow(…)]`, and no other_ — the same sentence a
-> misspelled `#[frobnicate]` gets. Nothing is silently dropped; what is lost is the distinction between a
-> name awaiting implementation and a typo, which is exactly what `#[sealed]`'s `E9079` bought back.
+> **[not yet]** The layout three are **reserved on this page and not built in the compiler**, and they say
+> so by name: _E9005 NotImplemented: the decorator `#[repr]` — it is a reserved LAYOUT decorator (in-memory
+> width, padding and alignment against an external ABI) and this compiler does not build it, so the type is
+> laid out as it would be without it_. They used to share the unknown-decorator arm with a misspelled
+> `#[frobnicate]`, which lost the distinction between a name awaiting implementation and a typo — the same
+> distinction `#[sealed]`'s `E9079` bought back one bullet above. A typo now carries a code that promises
+> nothing: _E2076 the decorator `#[frobnicate]` — the set is closed and compiler-owned, so an unknown name
+> is not a directive this compiler has yet to build_.
 
 The set grows only as the compiler gains directives; **logging** / instrumentation and **FFI** are the
 likely next entries. Any name **not** listed on this page is not a reserved decorator at all — it is a

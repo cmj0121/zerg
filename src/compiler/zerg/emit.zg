@@ -2577,8 +2577,14 @@ fn c_mod_collide(mut &em: Emitter, fn_i: ast.FnDecl, prev: ast.FnDecl) {
 	# sees, and it would be the wrong one.
 	return if prev.path == fn_i.path
 
-	raise c_diag_at(fn_i.path, fn_i.line, fn_i.col, rule.Rule.NotYetTwoModulesDefine, f"NotImplemented: two modules both define `{fn_i.name}` and at least one is `pub` — a public name has no package to be unique within (docs/runtime/package.md), so telling the two apart needs the link-name override docs/runtime/ffi.md specifies") if fn_i.is_pub or prev.is_pub
+	# THE SAME-MODULE QUESTION IS ASKED FIRST, and asking it second is what made the sentence
+	# above a lie about half the programs that met it. Two `pub` files of ONE directory are ONE
+	# module — `c_mod_of` says so — and they were told "two modules both define `helper`", which
+	# sends a reader looking for a second module that is not there. The two rules also have
+	# different LIFETIMES: the flat namespace is what this compiler does today, and a public
+	# name having no package to be unique within is what the package layer retires (#87).
 	raise c_mod_flat_collide(fn_i.path, fn_i.line, fn_i.col, fn_i.name, prev.path) if check.c_mod_of(em, fn_i.path) == check.c_mod_of(em, prev.path)
+	raise c_diag_at(fn_i.path, fn_i.line, fn_i.col, rule.Rule.NotYetTwoModulesDefine, f"NotImplemented: two modules both define `{fn_i.name}` and at least one is `pub` — a public name has no package to be unique within (docs/runtime/package.md), so telling the two apart needs the link-name override docs/runtime/ffi.md specifies") if fn_i.is_pub or prev.is_pub
 
 	if not c_name_in(em.mod_tagged, fn_i.name) {
 		em.mod_tagged.append(fn_i.name)
@@ -3620,8 +3626,10 @@ fn c_build_top_names(mut &em: Emitter, f: ast.File) {
 			c_check_private_field(em, sd, fd)
 		}
 		c_check_names_distinct(fnames, "a field", sd.name, sd.path, sd.line, sd.col)
+		mut earlier: list[str] = []
 		for fd in sd.fields {
-			c_check_field_default(sd, fnames, fd)
+			c_check_field_default(sd, fnames, earlier, fd)
+			earlier.append(fd.name)
 		}
 	}
 	for ed in f.enums {
@@ -3678,10 +3686,21 @@ fn c_check_private_field(mut &em: Emitter, sd: ast.StructDecl, fd: ast.FieldDef)
 # It is the same refusal `docs/code/functions.md` records for a parameter default that reads
 # an earlier parameter, for the same reason, and the seed has gated it on both since it was
 # written. Refusing by name is what this compiler owes a form it cannot lower.
-fn c_check_field_default(sd: ast.StructDecl, fnames: list[str], fd: ast.FieldDef) {
+fn c_check_field_default(sd: ast.StructDecl, fnames: list[str], earlier: list[str], fd: ast.FieldDef) {
 	return if not fd.has_def
 
 	nm := c_default_names_field(fnames, fd.def)
+
+	# ONE NUMBER, THREE PROGRAMS (#87). `fnames` is EVERY field, including this one and the
+	# ones after it, so all three arrived at the raise below wearing `NotImplemented:`.
+	#
+	# Only one of the three is a form. `docs/core/types.md` says a field default follows the
+	# rule a parameter default already follows, and `docs/code/functions.md` says a parameter
+	# default "may read earlier parameters (evaluation is left-to-right)" — so `b: int = a` is
+	# the specified language and this compiler has not built it. `a: int = a` and `b: int = c`
+	# are not: there is no left-to-right order in which either has a value to read, and no day
+	# a code in that range would have retired on.
+	raise c_diag_at(sd.path, fd.line, fd.col, rule.Rule.DefaultReadsUnbuiltField, f"the default on field `{fd.name}` of `{sd.name}` reads the field `{nm}`, which is not an EARLIER field — a default is evaluated left to right at the construction, so it can read the fields written before it and nothing else") if nm != "" and not c_name_in(earlier, nm)
 
 	# with a place, which a refusal usually has none of: this one runs over a DECLARATION and
 	# the field carries its own line and column, so there is a position to give and no reason
@@ -5255,7 +5274,7 @@ fn c_twice_in_file_says(name: str, first: int) -> str {
 # Asserting the first reading is what made it wrong about the same-file case above; naming the
 # files is right about all of them.
 fn c_mod_flat_collide(path: str, line: int, col: int, name: str, other: str) -> str {
-	return c_diag_at(path, line, col, rule.Rule.NotYetNamespaceCollision, f"NotImplemented: `{other}` and `{path}` both define `{name}` — this compiler flattens every module into one namespace, so two declarations under one directory cannot be told apart, whether they are two modules or two files of one")
+	return c_diag_at(path, line, col, rule.Rule.NamespaceCollision, f"`{other}` and `{path}` both define `{name}` — this compiler flattens every module into one namespace, so two declarations under one directory cannot be told apart, whether they are two modules or two files of one")
 }
 
 # The two below are one rule over a two-valued domain, which is why they read a side rather
@@ -5560,7 +5579,29 @@ fn c_last_val_ty(mut &em: Emitter, body: list[ast.Stmt], what: str) -> ast.Ty {
 	em.open_scopes = saved_open
 	em.scope_cur = saved_cur
 
-	raise c_diag(em, rule.Rule.NotYetValueUnnameableType, f"NotImplemented: {what} whose value has no type this compiler can name — give the block's last expression a call, a literal or a typed binding") if c_is_unknown(t)
+	# ONE NUMBER, TWO QUESTIONS (#87). `c_infer_ident` answers `TUnknown` for a name nothing
+	# bound — silently, because inference is not where a name is checked — so `x := { bogus }`
+	# arrived here and was told its BLOCK has a value with no nameable type. That is a wrong
+	# program wearing a `NotImplemented:` prefix, and it is the one sentence a reader of it
+	# cannot act on: everywhere else the same mistake is _E3069 undefined name `bogus`_.
+	#
+	# THE BARE NAME IS THE HALF THAT IS ASKED FOR. `TUnknown` has other producers, so the
+	# number keeps the rest — a block whose last expression really has no type this compiler
+	# can name is a form, and that is the sentence it is left saying.
+	mut named := false
+	if c_is_unknown(t) {
+		tail := c_block_tail_name(body[n - 1])
+		if tail != "" and not c_is_free_fn(em, tail) {
+			# REPORTED, NOT RAISED, because `c_undefined_name` is the one place that rule is
+			# spelled and it records a finding the way every other undefined name does. The
+			# raise below is what has to stand aside: it would otherwise report second and
+			# last, and the reader would meet the sentence about their block.
+			c_undefined_name(em, tail)
+			named = true
+		}
+	}
+
+	raise c_diag(em, rule.Rule.NotYetValueUnnameableType, f"NotImplemented: {what} whose value has no type this compiler can name — give the block's last expression a call, a literal or a typed binding") if c_is_unknown(t) and not named
 	return ast.Ty.TNil if c_is_nil_ty(t)
 
 	return t
@@ -6380,6 +6421,18 @@ fn c_neg_call(t: ast.Ty, inner: str) -> str {
 fn c_is_test(mut &em: Emitter, x: ast.Expr, name: str, sb: Subst) -> str {
 	t := c_infer(em, x)
 	kind := c_err_kind(name)
+
+	# ONE NUMBER, TWO QUESTIONS (#87). `is Banana`, where nothing declares `Banana`, is a WRONG
+	# PROGRAM — and it was told the same thing as `is S` for a `spec` the file declares two lines
+	# up, which is a form: GRAMMAR#cmp-expr takes any `type-name`, and the general runtime type
+	# test needs tags no value carries this phase. `NotImplemented:` is true of the second and
+	# false of the first, so the reader who typed a name wrong was told to wait for a feature.
+	#
+	# `c_names_a_type` IS THE SAME QUESTION A TYPE POSITION ASKS, so a name that reaches neither
+	# side of it gets the sentence a type position gives it.
+	if kind == 0 and not c_names_a_type(em, name) and parser.p_prelude_role(name) == "" and not c_name_in(c_err_kinds_unbuilt(), name) {
+		c_check_type_name(em, name, Site(ast.Ty.TNamed(name), f"the `is` test", [], em.at_path, 0, 0, false))
+	}
 
 	raise c_diag(em, rule.Rule.NotYetIsErrorKind, f"NotImplemented: `is {name}` — an `is` test names one of the built-in error kinds here, and `{name}` is not one; GRAMMAR#cmp-expr takes any `type-name`, so this is a narrower test than the grammar writes") if kind == 0
 	raise c_diag(em, rule.Rule.IsWantsErr, f"`is {name}` wants an Err on its left, found a {ast.ty_name(t)}") if not c_is_err_ty(t)
@@ -7336,9 +7389,22 @@ pub fn c_is_place(mut &em: Emitter, e: ast.Expr) -> bool {
 # was handed: `mk().xs[0] = 9` fails at `mk()`, and calling the whole thing "a call result"
 # is true of the call and not of the `mk().xs` this was asked about. c_is_place became a
 # whole-path question and this is its other half.
+# c_is_literal_expr is a WRITTEN VALUE — one with no storage anywhere in the program, not even
+# a temporary somebody else owns. It exists because `c_place_why` called `[1, 2]` "a call
+# result", which is a phrase about a form the reader did not write.
+fn c_is_literal_expr(e: ast.Expr) -> bool {
+	return match e {
+		Expr.EListLit(_) => true
+		Expr.EMapLit(_, _) => true
+		Expr.EStr(_) => true
+		_ => false
+	}
+}
+
 pub fn c_place_why(mut &em: Emitter, e: ast.Expr) -> str {
 	return "a map index" if c_is_index(e) and c_is_map(c_infer(em, c_index_target(e)))
 	return "a slice" if c_is_index(e) and c_is_range(c_index_key(e))
+	return "a literal" if c_is_literal_expr(e)
 	return "a call result" if c_ident_name(e) == "" and not c_is_lvalue(e)
 
 	# an lvalue by SHAPE whose path stops being storage further down — name where it stops
@@ -7744,6 +7810,17 @@ fn c_list_method(mut &em: Emitter, target: ast.Expr, meth: str, args: list[ast.E
 	# append silently did nothing. A read-only method on a copy is the same answer as on
 	# the original; a mutating one is not, and is refused rather than dropped.
 	if not c_is_place(em, target) {
+		# ONE NUMBER, TWO QUESTIONS (#87). A MAP INDEX is a place the language has: a LIST index
+		# is one — `xs[0].append(3)` compiles and edits in place — and nothing in
+		# `docs/code/collections.md` makes a map's element different. This compiler cannot take
+		# its address, so that is a form it has not built and the number is right for it.
+		#
+		# A SLICE, A CALL RESULT AND A LITERAL are not waiting for anything. `collections.md`
+		# calls a subrange "an ordinary read-only `list[T]` value" and a plain `xs` frozen, and a
+		# written value has no storage anywhere in the program — so there is no day a
+		# `NotImplemented:` on any of the three would have retired.
+		raise c_diag(em, rule.Rule.MutateAValueNotAPlace, f"`{meth}` MUTATES its list, and `{c_place_why(em, target)}` is a value rather than a place — bind it to a name first") if c_meth_mutates(meth) and not (c_is_index(target) and c_is_map(c_infer(em, c_index_target(target))))
+
 		raise c_diag(em, rule.Rule.NotYetMutateListRvalue, f"NotImplemented: `{meth}` MUTATES its list, and `{c_place_why(em, target)}` is a value rather than a place — bind it to a name first") if c_meth_mutates(meth)
 
 		return c_list_method_rv(em, target, meth, args, tty, sb)
@@ -7935,7 +8012,17 @@ fn c_free_method(mut &em: Emitter, target: ast.Expr, meth: str, args: list[ast.E
 	# LANGUAGE gives a value are decided in c_meth_kind, above every receiver family, so a name
 	# arriving here is a method no type here declares and there is no day on which it is one.
 	tty := c_infer(em, target)
-	raise c_diag(em, rule.Rule.MethodUnknown, f"the method `{meth}` on a {ast.ty_name(tty)}")
+	raise c_no_method_says(em, meth, ast.ty_name(tty))
+}
+
+# c_no_method_says is the sentence for a method NO TYPE HERE DECLARES, written once because
+# two callers ask it: the ordinary call above, and the `spawn`/`defer` thunk, which used to
+# answer its own half with `NotImplemented: … not a function, a method, or a namespaced
+# function` — a code saying the language has the form, about a method that never existed
+# (#87). A second spelling of one rule is what `error-codes-check` refuses, and rightly: the
+# two would drift, and the one a reader met would decide what they believed.
+fn c_no_method_says(mut &em: Emitter, meth: str, tyname: str) -> str {
+	return c_diag(em, rule.Rule.MethodUnknown, f"the method `{meth}` on a {tyname}")
 }
 
 # c_recv_args renders a method call's arguments: the receiver first, then the written
@@ -9624,6 +9711,18 @@ fn c_infer_listlit(mut &em: Emitter, elems: list[ast.Expr]) -> ast.Ty {
 # known element type that happens to be empty.
 fn c_infer_fill(mut &em: Emitter, v: ast.Expr) -> ast.Ty {
 	return ast.Ty.TList(c_infer(em, v))
+}
+
+# c_block_tail_name is the NAME a block's last statement reads, or "" when it is not a bare
+# name. It exists for one caller — the raise above — because the answer decides which of two
+# questions that site is being asked, and reading it off the statement is the only way to tell.
+fn c_block_tail_name(st: ast.Stmt) -> str {
+	return "" if not c_is_expr_stmt(st)
+
+	return match c_expr_stmt_of(st) {
+		Expr.EIdent(n) => n
+		_ => ""
+	}
 }
 
 fn c_infer_ident(mut &em: Emitter, n: str) -> ast.Ty {
@@ -11973,7 +12072,7 @@ fn c_callee_raw(mut &em: Emitter, x: ast.Expr, what: str) -> Callee {
 
 		return c_callee_free(em, n, c_call_args_of(x), what)
 	}
-	raise c_diag(em, rule.Rule.NotYetSpawnOfNonFunction, f"NotImplemented: {what} of anything but a function, a method, or a namespaced function") if not c_is_method_expr(x)
+	raise c_diag(em, rule.Rule.SpawnOfNonFunction, f"{what} of anything but a function, a method, or a namespaced function") if not c_is_method_expr(x)
 
 	tgt := c_meth_target_of(x)
 	m := c_meth_name_of(x)
@@ -12008,7 +12107,23 @@ fn c_callee_raw(mut &em: Emitter, x: ast.Expr, what: str) -> Callee {
 			return c_callee_free(em, m, margs, what)
 		}
 
-		raise c_diag(em, rule.Rule.NotYetSpawnOfUnknownName, f"NotImplemented: {what} of `{m}` — not a function, a method, or a namespaced function")
+		# ONE NUMBER, TWO QUESTIONS, and a sentence that was false for both halves (#87).
+		#
+		# `docs/code/coroutine.md` says the callee is ANY call — "a plain function, a method, a
+		# namespaced function" — so `defer xs.append(3)` and `spawn m.clear()` are the form, and
+		# telling a reader they are "not a method" is a lie about their own program. And a
+		# genuinely misspelled `p.bogus()` is a WRONG PROGRAM, which `NotImplemented:` denies:
+		# there is no day a code in that range retires on for a method that never existed.
+		#
+		# THE RECEIVER TELLS THEM APART. A named user type has a complete method table — that is
+		# what `c_has_method` just read — so a miss there is the ordinary call's `MethodUnknown`,
+		# reached by the same sentence it uses. An UNNAMED receiver is a built-in (a `list`, a
+		# `map`, a `str`, an `Err`), whose methods this compiler answers through a dispatch the
+		# thunk below never reaches, and THAT is the unbuilt form: it keeps the number, and says
+		# what is actually missing rather than denying the call is a method.
+		raise c_no_method_says(em, m, recv) if recv != ""
+
+		raise c_diag(em, rule.Rule.NotYetSpawnOfUnknownName, f"NotImplemented: {what} of the method `{m}` on a {ast.ty_name(c_infer(em, tgt))} — this compiler thunks a free function and a method on a NAMED type, and a built-in receiver answers through a dispatch a thunk does not reach")
 	}
 
 	# a method's receiver is parameter 0 — the parser put `this` there when it flattened the
@@ -12147,6 +12262,13 @@ fn c_map_vt(mut &em: Emitter, kt: ast.Ty, vt: ast.Ty) -> str {
 	# this all along; `zerg` reached it by inference the day a byte literal carried its type.
 	# a key whose type inference could not name is left alone, as every other rule here
 	# does: guessing turns a typing gap into a refusal of a working program
+	# A `float` KEY IS NOT WAITING FOR ANYTHING. `docs/core/derive.md` refuses `Hash` on any
+	# `float` field — a float has no equality a hash can agree with — so there is no day this
+	# retires on, and `NotImplemented:` promised one. The rest of the range really is unbuilt:
+	# a `byte`, a `rune` and a `derive(Hash)` type are `collections.md`'s intended rule, and
+	# they keep the number (#87).
+	raise c_diag(em, rule.Rule.MapKeyHasNoHash, f"a map key of type {ast.ty_name(kt)} — a key needs `Hash`, and a `float` has no equality a hash can agree with (docs/core/derive.md), so it can never be one") if c_is_float(kt)
+
 	raise c_diag(em, rule.Rule.NotYetMapKeyType, f"NotImplemented: a map key of type {ast.ty_name(kt)} — a key needs `Hash`, and this compiler has one for `int` and for `str`") if not c_is_int(kt) and not c_is_str(kt) and not c_is_unknown(kt)
 
 	mut hash := "zrt_hash_int"
@@ -13851,6 +13973,16 @@ fn c_err_kinds() -> list[str] {
 		"DivideByZeroError",
 		"AssertionError"
 	]
+}
+
+# c_err_kinds_unbuilt is the rest of the TAXONOMY: kinds `docs/code/errors.md` gives the
+# language and this compiler cannot name at the surface. They are here so that `is AliasError`
+# is answered as the unbuilt form the chapter says it is, rather than as a name nothing
+# declares — which is what the split below would otherwise make of it. The chapter marks all
+# three **[not yet]** and quotes E9078's sentence, and `refuse-check` pins one case per name,
+# so a name dropped from this list turns a gate red rather than changing an answer quietly.
+fn c_err_kinds_unbuilt() -> list[str] {
+	return ["UnwrapError", "MatchError", "AliasError"]
 }
 
 fn c_err_kind(name: str) -> int {

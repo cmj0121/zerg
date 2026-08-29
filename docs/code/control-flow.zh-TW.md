@@ -99,7 +99,7 @@ collection（[Collections](collections.zh-TW.md)），不要 break-with-value。
 區分）逐一試一個值，跑第一個命中的、產出它的 result。arm 的 body 是一個**運算式**（`GRAMMAR#match-arm`），而區塊
 **就是**運算式——所以 `pattern => { … }` 可以裝好幾個 statement 並且照樣產出值，它的值就是該區塊最後一個 statement
 的值。arm 的整個 body **不能**是一個 statement,因為那樣 arm 就沒有東西可以產出了:`1 => print "one"` 是
-_E9039 NotImplemented: `print` is a statement, and an expression is wanted here_(arm 裡的 `return` 也是同一則),
+_E2073 `print` is a statement, and an expression is wanted here_(arm 裡的 `return` 也是同一則),
 而一次 reassignment 或一次 send 是 _E9041_、訊息會指名它遇到的是哪一種。加上大括號,arm 就有了一個會產出值的區塊。
 每個 arm 產出**相同型別**(_E3021 a `match` answers ONE type, and its arms give … and …_),所以 `match` 是個值,可
 用於 `:=`、`return`、或引數——產出 `nil` 的 arm 讀來就是普通 statement。覆蓋是**必需**的——漏掉某個 case 的

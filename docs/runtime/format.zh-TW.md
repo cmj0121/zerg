@@ -57,7 +57,7 @@ method 會在宣告處被拒絕。`print`、格式洞與 `str(…)` 都會採用
 > 它們的答案:_E9107 NotImplemented: the method `display` on a chan[int] — there is nothing to write in its
 > place — a chan[int] is an identity rather than a value_。**三個 rendering 位置說同一句話** —— `print x`、
 > `str(x)` 與 `f"{x}"` 是同一個檢查,身分抵達那裡得到的是 _E4076 a … is an identity rather than a value, and
-> the language gives it no rendering_。那不是 `[not yet]`:沒有東西在路上。**nil** 是第三種答案,因為 nil 根本不是一個值:沒
+> the language gives it no rendering_。那指名的不是任何未建形式:沒有東西在路上。**nil** 是第三種答案,因為 nil 根本不是一個值:沒
 > 有 `-> type` 的 `fn` 回答的就是它（[`GRAMMAR#fn-decl`](../../GRAMMAR)）,`str(f())` 會被指名這麼告知——
 > _E3086 this rendering needs a value, and this one is nil_——而讀者需要的是一個會回答出東西的 `fn`,不是一個
 > 渲染。所以 `str(x)` 頂得上第一組;第二組沒有東西可以頂上,但有東西可以等;而這三種沒有東西可以頂上,也沒有

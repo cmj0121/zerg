@@ -458,7 +458,7 @@ fn p_name(mut &p: Parser, what: str) -> str {
 # type's arguments rather than an index — and parse_base_type maps neither to a `Ty`. There is
 # no `set[T]` in this language yet (docs/runtime/package.md marks it absent), so nothing is
 # bound and nothing is knocked out; a mention is not a binding.
-fn p_prelude_role(lx: str) -> str {
+pub fn p_prelude_role(lx: str) -> str {
 	return "a built-in scalar type" if lx == "int" or lx == "uint" or lx == "float" or lx == "bool" or lx == "str" or lx == "byte" or lx == "rune"
 	return "a built-in list alias" if lx == "bytearray" or lx == "runearray"
 	return "a built-in container type" if lx == "list" or lx == "map"

@@ -6403,6 +6403,18 @@ fn c_is_test(mut &em: Emitter, x: ast.Expr, name: str, sb: Subst) -> str {
 	t := c_infer(em, x)
 	kind := c_err_kind(name)
 
+	# ONE NUMBER, TWO QUESTIONS (#87). `is Banana`, where nothing declares `Banana`, is a WRONG
+	# PROGRAM — and it was told the same thing as `is S` for a `spec` the file declares two lines
+	# up, which is a form: GRAMMAR#cmp-expr takes any `type-name`, and the general runtime type
+	# test needs tags no value carries this phase. `NotImplemented:` is true of the second and
+	# false of the first, so the reader who typed a name wrong was told to wait for a feature.
+	#
+	# `c_names_a_type` IS THE SAME QUESTION A TYPE POSITION ASKS, so a name that reaches neither
+	# side of it gets the sentence a type position gives it.
+	if kind == 0 and not c_names_a_type(em, name) and parser.p_prelude_role(name) == "" and not c_name_in(c_err_kinds_unbuilt(), name) {
+		c_check_type_name(em, name, Site(ast.Ty.TNamed(name), f"the `is` test", [], em.at_path, 0, 0, false))
+	}
+
 	raise c_diag(em, rule.Rule.NotYetIsErrorKind, f"NotImplemented: `is {name}` — an `is` test names one of the built-in error kinds here, and `{name}` is not one; GRAMMAR#cmp-expr takes any `type-name`, so this is a narrower test than the grammar writes") if kind == 0
 	raise c_diag(em, rule.Rule.IsWantsErr, f"`is {name}` wants an Err on its left, found a {ast.ty_name(t)}") if not c_is_err_ty(t)
 
@@ -13911,6 +13923,16 @@ fn c_err_kinds() -> list[str] {
 		"DivideByZeroError",
 		"AssertionError"
 	]
+}
+
+# c_err_kinds_unbuilt is the rest of the TAXONOMY: kinds `docs/code/errors.md` gives the
+# language and this compiler cannot name at the surface. They are here so that `is AliasError`
+# is answered as the unbuilt form the chapter says it is, rather than as a name nothing
+# declares — which is what the split below would otherwise make of it. The chapter marks all
+# three **[not yet]** and quotes E9078's sentence, and `refuse-check` pins one case per name,
+# so a name dropped from this list turns a gate red rather than changing an answer quietly.
+fn c_err_kinds_unbuilt() -> list[str] {
+	return ["UnwrapError", "MatchError", "AliasError"]
 }
 
 fn c_err_kind(name: str) -> int {

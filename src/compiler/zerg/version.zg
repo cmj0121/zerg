@@ -11,11 +11,11 @@
 # through an import — so a constant here would compile under `zerg` and stop the bootstrap
 # dead at the one step that has to keep working.
 
-# zerg_version is the version alone — "0.1.0" — with no product name around it, because
+# zerg_version is the version alone — "0.2.0" — with no product name around it, because
 # the two compilers word their banners differently and only the number is shared.
 #
 # It cannot be called `version`: a program and the modules it imports flatten into one
 # scope, and `cli.version` is already a name in it.
 pub fn zerg_version() -> str {
-	return "0.1.0"
+	return "0.2.0"
 }

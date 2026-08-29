@@ -3,7 +3,7 @@
 English | [繁體中文](README.zh-TW.md)
 
 [![CI](https://github.com/cmj0121/zerg/actions/workflows/ci.yml/badge.svg)](https://github.com/cmj0121/zerg/actions/workflows/ci.yml)
-[![version](https://img.shields.io/badge/version-0.1.0-blue)](VERSION)
+[![version](https://img.shields.io/badge/version-0.2.0-blue)](VERSION)
 
 > Write the code as you think — one way, and only one way, to do it.
 

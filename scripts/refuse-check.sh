@@ -1439,13 +1439,30 @@ impl B {
 fn main() { print 1 }
 EOF
 
-expect "$ZERG" impl-item-that-is-not-a-method E9007 <<'EOF'
+expect "$ZERG" impl-item-that-is-not-a-method E2077 <<'EOF'
 struct B {
 	pub n: int
 }
 
 impl B {
 	print 1
+}
+
+fn main() { print 1 }
+EOF
+
+# THE OTHER HALF OF THAT NUMBER (#87). GRAMMAR#fn-decl spells `'pub'? 'unsafe'? 'mut'? 'fn'`
+# and GRAMMAR#impl-item takes a fn-decl, so an `unsafe fn` method IS a form — and its writer
+# was told this compiler "reads methods and nothing else", about a method they did write.
+expect "$ZERG" an-unsafe-method-in-an-impl E9109 <<'EOF'
+struct B {
+	pub n: int
+}
+
+impl B {
+	unsafe fn m() {
+		nop
+	}
 }
 
 fn main() { print 1 }

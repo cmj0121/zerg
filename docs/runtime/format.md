@@ -66,7 +66,10 @@ declaration. `print`, a format hole and `str(…)` all consult the override, and
 > identity rather than a value, and the language gives it no equality_ — so there are no parts to render
 > instead, and a `Display` would not be their answer if it arrived: _E9107 NotImplemented: the method
 > `display` on a chan[int] — there is nothing to write in its place — a chan[int] is an identity rather than
-> a value_. **nil** is a third answer, because nil is not a value at all: a `fn` with no `-> type` answers it
+> a value_. **The three rendering positions say the same thing** — `print x`, `str(x)` and `f"{x}"` are one
+> check, and an identity reaching it is _E4076 a … is an identity rather than a value, and the language
+> gives it no rendering_. That refusal is not a `[not yet]`: nothing is coming. **nil** is a third answer,
+> because nil is not a value at all: a `fn` with no `-> type` answers it
 > ([`GRAMMAR#fn-decl`](../../GRAMMAR)), `str(f())` is told so by name — _E3086 this rendering needs a value,
 > and this one is nil_ — and what the reader needs is a `fn` that answers with something, not a rendering.
 > So `str(x)` stands in on the first set; on the second there is nothing to stand in and something to wait

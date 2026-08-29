@@ -7169,6 +7169,25 @@ fn c_display_check(mut &em: Emitter, t: ast.Ty, where: str) {
 	raise c_diag(em, rule.Rule.NotYetRenderEnumAsText, f"NotImplemented: rendering a {ast.ty_name(t)} as text — an enum has no name for its variant without the structural `Display` this compiler does not generate; `int(v)` gives its discriminant, or `match` it") if c_is_enum_ty(em, t)
 	raise c_diag(em, rule.Rule.NotYetRenderAsText, f"NotImplemented: rendering a {ast.ty_name(t)} as text — a composite needs the structural `Display` this compiler does not generate; render its fields") if c_is_aggregate(em, t) or c_is_carrier(t)
 
+	# AN IDENTITY IS NOT WAITING FOR A `Display`, so its refusal is not the composite's. A
+	# composite has parts to render meanwhile and a gap that will close; a CHANNEL and a
+	# FUNCTION VALUE are a place to send to and a place to jump to, and the language gives
+	# neither of them equality, parts, or a rendering — `docs/runtime/format.md` says so of
+	# `display` already, and said it of a spelling this check does not reach.
+	#
+	# NEITHER MEMBER WAS ASKED ABOUT HERE, and they failed differently for it. A `chan` is not
+	# an enum, an aggregate or a carrier, so it fell to `c_display`'s `_` arm and `print ch`
+	# printed `zrt_display_int((int64_t)(ch))` — the channel's ADDRESS, a different number on
+	# every run of the same program. A `fn` took the same arm and did not compile: cc reported
+	# `operand of type 'zg_fnptr' where arithmetic or pointer type is required`, against
+	# generated C at a line in a file nobody wrote. One silent wrong answer and one escape to
+	# cc, from one missing rule (#88).
+	#
+	# `c_is_identity` IS THE CLASS, not a hand-written pair. It is what `E4034` refuses `==` on,
+	# and a second list of the same two types is how the defect it was extracted to end
+	# propagated in the first place.
+	raise c_diag(em, rule.Rule.IdentityHasNoRendering, f"a {ast.ty_name(t)} is an identity rather than a value, and the language gives it no rendering — it is a place to send to or to jump to, and its address is not a rendering of anything the program wrote") if c_is_identity(t)
+
 	# NIL IS NOT A THING TO RENDER, and it is asked here because this is the one gate the
 	# three rendering positions share — `print x`, an f-string's `{x}` and `str(x)`. A `fn`
 	# with no `-> type` answers nil, so `print f()` cast a `void` to `long long` and cc

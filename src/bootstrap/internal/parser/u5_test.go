@@ -1,6 +1,7 @@
 package parser
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/cmj0121/zerg/src/bootstrap/internal/ast"
@@ -96,5 +97,44 @@ func TestDecoratorAttachment(t *testing.T) {
 	}
 	if s.Decorators[0].Items[0].Name != "derive" || len(s.Decorators[0].Items[0].Args) != 2 {
 		t.Fatalf("unexpected deco item: %+v", s.Decorators[0].Items[0])
+	}
+}
+
+// TestAllowOnAStatement pins #91. `#[allow(…)]` is documented normatively in
+// docs/tooling/lint.md, the shipping compiler builds it, and the seed died on the
+// `#[` — so a documented feature could not be used in any file the seed must build,
+// which is the compiler's own sources and the whole standard library.
+//
+// The seed does not lint, so it does not honour the suppression; it only has to read
+// the decorator and hand back the statement it leads.
+func TestAllowOnAStatement(t *testing.T) {
+	fn := onlyFunc(t, "fn main() {\n\tmut x := 1\n\t#[allow(L101)]\n\tx = 2\n\tprint x\n}")
+	if len(fn.Body.Stmts) != 3 {
+		t.Fatalf("got %d stmts, want 3 — the decorator is read and the statement it leads is kept", len(fn.Body.Stmts))
+	}
+	if _, ok := fn.Body.Stmts[2].(*ast.PrintStmt); !ok {
+		t.Fatalf("stmt 2 is %T, want *ast.PrintStmt — the decorator became a statement of its own", fn.Body.Stmts[2])
+	}
+}
+
+// TestDecoratorOnAStatementIsAllowOnly pins the other half: a statement takes
+// `#[allow(…)]` and no other decorator, so the seed agrees with the shipping compiler
+// about which programs exist rather than accepting a wider language than it.
+//
+// The other two ways the seed could be wider — a STACK of statement decorators, and an
+// `#[allow]` naming no codes — are held by `reject-check`, which asks the seed and the
+// compiler to turn away the same program. Both were red when this fix was first written
+// and only this axis was guarded. They are not copied here: that gate is where the
+// two-compilers-agree fact lives.
+func TestDecoratorOnAStatementIsAllowOnly(t *testing.T) {
+	_, diags := Parse("fn main() {\n\t#[derive(Eq)]\n\tprint 1\n}")
+	if len(diags) == 0 {
+		t.Fatalf("a #[derive] leading a statement was accepted")
+	}
+	// The REASON is the assertion. Before the seed read a statement decorator at all,
+	// this failed too — with `expected an expression, found '#['`, which says nothing
+	// about the rule and would go on saying it if the rule were dropped.
+	if !strings.Contains(diags[0].Error(), "#[allow") {
+		t.Fatalf("refused for the wrong reason: %v", diags[0])
 	}
 }

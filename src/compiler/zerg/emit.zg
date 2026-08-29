@@ -3700,9 +3700,7 @@ fn c_check_field_default(sd: ast.StructDecl, fnames: list[str], earlier: list[st
 	# the specified language and this compiler has not built it. `a: int = a` and `b: int = c`
 	# are not: there is no left-to-right order in which either has a value to read, and no day
 	# a code in that range would have retired on.
-	if nm != "" and not c_name_in(earlier, nm) {
-		raise c_diag_at(sd.path, fd.line, fd.col, rule.Rule.DefaultReadsUnbuiltField, f"the default on field `{fd.name}` of `{sd.name}` reads the field `{nm}`, which is not an EARLIER field — a default is evaluated left to right at the construction, so it can read the fields written before it and nothing else")
-	}
+	raise c_diag_at(sd.path, fd.line, fd.col, rule.Rule.DefaultReadsUnbuiltField, f"the default on field `{fd.name}` of `{sd.name}` reads the field `{nm}`, which is not an EARLIER field — a default is evaluated left to right at the construction, so it can read the fields written before it and nothing else") if nm != "" and not c_name_in(earlier, nm)
 
 	# with a place, which a refusal usually has none of: this one runs over a DECLARATION and
 	# the field carries its own line and column, so there is a position to give and no reason
@@ -9723,7 +9721,7 @@ fn c_block_tail_name(st: ast.Stmt) -> str {
 
 	return match c_expr_stmt_of(st) {
 		Expr.EIdent(n) => n
-		_              => ""
+		_ => ""
 	}
 }
 

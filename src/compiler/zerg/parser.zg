@@ -4025,7 +4025,7 @@ fn p_type_arg_call(mut &p: Parser, base: ast.Expr, first: ast.Expr) -> ast.Expr 
 		tyargs.append(parse_type(p))
 	}
 	expect(p, token.Kind.RBrack)
-	raise p_diag(p, rule.Rule.NotYetTypeArgsNoCall, f"NotImplemented: `{name}[…]` with no call after it — this compiler instantiates a generic at the call, so its type arguments have to arrive with the arguments") if not p_at(p, token.Kind.LParen)
+	raise p_diag(p, rule.Rule.TypeArgsNoCall, f"`{name}[…]` with no call after it — this compiler instantiates a generic at the call, so its type arguments have to arrive with the arguments") if not p_at(p, token.Kind.LParen)
 
 	return ast.Expr.ECall(name, parse_call_args(p), tyargs)
 }
@@ -4274,7 +4274,7 @@ fn parse_primary(mut &p: Parser) -> ast.Expr {
 	# first thing anyone writes — where the statement used to be consumed as NOTHING: the
 	# arm yielded 0, and the tokens after it were read as a further arm. That is a program
 	# that compiles and is not the one that was written, so it is named instead.
-	raise p_diag(p, rule.Rule.NotYetStatementAsExpr, f"NotImplemented: `{token.says(t)}` is a statement, and an expression is wanted here") if is_stmt_kw(k)
+	raise p_diag(p, rule.Rule.StatementAsExpr, f"`{token.says(t)}` is a statement, and an expression is wanted here") if is_stmt_kw(k)
 
 	# TWO TOKENS ARRIVE HERE AS THE SIGN OF A FORM, not as themselves. A `:=` means the
 	# line was a DESTRUCTURING binding — `(a, b) := (1, 2)` — whose left side read as a
@@ -4284,14 +4284,14 @@ fn parse_primary(mut &p: Parser) -> ast.Expr {
 	# A bare `..` is a RANGE with nothing on its left (GRAMMAR#range-expr): `xs[..2]` is the open
 	# form of a slice. It was named as a list pattern, which is a different form the same
 	# token opens — advice about something nobody wrote.
-	raise p_diag(p, rule.Rule.NotYetRangeNoLower, "NotImplemented: a range with no lower bound — write `xs[0..n]`; a list PATTERN `[a, ..rest]` is a different form this compiler also does not have") if k == token.Kind.DotDot
+	raise p_diag(p, rule.Rule.RangeNoLower, "a range with no lower bound — write `xs[0..n]`; a list PATTERN `[a, ..rest]` is a different form this compiler also does not have") if k == token.Kind.DotDot
 
 	# ANY OTHER TOKEN. This used to be `p_advance(p); return ENil` — the token was consumed
 	# and the expression became nil, which emits `0`. So every form this parser does not
 	# know became the number zero, silently: a rune literal `'A'` was 0, and so was anything
 	# else that ever reached here. A form the compiler cannot read is named; it is never a
 	# value it did not write.
-	raise p_diag(p, rule.Rule.NotYetExprForm, f"NotImplemented: `{token.says(t)}` is not an expression this compiler reads")
+	raise p_diag(p, rule.Rule.ExprForm, f"`{token.says(t)}` is not an expression this compiler reads")
 }
 
 # parse_close reads `close ( expr )`, the channel's one built-in statement. `at_exit` is

@@ -101,6 +101,10 @@ pub enum Rule {
 	DecoratorEmpty = 2068
 	DeriveNamesNoSpec = 2069
 	ChanDirectionForm = 2070
+	TypeArgsNoCall = 2072
+	RangeNoLower = 2071
+	ExprForm = 2074
+	StatementAsExpr = 2073
 
 	# checking — a form whose meaning does not hold together — reported against the tree, all at once
 	NotPublicMember = 3001
@@ -342,6 +346,8 @@ pub enum Rule {
 	VariantPatternWrongQualifier = 4074
 	LocalShadowsNamespace = 4075
 	IdentityHasNoRendering = 4076
+	SpawnOfNonFunction = 4078
+	NamespaceCollision = 4077
 
 	# building — the program as a set of files, which no single file's text answers: imports resolved
 	# before anything is lexed, and `fn main` looked for after everything is emitted
@@ -410,7 +416,6 @@ pub enum Rule {
 	NotYetCommandInterpolating = 9019
 	NotYetCommandLiteral = 9020
 	NotYetDestructuringBinding = 9021
-	NotYetRangeNoLower = 9022
 	NotYetListPattern = 9023
 	NotYetOrPattern = 9024
 	NotYetForMutBinding = 9025
@@ -418,7 +423,6 @@ pub enum Rule {
 	NotYetUnsafeFn = 9027
 	NotYetAssocTypeProjection = 9028
 	NotYetValueGenericParam = 9029
-	NotYetTypeArgsNoCall = 9030
 	NotYetIfExprManyStatements = 9031
 	NotYetIfExprBindingHead = 9032
 	NotYetAsm = 9033
@@ -427,8 +431,6 @@ pub enum Rule {
 	NotYetUnsafeSpecSignature = 9036
 	NotYetImplTypeParams = 9037
 	NotYetImplTypeArgument = 9038
-	NotYetStatementAsExpr = 9039
-	NotYetExprForm = 9040
 	NotYetMatchArmStatement = 9041
 	NotYetTypedefNonScalar = 9042
 	NotYetJumpOutOfGuard = 9043
@@ -468,10 +470,8 @@ pub enum Rule {
 	NotYetIsErrorKind = 9078
 	NotYetSealed = 9079
 	NotYetTwoModulesDefine = 9081
-	NotYetNamespaceCollision = 9082
 	NotYetRenderEnumAsText = 9085
 	NotYetMainArgsWithConcurrency = 9097
-	NotYetSpawnOfNonFunction = 9098
 	NotYetSpawnOfUnknownName = 9099
 	NotYetMapMethod = 9100
 	NotYetSpawnOfBinding = 9103

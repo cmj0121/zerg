@@ -5255,7 +5255,7 @@ fn c_twice_in_file_says(name: str, first: int) -> str {
 # Asserting the first reading is what made it wrong about the same-file case above; naming the
 # files is right about all of them.
 fn c_mod_flat_collide(path: str, line: int, col: int, name: str, other: str) -> str {
-	return c_diag_at(path, line, col, rule.Rule.NotYetNamespaceCollision, f"NotImplemented: `{other}` and `{path}` both define `{name}` — this compiler flattens every module into one namespace, so two declarations under one directory cannot be told apart, whether they are two modules or two files of one")
+	return c_diag_at(path, line, col, rule.Rule.NamespaceCollision, f"`{other}` and `{path}` both define `{name}` — this compiler flattens every module into one namespace, so two declarations under one directory cannot be told apart, whether they are two modules or two files of one")
 }
 
 # The two below are one rule over a two-valued domain, which is why they read a side rather
@@ -11973,7 +11973,7 @@ fn c_callee_raw(mut &em: Emitter, x: ast.Expr, what: str) -> Callee {
 
 		return c_callee_free(em, n, c_call_args_of(x), what)
 	}
-	raise c_diag(em, rule.Rule.NotYetSpawnOfNonFunction, f"NotImplemented: {what} of anything but a function, a method, or a namespaced function") if not c_is_method_expr(x)
+	raise c_diag(em, rule.Rule.SpawnOfNonFunction, f"{what} of anything but a function, a method, or a namespaced function") if not c_is_method_expr(x)
 
 	tgt := c_meth_target_of(x)
 	m := c_meth_name_of(x)

@@ -105,6 +105,7 @@ pub enum Rule {
 	RangeNoLower = 2071
 	ExprForm = 2074
 	StatementAsExpr = 2073
+	UnsafeOpensNeither = 2075
 
 	# checking — a form whose meaning does not hold together — reported against the tree, all at once
 	NotPublicMember = 3001

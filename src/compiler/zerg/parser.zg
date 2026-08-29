@@ -73,6 +73,17 @@ fn peek_lexeme(mut &p: Parser, n: int) -> str {
 	return ""
 }
 
+# p_says_ahead is `token.says` for a token not reached yet. `peek_lexeme` answers "" past the
+# end, which is the empty pair of backticks a diagnostic quoting `cur` used to print, one peek
+# further along.
+fn p_says_ahead(mut &p: Parser, n: int) -> str {
+	lx := peek_lexeme(p, n)
+
+	return token.kind_name(peek_kind(p, n)) if lx == ""
+
+	return lx
+}
+
 fn p_at(mut &p: Parser, k: token.Kind) -> bool {
 	return cur_kind(p) == k
 }
@@ -1323,6 +1334,21 @@ pub fn parse_at(src: str, path: str) -> ast.File {
 			# is not one. This is the one pass round the loop that reads no item, so it is
 			# also the one that must not ask for the separator below.
 			continue
+		} else if p_at(p, token.Kind.Unsafe) {
+			# A TOP-LEVEL `unsafe` OPENS ONE OF TWO FORMS and this is neither. The two arms
+			# above take them — `unsafe fn` (GRAMMAR#fn-decl) and the `unsafe { … }` GROUP
+			# (GRAMMAR#unsafe-group) — and anything else used to fall through to the statement
+			# fallback below, be read as an EXPRESSION, and meet `E9011`: *NotImplemented:
+			# `unsafe { … }` as an EXPRESSION*. That answer is wrong twice over. There is no
+			# expression anywhere in `unsafe struct P { … }`, so it describes a form the reader
+			# did not write; and `E9011` says the LANGUAGE has this form and the compiler has
+			# not built it, which is true of the unsafe expression and false of this, because
+			# GRAMMAR derives no `unsafe` followed by a `struct` in any position (#87).
+			#
+			# `E9011` KEEPS THE HALF THAT IS A FORM. The block-expression is derived, is
+			# unbuilt, and is reached from `parse_primary` where an expression really is
+			# wanted; splitting the malformed group out is what leaves that sentence true.
+			raise p_diag_at(p, t.line, t.col, rule.Rule.UnsafeOpensNeither, f"a top-level `unsafe` opens a GROUP or marks a `fn` — GRAMMAR derives `unsafe {{ … }}` (unsafe-group) and `unsafe fn` (fn-decl), and what follows this one is `{p_says_ahead(p, 1)}`")
 		} else if in_unsafe and p_at(p, token.Kind.RBrace) {
 			p_advance(p)
 			in_unsafe = false

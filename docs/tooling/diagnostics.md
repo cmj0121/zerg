@@ -186,6 +186,7 @@ shipping compiler rather than a part of it (the line
 | `E2074` | `…` is not an expression this compiler reads                                                          |
 | `E2075` | a top-level `unsafe` opens a group or marks a `fn`, and this is neither                               |
 | `E2076` | the decorator `#[…]` — the set is closed, so an unknown name is not a directive                       |
+| `E2077` | `…` is not an `impl` item                                                                             |
 | `E3001` | `…` is not a public member of module `…`                                                              |
 | `E3002` | `…` is not a place, and an assignment needs one                                                       |
 | `E3003` | cannot assign to `…`: it is a module `const`, and a constant is never written                         |
@@ -411,7 +412,6 @@ shipping compiler rather than a part of it (the line
 | `E9004` | a generic struct `…[…]`                                                                               |
 | `E9005` | the decorator `#[…]`                                                                                  |
 | `E9006` | an associated value binding `… := …` in an `impl`                                                     |
-| `E9007` | `…` as an `impl` item                                                                                 |
 | `E9008` | a struct pattern `…{…}`                                                                               |
 | `E9009` | calling …                                                                                             |
 | `E9010` | the named argument `…:`                                                                               |
@@ -490,6 +490,7 @@ shipping compiler rather than a part of it (the line
 | `E9106` | module `…` declares the function `…`, and a module's function is not a value here                     |
 | `E9107` | the method `…` on a … — `display`, `debug`, `format`; `next` on a channel; `iter` on what `for` walks |
 | `E9108` | `del …` on an owning struct, list or map — the early free, where the release is a scope-exit unwind   |
+| `E9109` | an `unsafe fn` method in an `impl`                                                                    |
 
 They are reported the moment a file is **read**, before its imports are scanned — scanning
 them parses, and a parser handed unreadable text can only say something untrue about it.
@@ -620,6 +621,7 @@ name now is the prelude rule (`E2061`), which is about the name rather than abou
 | `E9040` | `E2074` | every derived expression has a home or its own code           |
 | `E9082` | `E4077` | reachable only when the two files are literally one module    |
 | `E9098` | `E4078` | everything call-shaped left earlier                           |
+| `E9007` | `E2077` | the three item forms all have arms; a statement is none       |
 | `E3047` | —       | a strong typedef takes its underlying type's prefix operators |
 
 **One of them moved nowhere**, and it is the only row whose second column is empty. `E3047`

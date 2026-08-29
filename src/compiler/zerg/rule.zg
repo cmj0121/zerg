@@ -349,6 +349,7 @@ pub enum Rule {
 	IdentityHasNoRendering = 4076
 	SpawnOfNonFunction = 4078
 	NamespaceCollision = 4077
+	MapKeyHasNoHash = 4079
 
 	# building — the program as a set of files, which no single file's text answers: imports resolved
 	# before anything is lexed, and `fn main` looked for after everything is emitted

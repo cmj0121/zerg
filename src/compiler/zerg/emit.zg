@@ -12219,6 +12219,13 @@ fn c_map_vt(mut &em: Emitter, kt: ast.Ty, vt: ast.Ty) -> str {
 	# this all along; `zerg` reached it by inference the day a byte literal carried its type.
 	# a key whose type inference could not name is left alone, as every other rule here
 	# does: guessing turns a typing gap into a refusal of a working program
+	# A `float` KEY IS NOT WAITING FOR ANYTHING. `docs/core/derive.md` refuses `Hash` on any
+	# `float` field — a float has no equality a hash can agree with — so there is no day this
+	# retires on, and `NotImplemented:` promised one. The rest of the range really is unbuilt:
+	# a `byte`, a `rune` and a `derive(Hash)` type are `collections.md`'s intended rule, and
+	# they keep the number (#87).
+	raise c_diag(em, rule.Rule.MapKeyHasNoHash, f"a map key of type {ast.ty_name(kt)} — a key needs `Hash`, and a `float` has no equality a hash can agree with (docs/core/derive.md), so it can never be one") if c_is_float(kt)
+
 	raise c_diag(em, rule.Rule.NotYetMapKeyType, f"NotImplemented: a map key of type {ast.ty_name(kt)} — a key needs `Hash`, and this compiler has one for `int` and for `str`") if not c_is_int(kt) and not c_is_str(kt) and not c_is_unknown(kt)
 
 	mut hash := "zrt_hash_int"

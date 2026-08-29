@@ -646,8 +646,19 @@ case $spec_out in
 esac
 
 # --- every documented rule has a case ----------------------------------------------
+#
+# BOTH LISTS BELOW ARE READ OUT OF ONE FILE BY ONE ANCHOR, and an anchor that stops matching
+# makes every assertion under it vacuous rather than red: the coverage loop runs zero times,
+# the equality compares an empty string against an empty string, and the summary then reports
+# the two things it did not check. A rename of the `#   Lxxx` comment convention, or a move of
+# the rules to another file, was invisible (#89). So the anchor is asserted before it is used.
+documented=$(sed -n 's/^#   \(L[0-9][0-9][0-9]\).*/\1/p' "$LINT_SRC" | sort -u)
+if [ "$(printf '%s\n' "$documented" | grep -c .)" -lt 10 ]; then
+	echo "lint-check: the \`#   Lxxx\` anchor found $(printf '%s\n' "$documented" | grep -c .) codes in $LINT_SRC — it no longer matches, and every assertion below it is vacuous"
+	exit 1
+fi
 
-for code in $(sed -n 's/^#   \(L[0-9][0-9][0-9]\).*/\1/p' "$LINT_SRC" | sort -u); do
+for code in $documented; do
 	case " $seen " in
 	*" $code "*) ;;
 	*)
@@ -663,7 +674,6 @@ done
 # what a reader consults, and they are two lists in one file. A code in one and not the other
 # is either a rule that can never be allowed or an allow for a rule nobody documented — and
 # both look exactly like nothing at all from the outside.
-documented=$(sed -n 's/^#   \(L[0-9][0-9][0-9]\).*/\1/p' "$LINT_SRC" | sort -u)
 catalogued=$(sed -nE '/^(pub )?fn lint_codes\(\)/,/^\}/p' "$LINT_SRC" | grep -oE 'L[0-9]{3}' | sort -u)
 if [ "$documented" != "$catalogued" ]; then
 	echo "CATALOGUE lint_codes() and the doc block in $LINT_SRC name different sets:"

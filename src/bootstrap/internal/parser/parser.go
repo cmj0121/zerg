@@ -476,9 +476,44 @@ func (p *parser) requireStmtSep() {
 		describe(p.cur().Kind))
 }
 
+// parseDecoratedStmt reads the ONE decorator a statement may carry and returns the
+// statement it leads (#91).
+//
+// `#[allow(…)]` is documented normatively in docs/tooling/lint.md, the shipping compiler
+// builds it and carries its own misuse diagnostics for it, and this parser died on the
+// `#[`. So a documented feature could not appear in any file the seed must build — which
+// is the compiler's own sources and the whole standard library — and nothing said so:
+// src/bootstrap/README.md records a seed gap, `make seed-gaps` holds that list, and a gap
+// nobody wrote down is one no gate can discover.
+//
+// THE DECORATOR IS READ AND DROPPED. The seed does not lint, so it has no suppression to
+// honour; it only has to not die. It emits C and never reprints source, so nothing
+// downstream can miss what is discarded here.
+//
+// AND ONLY `allow`. Accepting any decorator on a statement would make the seed read a
+// WIDER language than the compiler it builds — `#[derive]` on a statement is E2062 there —
+// and two compilers disagreeing about which programs exist is the thing the oracle gate
+// is for. The seed does not need to know what an L-code means to know which decorator
+// belongs on a statement.
+func (p *parser) parseDecoratedStmt() ast.Stmt {
+	h := p.cur()
+	d := p.parseDecorator()
+	p.skipSemis()
+	for _, it := range d.Items {
+		if it.Name != "allow" {
+			p.fail(h.Span, "`#[%s]` applies to the declaration that follows it, and a statement is not one — "+
+				"the decorator a statement takes is `#[allow(…)]`", it.Name)
+			break
+		}
+	}
+	return p.parseStmt()
+}
+
 func (p *parser) parseStmt() ast.Stmt {
 	t := p.cur()
 	switch t.Kind {
+	case token.Hash:
+		return p.parseDecoratedStmt()
 	case token.Nop:
 		p.advance()
 		return spanned(&ast.NopStmt{}, t.Span)

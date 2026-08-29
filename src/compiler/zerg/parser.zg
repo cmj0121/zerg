@@ -2647,8 +2647,23 @@ fn parse_impl(mut &p: Parser, mut &fns: list[ast.FnDecl], mut &impls: list[ast.I
 			raise p_diag(p, rule.Rule.NotYetImplAssocValue, f"NotImplemented: an associated value binding `{token.says(cur(p))} := …` in an `impl`")
 		} else if p_at(p, token.Kind.Type) {
 			raise p_diag(p, rule.Rule.NotYetImplAssocType, "NotImplemented: an associated type binding `type … = …` in an `impl`")
+		} else if p_at(p, token.Kind.Unsafe) {
+			# `unsafe fn m()` IS A METHOD. GRAMMAR#fn-decl spells the marker (`'pub'? 'unsafe'?
+			# 'mut'? 'fn'`) and GRAMMAR#impl-item takes a fn-decl, so this is a form the language
+			# has — and the arm below told its writer that this compiler "reads methods and
+			# nothing else", which is a sentence about a form they did write. It is refused for
+			# the reason the standalone one is (E9027) and the `unsafe fn` TYPE is (E9073): the
+			# marker is a trust boundary this compiler does not enforce, so honouring it would be
+			# a promise about calls it never checks, and dropping the word would make the method
+			# callable from safe code, which is the one thing the marker exists to prevent (#87).
+			ut := cur(p)
+			raise p_diag_at(p, ut.line, ut.col, rule.Rule.NotYetUnsafeMethod, "NotImplemented: an `unsafe fn` METHOD in an `impl` — `unsafe` marks a trust boundary this compiler does not enforce yet (docs/runtime/ffi.md), so the method is refused rather than read as a safe `fn`")
 		} else {
-			raise p_diag(p, rule.Rule.NotYetImplItem, f"NotImplemented: `{token.says(cur(p))}` as an `impl` item — this compiler reads methods and nothing else")
+			# WHAT IS LEFT IS NOT AN ITEM AT ALL. GRAMMAR#impl-item derives a `fn-decl`, a
+			# `val-bind` and a `type` binding, and the three arms above take all of them, so a
+			# statement here is a wrong program rather than a form waiting to be built — there is
+			# no day a `NotImplemented:` on it would have retired.
+			raise p_diag(p, rule.Rule.ImplItemUnknown, f"`{token.says(cur(p))}` is not an `impl` item — GRAMMAR#impl-item derives a method, an associated value and an associated type, and a statement is none of them")
 		}
 		skip_semis(p)
 	}

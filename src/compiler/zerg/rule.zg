@@ -107,6 +107,7 @@ pub enum Rule {
 	StatementAsExpr = 2073
 	DecoratorUnknown = 2076
 	UnsafeOpensNeither = 2075
+	ImplItemUnknown = 2077
 
 	# checking — a form whose meaning does not hold together — reported against the tree, all at once
 	NotPublicMember = 3001
@@ -404,7 +405,6 @@ pub enum Rule {
 	NotYetGenericStruct = 9004
 	NotYetDecoratorLayout = 9005
 	NotYetImplAssocValue = 9006
-	NotYetImplItem = 9007
 	NotYetStructPattern = 9008
 	NotYetCallee = 9009
 	NotYetNamedArgument = 9010
@@ -513,6 +513,7 @@ pub enum Rule {
 	# every exit unwinds to a mark. The channel case next door (9066) is the same absence read
 	# from the other side, and both retire when a release can be taken out of the middle.
 	NotYetDelOwning = 9108
+	NotYetUnsafeMethod = 9109
 }
 
 # rule_code is the text a rule is reported under — the `E2004` a gate pins and a reader looks

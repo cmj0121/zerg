@@ -7211,25 +7211,6 @@ fn main() {
 }
 EOF
 
-reject two-modules-defining-one-public-function E9081 seed-gap <<'EOF'
-import (
-	"./ma"
-	"./mb"
-)
-
-fn main() {
-	print ma.work() + mb.work()
-}
---- ma/mod.zg
-pub fn work() -> int {
-	return 1
-}
---- mb/mod.zg
-pub fn work() -> int {
-	return 2
-}
-EOF
-
 # TWO FILES of one module declaring a name. Two DIFFERENT modules each declaring a private one
 # is legal — they take a module tag in C — so what this pins is the collision no tag can
 # separate. The sentence is pinned because the case below it shares the shape and not the rule:

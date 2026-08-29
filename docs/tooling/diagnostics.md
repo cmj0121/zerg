@@ -481,7 +481,6 @@ shipping compiler rather than a part of it (the line
 | `E9077` | a range used as a value                                                                               |
 | `E9078` | `is …` names one of the built-in error kinds                                                          |
 | `E9079` | the decorator `#[sealed]` — reserved                                                                  |
-| `E9081` | two modules both define `…` and at least one is `pub`                                                 |
 | `E9085` | rendering a … as text — an enum has no name for its variant                                           |
 | `E9097` | main(args) in a program that uses concurrency                                                         |
 | `E9099` | … of the method `…` on a built-in receiver, which a thunk does not reach                              |
@@ -572,59 +571,60 @@ does not decide what a thing is, and a construction is told from a call by what 
 DECLARED. There is no successor number because there is no successor rule; what refuses a bad type
 name now is the prelude rule (`E2061`), which is about the name rather than about its first letter.
 
-| Code    | Now     | Why it left                                                   |
-| ------- | ------- | ------------------------------------------------------------- |
-| `E2009` | `E3095` | a repeated discriminant is a meaning, not a form              |
-| `E2060` | —       | the case rule it enforced is retired; a name decides nothing  |
-| `E2037` | `E3096` | an orphan `impl` is coherence, which is a meaning             |
-| `E2038` | `E3097` | what a `derive` can generate is a meaning                     |
-| `E2039` | `E3098` | as above                                                      |
-| `E2040` | `E3099` | what `#[obj]` may go on is a meaning                          |
-| `E2041` | `E3100` | as above                                                      |
-| `E2042` | `E3101` | as above                                                      |
-| `E2043` | `E3102` | what a `derive` reads is a meaning                            |
-| `E2050` | `E3103` | whether a name is declared is a meaning                       |
-| `E2051` | `E3104` | what kind of thing a name is, is a meaning                    |
-| `E2052` | `E3105` | whether a name still has storage is a meaning                 |
-| `E2053` | `E3106` | as above, over a branch                                       |
-| `E4003` | `E3107` | which element types a channel may carry is a type rule        |
-| `E4044` | `E2065` | `GRAMMAR#map-entry` — a form                                  |
-| `E4046` | `E3108` | what a declaration may be marked is a meaning                 |
-| `E4047` | `E5014` | an import cycle is the program as a set of files              |
-| `E4048` | `E2066` | where a decorator may go is a form                            |
-| `E4049` | `E2067` | `GRAMMAR#impl-decl` — a form                                  |
-| `E4050` | `E2068` | `GRAMMAR#decorator` — a form                                  |
-| `E4051` | `E2069` | `GRAMMAR#deco-item` — a form                                  |
-| `E4052` | `E2070` | `GRAMMAR#chan-type` — a form                                  |
-| `E5003` | `E3109` | a channel's direction is a type rule, not a whole-program one |
-| `E5004` | `E3110` | as above                                                      |
-| `E5005` | `E3111` | as above                                                      |
-| `E5006` | `E3112` | as above                                                      |
-| `E9053` | `E3117` | `if … := …` over a type that carries nothing is a meaning     |
-| `E9080` | `E3120` | `?` on a non-carrier is a meaning, not a missing form         |
-| `E9083` | `E3121` | as above, for `!`                                             |
-| `E9084` | `E3122` | as above, for `??`                                            |
-| `E9086` | `E3123` | how many arguments an `Err` method takes is a meaning         |
-| `E9087` | `E3124` | a name the `Error` interface does not declare                 |
-| `E9088` | `E3125` | `ok_or`'s arity is a meaning                                  |
-| `E9089` | `E3126` | as above                                                      |
-| `E9090` | `E3127` | what `ok_or` answers an absence with is a type rule           |
-| `E9091` | `E3128` | `ok`'s arity is a meaning                                     |
-| `E9092` | `E3129` | a method neither carrier answers                              |
-| `E9093` | `E3130` | a member an enum type does not have                           |
-| `E9094` | `E3131` | a method the type declares none of                            |
-| `E9095` | `E3132` | a third side on a two-sided `Result[T]`                       |
-| `E9096` | `E3133` | what the entry may answer is a meaning                        |
-| `E9101` | `E3135` | a field an `Err` does not carry                               |
-| `E9102` | `E3136` | `..=` with no bound is not a range, and that is a meaning     |
-| `E9022` | `E2071` | a range GRAMMAR requires a lower bound for                    |
-| `E9030` | `E2072` | a postfix `[ … ]` is always an index; no form reaches this    |
-| `E9039` | `E2073` | no `primary` alternative is a statement                       |
-| `E9040` | `E2074` | every derived expression has a home or its own code           |
-| `E9082` | `E4077` | reachable only when the two files are literally one module    |
-| `E9098` | `E4078` | everything call-shaped left earlier                           |
-| `E9007` | `E2077` | the three item forms all have arms; a statement is none       |
-| `E3047` | —       | a strong typedef takes its underlying type's prefix operators |
+| Code    | Now     | Why it left                                                        |
+| ------- | ------- | ------------------------------------------------------------------ |
+| `E2009` | `E3095` | a repeated discriminant is a meaning, not a form                   |
+| `E2060` | —       | the case rule it enforced is retired; a name decides nothing       |
+| `E2037` | `E3096` | an orphan `impl` is coherence, which is a meaning                  |
+| `E2038` | `E3097` | what a `derive` can generate is a meaning                          |
+| `E2039` | `E3098` | as above                                                           |
+| `E2040` | `E3099` | what `#[obj]` may go on is a meaning                               |
+| `E2041` | `E3100` | as above                                                           |
+| `E2042` | `E3101` | as above                                                           |
+| `E2043` | `E3102` | what a `derive` reads is a meaning                                 |
+| `E2050` | `E3103` | whether a name is declared is a meaning                            |
+| `E2051` | `E3104` | what kind of thing a name is, is a meaning                         |
+| `E2052` | `E3105` | whether a name still has storage is a meaning                      |
+| `E2053` | `E3106` | as above, over a branch                                            |
+| `E4003` | `E3107` | which element types a channel may carry is a type rule             |
+| `E4044` | `E2065` | `GRAMMAR#map-entry` — a form                                       |
+| `E4046` | `E3108` | what a declaration may be marked is a meaning                      |
+| `E4047` | `E5014` | an import cycle is the program as a set of files                   |
+| `E4048` | `E2066` | where a decorator may go is a form                                 |
+| `E4049` | `E2067` | `GRAMMAR#impl-decl` — a form                                       |
+| `E4050` | `E2068` | `GRAMMAR#decorator` — a form                                       |
+| `E4051` | `E2069` | `GRAMMAR#deco-item` — a form                                       |
+| `E4052` | `E2070` | `GRAMMAR#chan-type` — a form                                       |
+| `E5003` | `E3109` | a channel's direction is a type rule, not a whole-program one      |
+| `E5004` | `E3110` | as above                                                           |
+| `E5005` | `E3111` | as above                                                           |
+| `E5006` | `E3112` | as above                                                           |
+| `E9053` | `E3117` | `if … := …` over a type that carries nothing is a meaning          |
+| `E9080` | `E3120` | `?` on a non-carrier is a meaning, not a missing form              |
+| `E9083` | `E3121` | as above, for `!`                                                  |
+| `E9084` | `E3122` | as above, for `??`                                                 |
+| `E9086` | `E3123` | how many arguments an `Err` method takes is a meaning              |
+| `E9087` | `E3124` | a name the `Error` interface does not declare                      |
+| `E9088` | `E3125` | `ok_or`'s arity is a meaning                                       |
+| `E9089` | `E3126` | as above                                                           |
+| `E9090` | `E3127` | what `ok_or` answers an absence with is a type rule                |
+| `E9091` | `E3128` | `ok`'s arity is a meaning                                          |
+| `E9092` | `E3129` | a method neither carrier answers                                   |
+| `E9093` | `E3130` | a member an enum type does not have                                |
+| `E9094` | `E3131` | a method the type declares none of                                 |
+| `E9095` | `E3132` | a third side on a two-sided `Result[T]`                            |
+| `E9096` | `E3133` | what the entry may answer is a meaning                             |
+| `E9101` | `E3135` | a field an `Err` does not carry                                    |
+| `E9102` | `E3136` | `..=` with no bound is not a range, and that is a meaning          |
+| `E9022` | `E2071` | a range GRAMMAR requires a lower bound for                         |
+| `E9030` | `E2072` | a postfix `[ … ]` is always an index; no form reaches this         |
+| `E9039` | `E2073` | no `primary` alternative is a statement                            |
+| `E9040` | `E2074` | every derived expression has a home or its own code                |
+| `E9082` | `E4077` | reachable only when the two files are literally one module         |
+| `E9098` | `E4078` | everything call-shaped left earlier                                |
+| `E9007` | `E2077` | the three item forms all have arms; a statement is none            |
+| `E9081` | —       | a public name takes the module tag a private one already had (#92) |
+| `E3047` | —       | a strong typedef takes its underlying type's prefix operators      |
 
 **One of them moved nowhere**, and it is the only row whose second column is empty. `E3047`
 reported a prefix operator on a `type X = Y` — _operator `not` has no meaning on `Flag`_ — on

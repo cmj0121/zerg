@@ -921,7 +921,7 @@ EOF
 # same shape docs/code/functions.md records for a parameter default reading an earlier
 # parameter. The default is materialised at the construction, where a field is not a name in
 # scope — so with a module constant of the same name it would quietly read that instead.
-expect "$ZERG" field-default-reading-a-field E9071 <<'EOF'
+expect "$ZERG" field-default-reading-an-earlier-field E9071 <<'EOF'
 a := 100
 
 struct P {
@@ -930,6 +930,20 @@ struct P {
 }
 
 fn main() { print P(3).b }
+EOF
+
+# THE OTHER HALF OF THAT NUMBER (#87). `fnames` is every field including this one and the ones
+# after it, so a default reading ITSELF and one reading a LATER field both wore the same
+# `NotImplemented:` — and evaluation is left to right, so neither has a value to read in any
+# order. There is no day that code would have retired on.
+expect "$ZERG" field-default-reading-a-later-field E4080 <<'EOF'
+struct P {
+	pub a: int = 1
+	pub b: int = c
+	pub c: int = 3
+}
+
+fn main() { print P().b }
 EOF
 
 expect "$ZERG" struct-pattern-binding E9008 <<'EOF'

@@ -7689,7 +7689,11 @@ fn main() {
 }
 EOF
 
-reject spawn-of-a-method-the-receiver-does-not-declare E9099 <<'EOF'
+# ONE NUMBER, TWO QUESTIONS (#87). A named type has a complete method table, so a miss is a
+# WRONG PROGRAM and gets the ordinary call's sentence; a built-in receiver answers through a
+# dispatch the thunk does not reach, and THAT is the unbuilt form. The old code said
+# "not a function, a method, or a namespaced function" to both, which is false of both.
+reject spawn-of-a-method-the-receiver-does-not-declare E3131 <<'EOF'
 struct P {
 	pub v: int
 }
@@ -7697,6 +7701,14 @@ struct P {
 fn main() {
 	p := P(1)
 	spawn p.nope()
+}
+EOF
+
+reject defer-of-a-method-on-a-built-in-receiver E9099 <<'EOF'
+fn main() {
+	mut xs := [1, 2]
+	defer xs.append(3)
+	print xs.len()
 }
 EOF
 

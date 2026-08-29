@@ -7935,7 +7935,17 @@ fn c_free_method(mut &em: Emitter, target: ast.Expr, meth: str, args: list[ast.E
 	# LANGUAGE gives a value are decided in c_meth_kind, above every receiver family, so a name
 	# arriving here is a method no type here declares and there is no day on which it is one.
 	tty := c_infer(em, target)
-	raise c_diag(em, rule.Rule.MethodUnknown, f"the method `{meth}` on a {ast.ty_name(tty)}")
+	raise c_no_method_says(em, meth, ast.ty_name(tty))
+}
+
+# c_no_method_says is the sentence for a method NO TYPE HERE DECLARES, written once because
+# two callers ask it: the ordinary call above, and the `spawn`/`defer` thunk, which used to
+# answer its own half with `NotImplemented: … not a function, a method, or a namespaced
+# function` — a code saying the language has the form, about a method that never existed
+# (#87). A second spelling of one rule is what `error-codes-check` refuses, and rightly: the
+# two would drift, and the one a reader met would decide what they believed.
+fn c_no_method_says(mut &em: Emitter, meth: str, tyname: str) -> str {
+	return c_diag(em, rule.Rule.MethodUnknown, f"the method `{meth}` on a {tyname}")
 }
 
 # c_recv_args renders a method call's arguments: the receiver first, then the written
@@ -12008,7 +12018,23 @@ fn c_callee_raw(mut &em: Emitter, x: ast.Expr, what: str) -> Callee {
 			return c_callee_free(em, m, margs, what)
 		}
 
-		raise c_diag(em, rule.Rule.NotYetSpawnOfUnknownName, f"NotImplemented: {what} of `{m}` — not a function, a method, or a namespaced function")
+		# ONE NUMBER, TWO QUESTIONS, and a sentence that was false for both halves (#87).
+		#
+		# `docs/code/coroutine.md` says the callee is ANY call — "a plain function, a method, a
+		# namespaced function" — so `defer xs.append(3)` and `spawn m.clear()` are the form, and
+		# telling a reader they are "not a method" is a lie about their own program. And a
+		# genuinely misspelled `p.bogus()` is a WRONG PROGRAM, which `NotImplemented:` denies:
+		# there is no day a code in that range retires on for a method that never existed.
+		#
+		# THE RECEIVER TELLS THEM APART. A named user type has a complete method table — that is
+		# what `c_has_method` just read — so a miss there is the ordinary call's `MethodUnknown`,
+		# reached by the same sentence it uses. An UNNAMED receiver is a built-in (a `list`, a
+		# `map`, a `str`, an `Err`), whose methods this compiler answers through a dispatch the
+		# thunk below never reaches, and THAT is the unbuilt form: it keeps the number, and says
+		# what is actually missing rather than denying the call is a method.
+		raise c_no_method_says(em, m, recv) if recv != ""
+
+		raise c_diag(em, rule.Rule.NotYetSpawnOfUnknownName, f"NotImplemented: {what} of the method `{m}` on a {ast.ty_name(c_infer(em, tgt))} — this compiler thunks a free function and a method on a NAMED type, and a built-in receiver answers through a dispatch a thunk does not reach")
 	}
 
 	# a method's receiver is parameter 0 — the parser put `this` there when it flattened the

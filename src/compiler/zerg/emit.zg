@@ -2577,13 +2577,15 @@ fn c_mod_collide(mut &em: Emitter, fn_i: ast.FnDecl, prev: ast.FnDecl) {
 	# sees, and it would be the wrong one.
 	return if prev.path == fn_i.path
 
-	# THE SAME-MODULE QUESTION IS ASKED FIRST, and asking it second is what made the sentence
-	# above a lie about half the programs that met it. Two `pub` files of ONE directory are ONE
-	# module — `c_mod_of` says so — and they were told "two modules both define `helper`", which
-	# sends a reader looking for a second module that is not there. The two rules also have
-	# different LIFETIMES: the flat namespace is what this compiler does today, and a public
-	# name having no package to be unique within is what the package layer retires (#87).
+	# TWO FILES OF ONE DIRECTORY ARE ONE MODULE, however many they are and whatever their
+	# visibility, and no tag can separate them — a tag is the MODULE's position, and they share
+	# it. This question was asked after the `pub` one, which made that refusal a lie about half
+	# the programs it met: two public files of one directory were told "two modules both define
+	# `helper`", sending a reader to look for a second module that is not there (#87). What
+	# stood below it has since retired — a public name in two DIFFERENT modules is two symbols
+	# now, by the tag (#92) — so this is the only collision left that no lowering can answer.
 	raise c_mod_flat_collide(fn_i.path, fn_i.line, fn_i.col, fn_i.name, prev.path) if check.c_mod_of(em, fn_i.path) == check.c_mod_of(em, prev.path)
+
 	# A PUBLIC NAME GETS THE TAG A PRIVATE ONE ALREADY GETS (#92). The refusal that stood here
 	# said a public name has no package to be unique within — true of a package REGISTRY, which
 	# `docs/runtime/package.md` declines on purpose, and not true of the C symbol, which is the

@@ -3417,6 +3417,18 @@ fn main() {
 }
 EOF
 
+# THE OTHER HALF OF THAT NUMBER. `c_infer_ident` answers TUnknown for a name nothing bound —
+# silently, because inference is not where a name is checked — so a bare undefined name as a
+# block's value arrived at the raise above and was told the BLOCK has no nameable type. That is
+# a wrong program wearing a `NotImplemented:` prefix, and everywhere else the same mistake is
+# this sentence (#87).
+expect "$ZERG" a-block-whose-value-is-an-undefined-name E3069 <<'EOF'
+fn main() {
+	x := { bogus }
+	print x
+}
+EOF
+
 # A MATCH ARM'S BINDING IS SPLICED IN AS TEXT, not opened as a scope: every read of the
 # name inside the arm answers from the substitution before it asks what is bound. So a
 # binding taking that same name inside the arm's block would declare a C local nothing ever

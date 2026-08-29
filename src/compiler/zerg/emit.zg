@@ -5560,7 +5560,29 @@ fn c_last_val_ty(mut &em: Emitter, body: list[ast.Stmt], what: str) -> ast.Ty {
 	em.open_scopes = saved_open
 	em.scope_cur = saved_cur
 
-	raise c_diag(em, rule.Rule.NotYetValueUnnameableType, f"NotImplemented: {what} whose value has no type this compiler can name — give the block's last expression a call, a literal or a typed binding") if c_is_unknown(t)
+	# ONE NUMBER, TWO QUESTIONS (#87). `c_infer_ident` answers `TUnknown` for a name nothing
+	# bound — silently, because inference is not where a name is checked — so `x := { bogus }`
+	# arrived here and was told its BLOCK has a value with no nameable type. That is a wrong
+	# program wearing a `NotImplemented:` prefix, and it is the one sentence a reader of it
+	# cannot act on: everywhere else the same mistake is _E3069 undefined name `bogus`_.
+	#
+	# THE BARE NAME IS THE HALF THAT IS ASKED FOR. `TUnknown` has other producers, so the
+	# number keeps the rest — a block whose last expression really has no type this compiler
+	# can name is a form, and that is the sentence it is left saying.
+	mut named := false
+	if c_is_unknown(t) {
+		tail := c_block_tail_name(body[n - 1])
+		if tail != "" and not c_is_free_fn(em, tail) {
+			# REPORTED, NOT RAISED, because `c_undefined_name` is the one place that rule is
+			# spelled and it records a finding the way every other undefined name does. The
+			# raise below is what has to stand aside: it would otherwise report second and
+			# last, and the reader would meet the sentence about their block.
+			c_undefined_name(em, tail)
+			named = true
+		}
+	}
+
+	raise c_diag(em, rule.Rule.NotYetValueUnnameableType, f"NotImplemented: {what} whose value has no type this compiler can name — give the block's last expression a call, a literal or a typed binding") if c_is_unknown(t) and not named
 	return ast.Ty.TNil if c_is_nil_ty(t)
 
 	return t
@@ -9634,6 +9656,18 @@ fn c_infer_listlit(mut &em: Emitter, elems: list[ast.Expr]) -> ast.Ty {
 # known element type that happens to be empty.
 fn c_infer_fill(mut &em: Emitter, v: ast.Expr) -> ast.Ty {
 	return ast.Ty.TList(c_infer(em, v))
+}
+
+# c_block_tail_name is the NAME a block's last statement reads, or "" when it is not a bare
+# name. It exists for one caller — the raise above — because the answer decides which of two
+# questions that site is being asked, and reading it off the statement is the only way to tell.
+fn c_block_tail_name(st: ast.Stmt) -> str {
+	return "" if not c_is_expr_stmt(st)
+
+	return match c_expr_stmt_of(st) {
+		Expr.EIdent(n) => n
+		_              => ""
+	}
 }
 
 fn c_infer_ident(mut &em: Emitter, n: str) -> ast.Ty {

@@ -142,8 +142,13 @@ materializing a `str` only when it keeps a token.
 > with no lower bound — write `xs[0..n]`_, which also names the list PATTERN `[a, ..rest]` as a different
 > form this compiler does not have.
 >
-> **[not yet]** A growth method needs a PLACE and not a value: `f().append(1)` is _E9049 NotImplemented:
-> `append` MUTATES its list, and … is a value rather than a place — bind it to a name first_. And a map
+> **[not yet]** A growth method needs a PLACE, and a MAP INDEX is one this compiler cannot take the
+> address of: `m["a"].append(3)` is _E9049 NotImplemented: `append` MUTATES its list, and `a map index` is
+> a value rather than a place_. A list index already is a place — `xs[0].append(3)` edits in place — and
+> nothing here makes a map's element different. A **slice**, a **call result** and a **literal** are not
+> waiting for anything, because a subrange is a read-only value and a written value has no storage at all:
+> _E4081 `append` MUTATES its list, and `a slice` is a value rather than a place — bind it to a name
+> first_. And a map
 > is built with the literal and not by calling its type: `map[str, int](…)` is _E9067 NotImplemented:
 > `map[…](…)` as a constructor — this compiler builds an empty map with the literal `{:}`_.
 

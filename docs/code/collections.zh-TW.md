@@ -126,8 +126,12 @@ semantics，而唯讀情況維持**零拷貝**；COW 是與 copy-elision、move 
 > 不是一個等著被建的形式——它是 _E2071 a range with no lower bound — write `xs[0..n]`_，它同時指出 list
 > **pattern** `[a, ..rest]` 是這個編譯器也沒有的另一種形式。
 >
-> **[not yet]** 增長方法要的是一個**位置**而不是一個值：`f().append(1)` 是 _E9049 NotImplemented: `append`
-> MUTATES its list, and … is a value rather than a place — bind it to a name first_。而 map 用字面量建、不是
+> **[not yet]** 增長方法要的是一個**位置**，而 **map index** 正是一個這個編譯器取不到位址的位置：
+> `m["a"].append(3)` 是 _E9049 NotImplemented: `append` MUTATES its list, and `a map index` is a value
+> rather than a place_。list index 本來就是位置——`xs[0].append(3)` 會就地修改——而這裡沒有任何東西讓 map 的
+> 元素有所不同。**slice**、**呼叫結果**與**字面量**則不在等任何東西，因為子範圍是唯讀值，而寫下來的值根本
+> 沒有儲存空間：_E4081 `append` MUTATES its list, and `a slice` is a value rather than a place — bind it to
+> a name first_。而 map 用字面量建、不是
 > 呼叫它的型別：`map[str, int](…)` 是 _E9067 NotImplemented: `map[…](…)` as a constructor — this compiler
 > builds an empty map with the literal `{:}`_。
 

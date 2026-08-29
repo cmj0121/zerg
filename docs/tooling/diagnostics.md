@@ -394,6 +394,7 @@ shipping compiler rather than a part of it (the line
 | `E4078` | … of anything but a function, a method, or a namespaced function                                      |
 | `E4079` | a map key of type float — a float has no equality a hash can agree with                               |
 | `E4080` | the default on field `…` reads a field that is not an earlier one                                     |
+| `E4081` | `…` MUTATES its list, and a slice, a call result or a literal is a value                              |
 | `E5001` | this entry file declares no `fn main`                                                                 |
 | `E5002` | cannot resolve import `…`, and where it was looked for                                                |
 | `E5007` | `…` is a module this build compiles and this module did not import                                    |

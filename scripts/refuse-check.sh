@@ -1493,6 +1493,25 @@ fn main() {
 }
 EOF
 
+# THE OTHER HALF OF THAT NUMBER (#87). A map index is a place this compiler cannot take the
+# address of — a LIST index already is one — so that really is an unbuilt form. A slice, a call
+# result and a literal are not waiting for anything: `docs/code/collections.md` calls a subrange
+# a read-only value, and a written value has no storage anywhere in the program.
+expect "$ZERG" mutating-method-on-a-slice E4081 'a slice' <<'EOF'
+fn main() {
+	mut xs := [1, 2, 3]
+	xs[0..2].append(9)
+	print 1
+}
+EOF
+
+expect "$ZERG" mutating-method-on-a-literal E4081 'a literal' <<'EOF'
+fn main() {
+	[1, 2].append(3)
+	print 1
+}
+EOF
+
 # Too FEW constructor arguments has been named for a while; too many reached cc as an
 # "excess elements" WARNING, so it compiled and the extra values were dropped.
 expect "$ZERG" too-many-constructor-arguments E4017 <<'EOF'

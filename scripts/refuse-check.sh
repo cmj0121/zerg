@@ -699,8 +699,21 @@ impl B {
 fn main() { print 1 }
 EOF
 
-expect "$ZERG" unknown-decorator E9005 <<'EOF'
+# ONE NUMBER, TWO QUESTIONS (#87). `#[repr]`, `#[packed]` and `#[align]` are RESERVED on
+# docs/core/decorators.md and unbuilt here, which is what E9xxx is for; every other name is not
+# a decorator in any Zerg, because the set is closed and compiler-owned, so there is no day its
+# code retires on. The page said in as many words that the distinction was lost.
+expect "$ZERG" unknown-decorator E2076 <<'EOF'
 #[dyn]
+struct P {
+	pub x: int
+}
+
+fn main() { print 1 }
+EOF
+
+expect "$ZERG" a-reserved-layout-decorator E9005 <<'EOF'
+#[repr]
 struct P {
 	pub x: int
 }
@@ -3332,7 +3345,7 @@ EOF
 # The second item is an UNKNOWN name and not `sealed`, which is what it used to be: `sealed`
 # now has a code of its own (E9079, a reserved decorator that is not built), so asserting E9005
 # through it would have stopped testing the unknown-decorator rule the moment it got one.
-expect "$ZERG" second-decorator-in-a-comma-list E9005 <<'EOF'
+expect "$ZERG" second-decorator-in-a-comma-list E2076 <<'EOF'
 #[derive(Eq), frobnicate]
 struct P {
 	pub v: int

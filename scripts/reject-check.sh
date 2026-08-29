@@ -7235,6 +7235,31 @@ EOF
 # separate. The sentence is pinned because the case below it shares the shape and not the rule:
 # what E4077 has to say here is that there are two FILES, which is the thing this compiler
 # cannot tell from two modules and used to assert it could.
+# TWO `pub` FILES OF ONE MODULE ARE ONE MODULE (#87). The `pub` test used to be asked before
+# the same-module test, so this program was told "two modules both define `work`" — which sends
+# a reader looking for a second module that is not there. The two rules also have different
+# LIFETIMES: the flat namespace is what this compiler does today, and a public name having no
+# package to be unique within is what the package layer retires.
+reject two-public-files-of-one-module E4077 'both define `work`' <<'EOF'
+import "./one"
+
+fn main() {
+	print one.first()
+}
+--- one/a.zg
+pub fn work() -> int {
+	return 1
+}
+--- one/b.zg
+pub fn work() -> int {
+	return 2
+}
+--- one/mod.zg
+pub fn first() -> int {
+	return 1
+}
+EOF
+
 reject two-files-of-one-module-declaring-a-function E4077 'both define `work`' <<'EOF'
 import "./one"
 

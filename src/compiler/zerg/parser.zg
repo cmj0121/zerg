@@ -2483,7 +2483,17 @@ fn parse_deco_item(mut &p: Parser, mut &pending: list[str]) {
 	# not built, so nothing is protecting the constructor they thought they had sealed.
 	raise p_diag_at(p, nt.line, nt.col, rule.Rule.NotYetSealed, f"NotImplemented: the decorator `#[sealed]` — it is a reserved decorator (GRAMMAR group 7 gives it a meaning: the field-wise `T(…)` constructor becomes module-private) and this compiler does not build it, so the constructor stays public rather than being sealed in silence") if name == "sealed"
 
-	raise p_diag(p, rule.Rule.NotYetDecorator, f"NotImplemented: the decorator `#[{name}]` — this compiler reads `#[derive(…)]`, `#[obj]`, `#[test]`, `#[fixture]` and `#[allow(…)]`, and no other") if name != "derive"
+	# THE LAYOUT THREE ARE RESERVED, and that is a different sentence from a typo.
+	# `docs/core/decorators.md` gives `#[repr]`, `#[packed]` and `#[align]` a meaning — in-memory
+	# width, padding and alignment against an external ABI — and marks them **[not yet]**, which
+	# is what `E9xxx` is for: the language has the form and this compiler has not built it. Every
+	# OTHER name is not a decorator in any Zerg, because the set is closed and compiler-owned, so
+	# there is no day its code retires on. Both got the unknown-decorator sentence, and the page
+	# said in as many words that the distinction was lost — which is exactly what `#[sealed]`'s
+	# own code had already bought back one bullet above (#87).
+	raise p_diag_at(p, nt.line, nt.col, rule.Rule.NotYetDecoratorLayout, f"NotImplemented: the decorator `#[{name}]` — it is a reserved LAYOUT decorator (in-memory width, padding and alignment against an external ABI) and this compiler does not build it, so the type is laid out as it would be without it") if name == "repr" or name == "packed" or name == "align"
+
+	raise p_diag_at(p, nt.line, nt.col, rule.Rule.DecoratorUnknown, f"the decorator `#[{name}]` — the set is closed and compiler-owned, so an unknown name is not a directive this compiler has yet to build; it reads `#[derive(…)]`, `#[obj]`, `#[test]`, `#[fixture]` and `#[allow(…)]`, and no other") if name != "derive"
 
 	# `#[derive]` AND `#[derive()]` ASK FOR NOTHING, and were given it: the arguments are what
 	# a derive IS — the specs to generate — so a bare one was read, dropped, and the type went

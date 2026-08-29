@@ -105,6 +105,7 @@ pub enum Rule {
 	RangeNoLower = 2071
 	ExprForm = 2074
 	StatementAsExpr = 2073
+	DecoratorUnknown = 2076
 	UnsafeOpensNeither = 2075
 
 	# checking — a form whose meaning does not hold together — reported against the tree, all at once
@@ -401,7 +402,7 @@ pub enum Rule {
 	NotYetSpecMemberBody = 9002
 	NotYetGenericEnum = 9003
 	NotYetGenericStruct = 9004
-	NotYetDecorator = 9005
+	NotYetDecoratorLayout = 9005
 	NotYetImplAssocValue = 9006
 	NotYetImplItem = 9007
 	NotYetStructPattern = 9008

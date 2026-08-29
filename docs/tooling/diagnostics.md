@@ -480,7 +480,7 @@ shipping compiler rather than a part of it (the line
 | `E9081` | two modules both define `…` and at least one is `pub`                                                 |
 | `E9085` | rendering a … as text — an enum has no name for its variant                                           |
 | `E9097` | main(args) in a program that uses concurrency                                                         |
-| `E9099` | … of `…` — not a function, a method, or a namespaced function                                         |
+| `E9099` | … of the method `…` on a built-in receiver, which a thunk does not reach                              |
 | `E9100` | the map method `…`                                                                                    |
 | `E9103` | a `spawn`/`defer` of `…`, a binding that HOLDS a function                                             |
 | `E9104` | the module `atomic` ships and cannot be imported                                                      |

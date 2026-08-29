@@ -497,13 +497,25 @@ func (p *parser) requireStmtSep() {
 // belongs on a statement.
 func (p *parser) parseDecoratedStmt() ast.Stmt {
 	h := p.cur()
-	d := p.parseDecorator()
-	p.skipSemis()
-	for _, it := range d.Items {
-		if it.Name != "allow" {
-			p.fail(h.Span, "`#[%s]` applies to the declaration that follows it, and a statement is not one — "+
-				"the decorator a statement takes is `#[allow(…)]`", it.Name)
-			break
+
+	// parseDecorators, NOT parseDecorator: the one-per-item rule lives there, and reading a
+	// single one here let `#[allow(L103)]` over `#[allow(L104)]` through — a seed reading a
+	// program `zerg` refuses with E2063. Two of `reject-check`'s cases said so the first time
+	// this was written, which is what that gate is: the seed and the compiler have to turn
+	// away the same programs, and a fix that only adds is a fix that widens.
+	decos := p.parseDecorators()
+	for _, d := range decos {
+		for _, it := range d.Items {
+			if it.Name != "allow" {
+				p.fail(h.Span, "`#[%s]` applies to the declaration that follows it, and a statement is not one — "+
+					"the decorator a statement takes is `#[allow(…)]`", it.Name)
+				continue
+			}
+			// An allow with no codes suppresses nothing while reading as though it did.
+			if len(it.Args) == 0 {
+				p.fail(h.Span, "an `#[allow]` names the lint codes it suppresses, and an allow with none "+
+					"suppresses nothing while reading as though it did")
+			}
 		}
 	}
 	return p.parseStmt()

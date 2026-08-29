@@ -120,6 +120,12 @@ func TestAllowOnAStatement(t *testing.T) {
 // TestDecoratorOnAStatementIsAllowOnly pins the other half: a statement takes
 // `#[allow(…)]` and no other decorator, so the seed agrees with the shipping compiler
 // about which programs exist rather than accepting a wider language than it.
+//
+// The other two ways the seed could be wider — a STACK of statement decorators, and an
+// `#[allow]` naming no codes — are held by `reject-check`, which asks the seed and the
+// compiler to turn away the same program. Both were red when this fix was first written
+// and only this axis was guarded. They are not copied here: that gate is where the
+// two-compilers-agree fact lives.
 func TestDecoratorOnAStatementIsAllowOnly(t *testing.T) {
 	_, diags := Parse("fn main() {\n\t#[derive(Eq)]\n\tprint 1\n}")
 	if len(diags) == 0 {

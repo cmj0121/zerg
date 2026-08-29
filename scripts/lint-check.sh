@@ -351,7 +351,7 @@ EOF
 # The WARNING, in the spelling that matters: an `E` code. `#[allow]` must never suppress a
 # compiler diagnostic, so naming one is a suppression that can never apply.
 lint_warn L107 'an `E` code is a COMPILER diagnostic' <<'EOF'
-#[allow(E9040)]
+#[allow(E2074)]
 fn main() {
 	print "hi"
 }

@@ -3882,7 +3882,7 @@ EOF
 # made to state rather than absorb.
 # TWO FILES of one module declaring a type, which is what E3078's sentence is about: the
 # module flattening it names is a thing the reader can only have done across files. The
-# same-file half is E4073 below, and the pair mirrors E9082 / E4073 for functions — a rule
+# same-file half is E4073 below, and the pair mirrors E4077 / E4073 for functions — a rule
 # whose two halves have different LIFETIMES is two rules, and types had one.
 reject two-files-of-one-module-declaring-a-struct E3078 'flattens into one namespace' <<'EOF'
 import "./one"
@@ -7233,9 +7233,9 @@ EOF
 # TWO FILES of one module declaring a name. Two DIFFERENT modules each declaring a private one
 # is legal — they take a module tag in C — so what this pins is the collision no tag can
 # separate. The sentence is pinned because the case below it shares the shape and not the rule:
-# what E9082 has to say here is that there are two FILES, which is the thing this compiler
+# what E4077 has to say here is that there are two FILES, which is the thing this compiler
 # cannot tell from two modules and used to assert it could.
-reject two-files-of-one-module-declaring-a-function E9082 'both define `work`' <<'EOF'
+reject two-files-of-one-module-declaring-a-function E4077 'both define `work`' <<'EOF'
 import "./one"
 
 fn main() {
@@ -7259,8 +7259,8 @@ import pub "./b"
 EOF
 
 # ONE FILE declaring a name twice, which is the other half of the same collision and is a
-# different RULE: E9082 is a `NotImplemented` the package layer retires, and this is refused by
-# every compiler there will ever be. It was reported as E9082 — "two modules both define
+# different RULE: E4077 is a `NotImplemented` the package layer retires, and this is refused by
+# every compiler there will ever be. It was reported as E4077 — "two modules both define
 # `test_same`" about two `#[test]` functions in one file — and a reader following that sentence
 # goes looking for a second module.
 #
@@ -7682,7 +7682,7 @@ fn main() {
 }
 EOF
 
-reject spawn-of-something-that-is-not-a-call E9098 <<'EOF'
+reject spawn-of-something-that-is-not-a-call E4078 <<'EOF'
 fn main() {
 	x := 1
 	spawn x

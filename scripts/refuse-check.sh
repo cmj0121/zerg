@@ -1096,7 +1096,7 @@ EOF
 
 # A module's last segment is BOUND AS AN IDENTIFIER. All 45 reserved words are legal package
 # names by the character grammar, and this used to be reported at the USE — `match.hit()` read
-# as the keyword, answering _E9040 `.` is not an expression this compiler reads_, which is a
+# as the keyword, answering _E2074 `.` is not an expression this compiler reads_, which is a
 # true sentence about a line that is not the mistake.
 expect "$ZERG" an-import-named-for-a-reserved-word E5012 'is a reserved word' <<'EOF'
 import "./match"
@@ -2251,7 +2251,7 @@ fn main() {
 }
 EOF
 
-expect "$ZERG" open-range-with-no-lower-bound E9022 <<'EOF'
+expect "$ZERG" open-range-with-no-lower-bound E2071 <<'EOF'
 fn main() {
 	xs: list[int] = [1, 2, 3]
 	print xs[..2].len()
@@ -3119,7 +3119,7 @@ EOF
 # GRAMMAR#postfix puts type arguments in the postfix chain, so `f[A, B]` with no call is
 # grammatical. This compiler instantiates a generic at the call and has nothing for a bare
 # one to be.
-expect "$ZERG" type-arguments-with-no-call E9030 <<'EOF'
+expect "$ZERG" type-arguments-with-no-call E2072 <<'EOF'
 fn main() {
 	m := map[str, int]
 	print 1
@@ -3245,6 +3245,21 @@ expect "$ZERG" unsafe-as-an-expression E9011 <<'EOF'
 fn main() {
 	x := unsafe { 3 + 4 }
 	print x
+}
+EOF
+
+# THE OTHER HALF OF THAT NUMBER. A top-level `unsafe` opens a GROUP or marks a `fn`, and a
+# third thing used to fall through to the statement fallback, be read as an EXPRESSION, and
+# meet E9011 above — an answer describing a form the file does not contain (there is no
+# expression in `unsafe struct P`) under a code that says the language HAS the form. GRAMMAR
+# derives no `unsafe struct` in any position, so the split leaves E9011's sentence true (#87).
+expect "$ZERG" a-top-level-unsafe-that-opens-neither E2075 <<'EOF'
+unsafe struct P {
+	pub x: int
+}
+
+fn main() {
+	print 1
 }
 EOF
 
@@ -3619,14 +3634,14 @@ EOF
 # the split docs/conformance.md names; the permanent half is in reject-check.sh under the
 # same heading.
 
-expect "$ZERG" a-statement-where-an-expression-is-wanted E9039 <<'EOF'
+expect "$ZERG" a-statement-where-an-expression-is-wanted E2073 <<'EOF'
 fn main() {
 	x := break
 	print x
 }
 EOF
 
-expect "$ZERG" a-token-that-opens-no-expression E9040 <<'EOF'
+expect "$ZERG" a-token-that-opens-no-expression E2074 <<'EOF'
 fn main() {
 	x := =
 	print x

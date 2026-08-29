@@ -2063,6 +2063,17 @@ fn main() {
 }
 EOF
 
+# THE OTHER HALF OF THAT NUMBER (#87). A `byte` key is `collections.md`'s intended rule and
+# waits for it; a `float` key waits for nothing, because `docs/core/derive.md` refuses `Hash`
+# on any `float` field — a float has no equality a hash can agree with — so there is no day
+# `NotImplemented:` was promising.
+expect "$ZERG" map-key-that-can-never-hash E4079 <<'EOF'
+fn main() {
+	m := {1.5: 1}
+	print m.len()
+}
+EOF
+
 # THE REST OF THE `[not yet]` TABLE in docs/surface/grammar.md. That table claims a case
 # holds every entry; half of them had none, so the claim was the third unsynchronised copy
 # of a list that already lives in the parser's raises and in this file.

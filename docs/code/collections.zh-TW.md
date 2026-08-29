@@ -119,8 +119,9 @@ semantics，而唯讀情況維持**零拷貝**；COW 是與 copy-elision、move 
 > 但 `xs[2..]` 會得到 _E9050 NotImplemented: an open-ended range has no upper bound here — a slice needs an
 > upper bound — `xs[a..xs.len()]`_,那也就是目前該寫的拼法。由 0.2.0 的重新量測掃出(#74)。
 >
-> 反過來的形狀有自己的句子：沒有**下界**的 range 是 _E9022 NotImplemented: a range with no lower bound —
-> write `xs[0..n]`_，它同時指出 list **pattern** `[a, ..rest]` 是這個編譯器也沒有的另一種形式。
+> 反過來的形狀有自己的句子，而且不是同一種拒絕：`GRAMMAR#range-expr` 的下界是**必要的**，所以 `xs[..2]`
+> 不是一個等著被建的形式——它是 _E2071 a range with no lower bound — write `xs[0..n]`_，它同時指出 list
+> **pattern** `[a, ..rest]` 是這個編譯器也沒有的另一種形式。
 >
 > **[not yet]** 增長方法要的是一個**位置**而不是一個值：`f().append(1)` 是 _E9049 NotImplemented: `append`
 > MUTATES its list, and … is a value rather than a place — bind it to a name first_。而 map 用字面量建、不是

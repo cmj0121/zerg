@@ -227,10 +227,11 @@ does not read (_E9008 a struct pattern `Div{…}`_).
 Expressions are a precedence cascade. Every binary level is **left-associative**; **comparison is
 non-associative** — `a < b < c` does not parse, by design.
 
-> **[not yet]** A token that opens no production this compiler reads is refused where it stands rather
-> than carried into the tree: _E9040 NotImplemented: `…` is not an expression this compiler reads_. It
-> is the catch-all beneath every named form above, so a shape GRAMMAR derives and this phase does not
-> build reaches a reader as its own sentence and never as a parse that quietly went wrong.
+> A token that opens no production this compiler reads is refused where it stands rather than carried into
+> the tree: _E2074 `…` is not an expression this compiler reads_. It is the catch-all beneath every named
+> form above, so a shape that is not an expression reaches a reader as its own sentence and never as a parse
+> that quietly went wrong. It is a PARSER code and names no unbuilt form: every alternative of `primary`
+> and every prefix has a home or a code of its own above it, so nothing this grammar derives falls through here.
 
 | Precedence | Operators                             | Assoc     |
 | ---------- | ------------------------------------- | --------- |

@@ -180,6 +180,11 @@ shipping compiler rather than a part of it (the line
 | `E2068` | a decorator holds at least one item, and `#[]` names nothing to apply                                 |
 | `E2069` | a `#[derive]` names the specs to generate                                                             |
 | `E2070` | a channel is bidirectional, receive-only or send-only                                                 |
+| `E2071` | a range with no lower bound                                                                           |
+| `E2072` | `…[…]` with no call after it                                                                          |
+| `E2073` | `…` is a statement, and an expression is wanted here                                                  |
+| `E2074` | `…` is not an expression this compiler reads                                                          |
+| `E2075` | a top-level `unsafe` opens a group or marks a `fn`, and this is neither                               |
 | `E3001` | `…` is not a public member of module `…`                                                              |
 | `E3002` | `…` is not a place, and an assignment needs one                                                       |
 | `E3003` | cannot assign to `…`: it is a module `const`, and a constant is never written                         |
@@ -383,6 +388,8 @@ shipping compiler rather than a part of it (the line
 | `E4074` | a variant pattern's qualifier is not the subject's enum                                               |
 | `E4075` | a binding takes the name an import bound in this file                                                 |
 | `E4076` | a … is an identity rather than a value, and the language gives it no rendering                        |
+| `E4077` | `…` and `…` both define `…` — one flat namespace                                                      |
+| `E4078` | … of anything but a function, a method, or a namespaced function                                      |
 | `E5001` | this entry file declares no `fn main`                                                                 |
 | `E5002` | cannot resolve import `…`, and where it was looked for                                                |
 | `E5007` | `…` is a module this build compiles and this module did not import                                    |
@@ -417,7 +424,6 @@ shipping compiler rather than a part of it (the line
 | `E9019` | an interpolating command literal                                                                      |
 | `E9020` | a command literal                                                                                     |
 | `E9021` | a destructuring binding `(a, b) := …`                                                                 |
-| `E9022` | a range with no lower bound                                                                           |
 | `E9023` | a list pattern in a `match` arm                                                                       |
 | `E9024` | an or-pattern                                                                                         |
 | `E9025` | `for mut v in …`                                                                                      |
@@ -425,7 +431,6 @@ shipping compiler rather than a part of it (the line
 | `E9027` | a standalone `unsafe fn` declaration                                                                  |
 | `E9028` | an associated type projection `….…`                                                                   |
 | `E9029` | a value generic parameter `…: …`                                                                      |
-| `E9030` | `…[…]` with no call after it                                                                          |
 | `E9031` | an `if` EXPRESSION whose branch has more than one statement                                           |
 | `E9032` | a binding head in an `if` EXPRESSION                                                                  |
 | `E9033` | `asm(…)`                                                                                              |
@@ -434,8 +439,6 @@ shipping compiler rather than a part of it (the line
 | `E9036` | an `unsafe` `spec` signature                                                                          |
 | `E9037` | an `impl` carrying its own type parameters `[…]`                                                      |
 | `E9038` | an `impl` on `…[…]` — a type ARGUMENT on the target                                                   |
-| `E9039` | `…` is a statement, and an expression is wanted here                                                  |
-| `E9040` | `…` is not an expression this compiler reads                                                          |
 | `E9041` | a match arm's body is an expression, and this one is a statement                                      |
 | `E9042` | `type … = …` over a non-scalar                                                                        |
 | `E9043` | `…` leaving a `guard` block                                                                           |
@@ -475,10 +478,8 @@ shipping compiler rather than a part of it (the line
 | `E9078` | `is …` names one of the built-in error kinds                                                          |
 | `E9079` | the decorator `#[sealed]` — reserved                                                                  |
 | `E9081` | two modules both define `…` and at least one is `pub`                                                 |
-| `E9082` | `…` and `…` both define `…` — one flat namespace                                                      |
 | `E9085` | rendering a … as text — an enum has no name for its variant                                           |
 | `E9097` | main(args) in a program that uses concurrency                                                         |
-| `E9098` | … of anything but a function, a method, or a namespaced function                                      |
 | `E9099` | … of `…` — not a function, a method, or a namespaced function                                         |
 | `E9100` | the map method `…`                                                                                    |
 | `E9103` | a `spawn`/`defer` of `…`, a binding that HOLDS a function                                             |
@@ -611,6 +612,12 @@ name now is the prelude rule (`E2061`), which is about the name rather than abou
 | `E9096` | `E3133` | what the entry may answer is a meaning                        |
 | `E9101` | `E3135` | a field an `Err` does not carry                               |
 | `E9102` | `E3136` | `..=` with no bound is not a range, and that is a meaning     |
+| `E9022` | `E2071` | a range GRAMMAR requires a lower bound for                    |
+| `E9030` | `E2072` | a postfix `[ … ]` is always an index; no form reaches this    |
+| `E9039` | `E2073` | no `primary` alternative is a statement                       |
+| `E9040` | `E2074` | every derived expression has a home or its own code           |
+| `E9082` | `E4077` | reachable only when the two files are literally one module    |
+| `E9098` | `E4078` | everything call-shaped left earlier                           |
 | `E3047` | —       | a strong typedef takes its underlying type's prefix operators |
 
 **One of them moved nowhere**, and it is the only row whose second column is empty. `E3047`

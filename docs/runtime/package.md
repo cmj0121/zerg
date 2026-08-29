@@ -41,7 +41,7 @@ Keeping encapsulation/naming (`file`, `module`) and distribution/API (`package`)
 >
 > **[not yet]** Two modules that declare the same **public** top-level name are refused by name —
 > _E9081 NotImplemented: two modules both define `helper` and at least one is `pub` — a public name has
-> no package to be unique within_. (`E9082` is its neighbour and a different rule: two declarations under
+> no package to be unique within_. (`E4077` is its neighbour and a different rule: two declarations under
 > ONE directory, whether they are two modules or two files of one.) A
 > **private** one is not: nothing outside a module can reach its private names, so a bare call always means
 > the caller's own, and the two only have to be told apart in C — where each gets a module tag, its

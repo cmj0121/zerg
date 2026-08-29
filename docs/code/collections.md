@@ -134,9 +134,10 @@ materializing a `str` only when it keeps a token.
 > slice needs an upper bound — `xs[a..xs.len()]`_, which is the spelling to write meanwhile. Found by the
 > 0.2.0 re-measurement (#74).
 >
-> The mirror shape is refused with its own sentence: a range with no LOWER bound is _E9022
-> NotImplemented: a range with no lower bound — write `xs[0..n]`_, which also names the list PATTERN
-> `[a, ..rest]` as a different form this compiler does not have.
+> The mirror shape is refused with its own sentence, and it is not the same kind of refusal: a lower bound
+> is MANDATORY in `GRAMMAR#range-expr`, so `xs[..2]` is not a form waiting to be built — it is _E2071 a range
+> with no lower bound — write `xs[0..n]`_, which also names the list PATTERN `[a, ..rest]` as a different
+> form this compiler does not have.
 >
 > **[not yet]** A growth method needs a PLACE and not a value: `f().append(1)` is _E9049 NotImplemented:
 > `append` MUTATES its list, and … is a value rather than a place — bind it to a name first_. And a map

@@ -351,6 +351,7 @@ pub enum Rule {
 	IdentityHasNoRendering = 4076
 	SpawnOfNonFunction = 4078
 	NamespaceCollision = 4077
+	DefaultReadsUnbuiltField = 4080
 	MapKeyHasNoHash = 4079
 
 	# building — the program as a set of files, which no single file's text answers: imports resolved

@@ -3620,8 +3620,10 @@ fn c_build_top_names(mut &em: Emitter, f: ast.File) {
 			c_check_private_field(em, sd, fd)
 		}
 		c_check_names_distinct(fnames, "a field", sd.name, sd.path, sd.line, sd.col)
+		mut earlier: list[str] = []
 		for fd in sd.fields {
-			c_check_field_default(sd, fnames, fd)
+			c_check_field_default(sd, fnames, earlier, fd)
+			earlier.append(fd.name)
 		}
 	}
 	for ed in f.enums {
@@ -3678,10 +3680,23 @@ fn c_check_private_field(mut &em: Emitter, sd: ast.StructDecl, fd: ast.FieldDef)
 # It is the same refusal `docs/code/functions.md` records for a parameter default that reads
 # an earlier parameter, for the same reason, and the seed has gated it on both since it was
 # written. Refusing by name is what this compiler owes a form it cannot lower.
-fn c_check_field_default(sd: ast.StructDecl, fnames: list[str], fd: ast.FieldDef) {
+fn c_check_field_default(sd: ast.StructDecl, fnames: list[str], earlier: list[str], fd: ast.FieldDef) {
 	return if not fd.has_def
 
 	nm := c_default_names_field(fnames, fd.def)
+
+	# ONE NUMBER, THREE PROGRAMS (#87). `fnames` is EVERY field, including this one and the
+	# ones after it, so all three arrived at the raise below wearing `NotImplemented:`.
+	#
+	# Only one of the three is a form. `docs/core/types.md` says a field default follows the
+	# rule a parameter default already follows, and `docs/code/functions.md` says a parameter
+	# default "may read earlier parameters (evaluation is left-to-right)" — so `b: int = a` is
+	# the specified language and this compiler has not built it. `a: int = a` and `b: int = c`
+	# are not: there is no left-to-right order in which either has a value to read, and no day
+	# a code in that range would have retired on.
+	if nm != "" and not c_name_in(earlier, nm) {
+		raise c_diag_at(sd.path, fd.line, fd.col, rule.Rule.DefaultReadsUnbuiltField, f"the default on field `{fd.name}` of `{sd.name}` reads the field `{nm}`, which is not an EARLIER field — a default is evaluated left to right at the construction, so it can read the fields written before it and nothing else")
+	}
 
 	# with a place, which a refusal usually has none of: this one runs over a DECLARATION and
 	# the field carries its own line and column, so there is a position to give and no reason

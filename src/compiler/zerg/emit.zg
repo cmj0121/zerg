@@ -7391,9 +7391,22 @@ pub fn c_is_place(mut &em: Emitter, e: ast.Expr) -> bool {
 # was handed: `mk().xs[0] = 9` fails at `mk()`, and calling the whole thing "a call result"
 # is true of the call and not of the `mk().xs` this was asked about. c_is_place became a
 # whole-path question and this is its other half.
+# c_is_literal_expr is a WRITTEN VALUE — one with no storage anywhere in the program, not even
+# a temporary somebody else owns. It exists because `c_place_why` called `[1, 2]` "a call
+# result", which is a phrase about a form the reader did not write.
+fn c_is_literal_expr(e: ast.Expr) -> bool {
+	return match e {
+		Expr.EListLit(_) => true
+		Expr.EMapLit(_, _) => true
+		Expr.EStr(_) => true
+		_ => false
+	}
+}
+
 pub fn c_place_why(mut &em: Emitter, e: ast.Expr) -> str {
 	return "a map index" if c_is_index(e) and c_is_map(c_infer(em, c_index_target(e)))
 	return "a slice" if c_is_index(e) and c_is_range(c_index_key(e))
+	return "a literal" if c_is_literal_expr(e)
 	return "a call result" if c_ident_name(e) == "" and not c_is_lvalue(e)
 
 	# an lvalue by SHAPE whose path stops being storage further down — name where it stops
@@ -7799,6 +7812,17 @@ fn c_list_method(mut &em: Emitter, target: ast.Expr, meth: str, args: list[ast.E
 	# append silently did nothing. A read-only method on a copy is the same answer as on
 	# the original; a mutating one is not, and is refused rather than dropped.
 	if not c_is_place(em, target) {
+		# ONE NUMBER, TWO QUESTIONS (#87). A MAP INDEX is a place the language has: a LIST index
+		# is one — `xs[0].append(3)` compiles and edits in place — and nothing in
+		# `docs/code/collections.md` makes a map's element different. This compiler cannot take
+		# its address, so that is a form it has not built and the number is right for it.
+		#
+		# A SLICE, A CALL RESULT AND A LITERAL are not waiting for anything. `collections.md`
+		# calls a subrange "an ordinary read-only `list[T]` value" and a plain `xs` frozen, and a
+		# written value has no storage anywhere in the program — so there is no day a
+		# `NotImplemented:` on any of the three would have retired.
+		raise c_diag(em, rule.Rule.MutateAValueNotAPlace, f"`{meth}` MUTATES its list, and `{c_place_why(em, target)}` is a value rather than a place — bind it to a name first") if c_meth_mutates(meth) and not (c_is_index(target) and c_is_map(c_infer(em, c_index_target(target))))
+
 		raise c_diag(em, rule.Rule.NotYetMutateListRvalue, f"NotImplemented: `{meth}` MUTATES its list, and `{c_place_why(em, target)}` is a value rather than a place — bind it to a name first") if c_meth_mutates(meth)
 
 		return c_list_method_rv(em, target, meth, args, tty, sb)

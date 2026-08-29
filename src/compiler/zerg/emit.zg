@@ -2577,8 +2577,14 @@ fn c_mod_collide(mut &em: Emitter, fn_i: ast.FnDecl, prev: ast.FnDecl) {
 	# sees, and it would be the wrong one.
 	return if prev.path == fn_i.path
 
-	raise c_diag_at(fn_i.path, fn_i.line, fn_i.col, rule.Rule.NotYetTwoModulesDefine, f"NotImplemented: two modules both define `{fn_i.name}` and at least one is `pub` — a public name has no package to be unique within (docs/runtime/package.md), so telling the two apart needs the link-name override docs/runtime/ffi.md specifies") if fn_i.is_pub or prev.is_pub
+	# THE SAME-MODULE QUESTION IS ASKED FIRST, and asking it second is what made the sentence
+	# above a lie about half the programs that met it. Two `pub` files of ONE directory are ONE
+	# module — `c_mod_of` says so — and they were told "two modules both define `helper`", which
+	# sends a reader looking for a second module that is not there. The two rules also have
+	# different LIFETIMES: the flat namespace is what this compiler does today, and a public
+	# name having no package to be unique within is what the package layer retires (#87).
 	raise c_mod_flat_collide(fn_i.path, fn_i.line, fn_i.col, fn_i.name, prev.path) if check.c_mod_of(em, fn_i.path) == check.c_mod_of(em, prev.path)
+	raise c_diag_at(fn_i.path, fn_i.line, fn_i.col, rule.Rule.NotYetTwoModulesDefine, f"NotImplemented: two modules both define `{fn_i.name}` and at least one is `pub` — a public name has no package to be unique within (docs/runtime/package.md), so telling the two apart needs the link-name override docs/runtime/ffi.md specifies") if fn_i.is_pub or prev.is_pub
 
 	if not c_name_in(em.mod_tagged, fn_i.name) {
 		em.mod_tagged.append(fn_i.name)

@@ -7977,6 +7977,53 @@ pub fn only_in_test() -> int {
 }
 EOF
 
+# --- an identity has no rendering ---------------------------------------------------
+#
+# A CHANNEL and a FUNCTION VALUE are the class `E4034` refuses `==` on: a place to send to
+# and a place to jump to. `docs/runtime/format.md` already says a `Display` would not be
+# their answer if it arrived — and the three rendering positions did not ask. They failed
+# DIFFERENTLY for it, which is why both members are here: a `chan` printed its address, a
+# different number on every run, and a `fn` reached cc with `operand of type 'zg_fnptr'
+# where arithmetic or pointer type is required` (#88).
+#
+# One case per SPELLING as well as per member, because the rule is at the shared check and
+# a reader who trusts that has to be able to see it: `print x`, `str(x)` and `f"{x}"`.
+reject a-channel-printed E4076 <<'EOF'
+fn main() {
+	ch := chan[int](1)
+
+	print ch
+}
+EOF
+
+reject a-channel-through-str E4076 <<'EOF'
+fn main() {
+	ch := chan[int](1)
+
+	print str(ch)
+}
+EOF
+
+reject a-channel-in-an-f-string E4076 <<'EOF'
+fn main() {
+	ch := chan[int](1)
+
+	print f"{ch}"
+}
+EOF
+
+reject a-function-value-printed E4076 <<'EOF'
+fn twice(n: int) -> int {
+	return n * 2
+}
+
+fn main() {
+	g := twice
+
+	print g
+}
+EOF
+
 if [ $fail -ne 0 ]; then
 	echo "reject-check: $fail case(s) the compiler did not reject by itself"
 	exit 1

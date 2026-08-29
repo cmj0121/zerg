@@ -396,10 +396,13 @@ arguments, so a default makes **that** field optional and not the ones before it
 evaluated **per construction** rather than once at the declaration — an expression in it (a call, a sum
 over module constants) runs again for every construction that omits the field.
 
-> **[not yet]** A default that reads ANOTHER FIELD of the same struct is refused by name — _E9071
+> **[not yet]** A default that reads an EARLIER FIELD of the same struct is refused by name — _E9071
 > NotImplemented: the default on field `h` of `Box` reads the field `w` — a default is materialised at
 > the construction, where a field is not a name in scope_ — which is the field-wise reading of the same
-> limit a [parameter's default](../code/functions.md) has.
+> limit a [parameter's default](../code/functions.md) has. Reading the field ITSELF, or one written
+> AFTER it, is not that limit and is not waiting for anything: evaluation is left to right, so neither
+> has a value to read in any order — _E4080 the default on field `a` of `P` reads the field `a`, which is
+> not an EARLIER field_.
 
 There are **no zero values**. A non-optional field with no default is therefore **required** at
 construction, and a construction short of one is an error naming the field. The **one implicit default**

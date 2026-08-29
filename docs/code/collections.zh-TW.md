@@ -66,8 +66,11 @@ compiler 無法檢查的契約：**equal ⇒ same hash**。因為 key 是用凍�
 collection 也能拿來當 key。
 
 > **狀態。** 預期的規則——**任何 `Eq + Hash` 型別**皆可當 key——是 **[not yet]**。這個階段 `map` 的 key 僅限
-> **`int`** 或 **`str`**:其他一律是 _E9052 NotImplemented: a map key of type … — a key needs `Hash`, and this
-> compiler has one for `int` and for `str`_。`derive(Hash)` 與一般的 keyed 型別尚未建置。
+> **`int`** 或 **`str`**:`byte`、`rune` 或 `derive(Hash)` 型別是 _E9052 NotImplemented: a map key of type … —
+> a key needs `Hash`, and this compiler has one for `int` and for `str`_。`derive(Hash)` 與一般的 keyed 型別
+> 尚未建置。**`float`** key 是另一個答案,而且不是 `[not yet]` 那一種:[Derive 與預設行為](../core/derive.zh-TW.md)
+> 在任何 `float` 欄位上都拒絕 `Hash`,所以它沒有退場的那一天——_E4079 a map key of type float — a key needs
+> `Hash`, and a `float` has no equality a hash can agree with_。
 
 ## 存取——`[]` 斷言、`.get` 檢查
 

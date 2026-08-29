@@ -71,9 +71,12 @@ author owns the contract the compiler can't check: **equal ⇒ same hash**. Beca
 frozen snapshot, even a `mut` collection is usable as one.
 
 > **Status.** The intended rule — **any `Eq + Hash` type** as a key — is **[not yet]**. This phase a `map`
-> key is restricted to **`int`** or **`str`**: anything else is _E9052 NotImplemented: a map key of type … —
-> a key needs `Hash`, and this compiler has one for `int` and for `str`_. `derive(Hash)` and general keyed
-> types are not built.
+> key is restricted to **`int`** or **`str`**: a `byte`, a `rune` or a `derive(Hash)` type is _E9052
+> NotImplemented: a map key of type … — a key needs `Hash`, and this compiler has one for `int` and for
+> `str`_. `derive(Hash)` and general keyed types are not built. A **`float`** key is a different answer and
+> not a `[not yet]` one: [Derive & Default Behavior](../core/derive.md) refuses `Hash` on any `float` field,
+> so there is no day it retires on — _E4079 a map key of type float — a key needs `Hash`, and a `float` has
+> no equality a hash can agree with_.
 
 ## Access — `[]` asserts, `.get` checks
 

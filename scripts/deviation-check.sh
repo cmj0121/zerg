@@ -85,6 +85,67 @@ block_of() {
 	'
 }
 
+# THE TWO GREPS ARE FUNCTIONS so that the self-test below can hold them to a fixture. They
+# were written inline at each of the three places that reads a page, which is three copies
+# of one fact about the document format and no way to assert any of them.
+mentions() { grep -n '\*\*\[deviation\]\*\*' "$1"; }
+markers() { grep -n '^[[:space:]]*> \*\*\[deviation\]' "$1"; }
+
+# --- the gate proves it can SEE, before it reports what it saw -------------------------
+# `n` at the foot of this file is a COUNT, and a count is not an assertion. Break the
+# marker pattern — a reworded marker, a renamed heading, a moved path — and every clause
+# below runs zero times, the summary prints `0 markers, 0 inherited`, and the gate exits
+# 0. Success reported for two checks that never executed is the one failure a gate must
+# not have (#89).
+#
+# A FLOOR WOULD FIGHT THE CRITERION. #52's whole point is that the inherited list empties
+# and the marker count goes to zero, so `n` is a number this gate must be free to see at
+# zero. What can be asserted instead is that the readers still work, which is the shape
+# `grammar-cites` already uses one directory over: a fixture the file carries, and every
+# reader held to a known answer over it.
+self_test() {
+	d=$(mktemp -d)
+	f=$d/fixture.md
+	bad=0
+
+	# The fixture holds, in order: an INLINE mention (clause 0's quarry, and a form this
+	# gate could not see for as long as it existed), a canonical marker INDENTED under a
+	# list item, a ticket inside that marker's own block, a paragraph break, and a second
+	# ticket below the break that the block must NOT reach.
+	{
+		echo 'A sentence carrying **[deviation]** in the middle of it.'
+		echo
+		echo '- a list item'
+		echo '  > **[deviation]** the scheduler runs a coroutine to completion'
+		echo '  > and the ticket for it is #4242.'
+		echo '  >'
+		echo '  > a second paragraph naming #9999, which is not this marker to answer for.'
+	} >"$f"
+
+	[ "$(mentions "$f" | grep -c .)" = 2 ] ||
+		{ echo "SELFTEST  the mention reader found $(mentions "$f" | grep -c .) of 2 in the fixture"; bad=1; }
+	[ "$(markers "$f" | grep -c .)" = 1 ] ||
+		{ echo "SELFTEST  the marker reader found $(markers "$f" | grep -c .) of 1 in the fixture — an INDENTED marker is a marker"; bad=1; }
+
+	ln=$(markers "$f" | cut -d: -f1)
+	if [ -n "$ln" ]; then
+		block_of "$f" "$ln" | grep -q '#4242' ||
+			{ echo "SELFTEST  the block reader does not reach the ticket inside the marker it was given"; bad=1; }
+		block_of "$f" "$ln" | grep -q '#9999' &&
+			{ echo "SELFTEST  the block reader runs past the paragraph break and borrows the next ticket"; bad=1; }
+	fi
+
+	[ -n "$(slug '> **[deviation]** the scheduler runs a coroutine')" ] ||
+		{ echo "SELFTEST  slug returns nothing for a marker line, so every key below is empty"; bad=1; }
+
+	rm -rf "$d"
+	[ $bad -eq 0 ] && return 0
+	echo "deviation-check: the readers no longer see what this file documents, so nothing was checked"
+	return 1
+}
+
+self_test || exit 1
+
 # --- clause 0: every mention is a canonical marker, or is allowlisted prose ------------
 # The allowlist is keyed the same way the inherited list is, by `path<TAB>slug`, so that
 # exempting one SENTENCE never exempts a chapter: `docs/conformance.md` defines what the
@@ -106,7 +167,7 @@ done
 # --- every marker in the tree, as `path<TAB>slug` -------------------------------------
 found=$(
 	for f in $(pages); do
-		grep -n '^[[:space:]]*> \*\*\[deviation\]' "$f" | while IFS=: read -r n rest; do
+		markers "$f" | while IFS=: read -r n rest; do
 			printf '%s\t%s\n' "$f" "$(slug "$rest")"
 		done
 	done
@@ -114,7 +175,7 @@ found=$(
 
 # --- clause 1: a marker that is not inherited must name an issue -----------------------
 for f in $(pages); do
-	grep -n '^[[:space:]]*> \*\*\[deviation\]' "$f" | while IFS=: read -r n rest; do
+	markers "$f" | while IFS=: read -r n rest; do
 		s=$(slug "$rest")
 		if grep -qF "$(printf '%s\t%s' "$f" "$s")" "$LIST" 2>/dev/null; then
 			continue

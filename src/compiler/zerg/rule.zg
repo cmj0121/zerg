@@ -474,7 +474,6 @@ pub enum Rule {
 	NotYetRangeAsValue = 9077
 	NotYetIsErrorKind = 9078
 	NotYetSealed = 9079
-	NotYetTwoModulesDefine = 9081
 	NotYetRenderEnumAsText = 9085
 	NotYetMainArgsWithConcurrency = 9097
 	NotYetSpawnOfUnknownName = 9099

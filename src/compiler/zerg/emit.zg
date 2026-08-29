@@ -2584,7 +2584,19 @@ fn c_mod_collide(mut &em: Emitter, fn_i: ast.FnDecl, prev: ast.FnDecl) {
 	# different LIFETIMES: the flat namespace is what this compiler does today, and a public
 	# name having no package to be unique within is what the package layer retires (#87).
 	raise c_mod_flat_collide(fn_i.path, fn_i.line, fn_i.col, fn_i.name, prev.path) if check.c_mod_of(em, fn_i.path) == check.c_mod_of(em, prev.path)
-	raise c_diag_at(fn_i.path, fn_i.line, fn_i.col, rule.Rule.NotYetTwoModulesDefine, f"NotImplemented: two modules both define `{fn_i.name}` and at least one is `pub` — a public name has no package to be unique within (docs/runtime/package.md), so telling the two apart needs the link-name override docs/runtime/ffi.md specifies") if fn_i.is_pub or prev.is_pub
+	# A PUBLIC NAME GETS THE TAG A PRIVATE ONE ALREADY GETS (#92). The refusal that stood here
+	# said a public name has no package to be unique within — true of a package REGISTRY, which
+	# `docs/runtime/package.md` declines on purpose, and not true of the C symbol, which is the
+	# only thing that ever collided. Two private `helper`s were already told apart by a module
+	# tag: the module's position in a SORTED list of the program's modules, deterministic across
+	# runs because `fixpoint` compares emitted C byte for byte. Nothing in that tag needs the
+	# name to be private, and withholding it was the whole of the deviation.
+	#
+	# NOTHING CAN NAME A `pub` SYMBOL FROM C TODAY, which is what makes this free to do now:
+	# `docs/runtime/ffi.md` marks the whole export edge unbuilt — `--emit lib` writes objects and
+	# no header, and nothing reports which declarations a header would carry. When that edge
+	# lands it brings the link-name override that page already reserves, and that is the opt-out
+	# a foreign caller needs. A tag is not what stands in its way.
 
 	if not c_name_in(em.mod_tagged, fn_i.name) {
 		em.mod_tagged.append(fn_i.name)
@@ -2640,6 +2652,21 @@ fn c_required_params(fn_d: ast.FnDecl) -> int {
 }
 
 # c_sig_row is a signature's index in the sig_* columns, or -1 when nothing registered it.
+# c_sig_row_in is c_sig_row asked from ANOTHER module: the row for this key declared by `mod`,
+# or c_sig_row's answer when that module declares none. A namespaced call is the one shape where
+# the reader has said which module they mean, so the row it reads — the visibility, the arity,
+# the parameter types — has to be that module's and not the caller's (#92).
+pub fn c_sig_row_in(mut &em: Emitter, mod: str, key: str) -> int {
+	if mod != "" {
+		mut j := 0
+		for j < em.sig_names.len() {
+			return j if em.sig_names[j] == key and em.sig_mod[j] == mod
+			j = j + 1
+		}
+	}
+	return c_sig_row(em, key)
+}
+
 pub fn c_sig_row(mut &em: Emitter, key: str) -> int {
 	# THE READER'S OWN MODULE FIRST, where two of them declare the name. A private name two
 	# modules both have is two rows, and the first is whichever file was read first — so
@@ -4595,6 +4622,21 @@ pub fn c_ns_bound_in(mut &em: Emitter, n: str, here: str) -> bool {
 # the first is the silence chk_visible keeps for code emitted before any statement, and the
 # second is `chk_ns_bound`'s finding rather than this one's. A rule that spoke in either case
 # would report a program twice for one mistake.
+# c_ns_mod_of is WHICH MODULE a namespace name binds to in the file being emitted, or "" for a
+# name this file did not bind. It is the other half of `c_ns_names_mod`: that one asks whether a
+# declaration's module is the one this namespace names, and this one asks which module that is —
+# the question a namespaced CALL has, because the symbol it emits belongs to the callee's module
+# and not to the caller's (#92).
+pub fn c_ns_mod_of(mut &em: Emitter, n: str) -> str {
+	here := em.at_path
+	mut i := 0
+	for i < em.ns_names.len() {
+		return em.ns_mods[i] if em.ns_names[i] == n and em.ns_at[i] == here
+		i = i + 1
+	}
+	return ""
+}
+
 pub fn c_ns_names_mod(mut &em: Emitter, n: str, decl_mod: str) -> bool {
 	return true if decl_mod == ""
 
@@ -4657,7 +4699,10 @@ fn c_ns_declares_fn(mut &em: Emitter, ns: str, name: str) -> bool {
 }
 
 fn c_ns_owns_fn(mut &em: Emitter, ns: str, name: str) -> bool {
-	r := c_sig_row_of(em, name)
+	# THE NAMESPACE'S OWN ROW, where two modules declare the name. `c_sig_row_of` answers with
+	# the reader's module first and the earliest row otherwise, so `two.helper` was asked about
+	# `one`'s `helper` and told module `two` has none (#92).
+	r := c_sig_row_in(em, c_ns_mod_of(em, ns), c_sig_key("", name))
 	return true if r < 0
 
 	return c_ns_names_mod(em, ns, em.sig_mod[r])
@@ -7970,9 +8015,16 @@ fn c_free_method(mut &em: Emitter, target: ast.Expr, meth: str, args: list[ast.E
 		# A NAMESPACED call names the module out loud — `lib.helper()` — which makes it the
 		# one shape where the reader has said which module they mean, and the one where
 		# reading a module-private name is unambiguous rather than accidental.
-		c_chk_visible_fn(em, meth, c_sig_row_of(em, meth))
+		# THE CALLEE'S MODULE, not the caller's. `c_fn_cname_in` was given `em.at_path`'s module
+		# at every call site, which is right for a PRIVATE name — a bare call always means the
+		# caller's own — and wrong for this one, the only shape where the reader named someone
+		# else's module out loud. A public name two modules declare is two symbols, and this is
+		# where the right one is chosen (#92).
+		callee_mod := c_ns_mod_of(em, tn)
 
-		return f"{c_fn_cname_in(em, check.c_mod_of(em, em.at_path), "", meth)}({c_call_args(em, meth, args, sb)})"
+		c_chk_visible_fn(em, meth, c_sig_row_in(em, callee_mod, c_sig_key("", meth)))
+
+		return f"{c_fn_cname_in(em, callee_mod, "", meth)}({c_call_args(em, meth, args, sb)})"
 	}
 
 	# AN INVENTED PREFIX. The finding is about the prefix and there is nothing further to

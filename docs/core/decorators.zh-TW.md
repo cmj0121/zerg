@@ -72,13 +72,15 @@
   公開的自訂 constructor（具名關聯 `fn`），而模組自身仍以 `T(…)` 建——搭配私有、帶 default 的 field 以強制不變量。
   **[not yet]**，而且有自己的代碼：`E9079`。
 - **`#[repr]`** / **`#[packed]`** / **`#[align]`** — 記憶體 **layout** decorator，用於對接外部 ABI 時控制記憶體
-  寬度、padding 與對齊（見〈保持稀少〉與 [值與記憶體](memory.zh-TW.md)）。**[not yet]**，而且沒有自己的代碼：
-  讀者遇到的是未知 decorator 那條的 _E9005_（見下）。
+  寬度、padding 與對齊（見〈保持稀少〉與 [值與記憶體](memory.zh-TW.md)）。**[not yet]**，代碼是 `E9005`，
+  而現在那是它們獨有的（見下）。
 
-> **[not yet]** layout 那三個是**保留在本頁上、而不保留在編譯器裡**。`#[repr]` 沒有自己的規則：它落進未知
-> decorator 的分支，拿到 _E9005 … this compiler reads `#[derive(…)]`, `#[obj]`, `#[test]`, `#[fixture]` and
-> `#[allow(…)]`, and no other_——與拼錯的 `#[frobnicate]` 同一句話。沒有任何東西被默默丟掉；失去的是「等待實作」
-> 與「打錯字」之間的區分，而那正是 `#[sealed]` 的 `E9079` 買回來的東西。
+> **[not yet]** layout 那三個是**保留在本頁上、而編譯器沒有建**，而且它們會指名自己說出來：_E9005
+> NotImplemented: the decorator `#[repr]` — it is a reserved LAYOUT decorator (in-memory width, padding and
+> alignment against an external ABI) and this compiler does not build it_。它們過去和拼錯的 `#[frobnicate]`
+> 共用未知 decorator 的分支，於是失去「等待實作」與「打錯字」之間的區分——正是 `#[sealed]` 的 `E9079` 在上一
+> 個項目買回來的那個區分。打錯字現在拿到一個什麼都不承諾的代碼：_E2076 the decorator `#[frobnicate]` — the
+> set is closed and compiler-owned, so an unknown name is not a directive this compiler has yet to build_。
 
 這個集合只在編譯器新增指令時成長；**logging** / 觀測與 **FFI** 是可能的下一批。任何**未**列在本頁的名稱根本不是
 保留的 decorator——它是編譯錯誤，所以拼錯絕不會被當成某個編譯器默默丟棄的指令。

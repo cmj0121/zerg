@@ -185,6 +185,7 @@ shipping compiler rather than a part of it (the line
 | `E2073` | `…` is a statement, and an expression is wanted here                                                  |
 | `E2074` | `…` is not an expression this compiler reads                                                          |
 | `E2075` | a top-level `unsafe` opens a group or marks a `fn`, and this is neither                               |
+| `E2076` | the decorator `#[…]` — the set is closed, so an unknown name is not a directive                       |
 | `E3001` | `…` is not a public member of module `…`                                                              |
 | `E3002` | `…` is not a place, and an assignment needs one                                                       |
 | `E3003` | cannot assign to `…`: it is a module `const`, and a constant is never written                         |

@@ -60,7 +60,7 @@ $(HELP_TOPIC): help
 	@:
 endif
 
-.PHONY: all test clean run build install install-editors uninstall uninstall-editors upgrade linux-ci lint fmt help release release-tarball release-smoke $(SUBDIR)
+.PHONY: all test clean run build build-deps install install-editors uninstall uninstall-editors upgrade linux-ci lint fmt help release release-tarball release-smoke $(SUBDIR)
 
 all: build                      # default action
 	@[ -f .git/hooks/pre-commit ] || pre-commit install --install-hooks
@@ -84,10 +84,58 @@ clean: $(SUBDIR)                # clean-up environment
 run:                            # run in the local environment (not yet built)
 	@echo 'make run: nothing to run yet — the `zerg run` subcommand is not built'
 
-build: $(SUBDIR)                # build the toolchain: zerg0, an intermediate, then zerg
+# WHAT CAN CHANGE `bin/zerg`, and nothing else may be left out of this list. Thirty-one gates
+# begin by rebuilding the toolchain, and a no-op rebuild is 19s here, so a third of the board's
+# wall clock was spent recompiling a tree that had not changed (#84). What makes that safe to
+# stop is not the speed — it is that a gate must never run against a stale binary, so the
+# prerequisite list IS the design and a name missing from it is a silently wrong board.
+#
+# The four kinds, and why each is here:
+#
+#   the compiler's own sources    it is what is being compiled
+#   the standard library          `zergc.zg` imports it, so it is compiled in
+#   the runtime's C               a build ends in `cc` over `src/runtime/csrc`, read from the
+#                                 tree at build time (cmd/layout.zg), and linked into the result
+#   VERSION                       `gen-version.sh` turns it into one of the compiler's sources
+#
+# `$(SUBDIR)` is deliberately NOT among them. It is phony, and a phony prerequisite is newer
+# than everything forever — listing it would leave this rule exactly as unconditional as the
+# one it replaces, while looking like it had been fixed.
+ZERG_SRCS := $(shell find src/compiler src/stdlib -name '*.zg' 2>/dev/null)
+RUNTIME_SRCS := $(shell find src/runtime/csrc -type f 2>/dev/null)
+SEED_SRCS := $(shell find src/bootstrap -name '*.go' 2>/dev/null) src/bootstrap/go.mod
+
+# `src/bootstrap` IS NOT IN THIS FAN-OUT, and leaving it there is what made the first attempt
+# at this rule useless: the sub-make runs `go build -o bin/zerg0`, which REWRITES the file
+# whether or not a line of Go changed, so `bin/zerg0` came out newer than `bin/zerg` on every
+# invocation and the prerequisite list below was consulted only to be overruled. It has its own
+# file rule now, and the two that stay here produce nothing `bin/zerg` reads — `editors` is
+# editor integration and `src/runtime` type-checks the Go wrapper around the C the compiler
+# reads from the tree.
+BUILD_SUBDIR := editors src/runtime
+
+# build-deps prints the prerequisite list as data, so `build-deps-check` can hold the rule to
+# it without keeping a second copy of the list. A gate that re-listed these by hand would go
+# green over exactly the omission it exists to find.
+build-deps:                     # every file `bin/zerg` is rebuilt for, one per line
+	@printf '%s\n' $(ZERG_SRCS) $(RUNTIME_SRCS) $(SEED_SRCS) VERSION
+
+build: $(BUILD_SUBDIR) bin/zerg  # build the toolchain: zerg0, an intermediate, then zerg
+
+# The seed is a Go program and Go's own build is incremental, so this rule is about ORDER
+# rather than speed: `bin/zerg` names it as a prerequisite, and a file target is the only way
+# to say that without reaching for the phony fan-out above.
+bin/zerg0: $(SEED_SRCS) VERSION
+	$(MAKE) -C src/bootstrap build VERSION=$(VERSION)
+
+bin/zerg: bin/zerg0 $(ZERG_SRCS) $(RUNTIME_SRCS) VERSION
 	@# BEFORE the seed reads a line of the compiler: version.zg is one of the compiler's own
 	@# sources, so regenerating it afterwards would put the new number into the NEXT build and
 	@# leave this one quietly claiming the old one.
+	@#
+	@# It writes only when the content differs, which is what keeps VERSION's mtime from
+	@# making every build dirty — and `bin/zerg` is written after it, so a version bump costs
+	@# one rebuild rather than two.
 	@./scripts/gen-version.sh
 	./bin/zerg0 build $(ZERG_ENTRY) -o $(ZERG_STAGE1)
 	$(ZERG_STAGE1) build --emit bin -j $(JOBS) -o ./bin/zerg $(ZERG_ENTRY)

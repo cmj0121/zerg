@@ -180,7 +180,7 @@ jobs:
 
       # --- 1. create and build the bootstrap -------------------------------------
       - name: Build the bootstrap toolchain
-        run: make -C src/bootstrap build
+        run: make -C src/bootstrap build VERSION=$(cat VERSION)
 
       - name: Smoke-check the bootstrap binary
         run: ./bin/zerg0 --help

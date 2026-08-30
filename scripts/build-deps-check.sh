@@ -25,6 +25,12 @@
 # gate from measuring it by accident; a human edit is never that close to a build, and a script
 # that rewrites a source immediately after one can be.
 set -u
+# ONE INPUT IS NOT A FILE AND IS NOT CHECKED HERE. The seed's `--version` comes from `-X
+# main.version=`, a make VARIABLE, so a `bin/zerg0` built by another route carries `0.0.0-dev`
+# and no timestamp says so. `bin/zerg`'s recipe asks the binary before it compiles the answer
+# in, and `version-check` is the gate that owns the question — it is the one that caught this,
+# on CI, after this rule stopped re-stamping the seed by accident.
+
 
 cd "$(dirname "$0")/.." || exit 2
 

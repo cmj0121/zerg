@@ -129,6 +129,14 @@ bin/zerg0: $(SEED_SRCS) VERSION
 	$(MAKE) -C src/bootstrap build VERSION=$(VERSION)
 
 bin/zerg: bin/zerg0 $(ZERG_SRCS) $(RUNTIME_SRCS) VERSION
+	@# THE SEED'S STAMP IS AN INPUT ITS TIMESTAMP CANNOT CARRY. `-X main.version=` is a make
+	@# VARIABLE, not a file, so a `bin/zerg0` built by any other route — `make -C src/bootstrap
+	@# build` on its own, which is what CI does first — is newer than every prerequisite of the
+	@# rule above and carries `0.0.0-dev`. The old `build` re-ran that sub-make unconditionally
+	@# and re-stamped it by accident; nothing else did, and `version-check` is what noticed.
+	@#
+	@# So it is ASKED rather than assumed, here, where the answer is about to be compiled in.
+	@./bin/zerg0 --version | grep -q ' $(VERSION) ' || $(MAKE) -C src/bootstrap build VERSION=$(VERSION)
 	@# BEFORE the seed reads a line of the compiler: version.zg is one of the compiler's own
 	@# sources, so regenerating it afterwards would put the new number into the NEXT build and
 	@# leave this one quietly claiming the old one.

@@ -4490,6 +4490,29 @@ fn c_pat_env(mut &em: Emitter, pt: ast.Pat, st: ast.Ty) {
 		return
 	}
 
+	# AN OR-PATTERN'S SIDES MUST BIND THE SAME NAMES. The arm's body is one body, so a name only
+	# one side supplies is a name that is sometimes there — and `docs/code/control-flow.md` says
+	# as much: the binding form is `A(x) | B(x)`, whose alternatives bind the same names at the
+	# same types. Without this the body would read a substitution that side never made, and what
+	# reached the reader would be a complaint about generated C.
+	if c_pat_is_or(pt) {
+		alts := c_pat_or_alts(pt)
+		mut j := 0
+		for j < alts.len() {
+			c_pat_env(em, alts[j], st)
+			j = j + 1
+		}
+
+		want := c_pat_binds(alts[0])
+		mut k := 1
+		for k < alts.len() {
+			why := c_or_binds_differ(want, c_pat_binds(alts[k]))
+			raise c_diag(em, rule.Rule.OrPatternBindsDiffer, f"the sides of an or-pattern bind the same names, and {why}") if why != ""
+			k = k + 1
+		}
+		return
+	}
+
 	# A STRUCT PATTERN NAMES ITS FIELDS, so it asks three questions the positional shapes do
 	# not — and all three are about the TYPE, which is why they are here, in the first walk.
 	if c_pat_is_struct(pt) {
@@ -9367,8 +9390,20 @@ fn c_pat_catchall(pt: ast.Pat) -> bool {
 		# A STRUCT HAS ONE SHAPE, so a pattern of the right type covers every value of it when
 		# each field pattern does. `P{..}` and `P{x, y}` are catch-alls; `P{x: 1, ..}` is not.
 		Pat.PStruct(_, _, ps, _) => c_pats_catchall(ps)
-		_ => false
+
+		# ANY side covering everything makes the whole one cover it — `_ | A` is `_` with extra
+		# words. It is `or` and not `and` for that reason, which is the opposite of every other
+		# shape here.
+		Pat.POr(ps) => c_pats_any_catchall(ps)
+		_           => false
 	}
+}
+
+fn c_pats_any_catchall(ps: list[ast.Pat]) -> bool {
+	for pt in ps {
+		return true if c_pat_catchall(pt)
+	}
+	return false
 }
 
 fn c_pats_catchall(ps: list[ast.Pat]) -> bool {
@@ -9460,7 +9495,7 @@ fn c_arm_covers(arms: list[ast.Arm], ctor: str) -> bool {
 	mut i := 0
 	for i < arms.len() {
 		a := arms[i]
-		return true if not a.has_guard and c_pat_ctor(a.pat) == ctor and ctor != ""
+		return true if not a.has_guard and ctor != "" and c_pat_covers_ctor(a.pat, ctor)
 		i = i + 1
 	}
 	return false
@@ -9520,9 +9555,43 @@ fn c_arm_subst(mut &em: Emitter, a: ast.Arm, s: str, st: ast.Ty, sb: Subst) -> S
 # c_pat_subst is c_pat_cond's other half: what the pattern BINDS when it matches. The two walk
 # the same tree and must agree about the accessor for each position, which is why the accessor
 # is built the same way in both — an element of an element is a longer string, and nothing else.
+# c_sub_of — what a substitution maps `name` to, or "" for a name it does not carry.
+fn c_sub_of(sb: Subst, name: str) -> str {
+	mut i := 0
+	for i < sb.names.len() {
+		return sb.repls[i] if sb.names[i] == name
+		i = i + 1
+	}
+	return ""
+}
+
 fn c_pat_subst(mut &em: Emitter, pt: ast.Pat, s: str, st: ast.Ty, sb: Subst) -> Subst {
 	bn := c_pat_bind_name(pt)
 	return c_extend(sb, bn, s) if bn != ""
+
+	# AN OR-PATTERN'S BINDING IS WHICHEVER SIDE MATCHED, and a substitution is TEXT, so it is
+	# written as the choice it is: `x` becomes `(condA ? accA : accB)`. Both sides bind the same
+	# names — the rule in the first walk says so — and each side's accessor is what that side
+	# would have bound on its own.
+	if c_pat_is_or(pt) {
+		alts := c_pat_or_alts(pt)
+		mut r := sb
+		for nm in c_pat_binds(alts[0]) {
+			mut acc := ""
+			mut k := alts.len() - 1
+			for k >= 0 {
+				a := c_sub_of(c_pat_subst(em, alts[k], s, st, c_nosub()), nm)
+				if acc == "" {
+					acc = a
+				} else {
+					acc = f"({c_pat_cond(em, alts[k], s, st, sb)} ? {a} : {acc})"
+				}
+				k = k - 1
+			}
+			r = c_extend(r, nm, acc)
+		}
+		return r
+	}
 
 	if c_pat_is_struct(pt) {
 		sn := c_named_of(st)
@@ -9663,6 +9732,23 @@ fn c_pat_list_cond(mut &em: Emitter, pt: ast.Pat, s: str, st: ast.Ty, sb: Subst)
 fn c_pat_cond(mut &em: Emitter, pt: ast.Pat, s: str, st: ast.Ty, sb: Subst) -> str {
 	return c_pat_list_cond(em, pt, s, st, sb) if c_pat_is_list(pt)
 
+	# AN OR-PATTERN IS THE OR OF ITS ALTERNATIVES, which is the whole of its lowering — the
+	# work it takes is the RULE about what its sides may bind, and that is asked in the first
+	# walk where the types are.
+	if c_pat_is_or(pt) {
+		alts := c_pat_or_alts(pt)
+		mut out := ""
+		for a in alts {
+			c := c_pat_cond(em, a, s, st, sb)
+			if out == "" {
+				out = c
+			} else {
+				out = f"({out} || {c})"
+			}
+		}
+		return out
+	}
+
 	# A STRUCT HAS ONE SHAPE, so nothing about the struct itself is tested — the type already
 	# says it is a `P`. What is left is what the field patterns test, and a pattern that only
 	# binds tests nothing at all.
@@ -9748,6 +9834,86 @@ fn c_pat_cond(mut &em: Emitter, pt: ast.Pat, s: str, st: ast.Ty, sb: Subst) -> s
 # c_pat_struct_* read a struct pattern's four parts. `open` is the `..` that says the fields not
 # written are not being asked about — without it, the pattern names them all and the emitter
 # says which one is missing.
+# c_pat_covers_ctor — does this pattern match the variant `ctor`? It walks an or-pattern because
+# `E.A(x) | E.B(x)` covers BOTH, and the exhaustiveness rule that asked `c_pat_ctor` got "" for
+# the whole thing: an arm naming two variants counted for neither, and the match was reported
+# non-exhaustive over cases it plainly handles.
+fn c_pat_covers_ctor(pt: ast.Pat, ctor: str) -> bool {
+	return true if c_pat_ctor(pt) == ctor
+
+	return match pt {
+		Pat.POr(ps) => c_pats_cover_ctor(ps, ctor)
+		Pat.PAs(inner, _) => c_pat_covers_ctor(inner, ctor)
+		_ => false
+	}
+}
+
+fn c_pats_cover_ctor(ps: list[ast.Pat], ctor: str) -> bool {
+	for pt in ps {
+		return true if c_pat_covers_ctor(pt, ctor)
+	}
+	return false
+}
+
+fn c_pat_is_or(pt: ast.Pat) -> bool {
+	return match pt {
+		Pat.POr(_) => true
+		_          => false
+	}
+}
+
+fn c_pat_or_alts(pt: ast.Pat) -> list[ast.Pat] {
+	return match pt {
+		Pat.POr(ps) => ps
+		_           => []
+	}
+}
+
+# c_pat_binds — every name a pattern binds, in the order it binds them. It exists for the
+# or-pattern's one rule: `A(x) | B(x)` is a form and `A(x) | B(y)` is not, because the arm's body
+# reads a name that only one side supplies. Written as a walk so that a name nested three deep
+# counts exactly as much as one at the top.
+# c_or_binds_differ — "" when two sides of an or-pattern bind the same names, or the clause that
+# says how they do not. ONE function because it is ONE rule: raised at two sites it would be two
+# identities for one number, which `error-codes-check` refuses and which is how two sentences
+# about the same thing drift apart.
+fn c_or_binds_differ(want: list[str], got: list[str]) -> str {
+	return f"these bind {strconv.to_string(want.len(), 10)} and {strconv.to_string(got.len(), 10)}" if got.len() != want.len()
+
+	for nm in want {
+		return f"`{nm}` is not one of the other side's" if not c_name_in(got, nm)
+	}
+	return ""
+}
+
+fn c_pat_binds(pt: ast.Pat) -> list[str] {
+	bn := c_pat_bind_name(pt)
+	return [bn] if bn != ""
+
+	mut out: list[str] = []
+	for sub in c_pat_children(pt) {
+		for n in c_pat_binds(sub) {
+			out.append(n)
+		}
+	}
+	return out
+}
+
+# c_pat_children — the sub-patterns of a pattern, whatever shape it is. One function because
+# every walk over the tree wants the same answer, and a shape added to one list and not another
+# is the defect this whole change is about.
+fn c_pat_children(pt: ast.Pat) -> list[ast.Pat] {
+	return match pt {
+		Pat.PVariant(_, _, ps) => ps
+		Pat.PStruct(_, _, ps, _) => ps
+		Pat.PList(ps, _, _) => ps
+		Pat.PTuple(ps) => ps
+		Pat.POr(ps) => ps
+		Pat.PAs(inner, _) => [inner]
+		_ => []
+	}
+}
+
 fn c_pat_is_struct(pt: ast.Pat) -> bool {
 	return match pt {
 		Pat.PStruct(_, _, _, _) => true

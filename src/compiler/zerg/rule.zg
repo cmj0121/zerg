@@ -358,6 +358,7 @@ pub enum Rule {
 	TuplePatternNotATuple = 4083
 	StructPatternWrongType = 4085
 	StructPatternNoSuchField = 4086
+	OrPatternBindsDiffer = 4088
 	StructPatternIncomplete = 4087
 	ListPatternNotAList = 4084
 	MutateAValueNotAPlace = 4081
@@ -427,7 +428,6 @@ pub enum Rule {
 	NotYetCommandInterpolating = 9019
 	NotYetCommandLiteral = 9020
 	NotYetDestructuringBinding = 9021
-	NotYetOrPattern = 9024
 	NotYetForMutBinding = 9025
 	NotYetUnsafeFn = 9027
 	NotYetAssocTypeProjection = 9028

@@ -2081,19 +2081,20 @@ EOF
 # is not built" from "you made a typo", which is the whole of the implemented-or-named
 # contract — every one of these is in GRAMMAR and none of them was being turned away by
 # the name GRAMMAR gives it.
-expect "$ZERG" array-type E9017 <<'EOF'
+expect "$ZERG" array-length-that-names-a-constant E9111 <<'EOF'
+WIDTH := 4
+
 fn main() {
-	xs: [int; 3] = [1, 2, 3]
+	xs: [int; WIDTH] = [1, 2, 3, 4]
 	print xs[0]
 }
 EOF
 
-expect "$ZERG" array-type-parameter E9017 <<'EOF'
-fn f(xs: [int; 3]) -> int {
-	return xs[0]
+expect "$ZERG" array-method E9112 <<'EOF'
+fn main() {
+	xs: [int; 2] = [1, 2]
+	print xs.get(0)
 }
-
-fn main() { print 1 }
 EOF
 
 # THE STRUCT PATTERN IS BUILT, and these are the three questions naming its fields makes it

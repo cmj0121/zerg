@@ -2948,6 +2948,49 @@ fn main() {
 }
 EOF
 
+# --- the fixed-size array ---------------------------------------------------------
+#
+# The LENGTH IS PART OF THE TYPE, which is the whole of what separates `[T; N]` from a list —
+# so a literal of the wrong length, a constant index outside it, and a method that would
+# change the size are all mistakes the type already knows about. Each is checked at compile
+# time rather than left to the bound check that guards a variable index.
+#
+# The CONSTANT INDEX is the seed's gap: it has no array type at all, so what it refuses is the
+# type, and a rule about an index inside one is a rule it never reaches.
+
+reject array-length-that-is-not-a-constant E2079 'an array length is a compile-time constant' <<'EOF'
+fn f() -> int {
+	return 3
+}
+
+fn main() {
+	xs: [int; f()] = [1, 2, 3]
+	print xs[0]
+}
+EOF
+
+reject array-literal-of-the-wrong-length E3139 'takes 3 element(s) and this literal has 2' <<'EOF'
+fn main() {
+	xs: [int; 3] = [1, 2]
+	print xs[0]
+}
+EOF
+
+reject array-constant-index-outside-the-length E3140 'is outside [int; 3]' seed-gap <<'EOF'
+fn main() {
+	xs: [int; 3] = [1, 2, 3]
+	print xs[5]
+}
+EOF
+
+reject array-has-no-append E3141 'an array answers `len`' <<'EOF'
+fn main() {
+	mut xs: [int; 2] = [1, 2]
+	xs.append(3)
+	print xs[0]
+}
+EOF
+
 # --- a borrow needs a place ------------------------------------------------------
 #
 # A `mut &` argument is the caller's own storage handed over to be written. `m["k"]` reads

@@ -277,9 +277,10 @@ shadow-proof 綁定）。因為建構就是一次普通的**呼叫**,一個型�
 spec**。它是一個型別給自己的值,沒有 spec 要求它,**也沒有 spec 能要求它**——一個想要求它的 spec 就又回到「由
 impl 選定的輸出」。必須**摺疊**的值用常數形式,必須**執行**的用 associated fn（`fn max() -> This`）。
 
-> **[not yet]** `impl` 內的 `NAME := 32` 會報 _E9006 NotImplemented: an associated value binding `BITS := …` in
-> an `impl`_,所以 `Type.NAME` 什麼都沒指名、`Point.ORIGIN` 宣告不出來。原本要由型別常數供給的固定陣列長度,
-> 改寫成 module 層的常數。
+它**已經建好了**。`impl` 內的 `NAME := 32` 宣告一個以 `Type.NAME` 讀取、而永遠不以裸 `NAME` 讀取的常數——正是
+這一點讓兩個型別可以各有一個 `LIMIT`,而一個 module 常數同時坐在旁邊。讀一個型別沒有的關聯值是
+_E4089 `P` has no associated value `NOPE`_,而那句話取代的是一次外漏:在它之前,型別名字會被降階成一個**值**,
+所以 `P.NOPE` 變成對一個型別取成員,由 `cc` 對著產生出來的程式碼抱怨。
 
 ## 內建 spec（Built-in specs）
 

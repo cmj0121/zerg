@@ -403,6 +403,7 @@ shipping compiler rather than a part of it (the line
 | `E4086` | `…` has no field `…`                                                                                  |
 | `E4087` | a struct pattern names every field or ends in `..`                                                    |
 | `E4088` | the sides of an or-pattern bind the same names                                                        |
+| `E4089` | `…` has no associated value `…`                                                                       |
 | `E5001` | this entry file declares no `fn main`                                                                 |
 | `E5002` | cannot resolve import `…`, and where it was looked for                                                |
 | `E5007` | `…` is a module this build compiles and this module did not import                                    |
@@ -421,7 +422,6 @@ shipping compiler rather than a part of it (the line
 | `E9003` | a generic enum `…[…]`                                                                                 |
 | `E9004` | a generic struct `…[…]`                                                                               |
 | `E9005` | the decorator `#[…]`                                                                                  |
-| `E9006` | an associated value binding `… := …` in an `impl`                                                     |
 | `E9008` | a struct pattern `…{…}`                                                                               |
 | `E9009` | calling …                                                                                             |
 | `E9010` | the named argument `…:`                                                                               |
@@ -628,6 +628,7 @@ name now is the prelude rule (`E2061`), which is about the name rather than abou
 | `E9098` | `E4078` | everything call-shaped left earlier                                |
 | `E9007` | `E2077` | the three item forms all have arms; a statement is none            |
 | `E9016` | —       | the tuple pattern is built                                         |
+| `E9006` | —       | the associated value is built                                      |
 | `E9023` | —       | the list pattern is built; a NAMED rest is E9110                   |
 | `E9026` | —       | the struct pattern is built                                        |
 | `E9024` | —       | the or-pattern is built                                            |

@@ -359,9 +359,11 @@ which no spec demanded and **none can require** — a spec that wanted one would
 the impl chooses. Use the constant form for a value that must **fold**, and an associated fn
 (`fn max() -> This`) for one that must **run**.
 
-> **[not yet]** `NAME := 32` inside an `impl` reports _E9006 NotImplemented: an associated value binding
-> `BITS := …` in an `impl`_, so `Type.NAME` names nothing and `Point.ORIGIN` cannot be declared. A
-> fixed-array size that a type constant was to supply is written as a module-level constant instead.
+It is **built**. `NAME := 32` inside an `impl` declares a constant reached as `Type.NAME` and never as a
+bare `NAME` — which is what lets two types each have a `LIMIT`, and a module constant sit beside both.
+Reading one a type does not have is _E4089 `P` has no associated value `NOPE`_, and that message replaces
+an escape: before it, a type name lowered as a **value**, so `P.NOPE` became a member access on a type and
+`cc` reported it against generated code.
 
 ## Built-in specs
 

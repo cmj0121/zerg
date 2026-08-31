@@ -4490,6 +4490,48 @@ fn c_pat_env(mut &em: Emitter, pt: ast.Pat, st: ast.Ty) {
 		return
 	}
 
+	# A STRUCT PATTERN NAMES ITS FIELDS, so it asks three questions the positional shapes do
+	# not — and all three are about the TYPE, which is why they are here, in the first walk.
+	if c_pat_is_struct(pt) {
+		want := c_pat_struct_name(pt)
+		sn := c_named_of(st)
+
+		# THE TYPE NAME IS AN ASSERTION, not a reference. GRAMMAR#struct-pat writes it, and the
+		# scrutinee's type is what decides which struct this is — so the name is here to be
+		# CHECKED against it, exactly as a variant pattern's qualifier is. A name that was read
+		# and thrown away would let `Q{x}` match a `P` and renaming a struct leave every
+		# pattern of it still matching.
+		raise c_diag(em, rule.Rule.StructPatternWrongType, f"a struct pattern names `{want}` and the value is a {ast.ty_name(st)}") if not c_is_struct_name(em, sn) or sn != want
+
+		fs := c_pat_struct_fields(pt)
+		ps := c_pat_struct_pats(pt)
+		have := c_struct_field_names(em, sn)
+
+		mut i := 0
+		for i < fs.len() {
+			raise c_diag(em, rule.Rule.StructPatternNoSuchField, f"`{want}` has no field `{fs[i]}`") if not c_name_in(have, fs[i])
+			i = i + 1
+		}
+
+		# WITHOUT `..` THE PATTERN NAMES EVERY FIELD, and the reader is told WHICH one is
+		# missing rather than that one is: a struct gaining a field should break the patterns
+		# that were written before it, by name, which is the whole reason the `..` is opt-in.
+		if not c_pat_struct_open(pt) {
+			mut k := 0
+			for k < have.len() {
+				raise c_diag(em, rule.Rule.StructPatternIncomplete, f"a struct pattern names every field or ends in `..`, and this one does not name `{have[k]}`") if not c_name_in(fs, have[k])
+				k = k + 1
+			}
+		}
+
+		mut j := 0
+		for j < fs.len() {
+			c_pat_env(em, ps[j], c_field_ty(em, sn, fs[j]))
+			j = j + 1
+		}
+		return
+	}
+
 	if c_pat_is_list(pt) {
 		elems := c_pat_list_elems(pt)
 
@@ -9321,6 +9363,10 @@ fn c_pat_catchall(pt: ast.Pat) -> bool {
 		# only list pattern that does. `[a, ..]` needs one element and `[a, b]` needs exactly
 		# two, so both can be missed and neither closes a match.
 		Pat.PList(ps, rest, _) => ps.len() == 0 and rest >= 0
+
+		# A STRUCT HAS ONE SHAPE, so a pattern of the right type covers every value of it when
+		# each field pattern does. `P{..}` and `P{x, y}` are catch-alls; `P{x: 1, ..}` is not.
+		Pat.PStruct(_, _, ps, _) => c_pats_catchall(ps)
 		_ => false
 	}
 }
@@ -9478,6 +9524,19 @@ fn c_pat_subst(mut &em: Emitter, pt: ast.Pat, s: str, st: ast.Ty, sb: Subst) -> 
 	bn := c_pat_bind_name(pt)
 	return c_extend(sb, bn, s) if bn != ""
 
+	if c_pat_is_struct(pt) {
+		sn := c_named_of(st)
+		fs := c_pat_struct_fields(pt)
+		ps := c_pat_struct_pats(pt)
+		mut r := sb
+		mut i := 0
+		for i < fs.len() {
+			r = c_pat_subst(em, ps[i], f"{s}.zg_{fs[i]}", c_field_ty(em, sn, fs[i]), r)
+			i = i + 1
+		}
+		return r
+	}
+
 	if c_pat_is_list(pt) {
 		elems := c_pat_list_elems(pt)
 		rest := c_pat_list_rest(pt)
@@ -9604,6 +9663,31 @@ fn c_pat_list_cond(mut &em: Emitter, pt: ast.Pat, s: str, st: ast.Ty, sb: Subst)
 fn c_pat_cond(mut &em: Emitter, pt: ast.Pat, s: str, st: ast.Ty, sb: Subst) -> str {
 	return c_pat_list_cond(em, pt, s, st, sb) if c_pat_is_list(pt)
 
+	# A STRUCT HAS ONE SHAPE, so nothing about the struct itself is tested — the type already
+	# says it is a `P`. What is left is what the field patterns test, and a pattern that only
+	# binds tests nothing at all.
+	if c_pat_is_struct(pt) {
+		sn := c_named_of(st)
+		fs := c_pat_struct_fields(pt)
+		ps := c_pat_struct_pats(pt)
+		mut out := ""
+		mut i := 0
+		for i < fs.len() {
+			c := c_pat_cond(em, ps[i], f"{s}.zg_{fs[i]}", c_field_ty(em, sn, fs[i]), sb)
+			if c != "1" {
+				if out == "" {
+					out = c
+				} else {
+					out = f"({out} && {c})"
+				}
+			}
+			i = i + 1
+		}
+		return "1" if out == ""
+
+		return out
+	}
+
 	if c_pat_is_lit(pt) {
 		lit := c_pat_lit(pt)
 		return c_arm_range(em, lit, s, st, sb) if c_is_range(lit)
@@ -9661,6 +9745,59 @@ fn c_pat_cond(mut &em: Emitter, pt: ast.Pat, s: str, st: ast.Ty, sb: Subst) -> s
 # c_pat_list_* read a list pattern's three parts. `rest` is the index the `..` sits at, or -1
 # for a pattern that matches on length alone — which is what decides whether the elements after
 # it are counted from the front or from the back.
+# c_pat_struct_* read a struct pattern's four parts. `open` is the `..` that says the fields not
+# written are not being asked about — without it, the pattern names them all and the emitter
+# says which one is missing.
+fn c_pat_is_struct(pt: ast.Pat) -> bool {
+	return match pt {
+		Pat.PStruct(_, _, _, _) => true
+		_ => false
+	}
+}
+
+fn c_pat_struct_name(pt: ast.Pat) -> str {
+	return match pt {
+		Pat.PStruct(n, _, _, _) => n
+		_ => ""
+	}
+}
+
+fn c_pat_struct_fields(pt: ast.Pat) -> list[str] {
+	return match pt {
+		Pat.PStruct(_, fs, _, _) => fs
+		_ => []
+	}
+}
+
+fn c_pat_struct_pats(pt: ast.Pat) -> list[ast.Pat] {
+	return match pt {
+		Pat.PStruct(_, _, ps, _) => ps
+		_ => []
+	}
+}
+
+fn c_pat_struct_open(pt: ast.Pat) -> bool {
+	return match pt {
+		Pat.PStruct(_, _, _, o) => o
+		_ => false
+	}
+}
+
+# c_struct_field_names — every field a struct declares, in declaration order. It exists for the
+# completeness rule: a struct pattern with no `..` names them all, and the reader is told WHICH
+# one is missing rather than that one is.
+fn c_struct_field_names(mut &em: Emitter, sname: str) -> list[str] {
+	mut out: list[str] = []
+	mut i := 0
+	for i < em.fld_struct.len() {
+		if em.fld_struct[i] == sname {
+			out.append(em.fld_name[i])
+		}
+		i = i + 1
+	}
+	return out
+}
+
 fn c_pat_is_list(pt: ast.Pat) -> bool {
 	return match pt {
 		Pat.PList(_, _, _) => true

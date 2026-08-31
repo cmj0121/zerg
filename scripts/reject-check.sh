@@ -2948,6 +2948,51 @@ fn main() {
 }
 EOF
 
+# --- the command literal -----------------------------------------------------------
+#
+# `` `ls -l` `` IS `os.command(["ls", "-l"])` — an argument vector and no shell — so the two
+# refusals are about the argument vector: a hole is ONE argument and cannot be joined to the
+# text beside it, and a literal names a program to run.
+#
+# THE THIRD IS ABOUT THE MODULE. Without the import the desugared call reaches "undefined name
+# `os`", which names a word the reader did not write; the literal is what they wrote.
+
+reject command-literal-hole-inside-a-word E2081 'is ONE argument' <<'EOF'
+import "os"
+
+fn main() {
+	x := "X"
+	p := f`echo -{x}`
+	print p.wait()
+}
+EOF
+
+reject command-literal-hole-with-two-expressions E2084 'a single expression' <<'EOF'
+import "os"
+
+fn main() {
+	x := "X"
+	p := f`echo {x 1}`
+	print p.wait()
+}
+EOF
+
+reject command-literal-with-no-program E2082 'names the program to run' <<'EOF'
+import "os"
+
+fn main() {
+	p := ``
+	print p.wait()
+}
+EOF
+
+reject command-literal-without-the-os-import E2083 'does not `import "os"`' <<'EOF'
+fn main() {
+	p := `echo hi`
+	print p.wait()
+}
+EOF
+
 # --- the f-string's tails ---------------------------------------------------------
 #
 # A SPEC AND ITS VALUE ARE BOTH IN THE SOURCE — the spec is a literal and the type is inferred

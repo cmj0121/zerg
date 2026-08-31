@@ -2052,12 +2052,6 @@ fn main() {
 }
 EOF
 
-expect "$ZERG" interpolating-command-literal E9019 <<'EOF'
-fn main() {
-	n := "hi"
-	print f`echo {n}`
-}
-EOF
 
 # Every module flattens into ONE namespace, so two that declare the same constant mangle to
 # one symbol. The FUNCTION case has been refused since the tables were written; this one
@@ -2092,12 +2086,6 @@ EOF
 # THE REST OF THE `[not yet]` TABLE in docs/surface/grammar.md. That table claims a case
 # holds every entry; half of them had none, so the claim was the third unsynchronised copy
 # of a list that already lives in the parser's raises and in this file.
-expect "$ZERG" command-literal E9020 <<'EOF'
-fn main() {
-	c := `echo hi`
-	print c
-}
-EOF
 
 # A generic FUNCTION is built — it monomorphizes, one specialization per set of type
 # arguments — so its case moved to the codegen corpus, where a working form belongs. What

@@ -134,8 +134,29 @@ note() {
 # `mut` may stand between `pub` and the keyword (GRAMMAR groups 5 and 12), and a `spec` is
 # exposed by the same `pub` every other form is.
 exposed_in_source() {
-	sed -nE 's/^[[:space:]]*pub[[:space:]]+(unsafe[[:space:]]+)?(mut[[:space:]]+)?(fn|struct|enum|const|type|spec)[[:space:]]+([A-Za-z_][A-Za-z0-9_]*).*/\4/p' "$1" |
-		LC_ALL=C sort
+	awk '
+		/^pub[ \t]+spec[ \t]/ { inspec = 1 }
+		inspec && /^}/         { inspec = 0 }
+
+		# A pub SPEC MEMBER is part of that surface. They carry no `pub` of their own — a spec
+		# is exposed or it is not — so the line below would miss every one of them, and the
+		# document that prints them looked like it had invented names.
+		inspec && match($0, /^[ \t]+(unsafe[ \t]+)?(mut[ \t]+)?fn[ \t]+[A-Za-z_][A-Za-z0-9_]*/) {
+			line = $0
+			sub(/^[ \t]+(unsafe[ \t]+)?(mut[ \t]+)?fn[ \t]+/, "", line)
+			sub(/[^A-Za-z0-9_].*$/, "", line)
+			print line
+			next
+		}
+
+		match($0, /^[ \t]*pub[ \t]+(unsafe[ \t]+)?(mut[ \t]+)?(fn|struct|enum|const|type|spec)[ \t]+[A-Za-z_][A-Za-z0-9_]*/) {
+			line = $0
+			sub(/^[ \t]*pub[ \t]+(unsafe[ \t]+)?(mut[ \t]+)?(fn|struct|enum|const|type|spec)[ \t]+/, "", line)
+			sub(/[^A-Za-z0-9_].*$/, "", line)
+			print line
+		}
+	' "$1" |
+		LC_ALL=C sort -u
 }
 
 # named_in_document — the declarations the document actually prints. A signature is at indent
@@ -148,7 +169,7 @@ named_in_document() {
 		s/^  (struct|enum|spec) ([A-Za-z_][A-Za-z0-9_]*)$/\2/p
 		s/^  (const|mut) ([A-Za-z_][A-Za-z0-9_]*)[ :].*/\2/p
 		s/^  type ([A-Za-z_][A-Za-z0-9_]*) =.*/\1/p
-	' | LC_ALL=C sort
+	' | LC_ALL=C sort -u
 }
 
 # --- 1. every exposed declaration is in the document ---------------------------------

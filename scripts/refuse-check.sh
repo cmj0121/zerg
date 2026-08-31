@@ -959,6 +959,19 @@ EOF
 
 # THE `is` FAMILY. The case above tests a primitive; docs name a STRUCT and the two error
 # kinds that are not in the taxonomy, and each is a different sentence out of the same rule.
+# A LIST PATTERN TAKES ONE `..`. With two, no element has a position: the ones after the first
+# are counted from the front and the ones before the second from the back, and nothing decides
+# where the middle belongs. The list pattern itself is still unbuilt (E9023); this is the shape
+# that would have no answer even once it is.
+expect "$ZERG" a-list-pattern-with-two-rests E2078 <<'EOF'
+fn main() {
+	print match [1, 2, 3] {
+		[..a, ..b] => 0
+		_ => 1
+	}
+}
+EOF
+
 expect "$ZERG" is-a-struct E9078 'is P' <<'EOF'
 struct P {
 	pub a: int

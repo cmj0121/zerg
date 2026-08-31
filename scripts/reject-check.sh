@@ -2948,6 +2948,37 @@ fn main() {
 }
 EOF
 
+# --- the f-string's tails ---------------------------------------------------------
+#
+# A SPEC AND ITS VALUE ARE BOTH IN THE SOURCE — the spec is a literal and the type is inferred
+# — so a program the runtime would end the same way on every run is refused here instead. The
+# sentences are the runtime's own, because they answer the same question one stage earlier.
+#
+# THE BRACE IS A FORM AND NOT A MEANING: GRAMMAR#fmt-char excludes `{` and `}`, so Python's
+# nested replacement field is not derived here, and it used to reach the runtime as an
+# unreadable spec.
+
+reject fstring-spec-an-int-cannot-render E3142 'an int renders as `b`, `o`, `x`, `X`, `c` or `d`' seed-gap <<'EOF'
+fn main() {
+	n := 42
+	print f"{n:z}"
+}
+EOF
+
+reject fstring-spec-a-float-cannot-render E3142 'a float renders as `e`, `f` or `g`' seed-gap <<'EOF'
+fn main() {
+	pi := 3.5
+	print f"{pi:d}"
+}
+EOF
+
+reject fstring-spec-holds-a-brace E2080 'a brace is not one' <<'EOF'
+fn main() {
+	n := 42
+	print f"{n:>{4}}"
+}
+EOF
+
 # --- the fixed-size array ---------------------------------------------------------
 #
 # The LENGTH IS PART OF THE TYPE, which is the whole of what separates `[T; N]` from a list —

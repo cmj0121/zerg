@@ -2099,27 +2099,6 @@ fn main() {
 }
 EOF
 
-expect "$ZERG" fstring-conversion E9013 <<'EOF'
-fn main() {
-	n := 42
-	print f"{n!r}"
-}
-EOF
-
-expect "$ZERG" fstring-self-documenting E9014 <<'EOF'
-fn main() {
-	n := 42
-	print f"{n=}"
-}
-EOF
-
-expect "$ZERG" fstring-format-spec E9012 <<'EOF'
-fn main() {
-	pi := 3.5
-	print f"{pi:.2f}"
-}
-EOF
-
 # A generic FUNCTION is built — it monomorphizes, one specialization per set of type
 # arguments — so its case moved to the codegen corpus, where a working form belongs. What
 # is still refused is everything around it, and each shape is here rather than one standing

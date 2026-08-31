@@ -360,6 +360,7 @@ pub enum Rule {
 	StructPatternNoSuchField = 4086
 	OrPatternBindsDiffer = 4088
 	StructPatternIncomplete = 4087
+	NoAssociatedValue = 4089
 	ListPatternNotAList = 4084
 	MutateAValueNotAPlace = 4081
 
@@ -414,7 +415,6 @@ pub enum Rule {
 	NotYetGenericEnum = 9003
 	NotYetGenericStruct = 9004
 	NotYetDecoratorLayout = 9005
-	NotYetImplAssocValue = 9006
 	NotYetStructPattern = 9008
 	NotYetCallee = 9009
 	NotYetNamedArgument = 9010

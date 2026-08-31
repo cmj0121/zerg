@@ -3633,7 +3633,7 @@ fn c_build_top_names(mut &em: Emitter, f: ast.File) {
 	# constant-versus-function half from, so the place a reader is pointed at does not move:
 	# the collision is reported at the constant's own declaration in both orders.
 	for c in f.consts {
-		c_check_type_dup(em, seen, kind, wpath, wline, c.name, "a module constant", c.path, c.line, c.col)
+		c_check_type_dup(em, seen, kind, wpath, wline, c_const_scope_name(c), "a module constant", c.path, c.line, c.col)
 	}
 
 	# AND THE TABLE IS KEPT. What the six loops above have in hand is "what the top level
@@ -8557,10 +8557,14 @@ fn c_chk_visible_const(mut &em: Emitter, name: str) {
 # read the innermost live binding of `COUNT`, so a local of that name answered a question
 # that named `lib`. It is also how "does any module declare this name" is asked, since the
 # names are a field of the rows rather than a list of their own.
+# c_k_idx finds a constant by the name it is REACHED BY, which for an associated value is
+# `P.LIMIT` and not `LIMIT`. Matching the declaration's own field made `impl P { LIMIT := 5 }`
+# and `impl Q { LIMIT := 9 }` one name — the duplicate rule refused a program with two types
+# that each have a limit, which is the ordinary case rather than a mistake.
 fn c_k_idx(mut &em: Emitter, name: str) -> int {
 	mut i := 0
 	for i < em.k_decls.len() {
-		return i if em.k_decls[i].name == name
+		return i if c_const_scope_name(em.k_decls[i]) == name
 		i = i + 1
 	}
 	return -1
@@ -10947,7 +10951,7 @@ fn c_build_const_vals(mut &em: Emitter, f: ast.File) {
 		if not c.is_mut {
 			v = check.chk_const_eval(em, c.value)
 		}
-		em.kv_names.append(c.name)
+		em.kv_names.append(c_const_scope_name(c))
 		em.kv_vals.append(v)
 	}
 }
@@ -10999,7 +11003,7 @@ fn c_const_globals(mut &em: Emitter, f: ast.File, own: ast.File, whole: bool) ->
 		# WHICH of the two rules is the earlier declaration's FILE, exactly as it is for a
 		# signature: one file declaring a constant twice is ill-formed for good, and two files
 		# under one directory is the flat namespace this compiler still has.
-		ki := c_k_idx(em, c.name)
+		ki := c_k_idx(em, c_const_scope_name(c))
 		if ki >= 0 {
 			# ONE FILE IS NOT THIS WALK'S TO ANSWER, for the reason c_mod_collide states: it
 			# is recorded as E4073 there and rendered at the end, while this raises and would
@@ -11046,11 +11050,11 @@ fn c_const_globals(mut &em: Emitter, f: ast.File, own: ast.File, whole: bool) ->
 		# globals follow; a scalar or a container answers "nothing to do" by itself.
 		c_spelled_register(em, ty)
 		if whole {
-			out = out + f"static {c_type(ty)} zg_{c.name};\n"
+			out = out + f"static {c_type(ty)} {c_const_cname(c)};\n"
 		} else if c_const_in(own, c.name) {
-			out = out + f"{c_type(ty)} zg_{c.name};\n"
+			out = out + f"{c_type(ty)} {c_const_cname(c)};\n"
 		} else {
-			out = out + f"extern {c_type(ty)} zg_{c.name};\n"
+			out = out + f"extern {c_type(ty)} {c_const_cname(c)};\n"
 		}
 	}
 	em.at_path = keep_path
@@ -11062,10 +11066,28 @@ fn c_const_globals(mut &em: Emitter, f: ast.File, own: ast.File, whole: bool) ->
 # c_const_bind puts one constant's row into scope 0, which is what c_reset_env does for all of
 # them before every function body. It is spelled once and called from both, because a row
 # written two ways is two rows the day one of them gains a field.
+# c_const_cname — a constant's C name. An ASSOCIATED value carries the type it belongs to, which
+# is what keeps `impl P { LIMIT := 5 }` and a module `LIMIT` apart in the one flat C namespace —
+# the same reason a method is `zg_P_show` and not `zg_show`.
+fn c_const_cname(c: ast.ConstDecl) -> str {
+	return f"zg_{c.recv}_{c.name}" if c.recv != ""
+
+	return "zg_" + c.name
+}
+
+# c_const_scope_name — how a constant is REACHED. A module one is a bare name; an associated one
+# is `P.LIMIT` and nothing else, which is what stops it from joining the flat name space and
+# shadowing a binding somewhere.
+fn c_const_scope_name(c: ast.ConstDecl) -> str {
+	return f"{c.recv}.{c.name}" if c.recv != ""
+
+	return c.name
+}
+
 fn c_const_bind(mut &em: Emitter, c: ast.ConstDecl, ty: ast.Ty) {
-	em.env_names.append(c.name)
+	em.env_names.append(c_const_scope_name(c))
 	em.env_tys.append(ty)
-	em.env_cnames.append("zg_" + c.name)
+	em.env_cnames.append(c_const_cname(c))
 	em.env_dead.append(0)
 	em.env_mut.append(c.is_mut)
 	em.env_scope.append(0)
@@ -11157,12 +11179,12 @@ fn c_const_assigns(mut &em: Emitter, f: ast.File) -> str {
 		# constant happened to be registered third and rendered an int through
 		# `zrt_str_retain`. c_k_idx is the lookup that cannot drift, and it is the same one the
 		# duplicate-name check already uses.
-		ty := em.k_tys[c_k_idx(em, c.name)]
+		ty := em.k_tys[c_k_idx(em, c_const_scope_name(c))]
 		mut val := c_into(em, ty, c.value, c_nosub())
 		if c.has_ty and c_is_carrier(ty) {
 			val = c_carrier_fit(em, check.chk_binding_says(c.name), ty, c.value, c_nosub())
 		}
-		out = out + f"    zg_{c.name} = {val};\n"
+		out = out + f"    {c_const_cname(c)} = {val};\n"
 	}
 	em.at_path = keep_path
 	em.at_line = keep_line
@@ -13412,6 +13434,16 @@ fn c_field_ty_of(mut &em: Emitter, target: ast.Expr, fld: str) -> ast.Ty {
 		return em.k_tys[ki] if ki >= 0
 	}
 
+	# `P.LIMIT` — an ASSOCIATED VALUE has the type its declaration gives it, and asking here is
+	# what carries that to the reader. Without it the lowering was right and the TYPE was `int`
+	# for everything: `print P.NAME` on a `str` printed the pointer as a number, which is the
+	# silent wrong answer this compiler's whole contract is against.
+	tn := c_ident_name(target)
+	if tn != "" and c_is_struct_name(em, tn) {
+		ki := c_k_idx(em, f"{tn}.{fld}")
+		return em.k_tys[ki] if ki >= 0
+	}
+
 	t := c_infer(em, target)
 	if c_is_tuple(t) and c_all_digits(fld) {
 		ts := c_tuple_tys(t)
@@ -13465,6 +13497,23 @@ fn c_fieldref(mut &em: Emitter, target: ast.Expr, fld: str, sb: Subst) -> str {
 	# statements about a program the language rejects, not forms this compiler has not built;
 	# the C built after a finding is thrown away, which is what lets the walk carry on.
 	tn := c_ident_name(target)
+
+	# `P.LIMIT` — a name qualified by a STRUCT, which is where an associated value lives
+	# (GRAMMAR#val-bind). It is looked up by its full spelling: an associated value never joins
+	# the flat name space, so `P.LIMIT` is the only way to reach it and a bare `LIMIT` beside it
+	# is a different constant.
+	#
+	# THE FALL-THROUGH WAS AN ESCAPE TO cc. Without this arm the type name lowered as a VALUE
+	# and `P.LIMIT` became `zg_P.zg_LIMIT` — a member of a type — which cc reported as
+	# `expected ')'` against a line nobody wrote. That is the one thing the standing contract
+	# has no room for, and it was reachable for every struct in the language.
+	if tn != "" and c_is_struct_name(em, tn) {
+		qn := f"{tn}.{fld}"
+		return c_ident_val(em, qn, sb) if c_is_bound(em, qn)
+
+		raise c_diag(em, rule.Rule.NoAssociatedValue, f"`{tn}` has no associated value `{fld}` — a type is not a value, so `{tn}.{fld}` reads one an `impl {tn}` declares with `{fld} := …`")
+	}
+
 	if tn != "" and c_is_enum_name(em, tn) {
 		if c_is_variant(em, fld) {
 			check.chk_at(em, rule.Rule.VariantOfOtherEnum, f"`{fld}` is a variant of `{c_variant_enum(em, fld)}`, not of `{tn}`")

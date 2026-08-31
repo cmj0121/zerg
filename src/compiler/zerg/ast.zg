@@ -725,6 +725,13 @@ pub struct ImplDecl {
 # the way a private function's call is.
 pub struct ConstDecl {
 	pub name: str
+
+	# recv is the TYPE this constant belongs to — the `P` of `impl P { LIMIT := 5 }` — and ""
+	# for a module constant. It is one field rather than a second list because the two are the
+	# same declaration in every way but their name: `GRAMMAR#val-bind` is `identifier ':='
+	# const-expr` wherever it is written, and the initialisation order, the const-expr rule and
+	# the C storage are the module constant's already.
+	pub recv: str
 	pub ty: Ty
 	pub has_ty: bool
 	pub is_mut: bool

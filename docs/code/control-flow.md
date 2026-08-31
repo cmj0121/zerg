@@ -193,9 +193,13 @@ it works both in a `match` arm and at a plain `:=` binding (`(q, r) := divmod(x,
 return is consumed. **The tuple pattern is built in a `match` arm**, and it nests: an element is a pattern,
 so `((a, b), c)` and `((1, b), c)` are both arms, and a pattern whose elements all bind is a **catch-all**
 without saying `_`. Its arity is a fact about the type and is checked as one — _E4082 a tuple pattern names
-3 element(s) and a (int, int) has 2_, _E4083 a tuple pattern matches a tuple_. The other three shapes are
-**[not yet]** and each is refused by its own name — `E9021` and `E9008` at a binding, `E9026` for the struct
-in an arm — so they are told apart in the message rather than sharing one.
+3 element(s) and a (int, int) has 2_, _E4083 a tuple pattern matches a tuple_. **The struct pattern is
+built there too**, and naming its fields is what makes it ask three questions the positional shapes do not:
+the type it names must be the value's — the name is an **assertion**, not a reference, so `Q{x}` over a `P`
+is _E4085_ — every field it names must exist (_E4086_), and without a `..` it names them **all** (_E4087_,
+which says which one is missing). That last one is the point of the opt-in: a struct gaining a field breaks
+the patterns written before it, by name. **At a `:=` binding** both are still **[not yet]** — `E9021` and
+`E9008` — so the arm and the binding are told apart in the message rather than sharing one.
 **Guard conditions** work — an
 arm may carry an **`if expr`** after its pattern (`Left(v) if v > 0`) that must also hold for the arm to
 fire; the guard sees the pattern's **bindings**, and on `A | B if c` (once or-patterns land — see above)

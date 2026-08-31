@@ -375,6 +375,9 @@ seed 全程維持句子比對:代碼是語言的契約,而 seed 是建置正式�
 | `E4082` | tuple pattern 指名了 … 個元素,而 … 有 … 個                                                            |
 | `E4083` | tuple pattern 匹配的是 tuple                                                                          |
 | `E4084` | list pattern 匹配的是 list                                                                            |
+| `E4085` | struct pattern 指名的是 `…`,而值是 …                                                                  |
+| `E4086` | `…` 沒有欄位 `…`                                                                                      |
+| `E4087` | struct pattern 要指名每個欄位、或以 `..` 收尾                                                         |
 | `E5001` | 這個進入點檔案沒有宣告 `fn main`                                                                      |
 | `E5002` | 無法解析 import `…`,以及它到哪裡找過                                                                  |
 | `E5007` | `…` 是這次建置編進來、而本 module 沒有 import 的 module                                               |
@@ -409,7 +412,6 @@ seed 全程維持句子比對:代碼是語言的契約,而 seed 是建置正式�
 | `E9021` | 解構綁定 `(a, b) := …`                                                                                |
 | `E9024` | or-pattern                                                                                            |
 | `E9025` | `for mut v in …`                                                                                      |
-| `E9026` | `match` arm 裡的 struct pattern `…{…}`                                                                |
 | `E9027` | 獨立的 `unsafe fn` 宣告                                                                               |
 | `E9028` | associated type 投影 `….…`                                                                            |
 | `E9029` | 值 generic 參數 `…: …`                                                                                |
@@ -586,6 +588,7 @@ arm、同樣的形狀、同樣的兩個問題——而只有 map 那邊被問了
 | `E9007` | `E2077` | 三種項目形式都有分支;statement 不是其中任何一種  |
 | `E9016` | —       | tuple pattern 已經建好了                         |
 | `E9023` | —       | list pattern 已經建好了,具名的 rest 是 E9110     |
+| `E9026` | —       | struct pattern 已經建好了                        |
 | `E9081` | —       | 公開名字拿到私有名字早就有的 module tag（#92）   |
 | `E3047` | —       | 強 typedef 承接底層型別的前綴運算子              |
 

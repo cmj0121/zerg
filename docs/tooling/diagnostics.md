@@ -188,6 +188,7 @@ shipping compiler rather than a part of it (the line
 | `E2076` | the decorator `#[…]` — the set is closed, so an unknown name is not a directive                       |
 | `E2077` | `…` is not an `impl` item                                                                             |
 | `E2078` | a list pattern takes ONE `..`                                                                         |
+| `E2079` | an array length is a compile-time constant, and `…` is not one                                        |
 | `E3001` | `…` is not a public member of module `…`                                                              |
 | `E3002` | `…` is not a place, and an assignment needs one                                                       |
 | `E3003` | cannot assign to `…`: it is a module `const`, and a constant is never written                         |
@@ -325,6 +326,9 @@ shipping compiler rather than a part of it (the line
 | `E3136` | `..=` with no upper bound is not a range                                                              |
 | `E3137` | the list method `…` — a list answers `len` and `append`, and is read with `xs[i]`                     |
 | `E3138` | `….…` reads `this.…`, and a spec is field-blind                                                       |
+| `E3139` | a `[T; N]` slot takes `…` element(s) and this literal has `…`                                         |
+| `E3140` | `…` is outside `[T; N]` — a constant index is checked at compile time                                 |
+| `E3141` | an array answers `len`, and is read with `a[i]`                                                       |
 | `E4001` | `…` outside of a loop: it belongs to a `for`, and a `select` arm is not one                           |
 | `E4002` | a `from` cause is an `Err`, and … is not one                                                          |
 | `E4004` | `…(…)` names one side of an `Either`, which holds exactly one value                                   |
@@ -430,7 +434,6 @@ shipping compiler rather than a part of it (the line
 | `E9013` | an f-string '!r' / '!s' / '!a' conversion                                                             |
 | `E9014` | the f-string '{expr=}' self-documenting form                                                          |
 | `E9015` | an associated type binding `type … = …` in an `impl`                                                  |
-| `E9017` | an array type `[T; N]`                                                                                |
 | `E9019` | an interpolating command literal                                                                      |
 | `E9020` | a command literal                                                                                     |
 | `E9021` | a destructuring binding `(a, b) := …`                                                                 |
@@ -494,6 +497,8 @@ shipping compiler rather than a part of it (the line
 | `E9108` | `del …` on an owning struct, list or map — the early free, where the release is a scope-exit unwind   |
 | `E9109` | an `unsafe fn` method in an `impl`                                                                    |
 | `E9110` | a NAMED rest in a list pattern                                                                        |
+| `E9111` | an array length that names a constant                                                                 |
+| `E9112` | the array method `…`                                                                                  |
 
 They are reported the moment a file is **read**, before its imports are scanned — scanning
 them parses, and a parser handed unreadable text can only say something untrue about it.
@@ -634,6 +639,7 @@ name now is the prelude rule (`E2061`), which is about the name rather than abou
 | `E9002` | —       | a `spec` member with a body is built; it is a provided default     |
 | `E9035` | —       | `mut &` is part of a function type, and the type is built          |
 | `E9065` | —       | as above, on the value side: the marker rides in the type          |
+| `E9017` | —       | the fixed-size array is built; its length is part of its type      |
 | `E9081` | —       | a public name takes the module tag a private one already had (#92) |
 | `E3047` | —       | a strong typedef takes its underlying type's prefix operators      |
 

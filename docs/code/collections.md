@@ -9,12 +9,11 @@ one canonical type per role, no variant zoo. They're just ordinary **scope-owned
 | `list[T]`   | an **ordered sequence**     | any `T` (no bound)        | index order         |                       |
 | `map[K, V]` | an **associative** table    | `K: Eq + Hash`            | **insertion** order |                       |
 | `set[T]`    | a **unique-membership** set | `T: Eq + Hash`            | **insertion** order | **[not yet]** _E9064_ |
-| `[T; N]`    | a **fixed-size array**      | any `T` (no bound)        | index order         | **[not yet]** _E9017_ |
+| `[T; N]`    | a **fixed-size array**      | any `T` (no bound)        | index order         |                       |
 
 The `map` key requirement above is the intended one; this phase a key is restricted to **`int`** or **`str`**
-(see [Keys](#keys--eq-free-hash-explicit) below). The two **[not yet]** rows each name themselves: `set[T]`
-in either type or value position is _E9064 NotImplemented: the built-in `set`_, and `[T; N]` is _E9017
-NotImplemented: an array type `[T; N]` — this compiler has `list[T]`, whose length is not part of its type_.
+(see [Keys](#keys--eq-free-hash-explicit) below). The one **[not yet]** row names itself: `set[T]` in either
+type or value position is _E9064 NotImplemented: the built-in `set`_.
 
 Richer shapes are compositions, not new built-ins. `list[byte]` is the raw byte sequence (indexable, may
 hold a NUL); `str` stays a separate immutable primitive (below).
@@ -225,11 +224,10 @@ is freed at scope exit, and it never aliases — exactly the container value mod
 of the rules already stated for `list`:
 
 - **Build** — the list literal `[a, b, …]` is **context-typed**: a `list[T]` by default, an array when the
-  target is `[T; N]` (its length is checked at compile time). The **fill form `[v; N]`** is intended to make
-  **`N` copies of `v`** — the way to build a large collection without spelling every element; there is no
-  implicit zero-fill. Under a bare `:=` the fill form builds a **`list[T]`**, not the array type `[T; N]`;
-  the array-typed fill form (in explicit `[T; N]` position) is **[not yet]**, refused with the array type
-  itself: _E9017_.
+  target is `[T; N]` (its length is checked at compile time — _E3139 a [int; 3] slot takes 3 element(s) and
+  this literal has 2_). The **fill form `[v; N]`** makes **`N` copies of `v`** — the way to build a large
+  collection without spelling every element; there is no implicit zero-fill. Under a bare `:=` the fill form
+  builds a **`list[T]`**, not the array type `[T; N]`.
 
   The **count is the same compile-time constant** an array length is — a literal, a name whose binding
   folds (module-level or local), or the arithmetic over them: `[0; 256]`, `[0; ROWS * COLS]` and
@@ -243,12 +241,22 @@ of the rules already stated for `list`:
   sharing one.
 
 - **Access** — `a[i]` by value, bounds-checked → `IndexError`, with a constant index outside `[0, N)` caught
-  at **compile time**; `a.get(i) -> T?` is the checked path. `mut a` edits elements in place (`a[i] = v`) but
-  can **never grow or shrink** — the size is in the type; a plain `a` is frozen.
+  at **compile time** (_E3140 `5` is outside [int; 3]_); `a.get(i) -> T?` is the checked path. `mut a` edits
+  elements in place (`a[i] = v`) but can **never grow or shrink** — the size is in the type
+  (_E3141 an array answers `len`_); a plain `a` is frozen.
+
+  > **[not yet]** `get` is unbuilt — _E9112 NotImplemented: the array method `get`_ — as is `slice` below.
+  > An element is read with `a[i]`, whose bound is checked at run time.
+
 - **Length** — `a.len()` is `N`, itself a compile-time constant.
 - **In a signature** — a function is generic over the length through a **value generic**,
   `fn sum[N: int](xs: [int; N])`, with `N` inferred from the argument and never written at the call site.
 
+  > **[not yet]** A length that NAMES a constant is refused — _E9111 NotImplemented: an array length that
+  > names a constant_. The length is part of the type, so it has to be a number before any two types are
+  > compared, and the parser that reads the type has no constant table to fold a name with. Write the
+  > number, or use a `list[T]`.
+  >
   > **[not yet]** A value parameter is refused — _E9029 NotImplemented: a value generic parameter `N: int`_ — so a
   > function today takes one concrete length (`[int; 4]`) and nothing else, and a routine over arbitrary
   > lengths takes a `list[T]` instead.
@@ -258,8 +266,8 @@ of the rules already stated for `list`:
   (and, when built, `Hash` / `Encode`) exactly when its element type `T` does — two same-type arrays then
   compare (and hash) element-wise. There is **no** blanket auto-derived `Object`; equality comes only from
   `derive(Eq)` on the element. `a.slice(p, q)` is intended to yield a **read-only `list[T]`** view — the COW
-  bridge from an array back into the list family — but the `slice` **method** is **[not yet]** — _E9056_ (see
-  [Slicing](#slicing--read-only-subranges)).
+  bridge from an array back into the list family — but the `slice` **method** is **[not yet]** — _E9112
+  NotImplemented: the array method `slice`_ (see [Slicing](#slicing--read-only-subranges)).
 
 ## Strings & bytes
 

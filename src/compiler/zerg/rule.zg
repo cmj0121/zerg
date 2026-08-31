@@ -372,6 +372,9 @@ pub enum Rule {
 	OrPatternBindsDiffer = 4088
 	StructPatternIncomplete = 4087
 	NoAssociatedValue = 4089
+	DeriveFromNotEnum = 4090
+	DeriveFromTwice = 4091
+	DeriveFromNoPayload = 4092
 	ListPatternNotAList = 4084
 	MutateAValueNotAPlace = 4081
 

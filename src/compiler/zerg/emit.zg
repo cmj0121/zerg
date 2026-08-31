@@ -16230,6 +16230,7 @@ fn c_derive_src(prog: ast.File, target: str, nm: str) -> str {
 
 	raise c_derive_diag(prog, target, rule.Rule.NotYetDerive, f"NotImplemented: `#[derive({nm})]` — this compiler derives `Eq`; `Ord`, `Hash`, `Encode` and `Decode` are specified and unbuilt") if nm == "Ord" or nm == "Hash" or nm == "Encode" or nm == "Decode"
 	return c_derive_eq(prog, target) if nm == "Eq"
+	return c_derive_from(prog, target) if nm == "From"
 
 	# A `spec` YOU WROTE, on an ENUM. The two halves of `derive` answer to different rules
 	# and the difference is where the generated code comes from: on a struct it is read out
@@ -16368,6 +16369,50 @@ fn c_derive_diag(prog: ast.File, target: str, code: rule.Rule, msg: str) -> str 
 		return c_diag_at(sp.path, sp.line, sp.col, code, msg) if sp.name == target
 	}
 	return c_diag_at("", 0, 0, code, msg)
+}
+
+# c_derive_from writes what `#[derive(From)]` on an error enum stands for: the conversion each
+# variant implies, one `impl Into[E] for P` per payload.
+#
+# THIS IS THE WRAPPING THE LANGUAGE CHOSE TO COST. Zerg has no open error downcast; the answer
+# it took instead is a per-layer error enum, and what that answer costs is the wrapping written
+# by hand at every boundary. This derives it, so a layer's error becomes the caller's with
+# `e.into()` rather than a `match` written per variant.
+#
+# THE CONVERSION IS STILL WRITTEN. A position never converts (docs/core/types.md), so what this
+# generates is the conversion and not its application: `?` does not lift an error by itself,
+# and `into()` at the boundary is what does.
+#
+# A VARIANT WITH NO PAYLOAD IMPLIES NO CONVERSION and is skipped — there is nothing to convert
+# FROM. A variant with two implies none either, for the same reason read the other way: there
+# is no single type that is the source.
+fn c_derive_from(prog: ast.File, target: str) -> str {
+	at := c_derive_enum_at(prog, target)
+	raise c_derive_diag(prog, target, rule.Rule.DeriveFromNotEnum, f"cannot derive `From` for `{target}`: it wraps a VARIANT'S PAYLOAD into the enum that holds it, and `{target}` is not an enum") if at < 0
+
+	ed := prog.enums[at]
+	mut out := ""
+	mut seen: list[str] = []
+	for v in ed.variants {
+		continue if v.fields.len() != 1
+
+		src := ast.ty_name(v.fields[0])
+
+		# TWO VARIANTS OF ONE PAYLOAD TYPE ARE TWO CONVERSIONS FROM IT, and a type has one
+		# `Into` per destination — the method is keyed by name. Generating both would be a
+		# duplicate impl reported about code nobody wrote, so it is refused about the enum.
+		raise c_derive_diag(prog, target, rule.Rule.DeriveFromTwice, f"cannot derive `From` for `{target}`: `{v.name}` and an earlier variant both carry a `{src}`, and a type has one conversion to a destination — which of the two a `{src}` becomes is not something a derive may pick") if c_name_in(seen, src)
+
+		seen.append(src)
+		out = out + f"impl Into[{target}] for {src} {{\n\tfn into() -> {target} {{\n\t\treturn {target}.{v.name}(this)\n\t}}\n}}\n"
+	}
+
+	# NOTHING TO DERIVE IS A MISTAKE AND NOT A NO-OP. An enum whose variants carry nothing has
+	# no conversion to generate, and a decorator that generated nothing would read as one that
+	# worked.
+	raise c_derive_diag(prog, target, rule.Rule.DeriveFromNoPayload, f"cannot derive `From` for `{target}`: it wraps a variant's payload, and no variant of `{target}` carries exactly one") if out == ""
+
+	return out
 }
 
 fn c_derive_enum_at(prog: ast.File, target: str) -> int {

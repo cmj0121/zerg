@@ -4670,17 +4670,32 @@ pub fn c_ns_names_mod(mut &em: Emitter, n: str, decl_mod: str) -> bool {
 # real surface and the import graph is a DAG anyway (E5014); the bound is here so that a bug in
 # the graph is a wrong answer rather than a dead compiler.
 fn c_ns_reexports(mut &em: Emitter, mod: str, want: str, depth: int) -> bool {
-	return false if depth > 8
+	mut seen: list[str] = []
+	return c_ns_reexports_in(em, mod, want, depth, seen)
+}
 
-	# THE ROW'S SCOPE IS A FILE and the question is about a MODULE, so the two are compared
-	# through `c_mod_of`. A binding belongs to the file that wrote it; a SURFACE belongs to the
-	# module — `import pub` in any one of a module's files puts the named module on that
-	# module's surface, which is what a dependent sees.
+# c_ns_reexports_in is the walk, and `seen` is what makes it a walk rather than a search.
+#
+# IT WAS EXPONENTIAL. `return true if c_ns_reexports(…)` does not return when the answer is
+# false — it falls through and keeps scanning — so every binding that matched at a level
+# expanded a whole subtree of its own, eight levels deep. The bound hid it: the shape only
+# shows when enough queries arrive, and adding one recursive type to the AST was enough to take
+# a nineteen-second build past three minutes.
+#
+# A MODULE EXPANDED ONCE IS EXPANDED, which is exactly true here because `import pub` forms a
+# DAG — `E5014` refuses a cycle — so a second visit can add no answer the first did not. The
+# depth bound stays: it is about a bug in the graph, not about this walk terminating.
+fn c_ns_reexports_in(mut &em: Emitter, mod: str, want: str, depth: int, mut &seen: list[str]) -> bool {
+	return false if depth > 8
+	return false if c_name_in(seen, mod)
+
+	seen.append(mod)
+
 	mut i := 0
 	for i < em.ns_names.len() {
 		if em.ns_pub[i] and check.c_mod_of(em, em.ns_at[i]) == mod {
 			return true if em.ns_mods[i] == want
-			return true if c_ns_reexports(em, em.ns_mods[i], want, depth + 1)
+			return true if c_ns_reexports_in(em, em.ns_mods[i], want, depth + 1, seen)
 		}
 		i = i + 1
 	}
@@ -10551,7 +10566,9 @@ fn c_const_order(mut &em: Emitter, f: ast.File) -> list[int] {
 # an identity is `stdlib:io` or `project:util/text` — a root and a path under it — so the
 # same program built from a relative and an absolute entry sorts one way. Within a module
 # the table's own order stands, which is the source order the loader read the files in.
-fn c_const_seq(em: Emitter, f: ast.File) -> list[int] {
+# BY REFERENCE for `c_mod_of`'s reason: a value parameter copies every list on the Emitter and
+# drops every one again, once per constant.
+fn c_const_seq(mut &em: Emitter, f: ast.File) -> list[int] {
 	mut keys: list[str] = []
 	for c in f.consts {
 		keys.append(check.c_mod_of(em, c.path))

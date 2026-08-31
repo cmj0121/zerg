@@ -240,6 +240,17 @@ pub struct Emitter {
 	# carrier element exactly the way a tuple's does.
 	pub arr_names: list[str]
 
+	# rnd_names are the shapes whose STRUCTURAL RENDERER has been generated — one function
+	# per shape, on demand, into the same stream the typedefs go into. A renderer spells the
+	# renderers of its parts, so the stream's met-order is what places them: a list's is
+	# written after its element's, because it is the element's that names it.
+	pub rnd_names: list[str]
+
+	# rnd_decls is where the renderer BODIES go, and it is a stream of its own because of
+	# where they have to land: a renderer may call a type's own `display` override, so it
+	# follows the PROTOTYPES — the typedef stream above is written before them.
+	pub rnd_decls: list[str]
+
 	# mvt_names / mvt_decls are the map VTABLES — one static per distinct key/value shape,
 	# holding the hash and equality for the key type.
 	pub mvt_names: list[str]
@@ -7098,7 +7109,7 @@ fn c_conv(mut &em: Emitter, ty: ast.Ty, x: ast.Expr, nm: str, sb: Subst) -> str 
 		}
 
 		c_display_check(em, xt0, "this rendering")
-		return c_display(xt0, c_expr(em, x, sb))
+		return c_render_of(em, xt0, c_expr(em, x, sb), false)
 	}
 	if c_is_list(ty) {
 		em.used_str = true
@@ -7463,15 +7474,13 @@ pub fn c_param_is_ref(mut &em: Emitter, key: str, idx: int) -> bool {
 # c_display is the runtime leaf that renders one scalar as its display text. A `byte` goes
 # through the unsigned one, and anything whose type did not survive inference falls to the
 # integer one — where the C cast is what reports it, rather than this pass guessing.
-# c_display is the runtime leaf that renders one SCALAR. A composite has no rendering here
-# — the structural one is `Display`'s job and there is no derive for it — so it is named
-# rather than cast, which is what reached cc as "operand of type 'zg_P'".
+# c_display_check is the ONE GATE THE THREE RENDERING POSITIONS SHARE — `print x`, an
+# f-string's `{x}` and `str(x)` — and what is left in it is the class that has no rendering
+# at all. A composite has one now (c_render_of).
 fn c_display_check(mut &em: Emitter, t: ast.Ty, where: str) {
-	# an ENUM's advice is not a struct's: it has variants and not fields, and the thing a
-	# reader can actually write is the discriminant
-	raise c_diag(em, rule.Rule.NotYetRenderEnumAsText, f"NotImplemented: rendering a {ast.ty_name(t)} as text — an enum has no name for its variant without the structural `Display` this compiler does not generate; `int(v)` gives its discriminant, or `match` it") if c_is_enum_ty(em, t)
-	raise c_diag(em, rule.Rule.NotYetRenderAsText, f"NotImplemented: rendering a {ast.ty_name(t)} as text — a composite needs the structural `Display` this compiler does not generate; render its fields") if c_is_aggregate(em, t) or c_is_carrier(t)
-
+	# A COMPOSITE RENDERS STRUCTURALLY NOW (c_render_of), so the two refusals that stood here
+	# — one for an enum, one for every other composite — are gone with the gap they named.
+	# What is left is the class that is not waiting for a generator at all.
 	# AN IDENTITY IS NOT WAITING FOR A `Display`, so its refusal is not the composite's. A
 	# composite has parts to render meanwhile and a gap that will close; a CHANNEL and a
 	# FUNCTION VALUE are a place to send to and a place to jump to, and the language gives
@@ -7719,6 +7728,7 @@ fn c_is_lvalue(e: ast.Expr) -> bool {
 # Which one it is has to be decided identically when the call is EMITTED and when it is
 # TYPED, so it is decided once, here, and both ask. Deciding it twice is how the two drift.
 enum MethKind {
+	MRender
 	MList
 	MArr
 	MMap
@@ -7816,21 +7826,18 @@ fn c_no_render_says(mut &em: Emitter, t: ast.Ty) -> str {
 # that same paragraph — `Iterable[T]` is what has `iter()`, and `for x in X` requires
 # `X: Iterable[T]` — so it is given on everything that loop walks, not on a channel alone.
 #
-# THE THREE RENDERINGS ARE GIVEN ON EVERY RECEIVER AND THEIR SUBSTITUTE IS NOT. `display`,
-# `debug` and `format` were widened to every value, correctly — the chapter says "on every
-# value" — while their substitutes went on naming `str(x)` and `f"{x}"`, which a `list[int]`
-# answers with E4011 and a map, a struct, an enum and a carrier with E9059 and E9085. The
-# compiler was telling a reader to write an expression the same compiler refuses, which is a
-# worse answer than the permanent rejection this split was built to remove. So each of the
-# three has TWO clauses, one per side of c_renders_as_text: where the value renders, the
-# substitute is the expression that renders it, and where it does not there is no substitute
-# and c_no_render_says says which absence it is. The fourth spelling waits on whatever the
-# first three wait on, so for a composite that is one gap and not two.
+# `format` IS GIVEN ON EVERY RECEIVER AND ITS SUBSTITUTE IS NOT, which is why it has TWO
+# clauses, one per side of c_renders_as_text: where the value renders, the substitute is the
+# expression that renders it, and where it does not there is no substitute and c_no_render_says
+# says which absence it is. Naming one the same compiler refuses is a worse answer than the
+# permanent rejection this split was built to remove.
+#
+# `display` AND `debug` HAVE LEFT THIS SPLIT: they are built (#112), so every value that
+# renders answers them through the same generator the other three spellings reach, and the
+# class that renders nowhere is named by the rendering gate rather than here.
 fn c_specified_meth_says(mut &em: Emitter, tty: ast.Ty, meth: str) -> str {
 	renders := c_renders_as_text(em, tty)
 
-	return "`str(x)` renders it, and an `impl` on a declared type is how a type overrides that" if renders and (meth == "display" or meth == "debug")
-	return f"there is nothing to write in its place — {c_no_render_says(em, tty)}" if meth == "display" or meth == "debug"
 	return "a spec is unread here (`E9012` is the same gap spelled in an f-string hole), and `f\"{x}\"` renders without one" if renders and meth == "format"
 	return f"a spec is unread here (`E9012` is the same gap spelled in an f-string hole), and there is no spec-less rendering to fall back on — {c_no_render_says(em, tty)}" if meth == "format"
 	return "receive one element with `<-ch`, or drain the channel with `for v in ch`" if meth == "next" and ast.ty_is_chan(tty)
@@ -7845,6 +7852,14 @@ fn c_specified_meth_says(mut &em: Emitter, tty: ast.Ty, meth: str) -> str {
 fn c_specified_method(mut &em: Emitter, tty: ast.Ty, meth: str) {
 	says := c_specified_meth_says(em, tty, meth)
 	raise c_diag(em, rule.Rule.NotYetSpecifiedMethod, f"NotImplemented: the method `{meth}` on a {ast.ty_name(tty)} — {says}") if says != ""
+}
+
+# MRender is `x.display()` and `x.debug()` WRITTEN OUT, on a value whose type declares
+# neither. They are built-in renderings and not methods of any spec, so they answer for every
+# value that renders at all — which is now every scalar, every `str`, every `Err` and every
+# composite, through the one generator the other three spellings go through.
+fn c_render_meth(mut &em: Emitter, target: ast.Expr, tty: ast.Ty, sb: Subst) -> str {
+	return c_render_of(em, tty, c_expr(em, target, sb), false)
 }
 
 fn c_meth_kind(mut &em: Emitter, tty: ast.Ty, meth: str) -> MethKind {
@@ -7865,6 +7880,15 @@ fn c_meth_kind(mut &em: Emitter, tty: ast.Ty, meth: str) -> MethKind {
 	# both). `strings.display()` is a member no module declares, not a rendering.
 	nm := c_named_of(tty)
 	if not c_is_unknown(tty) and not c_has_method(em, nm, meth) and not c_is_fn(c_field_ty(em, nm, meth)) {
+		# THE TWO RENDERINGS ARE BUILT NOW, and they are the same generator the other three
+		# spellings reach. What is left of `E9107` for them is the class with no rendering at
+		# all, which c_display_check names — so the check is asked here, and the answer is a
+		# rendering rather than a refusal.
+		if meth == "display" or meth == "debug" {
+			c_display_check(em, tty, f"`{meth}`")
+			return MethKind.MRender
+		}
+
 		c_specified_method(em, tty, meth)
 	}
 
@@ -7906,6 +7930,7 @@ fn c_method(mut &em: Emitter, target: ast.Expr, meth: str, args: list[ast.Expr],
 	tty := c_infer(em, target)
 	recv := c_named_of(tty)
 	return match c_meth_kind(em, tty, meth) {
+		MethKind.MRender => c_render_meth(em, target, tty, sb)
 		MethKind.MList => c_list_method(em, target, meth, args, tty, sb)
 		MethKind.MArr => c_arr_method(em, meth, tty)
 		MethKind.MMap => c_map_method(em, target, meth, args, tty, sb)
@@ -10356,6 +10381,7 @@ fn c_infer_methcall(mut &em: Emitter, target: ast.Expr, meth: str, args: list[as
 	tty := c_infer(em, target)
 	recv := c_named_of(tty)
 	return match c_meth_kind(em, tty, meth) {
+		MethKind.MRender  => ast.Ty.TStr
 		MethKind.MList    => c_list_method_ret(em, meth)
 		MethKind.MArr     => c_arr_method_ret(em, meth)
 		MethKind.MMap     => c_map_method_ret(meth)
@@ -13495,6 +13521,239 @@ fn c_fill_value(e: ast.Expr) -> ast.Expr {
 	}
 }
 
+# --- structural rendering (docs/runtime/format.md) ----------------------------------------
+#
+# `debug` IS DEFINED STRUCTURALLY — a sum by tag-then-payload, a product by its fields — and
+# `display` defaults to it, so one generator answers `print x`, `str(x)`, `f"{x}"` and the two
+# methods. It is the COMPILER'S, keyed on structure, exactly as `#[derive(Eq)]` is: there is no
+# auto-implemented `Object` spec and this adds none (docs/core/specs.md).
+#
+# THE SPELLINGS ARE THE LANGUAGE'S OWN. A composite renders as the literal a reader would
+# write for it — `[1, 2]`, `{"k": 1}`, `(1, "x")`, `P(x: 1, y: "a")`, `E.B(3)` — with one
+# difference that is the whole point of a debug rendering: a `str` INSIDE one is quoted and
+# escaped, because `["a, b"]` and `["a", "b"]` are two different lists.
+#
+# A USER OVERRIDE STILL WINS. c_render_override is asked first at every site, so a type that
+# declares `display` or `debug` renders through it and its parts are rendered by whatever they
+# themselves declare — the generator recurses through the same dispatch, not around it.
+
+# c_render_of is the rendering of one value: the override if the type declares one, the
+# structural renderer if it has parts, and the scalar spelling otherwise.
+fn c_render_of(mut &em: Emitter, t: ast.Ty, inner: str, quoted: bool) -> str {
+	if meth := c_render_override(em, t) {
+		return f"{c_fn_cname(c_named_of(t), meth)}({inner})" if meth != ""
+		return "\"\""
+	}
+
+	# A `str` IS THE ONE TYPE THAT READS DIFFERENTLY IN THE TWO VIEWS: on its own it is its
+	# own text, and inside a composite it is quoted. That is the only place the two renderings
+	# part, which is why it rides as a flag rather than as a second walk.
+	if c_is_str(t) {
+		em.used_rt = true
+		return f"zrt_debug_str({inner})" if quoted
+		return f"zrt_str_retain({inner})"
+	}
+
+	return f"{c_render_fn(em, t)}({inner})" if c_has_parts(em, t)
+	return c_display(t, inner)
+}
+
+# c_has_parts is the class the generator answers for: a value made OF other values. An
+# identity has none (a channel, a function value), and a scalar is its own rendering.
+fn c_has_parts(mut &em: Emitter, t: ast.Ty) -> bool {
+	return c_is_list(t) or c_is_map(t) or c_is_tuple(t) or c_is_arr(t) or c_is_carrier(t) or c_is_enum_ty(em, t) or c_is_struct_name(em, c_named_of(t))
+}
+
+# c_render_fn names the generated renderer for one shape and emits it once. The PARTS go
+# first, depth first, for the reason a typedef's do: the function about to be written calls
+# theirs by name.
+fn c_render_fn(mut &em: Emitter, t: ast.Ty) -> str {
+	name := "zg_render_" + c_render_key(em, t)
+	for n in em.rnd_names {
+		return name if n == name
+	}
+
+	em.rnd_names.append(name)
+	em.used_rt = true
+	em.used_str = true
+	em.rnd_decls.append(c_render_body(em, name, t))
+	return name
+}
+
+# c_render_key is the shape's identity, and it is the ZERG type's name rather than the C one.
+# Every list is `zrt_list` in C, so a key read off c_type gave `list[int]` and `list[list[int]]`
+# one renderer — and the outer one then recursed into itself, rendering nonsense for a nested
+# composite. What a renderer is keyed on is what it renders, which is the Zerg type.
+fn c_render_key(mut &em: Emitter, t: ast.Ty) -> str {
+	mut out: list[byte] = []
+	for c in bytearray(ast.ty_name(t)) {
+		if ascii.is_alpha(c) or ascii.is_digit(c) or c == b'_' {
+			out.append(c)
+		} else {
+			out.append(b'_')
+		}
+	}
+	return str(out)
+}
+
+fn c_render_body(mut &em: Emitter, name: str, t: ast.Ty) -> str {
+	head := f"static const char *{name}({c_type(t)} v) {{\n"
+
+	return head + c_render_list_body(em, t) + "}\n\n" if c_is_list(t) or c_is_arr(t)
+	return head + c_render_map_body(em, t) + "}\n\n" if c_is_map(t)
+	return head + c_render_tuple_body(em, t) + "}\n\n" if c_is_tuple(t)
+	return head + c_render_carrier_body(em, t) + "}\n\n" if c_is_carrier(t)
+	return head + c_render_enum_body(em, c_named_of(t)) + "}\n\n" if c_is_enum_ty(em, t)
+
+	return head + c_render_struct_body(em, c_named_of(t)) + "}\n\n"
+}
+
+# A SEQUENCE RENDERS AS ITS LITERAL, `[a, b]`, and the two sequences share this body: what
+# differs is where the length comes from and how a slot is reached, which is two lines.
+fn c_render_list_body(mut &em: Emitter, t: ast.Ty) -> str {
+	arr := c_is_arr(t)
+	mut et := ast.Ty.TUnknown
+	if arr {
+		et = c_arr_elem(t)
+	} else {
+		et = c_list_elem(t)
+	}
+
+	mut n := "zrt_list_len(&v)"
+	mut slot := f"(*({c_type(et)}*)zrt_list_at_ref(&v, i))"
+	if arr {
+		n = strconv.to_string(c_arr_len(t), 10)
+		slot = "v.v[i]"
+	}
+
+	mut out := "    const char *s = zrt_str_dup(\"[\");\n"
+	out = out + f"    for (size_t i = 0; i < (size_t)({n}); i++) {{\n"
+	out = out + "        if (i > 0) { s = zrt_str_concat(s, \", \"); }\n"
+	out = out + f"        s = zrt_str_concat(s, {c_render_of(em, et, slot, true)});\n"
+	out = out + "    }\n"
+	return out + "    return zrt_str_concat(s, \"]\");\n"
+}
+
+# A MAP RENDERS AS ITS LITERAL, `{k: v}`, in INSERTION ORDER — the order the language pins for
+# walking one (docs/code/collections.md), so a rendering that used any other would disagree
+# with the loop a reader writes to check it.
+fn c_render_map_body(mut &em: Emitter, t: ast.Ty) -> str {
+	kt := c_map_key_ty(t)
+	vt := c_map_val_ty(t)
+	ks := f"(*({c_type(kt)}*)zrt_map_key_at(&v, i))"
+	vs := f"(*({c_type(vt)}*)zrt_map_val_at(&v, i))"
+
+	mut out := "    const char *s = zrt_str_dup(\"{\");\n"
+	out = out + "    for (size_t i = 0; i < zrt_map_len(&v); i++) {\n"
+	out = out + "        if (i > 0) { s = zrt_str_concat(s, \", \"); }\n"
+	out = out + f"        s = zrt_str_concat(s, {c_render_of(em, kt, ks, true)});\n"
+	out = out + "        s = zrt_str_concat(s, \": \");\n"
+	out = out + f"        s = zrt_str_concat(s, {c_render_of(em, vt, vs, true)});\n"
+	out = out + "    }\n"
+	return out + "    return zrt_str_concat(s, \"}\");\n"
+}
+
+fn c_render_tuple_body(mut &em: Emitter, t: ast.Ty) -> str {
+	es := ast.ty_tuple_elems(t)
+	mut out := "    const char *s = zrt_str_dup(\"(\");\n"
+	mut i := 0
+	for i < es.len() {
+		if i > 0 {
+			out = out + "    s = zrt_str_concat(s, \", \");\n"
+		}
+		out = out + f"    s = zrt_str_concat(s, {c_render_of(em, es[i], f"v.f{strconv.to_string(i, 10)}", true)});\n"
+		i = i + 1
+	}
+	return out + "    return zrt_str_concat(s, \")\");\n"
+}
+
+# A CARRIER RENDERS WHAT IT HOLDS, and an absent optional renders `nil` — the word the program
+# would have written. An `Either` is a sum, so it renders by tag then payload like any other.
+fn c_render_carrier_body(mut &em: Emitter, t: ast.Ty) -> str {
+	if ast.ty_is_opt(t) {
+		el := c_opt_elem(t)
+		out := "    if (v.tag != 0) { return zrt_str_dup(\"nil\"); }\n"
+		return out + f"    return {c_render_of(em, el, "v.ok", true)};\n"
+	}
+
+	lt := c_either_left(t)
+	rt := c_either_right(t)
+	mut out := "    if (v.tag != 0) {\n"
+	out = out + f"        return zrt_str_concat(zrt_str_dup(\"Right(\"), zrt_str_concat({c_render_of(em, rt, "v.err", true)}, \")\"));\n"
+	out = out + "    }\n"
+	return out + f"    return zrt_str_concat(zrt_str_dup(\"Left(\"), zrt_str_concat({c_render_of(em, lt, "v.ok", true)}, \")\"));\n"
+}
+
+# A SUM RENDERS BY TAG THEN PAYLOAD: `E.A` for a variant that carries nothing, `E.B(3)` for one
+# that does — which is what a reader would have written to construct it.
+fn c_render_enum_body(mut &em: Emitter, en: str) -> str {
+	mut out := "    switch (v.tag) {\n"
+	mut i := 0
+	for i < em.var_name.len() {
+		if em.var_enum[i] == en {
+			vn := em.var_name[i]
+			out = out + "    case " + strconv.to_string(em.var_tag[i], 10) + ":\n"
+			out = out + f"        return {c_render_variant(em, en, vn)};\n"
+		}
+		i = i + 1
+	}
+	return out + "    default: break;\n    }\n    return zrt_str_dup(\"" + en + "\");\n"
+}
+
+fn c_render_variant(mut &em: Emitter, en: str, vn: str) -> str {
+	mut ps: list[str] = []
+	mut i := 0
+	for i < em.vf_variant.len() {
+		if em.vf_enum[i] == en and em.vf_variant[i] == vn {
+			ty := em.vf_ty[i]
+			mut slot := f"v.u.{vn}.f{strconv.to_string(em.vf_index[i], 10)}"
+
+			# A BOXED PAYLOAD IS A POINTER — the auto-boxing a self-recursive enum gets — so
+			# the value is read back out of the cell before it is rendered.
+			if em.vf_boxed[i] {
+				slot = f"(*({c_type(ty)}*)zrt_ref_payload({slot}))"
+			}
+			ps.append(c_render_of(em, ty, slot, true))
+		}
+		i = i + 1
+	}
+
+	lit := f"zrt_str_dup(\"{en}.{vn}\")"
+	return lit if ps.len() == 0
+
+	mut out := f"zrt_str_concat({lit}, \"(\")"
+	mut j := 0
+	for j < ps.len() {
+		if j > 0 {
+			out = f"zrt_str_concat({out}, \", \")"
+		}
+		out = f"zrt_str_concat({out}, {ps[j]})"
+		j = j + 1
+	}
+	return f"zrt_str_concat({out}, \")\")"
+}
+
+# A PRODUCT RENDERS BY ITS FIELDS, named: `P(x: 1, y: "a")` is the constructor a reader would
+# write with the names a reader would have to count without.
+fn c_render_struct_body(mut &em: Emitter, sn: str) -> str {
+	mut out := f"    const char *s = zrt_str_dup(\"{sn}(\");\n"
+	mut first := true
+	mut i := 0
+	for i < em.fld_struct.len() {
+		if em.fld_struct[i] == sn {
+			if not first {
+				out = out + "    s = zrt_str_concat(s, \", \");\n"
+			}
+			first = false
+			fnm := em.fld_name[i]
+			out = out + f"    s = zrt_str_concat(s, \"{fnm}: \");\n"
+			out = out + f"    s = zrt_str_concat(s, {c_render_of(em, em.fld_ty[i], f"v.zg_{fnm}", true)});\n"
+		}
+		i = i + 1
+	}
+	return out + "    return zrt_str_concat(s, \")\");\n"
+}
+
 # c_into_says names the slot for the length message. A declared binding, an argument and a
 # field all reach c_into with only the TYPE in hand, so the sentence names the type — which is
 # the half the reader has to change anyway.
@@ -14592,6 +14851,17 @@ fn c_print(mut &em: Emitter, e: ast.Expr, ind: str) -> str {
 	# reader does not see coming — there is no two-argument `print`, so it builds a TUPLE
 	# and prints that. c_display_check is the same refusal `str(…)` already makes.
 	c_display_check(em, ty, "`print`")
+
+	# A COMPOSITE RENDERS STRUCTURALLY, and its rendering is a FRESH cell like an f-string's:
+	# built here, shown, and given back on the same line, because nothing else will ever name
+	# it. The arm below used to cast a struct, a list or a tuple to `long long` for cc to
+	# report — `print(a, b)` is the way into that a reader does not see coming, since there is
+	# no two-argument `print` and the pair builds a tuple.
+	if c_has_parts(em, ty) {
+		em.used_rt = true
+		return f"{ind}{{ const char* zgt_ps = {c_render_of(em, ty, c_expr(em, e, c_nosub()), false)}; printf(\"%s\\n\", zgt_ps); zrt_str_release(zgt_ps); }}\n"
+	}
+
 	ex := c_expr(em, e, c_nosub())
 
 	# A FRESH string is nobody's: `print f"{x}"` builds a cell, shows it, and had nothing
@@ -16310,7 +16580,7 @@ fn c_emit_unit(prog0: ast.File, own0: ast.File, ms: Mods, whole: bool, want_lint
 	# is what makes that invariant hold for a multi-unit program, at the place it already lives,
 	# and it is what lets the declaration passes below go back to reading the WHOLE program.
 	seen := diags.len()
-	mut em := Emitter([], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], false, false, false, [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], 0, [], 0, [], [], false, "", "", [], [], ast.Ty.TVoid, 0, "", 0, 0, diags, 0, 0, [], [], [], [], [], false, 0, false, "", 0, false, false, [], want_lints, [], [], [], [], [], [], [], [], [], [], [], false, 0, [], [], "", c_nosub(), [], [], [], [], [], [], [], [], [])
+	mut em := Emitter([], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], false, false, false, [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], 0, [], 0, [], [], false, "", "", [], [], ast.Ty.TVoid, 0, "", 0, 0, diags, 0, 0, [], [], [], [], [], false, 0, false, "", 0, false, false, [], want_lints, [], [], [], [], [], [], [], [], [], [], [], false, 0, [], [], "", c_nosub(), [], [], [], [], [], [], [], [], [])
 
 	# ASSIGNED, NOT PASSED. Every argument above is a zero value, and `layering` asserts that
 	# — it lines the call up with the fields by KIND, which only works while nothing in it
@@ -16582,6 +16852,13 @@ fn c_emit_unit(prog0: ast.File, own0: ast.File, ms: Mods, whole: bool, want_lint
 		mvts = mvts + c_lowered(checking, d)
 	}
 
+	# THE STRUCTURAL RENDERERS go here too, and for the same reason: one may call a type's
+	# `display` override, which is a program function the prototypes above declare.
+	mut rnds := ""
+	for d in em.rnd_decls {
+		rnds = rnds + c_lowered(checking, d)
+	}
+
 	# the defer thunks go AFTER the prototypes — each one calls a program function — and
 	# before the bodies that schedule them
 	mut dfns := ""
@@ -16616,5 +16893,5 @@ fn c_emit_unit(prog0: ast.File, own0: ast.File, ms: Mods, whole: bool, want_lint
 	# lowering step, so it is the one c_lowered never sees. A check-only walk returns
 	# the empty string, not a file with nothing but includes in it.
 	return "" if checking
-	return f"{hdr}{types}{ress}{mvts}{globals}{protos}\n{dfns}{lams}{defs}{mainw}"
+	return f"{hdr}{types}{ress}{mvts}{globals}{protos}\n{rnds}{dfns}{lams}{defs}{mainw}"
 }

@@ -458,7 +458,6 @@ pub enum Rule {
 	NotYetListMethod = 9056
 	NotYetContainerEquality = 9057
 	NotYetRefBox = 9058
-	NotYetRenderAsText = 9059
 	NotYetSecondIntoImpl = 9060
 	NotYetInOverNoEq = 9061
 	NotYetInOverType = 9062
@@ -478,7 +477,6 @@ pub enum Rule {
 	NotYetRangeAsValue = 9077
 	NotYetIsErrorKind = 9078
 	NotYetSealed = 9079
-	NotYetRenderEnumAsText = 9085
 	NotYetMainArgsWithConcurrency = 9097
 	NotYetSpawnOfUnknownName = 9099
 	NotYetMapMethod = 9100

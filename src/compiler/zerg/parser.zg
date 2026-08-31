@@ -722,12 +722,81 @@ fn parse_chan_elem(mut &p: Parser, line: int, col: int) -> ast.Ty {
 	return elem
 }
 
+# p_arr_len_key reduces an array length to the KEY the type carries. GRAMMAR#array-type derives
+# a const-expr there, and two spellings of one length have to be one type — so a fold that needs
+# no table runs here, and what it cannot fold is carried as the constant's NAME for the emitter
+# to resolve.
+#
+# ANYTHING ELSE IS REFUSED AT THE LENGTH. An expression mixing a name with arithmetic cannot be
+# reduced without the table, and carrying its source text instead would make two spellings of
+# one number two types — which is worse than saying so.
+fn p_arr_len_key(mut &p: Parser) -> str {
+	at := cur(p)
+	e := parse_expr(p)
+	v := p_fold_len(e)
+	return strconv.to_string(v, 10) if v >= 0
+
+	# A NAME IS THE HALF THAT NEEDS THE CONSTANT TABLE, and the parser has not got one. The
+	# length is part of the TYPE — two types are compared long before the emitter is reached —
+	# so carrying the name instead of the number would make `[byte; WIDTH]` and `[byte; 4]` two
+	# types whatever WIDTH is, which is worse than saying the form is not built.
+	raise p_diag_at(p, at.line, at.col, rule.Rule.NotYetArrayLenNamed, f"NotImplemented: an array length that names a constant — `{p_name_of(e)}` is a const-expr GRAMMAR#array-type derives, and the length is part of the TYPE, so it has to be a number before any two types are compared. Write the number, or use a `list[T]`") if p_name_of(e) != ""
+
+	raise p_diag_at(p, at.line, at.col, rule.Rule.ArrayLenNotConst, f"an array length is a compile-time constant (GRAMMAR#array-type derives a const-expr there), and {ast.expr_kind(e)} is not one")
+}
+
+fn p_fold_len(e: ast.Expr) -> int {
+	return match e {
+		Expr.EInt(lex, _, _) => p_len_int(lex)
+		Expr.EBinary(o, a, b) => p_len_binary(o, a, b)
+		_ => -1
+	}
+}
+
+fn p_len_int(lex: str) -> int {
+	return -1 if not lexer.int_fits(lex)
+
+	v := lexer.int_value(lex)
+	return -1 if v < 0
+
+	return v
+}
+
+fn p_len_binary(o: str, a: ast.Expr, b: ast.Expr) -> int {
+	x := p_fold_len(a)
+	y := p_fold_len(b)
+
+	return -1 if x < 0 or y < 0
+
+	return x + y if o == "+"
+	return x - y if o == "-" and x >= y
+	return x * y if o == "*"
+	return x / y if o == "/" and y != 0
+	return x % y if o == "%" and y != 0
+
+	return -1
+}
+
+fn p_name_of(e: ast.Expr) -> str {
+	return match e {
+		Expr.EIdent(nm) => nm
+		_ => ""
+	}
+}
+
 fn parse_base_type(mut &p: Parser) -> ast.Ty {
-	# `[T; N]` — an ARRAY TYPE (GRAMMAR#array-type). It is not built, and it was not turned away
-	# either: the `[` fell through to the name below, so `xs: [int; 3]` reported `expected
-	# `=`, found `int`` and `fn f(xs: [int; 3])` reported `expected `:`, found `;`` — two
-	# different tokens, neither of them the form.
-	raise p_diag(p, rule.Rule.NotYetArrayType, "NotImplemented: an array type `[T; N]` — this compiler has `list[T]`, whose length is not part of its type") if p_at(p, token.Kind.LBrack)
+	# `[T; N]` — an ARRAY TYPE (GRAMMAR#array-type): the element type, and a length that is part
+	# of the type. The `[` is the only thing that opens one in type position, so it is read here
+	# rather than falling through to the name below, which is what used to report `expected `=`,
+	# found `int`` for `xs: [int; 3]`.
+	if p_at(p, token.Kind.LBrack) {
+		p_advance(p)
+		elem := parse_type(p)
+		expect(p, token.Kind.Semi)
+		key := p_arr_len_key(p)
+		expect(p, token.Kind.RBrack)
+		return ast.Ty.TArr(elem, key)
+	}
 
 	# `unsafe fn(…) -> R` — a FUNCTION TYPE carrying the unsafe marker (GRAMMAR#fn-type is
 	# `'unsafe'? 'fn' '(' param-type-list? ')' ret-type?`). `unsafe` is a keyword, so it never

@@ -235,6 +235,11 @@ pub struct Emitter {
 	# two sections whose fixed order is wrong for whichever nesting came second.
 	pub tup_names: list[str]
 
+	# arr_names is tup_names for the fixed-size array — one C struct per (element, length),
+	# generated on demand into the same stream, because an array typedef spells a tuple or a
+	# carrier element exactly the way a tuple's does.
+	pub arr_names: list[str]
+
 	# mvt_names / mvt_decls are the map VTABLES — one static per distinct key/value shape,
 	# holding the hash and equality for the key type.
 	pub mvt_names: list[str]
@@ -662,6 +667,7 @@ fn c_type(t: ast.Ty) -> str {
 		# the same C parameter a `mut &` on a declaration has always lowered to
 		Ty.TRef(e) => c_type(e) + "*"
 		Ty.TTuple(ts) => c_tuple_cname(ts)
+		Ty.TArr(e, n) => c_arr_cname(e, n)
 		Ty.TMap(_, _) => "zrt_map"
 		Ty.TChan(_, _) => "zrt_chan*"
 		Ty.TEither(l, r) => c_carrier_cname(l, r)
@@ -857,6 +863,7 @@ fn c_fit_copied(mut &em: Emitter, where: str, want: ast.Ty, e: ast.Expr, sb: Sub
 	# back as doubles. Each element is a typed position of its own, which is also where `Into`
 	# fires on it.
 	return c_list_lit_vals(em, c_list_elem(want), c_elem_exprs(em, e, c_list_elem(want))) if c_is_list(want) and c_is_listlit(e)
+
 	return c_into(em, want, e, sb)
 }
 
@@ -873,6 +880,13 @@ fn c_fit_copied(mut &em: Emitter, where: str, want: ast.Ty, e: ast.Expr, sb: Sub
 # chk_fits_expr with the written form as the fix, and `L501` — the lint that reported each
 # such application while it was still legal — retires with them.
 fn c_into(mut &em: Emitter, want: ast.Ty, e0: ast.Expr, sb: Subst) -> str {
+	# A LIST LITERAL IN AN ARRAY POSITION IS AN ARRAY (docs/code/collections.md): the literal
+	# is context-typed, a `list[T]` by default and a `[T; N]` when the target is one. It is
+	# read HERE rather than in c_fit_copied because a DECLARED BINDING is the one typed
+	# position that does not lower through that one, and `xs: [int; 3] = [1, 2, 3]` is the
+	# first thing anybody writes.
+	return c_arr_lit(em, c_into_says(want), want, e0) if c_is_arr(want) and c_is_listlit(e0)
+
 	# CARVE-OUT (c): a closure's omitted parameter types — and its omitted return type —
 	# come from the function type it is CHECKED AGAINST, which is a fact about THIS POSITION
 	# and not about the closure. It is filled here because c_fit_copied's eighteen slots come
@@ -1436,6 +1450,7 @@ fn c_carrier_emit(mut &em: Emitter, c: ast.Ty) -> str {
 # even a shape the walk meets twice answers "" instead of being walked again.
 fn c_spelled_pre(mut &em: Emitter, t: ast.Ty) -> str {
 	return c_tuple_decl(em, ast.ty_tuple_elems(t)) if c_is_tuple(t)
+	return c_arr_decl(em, t) if c_is_arr(t)
 	return c_carrier_emit(em, t) if c_is_carrier(t)
 
 	return ""
@@ -2834,7 +2849,7 @@ fn c_type_decls(mut &em: Emitter, f: ast.File, carriers: list[ast.Ty], tuples: l
 		all.append(c_carrier_ty_cname(c))
 	}
 	for t in tuples {
-		all.append(c_tuple_cname(ast.ty_tuple_elems(t)))
+		all.append(c_shape_cname(t))
 	}
 
 	mut done: list[str] = []
@@ -2929,10 +2944,9 @@ fn c_type_decls(mut &em: Emitter, f: ast.File, carriers: list[ast.Ty], tuples: l
 		# which is where it was and why `pair: (Q, int)` had to be turned away.
 		mut ts2: list[ast.Ty] = []
 		for t in ts {
-			elems := ast.ty_tuple_elems(t)
-			tn := c_tuple_cname(elems)
-			if c_deps_done(c_ty_list_deps(elems), done, all) {
-				out = out + c_tuple_decl(em, elems)
+			tn := c_shape_cname(t)
+			if c_deps_done(c_ty_list_deps(c_shape_deps(t)), done, all) {
+				out = out + c_shape_decl(em, t)
 				done.append(tn)
 			} else {
 				ts2.append(t)
@@ -3027,6 +3041,7 @@ fn c_ty_struct_deps(t: ast.Ty, mut &out: list[str]) {
 		Ty.TOpt(el) => out.append(c_carrier_ty_cname(ast.Ty.TOpt(el)))
 		Ty.TEither(l, r) => out.append(c_carrier_ty_cname(ast.Ty.TEither(l, r)))
 		Ty.TTuple(ts) => out.append(c_tuple_cname(ts))
+		Ty.TArr(el, n) => out.append(c_arr_cname(el, n))
 		_ => c_skip()
 	}
 }
@@ -3193,6 +3208,7 @@ fn c_decl_types(sites: list[Site], mut &tups: list[ast.Ty], mut &cars: list[ast.
 fn c_decl_collect(t: ast.Ty, mut &tups: list[ast.Ty], mut &cars: list[ast.Ty]) {
 	match t {
 		Ty.TTuple(ts) => c_decl_collect_tuple(ts, tups, cars)
+		Ty.TArr(el, n) => c_decl_collect_arr(el, n, tups, cars)
 		Ty.TOpt(el) => c_decl_collect_carrier(ast.Ty.TOpt(el), tups, cars)
 		Ty.TEither(l, r) => c_decl_collect_carrier(ast.Ty.TEither(l, r), tups, cars)
 		Ty.TList(el) => c_decl_collect(el, tups, cars)
@@ -3216,6 +3232,38 @@ fn c_decl_collect_tuple(ts: list[ast.Ty], mut &tups: list[ast.Ty], mut &cars: li
 		return if c_tuple_cname(ast.ty_tuple_elems(t)) == name
 	}
 	tups.append(ast.Ty.TTuple(ts))
+}
+
+# c_decl_collect_arr adds an array to the same list the tuples are in, and for the same
+# reason: both are a typedef the sweep has to place after whatever they spell, and a struct
+# field of either type depends on one. `c_shape_cname` is what tells the two apart there.
+fn c_decl_collect_arr(el: ast.Ty, n: str, mut &tups: list[ast.Ty], mut &cars: list[ast.Ty]) {
+	c_decl_collect(el, tups, cars)
+	name := c_arr_cname(el, n)
+	for t in tups {
+		return if c_shape_cname(t) == name
+	}
+	tups.append(ast.Ty.TArr(el, n))
+}
+
+# c_shape_cname and c_shape_decl are the tuple's two questions asked of either shape, so the
+# sweep below stays one arm rather than two that must be kept in step.
+fn c_shape_cname(t: ast.Ty) -> str {
+	return c_arr_cname(c_arr_elem(t), c_arr_key(t)) if c_is_arr(t)
+
+	return c_tuple_cname(ast.ty_tuple_elems(t))
+}
+
+fn c_shape_decl(mut &em: Emitter, t: ast.Ty) -> str {
+	return c_arr_decl(em, t) if c_is_arr(t)
+
+	return c_tuple_decl(em, ast.ty_tuple_elems(t))
+}
+
+fn c_shape_deps(t: ast.Ty) -> list[ast.Ty] {
+	return [c_arr_elem(t)] if c_is_arr(t)
+
+	return ast.ty_tuple_elems(t)
 }
 
 # c_decl_collect_carrier adds a carrier once per SHAPE, then descends into its payloads — a
@@ -3992,6 +4040,11 @@ fn c_needs_copy(mut &em: Emitter, t: ast.Ty) -> bool {
 	# branch and buys one rule.
 	return true if c_is_fn(t)
 
+	# AN ARRAY owes a copy exactly when its ELEMENT does, which is the tuple's rule with one
+	# element type instead of a list of them: a `[str; 4]` copied by the C struct assignment
+	# alone would give two names one set of cells.
+	return c_needs_copy(em, c_arr_elem(t)) if c_is_arr(t)
+
 	# A TUPLE is the third composite, and it was missing: `mut t := (a, 0)` bit-copied the
 	# list `a`, so `t.0[0] = 99` was read back through `a`. Its elements are a list of
 	# types, so the same question is asked of each.
@@ -4064,6 +4117,11 @@ fn c_copy_of(mut &em: Emitter, t: ast.Ty, x: str) -> str {
 		return "({ " + ct + " zgt_cs = (" + x + "); " + ct + " zgt_cp; " + ct + "_copy(&zgt_cp, &zgt_cs); zgt_cp; })"
 	}
 	return f"{c_tuple_cname(ast.ty_tuple_elems(t))}_copy({x})" if c_is_tuple(t)
+
+	# an array's, named after its SHAPE the way a tuple's is — c_arr_decl generates the pair
+	# under this same question asked as c_needs_copy, so a POD array has neither and is copied
+	# by the C struct assignment alone
+	return f"{c_arr_cname(c_arr_elem(t), c_arr_key(t))}_copy({x})" if c_is_arr(t)
 	if c_is_str(t) {
 		em.used_rt = true
 		return f"zrt_str_retain({x})"
@@ -4216,6 +4274,7 @@ fn c_elem_kind(mut &em: Emitter, t: ast.Ty) -> str {
 	return "str" if c_is_str(t)
 	return "" if not c_needs_copy(em, t)
 	return c_tuple_cname(ast.ty_tuple_elems(t)) if c_is_tuple(t)
+	return c_arr_cname(c_arr_elem(t), c_arr_key(t)) if c_is_arr(t)
 
 	# a carrier's kind is its own C name, for the reason c_copy_of gives one line up: there
 	# is no declared name to build it out of. Without this a `list[str?]` took the memcpy
@@ -4305,6 +4364,7 @@ fn c_drop_fn(mut &em: Emitter, t: ast.Ty) -> str {
 	# the tuple's, named after the SHAPE the way its copy is — c_tuple_decl generates the
 	# pair together, under this same question asked as c_needs_copy
 	return f"{c_tuple_cname(ast.ty_tuple_elems(t))}_drop" if c_is_tuple(t) and c_needs_copy(em, t)
+	return f"{c_arr_cname(c_arr_elem(t), c_arr_key(t))}_drop" if c_is_arr(t) and c_needs_copy(em, t)
 
 	# the carrier's, which c_carrier_decl generates beside its copy and answers "" for when
 	# the payload owns nothing
@@ -6907,7 +6967,7 @@ fn c_is_aggregate(mut &em: Emitter, t: ast.Ty) -> bool {
 	# because a NAME for the variant is what `Display` would give and there is none.
 	return true if c_is_enum_ty(em, t)
 
-	return c_is_struct_name(em, c_named_of(t)) or c_is_list(t) or c_is_map(t) or c_is_tuple(t)
+	return c_is_struct_name(em, c_named_of(t)) or c_is_list(t) or c_is_map(t) or c_is_tuple(t) or c_is_arr(t)
 }
 
 # c_is_enum_ty reports whether a type is a declared enum (a TNamed matching an enum).
@@ -7480,7 +7540,9 @@ fn c_index(mut &em: Emitter, target: ast.Expr, idx: ast.Expr, sb: Subst) -> str 
 		return "0"
 	}
 
-	raise c_diag(em, rule.Rule.IndexOfNonContainer, f"`[…]` indexes a list or a map, and this is {ast.ty_name(tty)}") if not c_is_list(tty) and not c_is_map(tty) and not c_is_unknown(tty)
+	return c_arr_index(em, target, idx, tty, sb) if c_is_arr(tty)
+
+	raise c_diag(em, rule.Rule.IndexOfNonContainer, f"`[…]` indexes a list, a map or an array, and this is {ast.ty_name(tty)}") if not c_is_list(tty) and not c_is_map(tty) and not c_is_unknown(tty)
 
 	return c_map_index(em, target, idx, tty, sb) if c_is_map(tty)
 
@@ -7658,6 +7720,7 @@ fn c_is_lvalue(e: ast.Expr) -> bool {
 # TYPED, so it is decided once, here, and both ask. Deciding it twice is how the two drift.
 enum MethKind {
 	MList
+	MArr
 	MMap
 	MErr
 	MCarrier
@@ -7674,7 +7737,7 @@ enum MethKind {
 # that have one. Narrower than this and a `map`'s `iter` is refused permanently for a loop the
 # language gives it; wider and an `int` is promised a loop nothing walks.
 fn c_ty_is_iterable(tty: ast.Ty) -> bool {
-	return c_is_list(tty) or c_is_map(tty) or c_is_str(tty) or ast.ty_is_chan(tty)
+	return c_is_list(tty) or c_is_arr(tty) or c_is_map(tty) or c_is_str(tty) or ast.ty_is_chan(tty)
 }
 
 # c_renders_as_text answers whether this value HAS a rendering, and it is asked because a
@@ -7806,6 +7869,7 @@ fn c_meth_kind(mut &em: Emitter, tty: ast.Ty, meth: str) -> MethKind {
 	}
 
 	return MethKind.MList if c_is_list(tty)
+	return MethKind.MArr if c_is_arr(tty)
 	return MethKind.MMap if c_is_map(tty)
 
 	# EVERY method on an `Err`, not only the three that exist. An `Err` has no declaration
@@ -7843,6 +7907,7 @@ fn c_method(mut &em: Emitter, target: ast.Expr, meth: str, args: list[ast.Expr],
 	recv := c_named_of(tty)
 	return match c_meth_kind(em, tty, meth) {
 		MethKind.MList => c_list_method(em, target, meth, args, tty, sb)
+		MethKind.MArr => c_arr_method(em, meth, tty)
 		MethKind.MMap => c_map_method(em, target, meth, args, tty, sb)
 		MethKind.MErr => c_err_method(em, target, meth, args, sb)
 		MethKind.MCarrier => c_carrier_method(em, target, meth, args, tty, sb)
@@ -10292,6 +10357,7 @@ fn c_infer_methcall(mut &em: Emitter, target: ast.Expr, meth: str, args: list[as
 	recv := c_named_of(tty)
 	return match c_meth_kind(em, tty, meth) {
 		MethKind.MList    => c_list_method_ret(em, meth)
+		MethKind.MArr     => c_arr_method_ret(em, meth)
 		MethKind.MMap     => c_map_method_ret(meth)
 		MethKind.MErr     => c_err_method_ret(em, meth)
 		MethKind.MCarrier => c_carrier_method_ret(em, tty, meth)
@@ -10311,6 +10377,7 @@ fn c_elem_ty(mut &em: Emitter, target: ast.Expr, idx: ast.Expr) -> ast.Ty {
 	# a slice is the same kind of container as what it came from
 	return t if c_is_range(idx)
 	return c_map_val_ty(t) if c_is_map(t)
+	return c_arr_elem(t) if c_is_arr(t)
 
 	return c_list_elem(t)
 }
@@ -13318,6 +13385,235 @@ fn c_tuple_helpers(mut &em: Emitter, name: str, tys: list[ast.Ty]) -> str {
 	return out + "}\n"
 }
 
+# c_arr_index reads or writes one slot of `[T; N]`. The bound is CHECKED AT RUNTIME like a
+# list's, and a constant index outside the length is caught here as well — an array's length is
+# part of its type, so an out-of-range constant is a mistake the type already knows about.
+fn c_arr_index(mut &em: Emitter, target: ast.Expr, idx: ast.Expr, tty: ast.Ty, sb: Subst) -> str {
+	c_list_index_int(em, idx)
+	n := c_arr_len(tty)
+
+	k := check.chk_const_eval(em, idx)
+	if k.ok and (k.value < 0 or k.value >= n) {
+		check.chk_at(em, rule.Rule.ArrayIndexConst, f"`{strconv.to_string(k.value, 10)}` is outside {ast.ty_name(tty)} — an array's length is part of its type, so a constant index is checked here rather than at run time")
+		return "0"
+	}
+
+	w := em.lv_write
+	tgt := c_expr(em, target, sb)
+	em.lv_write = false
+	ix := c_expr(em, idx, sb)
+	em.lv_write = w
+
+	em.used_rt = true
+	return f"({tgt}).v[zrt_arr_index({ix}, {strconv.to_string(n, 10)})]"
+}
+
+# c_arr_method is every method an array answers, which is `len` and nothing else. The length
+# is part of the type, so it is a COMPILE-TIME CONSTANT rather than a field read — and that is
+# also why an array has no `append`: the size is in the type and a method cannot change one.
+fn c_arr_method(mut &em: Emitter, meth: str, tty: ast.Ty) -> str {
+	c_arr_method_ret(em, meth)
+	return strconv.to_string(c_arr_len(tty), 10)
+}
+
+fn c_arr_method_ret(mut &em: Emitter, meth: str) -> ast.Ty {
+	return ast.Ty.TInt if meth == "len"
+
+	# THE SPLIT A LIST'S FALLBACK MAKES, made here for the same reason (#74): a name the
+	# chapter marks `[not yet]` is a form that is coming, and every other name is a permanent
+	# rejection. `get` and `slice` are the two docs/code/collections.md gives an array.
+	unbuilt := meth == "get" or meth == "slice"
+	raise c_diag(em, rule.Rule.NotYetArrayMethod, f"NotImplemented: the array method `{meth}` — this compiler has `len`, and reads an element with `a[i]`") if unbuilt
+
+	raise c_diag(em, rule.Rule.ArrayMethodUnknown, f"an array answers `len`, and is read with `a[i]` — `{meth}` is not one of its methods, and its size is part of its type, so nothing may grow or shrink it")
+}
+
+# c_forarr walks `[T; N]`. It is the list loop with the bound taken from the TYPE and no
+# runtime header to read — and the copy is the same copy for the same reason: the loop walks
+# the sequence as it was when it started, and the body may write the binding it came from.
+fn c_forarr(mut &em: Emitter, var: str, iter: ast.Expr, ct: ast.Ty, body: list[ast.Stmt], ind: str) -> str {
+	elem := c_arr_elem(ct)
+	et := c_type(elem)
+	at := c_type(ct)
+	n := strconv.to_string(c_arr_len(ct), 10)
+	outer_scope := c_scope_open(em)
+	c_add_var(em, var, elem, false, false)
+
+	cv := c_var_cname(em, var)
+
+	in2 := ind + "    "
+	keep := em.rel_cnames.len()
+	mark := c_new_mark(em)
+	c_spelled_register(em, ct)
+	mut out := ind + "{\n" + in2 + f"size_t {mark} = zrt_scope_mark();\n"
+	out = out + in2 + f"{at} zgt_ai = " + c_copied(em, ct, iter, c_nosub()) + ";\n"
+	out = out + c_pend_drop(em, ct, "zgt_ai", in2)
+	out = out + in2 + f"for (int64_t zgt_i = 0; zgt_i < {n}; zgt_i++) {{\n"
+	out = out + in2 + "    " + et + " " + cv + " = zgt_ai.v[zgt_i];\n"
+
+	frz := c_frz_push(em, iter)
+	out = out + c_loop_block(em, body, in2 + "    ")
+	c_frz_pop(em, frz, iter)
+	out = out + in2 + "}\n"
+	c_scope_close(em, outer_scope)
+	c_scope_forget(em, keep)
+	return out + in2 + f"zrt_unwind_to({mark});\n" + ind + "}\n"
+}
+
+# c_arr_fill is `[v; N]` in an array position: one evaluation, then N - 1 copies.
+fn c_arr_fill(mut &em: Emitter, want: ast.Ty, et: ast.Ty, e: ast.Expr, n: int) -> str {
+	ct := c_type(et)
+	fv := c_tmp(em, "zgt_af")
+	mut out := f"({{ {ct} {fv} = " + c_fit_copied(em, c_into_says(want), et, c_fill_value(e), c_nosub()) + "; "
+	out = out + f"({c_type(want)}){{{{"
+	mut i := 0
+	for i < n {
+		if i > 0 {
+			out = out + ", "
+		}
+		mut src := fv
+		if i > 0 and c_needs_copy(em, et) {
+			src = c_copy_of(em, et, fv)
+		}
+		out = out + src
+		i = i + 1
+	}
+	return out + "}}; })"
+}
+
+fn c_is_fill(e: ast.Expr) -> bool {
+	return match e {
+		Expr.EFill(_, _) => true
+		_ => false
+	}
+}
+
+fn c_fill_value(e: ast.Expr) -> ast.Expr {
+	return match e {
+		Expr.EFill(v, _) => v
+		_ => e
+	}
+}
+
+# c_into_says names the slot for the length message. A declared binding, an argument and a
+# field all reach c_into with only the TYPE in hand, so the sentence names the type — which is
+# the half the reader has to change anyway.
+fn c_into_says(want: ast.Ty) -> str {
+	return f"a {ast.ty_name(want)} slot"
+}
+
+# c_arr_lit builds `[T; N]` out of a list literal in an array position. The ELEMENTS are each
+# a typed position of their own, exactly as a list literal's are, so a literal element adopts
+# the array's element type rather than the first element's.
+fn c_arr_lit(mut &em: Emitter, where: str, want: ast.Ty, e: ast.Expr) -> str {
+	et := c_arr_elem(want)
+	elems := c_elem_exprs(em, e, et)
+	n := c_arr_len(want)
+	if elems.len() != n {
+		check.chk_at(em, rule.Rule.ArrayLitLen, f"{where} takes {strconv.to_string(n, 10)} element(s) and this literal has {strconv.to_string(elems.len(), 10)} — an array's length is part of its type, so the two have to agree")
+		return "{0}"
+	}
+
+	c_spelled_register(em, want)
+
+	# THE FILL FORM EVALUATES `v` ONCE (docs/code/collections.md): `[f(); 4]` is four copies of
+	# one value, not four calls. The list's own fill says so with a temporary, and an array
+	# would otherwise render the expression once per slot, because a fill's elements are the
+	# same expression repeated.
+	return c_arr_fill(em, want, et, e, n) if c_is_fill(e) and n > 1
+
+	mut out := f"({c_type(want)}){{{{"
+	mut i := 0
+	for i < elems.len() {
+		if i > 0 {
+			out = out + ", "
+		}
+		out = out + elems[i]
+		i = i + 1
+	}
+	return out + "}}"
+}
+
+# --- the fixed-size array (GRAMMAR#array-type) -------------------------------------------
+#
+# `[T; N]` is a C STRUCT WRAPPING AN ARRAY, and not a bare `T[N]`: a bare one is not a value in
+# C — it cannot be assigned, returned, or passed without decaying to a pointer — and every rule
+# the language states about an array is a rule about a VALUE. Wrapped, it assigns, returns and
+# passes by value for free, which is the whole of copy-by-value for a POD element.
+#
+# It is the tuple's machinery with a loop where the tuple has a list: one shape per (element,
+# length), the name a pure function of both so `c_type` can spell it with no Emitter to ask,
+# and a copy/drop pair emitted only when the element owes one.
+
+# c_arr_cname is the C name of `[T; N]`. It is pure, for the reason c_tuple_cname is: c_type
+# has to be able to spell it, and one shape must get one name in every translation unit.
+pub fn c_arr_cname(e: ast.Ty, n: str) -> str {
+	return f"zga_{c_ident_safe(c_type(e))}_{n}"
+}
+
+# c_arr_decl registers one array shape and answers its declaration text, or "" for a shape
+# already out. The ELEMENT goes first, depth first, exactly as a tuple's does: a typedef
+# spelling `zgt_tup_…` or a carrier needs that name written above it.
+fn c_arr_decl(mut &em: Emitter, t: ast.Ty) -> str {
+	e := c_arr_elem(t)
+	key := c_arr_key(t)
+	out := c_spelled_pre(em, e)
+	name := c_arr_cname(e, key)
+	for n in em.arr_names {
+		return out if n == name
+	}
+
+	em.arr_names.append(name)
+	decl := f"typedef struct {{ {c_type(e)} v[{key}]; }} {name};\n"
+	mut helpers := ""
+	if c_needs_copy(em, e) {
+		helpers = c_arr_helpers(em, name, e, key) + c_elem_vt_helper(em, t)
+	}
+	return out + decl + helpers
+}
+
+# c_arr_helpers is the tuple's copy/drop pair over a loop. An array of a POD element needs
+# neither — the struct assignment IS the copy — and one whose element owns something needs both,
+# for the same reason a tuple holding a list does: without them the copy's slots named the
+# source's buffers.
+fn c_arr_helpers(mut &em: Emitter, name: str, e: ast.Ty, key: str) -> str {
+	mut out := f"static {name} {name}_copy({name} v) {{\n    {name} r = v;\n"
+	out = out + f"    for (int64_t i = 0; i < {key}; i++) {{ r.v[i] = " + c_copy_of(em, e, "v.v[i]") + f"; }}\n"
+	out = out + "    return r;\n}\n"
+
+	out = out + f"static void {name}_drop({name} *v) {{\n"
+	out = out + f"    for (int64_t i = {key} - 1; i >= 0; i--) {{ " + c_drop_stmt(em, e, "v->v[i]") + f" }}\n"
+	return out + "}\n"
+}
+
+pub fn c_is_arr(t: ast.Ty) -> bool {
+	return match t {
+		Ty.TArr(_, _) => true
+		_             => false
+	}
+}
+
+pub fn c_arr_elem(t: ast.Ty) -> ast.Ty {
+	return match t {
+		Ty.TArr(e, _) => e
+		_             => ast.Ty.TUnknown
+	}
+}
+
+pub fn c_arr_key(t: ast.Ty) -> str {
+	return match t {
+		Ty.TArr(_, n) => n
+		_             => "0"
+	}
+}
+
+# c_arr_len is an array's length as a number. Every key this compiler builds is decimal digits
+# — a name is refused at the type (E9111) — so the fold cannot fail, and -1 would be a shape
+# nothing constructs rather than a length to guard against.
+pub fn c_arr_len(t: ast.Ty) -> int {
+	return ast.ty_arr_len(c_arr_key(t))
+}
+
 fn c_tuple_cname(tys: list[ast.Ty]) -> str {
 	mut name := "zgt_tup"
 	for t in tys {
@@ -13878,8 +14174,10 @@ fn c_forin(mut &em: Emitter, var: str, iter: ast.Expr, body: list[ast.Stmt], ind
 	# TUnknown, and the first USE of `x` reported "undefined name `x`". The loop variable was
 	# blamed for the thing being walked: a sentence about the consequence, naming the one part
 	# of the line that is fine.
+	return c_forarr(em, var, iter, ct, body, ind) if c_is_arr(ct)
+
 	if not c_is_list(ct) and not c_is_unknown(ct) {
-		check.chk_at(em, rule.Rule.NotIterable, f"`for … in` walks a list, a map, a str, a range or a channel, and {ast.ty_name(ct)} is not iterable")
+		check.chk_at(em, rule.Rule.NotIterable, f"`for … in` walks a list, an array, a map, a str, a range or a channel, and {ast.ty_name(ct)} is not iterable")
 	}
 
 	elem := c_list_elem(ct)
@@ -16012,7 +16310,7 @@ fn c_emit_unit(prog0: ast.File, own0: ast.File, ms: Mods, whole: bool, want_lint
 	# is what makes that invariant hold for a multi-unit program, at the place it already lives,
 	# and it is what lets the declaration passes below go back to reading the WHOLE program.
 	seen := diags.len()
-	mut em := Emitter([], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], false, false, false, [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], 0, [], 0, [], [], false, "", "", [], [], ast.Ty.TVoid, 0, "", 0, 0, diags, 0, 0, [], [], [], [], [], false, 0, false, "", 0, false, false, [], want_lints, [], [], [], [], [], [], [], [], [], [], [], false, 0, [], [], "", c_nosub(), [], [], [], [], [], [], [], [], [])
+	mut em := Emitter([], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], false, false, false, [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], 0, [], 0, [], [], false, "", "", [], [], ast.Ty.TVoid, 0, "", 0, 0, diags, 0, 0, [], [], [], [], [], false, 0, false, "", 0, false, false, [], want_lints, [], [], [], [], [], [], [], [], [], [], [], false, 0, [], [], "", c_nosub(), [], [], [], [], [], [], [], [], [])
 
 	# ASSIGNED, NOT PASSED. Every argument above is a zero value, and `layering` asserts that
 	# — it lines the call up with the fields by KIND, which only works while nothing in it

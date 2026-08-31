@@ -76,6 +76,18 @@ pub enum Ty {
 	TOpt(Ty)
 	TErr
 
+	# TArr is `[T; N]`, the fixed-size array (GRAMMAR#array-type). The LENGTH IS PART OF THE
+	# TYPE, which is the whole of what separates it from `list[T]`: `[int; 3]` and `[int; 4]`
+	# are two types, and neither grows.
+	#
+	# The length rides as a KEY rather than as the expression that was written: the digits it
+	# folds to, or the name of the constant it is. A `Ty` cannot hold an `Expr` — an `Expr`
+	# already holds a `Ty`, and the two together have no size — and a key is what the length is
+	# for anyway. Two arrays are the same type when their keys agree, so `[int; 2 + 1]` and
+	# `[int; 3]` are one type; a name is its own key, and the emitter, which has the constant
+	# table, is what turns it into a number.
+	TArr(Ty, str)
+
 	# TRef is `mut &T`, and it is a TYPE rather than a marker on a declaration:
 	# GRAMMAR#param-type derives `( 'mut' '&' )? type`, so `fn(mut &int)` and `fn(int)` are
 	# two different function types and a value of one is not a value of the other.
@@ -1463,6 +1475,7 @@ pub fn ty_eq(a: Ty, b: Ty) -> bool {
 		Ty.TEither(al, ar) => ty_eq_either(al, ar, b)
 		Ty.TFn(aps, ar)    => ty_eq_fn(aps, ar, b)
 		Ty.TRef(ae)        => ty_eq_ref(ae, b)
+		Ty.TArr(ae, an)    => ty_eq_arr(ae, an, b)
 		Ty.TTuple(aes)     => ty_eq_tuple(aes, b)
 		Ty.TUnknown        => false
 
@@ -1470,6 +1483,33 @@ pub fn ty_eq(a: Ty, b: Ty) -> bool {
 		# the identity there — the one place the shortcut this function replaces was right
 		_ => ty_name(a) == ty_name(b)
 	}
+}
+
+# TWO ARRAYS ARE THE SAME TYPE WHEN THEIR ELEMENTS AND THEIR LENGTH KEYS ARE. The key is what
+# the parser reduced the const-expr to — the digits it folds to, or the constant it names — so
+# `[int; 2 + 1]` and `[int; 3]` are one type and `[byte; WIDTH]` meets itself. The one pair a
+# comparison with no constant table cannot settle, `[byte; WIDTH]` against `[byte; 4]`, is the
+# emitter's (c_arr_len).
+fn ty_eq_arr(ae: Ty, an: str, b: Ty) -> bool {
+	return match b {
+		Ty.TArr(be, bn) => ty_eq(ae, be) and an == bn
+		_ => false
+	}
+}
+
+# ty_arr_len is an array length as a NUMBER when the key already is one, and -1 when it names a
+# constant instead. The emitter resolves that half, where the table is.
+pub fn ty_arr_len(key: str) -> int {
+	bs := bytearray(key)
+	return -1 if bs.len() == 0
+
+	mut v := 0
+	for c in bs {
+		return -1 if c < b'0' or c > b'9'
+
+		v = v * 10 + int(c - b'0')
+	}
+	return v
 }
 
 # A `mut &T` IS EQUAL TO NOTHING BUT A `mut &` OF THE SAME TYPE, which is the whole reason
@@ -1574,6 +1614,7 @@ pub fn ty_name(t: Ty) -> str {
 		Ty.TEither(l, r) => either_name(l, r)
 		Ty.TOpt(e)       => f"{ty_name(e)}?"
 		Ty.TRef(e)       => f"mut &{ty_name(e)}"
+		Ty.TArr(e, n)    => f"[{ty_name(e)}; {n}]"
 		Ty.TErr          => "Err"
 		Ty.TMap(k, v)    => f"map[{ty_name(k)}, {ty_name(v)}]"
 

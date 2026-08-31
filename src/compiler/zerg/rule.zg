@@ -109,6 +109,7 @@ pub enum Rule {
 	UnsafeOpensNeither = 2075
 	ListPatternTwoRests = 2078
 	ImplItemUnknown = 2077
+	ArrayLenNotConst = 2079
 
 	# checking — a form whose meaning does not hold together — reported against the tree, all at once
 	NotPublicMember = 3001
@@ -281,6 +282,9 @@ pub enum Rule {
 	# and scripts/method-gaps-check.sh is what holds it to the chapters. A per-chapter
 	# attribution here is a third copy, and both times it has been one it has drifted.
 	ListMethodUnknown = 3137
+	ArrayLitLen = 3139
+	ArrayIndexConst = 3140
+	ArrayMethodUnknown = 3141
 	SpecDefaultReadsField = 3138
 
 	# emitting — a form this compiler will not lower
@@ -423,7 +427,6 @@ pub enum Rule {
 	NotYetFStringConversion = 9013
 	NotYetFStringSelfDoc = 9014
 	NotYetImplAssocType = 9015
-	NotYetArrayType = 9017
 	NotYetCommandInterpolating = 9019
 	NotYetCommandLiteral = 9020
 	NotYetDestructuringBinding = 9021
@@ -517,6 +520,8 @@ pub enum Rule {
 	NotYetDelOwning = 9108
 	NotYetListPatternRestBinding = 9110
 	NotYetUnsafeMethod = 9109
+	NotYetArrayLenNamed = 9111
+	NotYetArrayMethod = 9112
 }
 
 # rule_code is the text a rule is reported under — the `E2004` a gate pins and a reader looks

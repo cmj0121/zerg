@@ -2576,6 +2576,13 @@ fn chk_fits(mut &em: emit.Emitter, want: ast.Ty, got: ast.Ty) -> bool {
 		return chk_fits(em, we, ge)
 	}
 
+	# A LIST LITERAL FITS AN ARRAY SLOT, and the length is what decides whether it does. The
+	# literal is context-typed (docs/code/collections.md): `[1, 2, 3]` infers `list[int]`
+	# standing on its own, and IS a `[int; 3]` in an array position. So the ELEMENTS are asked
+	# here — the same recursion a list gets — and the LENGTH is asked at the lowering, where
+	# the literal's elements are in hand and the sentence can name both counts.
+	return chk_fits(em, emit.c_arr_elem(want), emit.c_list_elem(got)) if emit.c_is_arr(want) and emit.c_is_list(got)
+
 	# an optional handed to a value slot is a real mistake, and emit already has a better
 	# sentence for it than this rule can write — it names the three ways to unwrap one
 	return true if ast.ty_is_opt(got)

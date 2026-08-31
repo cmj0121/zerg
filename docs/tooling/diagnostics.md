@@ -442,7 +442,6 @@ shipping compiler rather than a part of it (the line
 | `E9032` | a binding head in an `if` EXPRESSION                                                                  |
 | `E9033` | `asm(…)`                                                                                              |
 | `E9034` | a default on a closure parameter                                                                      |
-| `E9035` | a `mut &` parameter in a function type                                                                |
 | `E9036` | an `unsafe` `spec` signature                                                                          |
 | `E9037` | an `impl` carrying its own type parameters `[…]`                                                      |
 | `E9038` | an `impl` on `…[…]` — a type ARGUMENT on the target                                                   |
@@ -469,7 +468,6 @@ shipping compiler rather than a part of it (the line
 | `E9062` | `in` over … — a range's members are found by comparing its bounds                                     |
 | `E9063` | `…` is part of the fixed-width ladder                                                                 |
 | `E9064` | the built-in `set`                                                                                    |
-| `E9065` | … is a `mut &`, and a function VALUE cannot carry one                                                 |
 | `E9066` | `del …` on a CHANNEL                                                                                  |
 | `E9067` | `…[…](…)` as a constructor                                                                            |
 | `E9068` | `nil` as a `match` pattern                                                                            |
@@ -634,6 +632,8 @@ name now is the prelude rule (`E2061`), which is about the name rather than abou
 | `E9024` | —       | the or-pattern is built                                            |
 | `E9018` | —       | the `as` binding is built                                          |
 | `E9002` | —       | a `spec` member with a body is built; it is a provided default     |
+| `E9035` | —       | `mut &` is part of a function type, and the type is built          |
+| `E9065` | —       | as above, on the value side: the marker rides in the type          |
 | `E9081` | —       | a public name takes the module tag a private one already had (#92) |
 | `E3047` | —       | a strong typedef takes its underlying type's prefix operators      |
 

@@ -55,12 +55,10 @@ type, and this position gives it none_.
 > bracket is always an index ([Grammar](../surface/grammar.md)), and it is refused by name — _E2035
 > `id[int](…)` writes a call's type arguments, and a postfix `[ … ]` is an index_.
 >
-> **[not yet]** The `mut &` distinction is real in the language and cannot be written down. A function
-> **type** carrying it is read and then refused by name: `f: fn(mut &int) = bump` reports _E9035
-> NotImplemented: a `mut &` parameter in a function type_, with the place the prefix sits at. The refusal is
-> the same rule the value side already states — a held function is a bare pointer here and the call site reads
-> a `mut &` from the callee's **name**, which a value has not got (`E9065`) — so `fn(mut &int) -> bool` has no
-> spelling, and the two types stay distinct only on paper.
+> The `mut &` distinction is **carried by the type**: `fn(mut &int)` and `fn(int)` are two types, and a value
+> of one is not a value of the other — _E3033 cannot bind fn(mut &int) -> void to a fn(int) -> void binding_.
+> A call through a value reads the convention from the type it is calling, having no callee name to read it
+> from, so the borrow rules hold there exactly as they do at a call by name.
 
 **A function's type is its input/output contract, and only that.** It reveals its parameters — with `mut &`
 marking the one argument-level effect, a mutable reference that writes back to the caller — and its result, where a

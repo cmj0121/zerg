@@ -1267,6 +1267,7 @@ fn walk_expr(e: ast.Expr, mut &ids: list[str], mut &calls: list[str], mut &ns: l
 		Expr.EListLit(elems) => walk_all(elems, ids, calls, ns)
 		Expr.EFill(v, n) => walk_pair(v, n, ids, calls, ns)
 		Expr.EConv(ty, x, nm) => walk_expr(x, ids, calls, ns)
+		Expr.EFmt(x, _, _) => walk_expr(x, ids, calls, ns)
 		Expr.EIf(cond, then_e, else_e) => walk_three(cond, then_e, else_e, ids, calls, ns)
 		Expr.EMatch(scrut, arms) => walk_match(scrut, arms, ids, calls, ns)
 		Expr.ERange(lo, hi, inclusive) => walk_pair(lo, hi, ids, calls, ns)

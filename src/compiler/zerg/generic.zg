@@ -306,6 +306,7 @@ fn subst_expr(su: TySubst, e: ast.Expr) -> ast.Expr {
 		Expr.EMethod(x, m, xs) => ast.Expr.EMethod(subst_expr(su, x), m, subst_exprs(su, xs))
 		Expr.EListLit(xs) => ast.Expr.EListLit(subst_exprs(su, xs))
 		Expr.EConv(ty, x, as_) => ast.Expr.EConv(subst_ty(su, ty), subst_expr(su, x), as_)
+		Expr.EFmt(x, cv, sp) => ast.Expr.EFmt(subst_expr(su, x), cv, sp)
 		Expr.EIf(c, a, b) => ast.Expr.EIf(subst_expr(su, c), subst_expr(su, a), subst_expr(su, b))
 		Expr.EMatch(x, arms) => ast.Expr.EMatch(subst_expr(su, x), subst_arms(su, arms))
 		Expr.ERange(a, b, inc) => ast.Expr.ERange(subst_expr(su, a), subst_expr(su, b), inc)

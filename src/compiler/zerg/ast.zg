@@ -150,6 +150,16 @@ pub enum Expr {
 	# as "byte" and an f-string hole as "str", because neither was spelled by the reader
 	# and those are the nearest true names for what the node does.
 	EConv(Ty, Expr, str)
+
+	# EFmt is ONE f-string HOLE with a tail: the value, the `!conv` letter ("" for none), and
+	# the `:spec` text ("" for none). GRAMMAR#interp derives `'{' expr '='? conversion?
+	# format-spec? '}'`, so the two tails belong to one hole — and they are held rather than
+	# resolved because both need the value's TYPE, which the parser that reads the hole has
+	# not got. A hole with no tail stays the plain `str(x)` it always was.
+	#
+	# `=` IS NOT IN HERE. It renders the expression's SOURCE TEXT, which is a fact the parser
+	# alone has, so it is spliced as an ordinary literal at the hole rather than carried.
+	EFmt(Expr, str, str)
 	EIf(Expr, Expr, Expr)
 	EMatch(Expr, list[Arm])
 
@@ -1168,6 +1178,7 @@ pub fn expr_kind(e: Expr) -> str {
 		Expr.EListLit(elems) => "list-literal"
 		Expr.EFill(v, n) => "fill"
 		Expr.EConv(ty, x, nm) => "convert " + nm
+		Expr.EFmt(x, _, _) => "format hole"
 		Expr.EIf(cond, then_e, else_e) => "if-expr"
 		Expr.EMatch(scrut, arms) => "match"
 		Expr.ERange(lo, hi, inclusive) => "range"
@@ -1221,6 +1232,7 @@ pub fn expr_parts(e: Expr) -> list[Expr] {
 		Expr.EListLit(elems) => elems
 		Expr.EFill(v, n) => [v, n]
 		Expr.EConv(_, x, _) => [x]
+		Expr.EFmt(x, _, _) => [x]
 		Expr.EIf(c, a, b) => [c, a, b]
 		Expr.EMatch(scrut, arms) => expr_parts_arms(scrut, arms)
 		Expr.ERange(lo, hi, _) => [lo, hi]

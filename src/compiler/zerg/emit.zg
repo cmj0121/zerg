@@ -5625,6 +5625,7 @@ fn c_expr_node(mut &em: Emitter, e: ast.Expr, sb: Subst) -> str {
 		Expr.EListLit(elems) => c_list_lit(em, elems, sb)
 		Expr.EFill(v, n) => c_fill_lit(em, v, n, sb)
 		Expr.EConv(ty, x, nm) => c_conv(em, ty, x, nm, sb)
+		Expr.EFmt(x, cv, sp) => c_fmt_hole(em, x, cv, sp, sb)
 		Expr.EIf(cond, then_e, else_e) => c_ternary(em, cond, then_e, else_e, sb)
 		Expr.EMatch(scrut, arms) => c_match(em, scrut, arms, sb)
 
@@ -10337,6 +10338,7 @@ fn c_infer_node(mut &em: Emitter, e: ast.Expr) -> ast.Ty {
 
 		Expr.EFill(v, _) => c_infer_fill(em, v)
 		Expr.EConv(ty, x, nm) => ty
+		Expr.EFmt(_, _, _) => ast.Ty.TStr
 		Expr.EIf(cond, then_e, else_e) => c_infer(em, then_e)
 		Expr.EMatch(scrut, arms) => c_infer_match(em, scrut, arms)
 		Expr.ERange(lo, hi, inclusive) => ast.Ty.TUnknown
@@ -13752,6 +13754,50 @@ fn c_render_struct_body(mut &em: Emitter, sn: str) -> str {
 		i = i + 1
 	}
 	return out + "    return zrt_str_concat(s, \")\");\n"
+}
+
+# --- an f-string hole with a tail (GRAMMAR#interp) ----------------------------------------
+#
+# `{ expr =? !conv? :spec? }` — the `=` is spliced at the parse, and the other two land here,
+# because both need the value's TYPE and the parser that reads the hole has not got one.
+#
+# THE CONVERSION PICKS THE VIEW and the spec formats what it produced. `!s` is `display`,
+# which is what a bare hole already uses; `!r` is the developer `debug`, which differs from
+# display in exactly one place — a `str` renders quoted — and `!a` is that same debug with
+# every non-ASCII byte escaped.
+#
+# THE SPEC IS READ BY THE VALUE'S OWN TYPE where the language gives it one: a number reads
+# `[[fill]align][sign][#][0][width][.prec][type]` as a NUMBER, so `{n:04d}` is zero-padded
+# rather than a padded rendering of its text. Everything else is rendered first and then read
+# as text, which is what `zrt_fmt_str` is — and it is also why a conversion overrides that: a
+# value asked for a VIEW has already become text by the time the spec sees it.
+fn c_fmt_hole(mut &em: Emitter, x: ast.Expr, conv: str, fspec: str, sb: Subst) -> str {
+	t := c_infer(em, x)
+	c_display_check(em, t, "this rendering")
+	em.used_rt = true
+	em.used_str = true
+
+	return f"{c_fmt_num_fn(t)}({c_expr(em, x, sb)}, {c_str_lit(fspec)})" if conv == "" and fspec != "" and c_fmt_is_number(t)
+
+	text := c_render_of(em, t, c_expr(em, x, sb), conv == "r" or conv == "a")
+	mut out := text
+	if conv == "a" {
+		out = f"zrt_ascii_escape({out})"
+	}
+	return out if fspec == ""
+
+	return f"zrt_fmt_str({out}, {c_str_lit(fspec)})"
+}
+
+fn c_fmt_is_number(t: ast.Ty) -> bool {
+	return c_is_int(t) or c_is_uint(t) or c_is_float(t) or c_is_byte(t) or c_is_rune(t)
+}
+
+fn c_fmt_num_fn(t: ast.Ty) -> str {
+	return "zrt_fmt_float" if c_is_float(t)
+	return "zrt_fmt_uint" if c_is_uint(t) or c_is_byte(t)
+
+	return "zrt_fmt_int"
 }
 
 # c_into_says names the slot for the length message. A declared binding, an argument and a

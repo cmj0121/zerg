@@ -982,6 +982,10 @@ const char *zrt_display_bool(bool v);
  * lists whose elements differ only by a separator do not render the same way. */
 const char *zrt_debug_str(const char *s);
 
+/* zrt_ascii_escape is the f-string `!a` conversion: the debug text with every byte outside
+ * printable ASCII written as a hex escape, for a terminal that cannot show the bytes. */
+const char *zrt_ascii_escape(const char *s);
+
 /* zrt_fmt_* render a value under a `:spec` (the f-string `{x:spec}` hole). Numbers
  * read sign / base (d/b/o/x/X/c) / '#' prefix / zero-pad / width / (float) precision;
  * a string reads width / align / precision (truncation). */

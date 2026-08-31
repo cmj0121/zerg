@@ -1556,16 +1556,6 @@ fn main() {
 }
 EOF
 
-expect "$ZERG" rendering-a-composite E9059 <<'EOF'
-struct P {
-	pub x: int
-}
-
-fn main() {
-	print str(P(1))
-}
-EOF
-
 expect "$ZERG" list-slice E9056 'the list method `slice`' <<'EOF'
 fn main() {
 	xs := [1, 2, 3]
@@ -1666,25 +1656,10 @@ EOF
 # `display` from `next`, so a name that lands stops matching its own line.
 #
 # AND THE SENTENCE RUNS PAST THE NAME, as far as the SUBSTITUTE, for the three renderings.
-# `display`, `debug` and `format` are given on every receiver and what to write instead is
-# not: `str(x)` and `f"{x}"` render an `int` and are refused on a `list[int]` (E4011), a map,
-# a struct, a carrier (E9059) and an enum (E9085). A case that stopped at the receiver's name
-# passed while the compiler told the reader to write an expression it refuses, so each side of
-# that split is pinned by the words that differ — here the substitute, below its absence.
-expect "$ZERG" builtin-display E9107 'the method `display` on a int — `str(x)` renders it' <<'EOF'
-fn main() {
-	x := 5
-	print x.display()
-}
-EOF
-
-expect "$ZERG" builtin-debug E9107 'the method `debug` on a int — `str(x)` renders it' <<'EOF'
-fn main() {
-	x := 5
-	print x.debug()
-}
-EOF
-
+# `format` is given on every receiver and what to write instead is not, which is why its two
+# clauses are pinned by the words that differ. `display` and `debug` are no longer in that
+# split at all: they are BUILT (#112), so every value that renders answers them, and what is
+# left of E9107 for them is the class that renders nowhere — an identity, which E4076 names.
 expect "$ZERG" builtin-format E9107 'the method `format` on a int — a spec is unread here' <<'EOF'
 fn main() {
 	x := 5
@@ -1708,100 +1683,23 @@ fn main() {
 }
 EOF
 
-# AND ON A RECEIVER THAT HAS A FAMILY. Every case above stands on an `int` or a channel, and
-# neither is a list, a map, an `Err` or a carrier — which is to say every one of them reached
-# the fallback that carries this split, and none of them could see that the four families
-# above it were answering the same names for themselves. `m.display()` was `E3134`,
-# `e.display()` was `E3124`, `o.display()` was `E3129` and `xs.display()` was `E9056`: four
-# codes for one question, three of them permanent, for a rendering docs/runtime/format.md
-# gives every value. One case per family, because one case per family is what a shared
-# fallback cannot fake.
-expect "$ZERG" map-display E9107 'on a map[str, int] — there is nothing to write in its place' <<'EOF'
-fn main() {
-	m := {"a": 1}
-	print m.display()
-}
-EOF
-
-expect "$ZERG" err-display E9107 'the method `display` on a Err — `str(x)` renders it' <<'EOF'
-fn f() -> int {
-	raise ValueError("x")
-}
-
-fn main() {
-	r: Result[int] = guard {
-		f()
-	}
-	match r {
-		Either.Left(v) => {
-			print v
-		}
-		Either.Right(e) => {
-			print e.display()
-		}
-	}
-}
-EOF
-
-expect "$ZERG" carrier-display E9107 'on a int? — there is nothing to write in its place' <<'EOF'
-fn g() -> int? {
-	return nil
-}
-
-fn main() {
-	print g().display()
-}
-EOF
-
-expect "$ZERG" list-display E9107 'on a list[int] — there is nothing to write in its place' <<'EOF'
-fn main() {
-	xs := [1, 2]
-	print xs.display()
-}
-EOF
-
-# AND THE OTHER SIDE OF THE SAME RECEIVER, which is what proves the predicate is about the
-# rendering and not about the word "list". `str(xs)` over a `list[byte]` IS built — it is the
-# way back from the bytes — so this one is handed the substitute the case above is refused,
-# from the same clause, on a receiver spelled almost the same way.
-expect "$ZERG" bytes-display E9107 'on a list[byte] — `str(x)` renders it' <<'EOF'
-fn main() {
-	xs: list[byte] = [b'a', b'b']
-	print xs.display()
-}
-EOF
-
-# AND THE SECOND SPELLING OF THE SAME BRIDGE. `c_str_bridges_list` admits a `list[rune]` as
-# well — bytes and code points are the two ways back to a string — and only one of the two was
-# asserted, so deleting `c_is_rune` from that clause left the board green while the chapter's
-# stand-in set (docs/runtime/format.md) went on promising the substitute. Proved by deleting
-# it: this case fails alone and `bytes-display` does not.
-expect "$ZERG" runes-display E9107 'on a list[rune] — `str(x)` renders it' <<'EOF'
-fn main() {
-	xs: list[rune] = ['a', 'b']
-	print xs.display()
-}
-EOF
-
-# AND ON THE CLASS THAT HAS NO RENDERING AND NEVER WILL. The three above are composites: they
-# are waiting for the structural `Display` this compiler does not generate, and until it comes
-# their parts are what a reader renders instead. An IDENTITY is not waiting and has no parts —
-# `E4034` names the class, a channel and a function value, and the predicate that decides the
-# substitute wrote out the channel alone, so `f := g; f.display()` said "`str(x)` renders it"
-# while `str(f)` reached cc and was refused against a line nobody wrote. NIL is a third answer
-# and not either of those: `str(f())` is `E3086` by name.
+# AND ON THE CLASS THAT HAS NO RENDERING AND NEVER WILL. A composite renders structurally now
+# (#112), so `x.display()` answers on every value that renders at all — and these three are
+# what is left. An IDENTITY has no parts and is not waiting for a generator: `E4034` names the
+# class, a channel and a function value, and the rendering positions name it as `E4076`. NIL is
+# a third answer and neither of those: it is `E3086` by name.
 #
-# All three assert the WORDS and not the code, because the code was already `E9107` on every
-# one of them while the sentence was wrong — and the channel had no case at all, so deleting
-# the line that excludes it left the whole board green.
-expect "$ZERG" chan-display E9107 'on a chan[int] — there is nothing to write in its place — a chan[int] is an identity rather than a value' <<'EOF'
+# THE FOURTH SPELLING REACHES THE SAME GATE AS THE OTHER THREE, which is what these pin: the
+# method form used to have refusals of its own — four codes for one question — and now
+# `x.display()` is asked exactly what `print x` is asked.
+expect "$ZERG" chan-display E4076 'a chan[int] is an identity rather than a value, and the language gives it no rendering' <<'EOF'
 fn main() {
 	ch := chan[int](1)
 	print ch.display()
 }
 EOF
 
-expect "$ZERG" fn-display E9107 'on a fn() -> int — there is nothing to write in its place — a fn() -> int is an identity rather than a value' <<'EOF'
+expect "$ZERG" fn-display E4076 'a fn() -> int is an identity rather than a value, and the language gives it no rendering' <<'EOF'
 fn g() -> int {
 	return 1
 }
@@ -1812,7 +1710,7 @@ fn main() {
 }
 EOF
 
-expect "$ZERG" nil-display E9107 'on a void — there is nothing to write in its place — nil is the absence of a value' <<'EOF'
+expect "$ZERG" nil-display E3086 '`display` needs a value, and this one is nil' <<'EOF'
 fn h() {
 	nop
 }
@@ -2464,16 +2362,6 @@ expect "$ZERG" render-a-list-of-ints E4011 <<'EOF'
 fn main() {
 	xs: list[int] = [65, 66, 67]
 	print(f"{xs}")
-}
-EOF
-
-# `print` has no two-argument form, so `print(a, b)` builds a TUPLE and prints that. A
-# composite has no rendering — the structural one is `Display`'s job and this compiler
-# generates none — and the cast reached cc as "operand of type 'zg_tup_...' where
-# arithmetic or pointer type is required". The mutation fuzzer is what found it.
-expect "$ZERG" print-a-tuple E9059 <<'EOF'
-fn main() {
-	print(1, 2)
 }
 EOF
 

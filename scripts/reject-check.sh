@@ -7535,18 +7535,6 @@ fn main() {
 }
 EOF
 
-reject render-an-enum-as-text E9085 <<'EOF'
-enum Color {
-	Red
-	Green
-}
-
-fn main() {
-	c := Color.Red
-	print str(c)
-}
-EOF
-
 reject index-something-that-is-neither-a-list-nor-a-map E4061 <<'EOF'
 fn main() {
 	x := 1

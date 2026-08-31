@@ -149,8 +149,11 @@ msg := match ev {
 值，如此而已；它對 existential 唯一允許的，是布林的 **`is`** 測試（見 [Spec 與 Generics](../core/specs.zh-TW.md)），用作**條件**、絕不作為交回
 具體值的綁定。一個 **product pattern** 能**依欄位**解構一個 `struct`（`Div{q, r}`）、或**依位置**解構一個 tuple（`(a, b)`），每一
 部分以 copy 綁定；它在 `match` arm 與普通的 `:=` 綁定（`(q, r) := divmod(x, y)`，也就是多重回傳被消費的方式）都可用；
-product pattern 是 **[not yet]**:用 `.0` / `.1` 與欄位存取來解構。它的四種樣子各自被自己的名字拒絕——綁定位置是
-`E9021` 與 `E9008`、arm 裡是 `E9016` 與 `E9026`——所以 tuple 與 struct 在訊息裡分得開,而不是共用一句。**guard 條件**可用:一個 arm 可在 pattern 之後帶一個
+**tuple pattern 在 `match` arm 裡已經建好了**,而且會巢狀:元素本身就是 pattern,所以 `((a, b), c)` 與
+`((1, b), c)` 都是 arm,而元素全部都是綁定的 pattern 就是一個 **catch-all**——不必寫 `_`。它的元數是型別的事實,
+也照事實檢查——_E4082 a tuple pattern names 3 element(s) and a (int, int) has 2_、
+_E4083 a tuple pattern matches a tuple_。另外三種樣子是 **[not yet]**,各自被自己的名字拒絕——綁定位置是
+`E9021` 與 `E9008`、arm 裡的 struct 是 `E9026`——所以它們在訊息裡分得開,而不是共用一句。**guard 條件**可用:一個 arm 可在 pattern 之後帶一個
 **`if expr`**（`Left(v) if v > 0`），它也必須成立該 arm 才觸發；guard 看得到 pattern 的**綁定**，而在 `A | B if c`
 上（待 or-pattern 落地——見上）涵蓋**整個 or-pattern**。帶 guard 的 arm **不**計入 exhaustiveness，所以帶 guard 的
 case 仍需要一個無 guard 的 arm 或 `_`。一個 **range arm**（`200..300 =>`、`400..=499 =>`、`500.. =>`）是 match 專屬的

@@ -396,6 +396,8 @@ shipping compiler rather than a part of it (the line
 | `E4079` | a map key of type float — a float has no equality a hash can agree with                               |
 | `E4080` | the default on field `…` reads a field that is not an earlier one                                     |
 | `E4081` | `…` MUTATES its list, and a slice, a call result or a literal is a value                              |
+| `E4082` | a tuple pattern names … element(s) and a … has …                                                      |
+| `E4083` | a tuple pattern matches a tuple                                                                       |
 | `E5001` | this entry file declares no `fn main`                                                                 |
 | `E5002` | cannot resolve import `…`, and where it was looked for                                                |
 | `E5007` | `…` is a module this build compiles and this module did not import                                    |
@@ -423,7 +425,6 @@ shipping compiler rather than a part of it (the line
 | `E9013` | an f-string '!r' / '!s' / '!a' conversion                                                             |
 | `E9014` | the f-string '{expr=}' self-documenting form                                                          |
 | `E9015` | an associated type binding `type … = …` in an `impl`                                                  |
-| `E9016` | a tuple pattern in a `match` arm                                                                      |
 | `E9017` | an array type `[T; N]`                                                                                |
 | `E9018` | an `as` binding in a `match` arm                                                                      |
 | `E9019` | an interpolating command literal                                                                      |
@@ -624,6 +625,7 @@ name now is the prelude rule (`E2061`), which is about the name rather than abou
 | `E9082` | `E4077` | reachable only when the two files are literally one module         |
 | `E9098` | `E4078` | everything call-shaped left earlier                                |
 | `E9007` | `E2077` | the three item forms all have arms; a statement is none            |
+| `E9016` | —       | the tuple pattern is built                                         |
 | `E9081` | —       | a public name takes the module tag a private one already had (#92) |
 | `E3047` | —       | a strong typedef takes its underlying type's prefix operators      |
 

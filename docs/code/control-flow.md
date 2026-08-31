@@ -187,9 +187,12 @@ allows on an existential is the boolean **`is`** test ([Specs & Generics](../cor
 as a binding that hands the concrete value back. A **product pattern** destructures
 a `struct` **by field** (`Div{q, r}`) or a tuple **positionally** (`(a, b)`), binding each part by copy;
 it works both in a `match` arm and at a plain `:=` binding (`(q, r) := divmod(x, y)`) — the way a multiple
-return is consumed. The product pattern is **[not yet]**: destructure with `.0` / `.1` and field access.
-Each of its four shapes is refused by its own name — `E9021` and `E9008` at a binding, `E9016` and `E9026` in
-an arm — so the tuple and the struct are told apart in the message rather than sharing one.
+return is consumed. **The tuple pattern is built in a `match` arm**, and it nests: an element is a pattern,
+so `((a, b), c)` and `((1, b), c)` are both arms, and a pattern whose elements all bind is a **catch-all**
+without saying `_`. Its arity is a fact about the type and is checked as one — _E4082 a tuple pattern names
+3 element(s) and a (int, int) has 2_, _E4083 a tuple pattern matches a tuple_. The other three shapes are
+**[not yet]** and each is refused by its own name — `E9021` and `E9008` at a binding, `E9026` for the struct
+in an arm — so they are told apart in the message rather than sharing one.
 **Guard conditions** work — an
 arm may carry an **`if expr`** after its pattern (`Left(v) if v > 0`) that must also hold for the arm to
 fire; the guard sees the pattern's **bindings**, and on `A | B if c` (once or-patterns land — see above)

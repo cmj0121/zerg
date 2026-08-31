@@ -372,6 +372,8 @@ seed 全程維持句子比對:代碼是語言的契約,而 seed 是建置正式�
 | `E4079` | float 當 map key — float 沒有 hash 能同意的相等                                                       |
 | `E4080` | 欄位 `…` 的預設值讀了一個不是「更早」的欄位                                                           |
 | `E4081` | `…` 會改動它的 list,而 slice、呼叫結果或字面量都是值                                                  |
+| `E4082` | tuple pattern 指名了 … 個元素,而 … 有 … 個                                                            |
+| `E4083` | tuple pattern 匹配的是 tuple                                                                          |
 | `E5001` | 這個進入點檔案沒有宣告 `fn main`                                                                      |
 | `E5002` | 無法解析 import `…`,以及它到哪裡找過                                                                  |
 | `E5007` | `…` 是這次建置編進來、而本 module 沒有 import 的 module                                               |
@@ -399,7 +401,6 @@ seed 全程維持句子比對:代碼是語言的契約,而 seed 是建置正式�
 | `E9013` | f-string 的 '!r' / '!s' / '!a' 轉換                                                                   |
 | `E9014` | f-string 的 '{expr=}' 自述形式                                                                        |
 | `E9015` | `impl` 裡的 associated type 綁定 `type … = …`                                                         |
-| `E9016` | `match` arm 裡的 tuple pattern                                                                        |
 | `E9017` | 陣列型別 `[T; N]`                                                                                     |
 | `E9018` | `match` arm 裡的 `as` 綁定                                                                            |
 | `E9019` | 會內插的 command literal                                                                              |
@@ -582,6 +583,7 @@ arm、同樣的形狀、同樣的兩個問題——而只有 map 那邊被問了
 | `E9082` | `E4077` | 只有在兩個檔案字面上就是同一個 module 時才到得了 |
 | `E9098` | `E4078` | 所有呼叫形狀的東西都更早離開了                   |
 | `E9007` | `E2077` | 三種項目形式都有分支;statement 不是其中任何一種  |
+| `E9016` | —       | tuple pattern 已經建好了                         |
 | `E9081` | —       | 公開名字拿到私有名字早就有的 module tag（#92）   |
 | `E3047` | —       | 強 typedef 承接底層型別的前綴運算子              |
 

@@ -424,7 +424,6 @@ pub enum Rule {
 	NotYetFStringSelfDoc = 9014
 	NotYetImplAssocType = 9015
 	NotYetArrayType = 9017
-	NotYetAsPattern = 9018
 	NotYetCommandInterpolating = 9019
 	NotYetCommandLiteral = 9020
 	NotYetDestructuringBinding = 9021

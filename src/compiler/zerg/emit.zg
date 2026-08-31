@@ -4490,6 +4490,14 @@ fn c_pat_env(mut &em: Emitter, pt: ast.Pat, st: ast.Ty) {
 		return
 	}
 
+	# an `as` name holds the WHOLE matched value, so it has the subject's own type — and the
+	# pattern under it is registered too, over the same type, because it is still destructuring
+	if c_pat_is_as(pt) {
+		c_add_var(em, c_pat_as_name(pt), st, false, false)
+		c_pat_env(em, c_pat_as_inner(pt), st)
+		return
+	}
+
 	# AN OR-PATTERN'S SIDES MUST BIND THE SAME NAMES. The arm's body is one body, so a name only
 	# one side supplies is a name that is sometimes there — and `docs/code/control-flow.md` says
 	# as much: the binding form is `A(x) | B(x)`, whose alternatives bind the same names at the
@@ -9569,6 +9577,11 @@ fn c_pat_subst(mut &em: Emitter, pt: ast.Pat, s: str, st: ast.Ty, sb: Subst) -> 
 	bn := c_pat_bind_name(pt)
 	return c_extend(sb, bn, s) if bn != ""
 
+	# `pattern as name` BINDS THE WHOLE and keeps destructuring: the name reads the subject
+	# itself, and the pattern inside it binds through the same accessor. Both, in that order,
+	# because the inner one may bind a name of its own and neither shadows the other.
+	return c_pat_subst(em, c_pat_as_inner(pt), s, st, c_extend(sb, c_pat_as_name(pt), s)) if c_pat_is_as(pt)
+
 	# AN OR-PATTERN'S BINDING IS WHICHEVER SIDE MATCHED, and a substitution is TEXT, so it is
 	# written as the choice it is: `x` becomes `(condA ? accA : accB)`. Both sides bind the same
 	# names — the rule in the first walk says so — and each side's accessor is what that side
@@ -9730,6 +9743,9 @@ fn c_pat_list_cond(mut &em: Emitter, pt: ast.Pat, s: str, st: ast.Ty, sb: Subst)
 }
 
 fn c_pat_cond(mut &em: Emitter, pt: ast.Pat, s: str, st: ast.Ty, sb: Subst) -> str {
+	# an `as` TESTS NOTHING of its own — it names what the pattern under it matched
+	return c_pat_cond(em, c_pat_as_inner(pt), s, st, sb) if c_pat_is_as(pt)
+
 	return c_pat_list_cond(em, pt, s, st, sb) if c_pat_is_list(pt)
 
 	# AN OR-PATTERN IS THE OR OF ITS ALTERNATIVES, which is the whole of its lowering — the
@@ -9853,6 +9869,27 @@ fn c_pats_cover_ctor(ps: list[ast.Pat], ctor: str) -> bool {
 		return true if c_pat_covers_ctor(pt, ctor)
 	}
 	return false
+}
+
+fn c_pat_is_as(pt: ast.Pat) -> bool {
+	return match pt {
+		Pat.PAs(_, _) => true
+		_             => false
+	}
+}
+
+fn c_pat_as_name(pt: ast.Pat) -> str {
+	return match pt {
+		Pat.PAs(_, n) => n
+		_             => ""
+	}
+}
+
+fn c_pat_as_inner(pt: ast.Pat) -> ast.Pat {
+	return match pt {
+		Pat.PAs(inner, _) => inner
+		_ => pt
+	}
 }
 
 fn c_pat_is_or(pt: ast.Pat) -> bool {

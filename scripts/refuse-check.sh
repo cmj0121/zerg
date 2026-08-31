@@ -2309,10 +2309,10 @@ fn deep[T](x: T, n: int) {
 fn main() { deep(1, 3) }
 EOF
 
-expect "$ZERG" spec-member-with-a-body E9002 <<'EOF'
+expect "$ZERG" spec-default-reads-a-field E3138 <<'EOF'
 spec Show {
 	fn show() -> int {
-		return 1
+		return this.n
 	}
 }
 

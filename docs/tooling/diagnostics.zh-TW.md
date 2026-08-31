@@ -407,7 +407,6 @@ seed 全程維持句子比對:代碼是語言的契約,而 seed 是建置正式�
 | `E9014` | f-string 的 '{expr=}' 自述形式                                                                        |
 | `E9015` | `impl` 裡的 associated type 綁定 `type … = …`                                                         |
 | `E9017` | 陣列型別 `[T; N]`                                                                                     |
-| `E9018` | `match` arm 裡的 `as` 綁定                                                                            |
 | `E9019` | 會內插的 command literal                                                                              |
 | `E9020` | command literal                                                                                       |
 | `E9021` | 解構綁定 `(a, b) := …`                                                                                |
@@ -590,6 +589,7 @@ arm、同樣的形狀、同樣的兩個問題——而只有 map 那邊被問了
 | `E9023` | —       | list pattern 已經建好了,具名的 rest 是 E9110     |
 | `E9026` | —       | struct pattern 已經建好了                        |
 | `E9024` | —       | or-pattern 已經建好了                            |
+| `E9018` | —       | `as` 綁定已經建好了                              |
 | `E9081` | —       | 公開名字拿到私有名字早就有的 module tag（#92）   |
 | `E3047` | —       | 強 typedef 承接底層型別的前綴運算子              |
 

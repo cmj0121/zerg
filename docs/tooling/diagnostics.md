@@ -431,7 +431,6 @@ shipping compiler rather than a part of it (the line
 | `E9014` | the f-string '{expr=}' self-documenting form                                                          |
 | `E9015` | an associated type binding `type … = …` in an `impl`                                                  |
 | `E9017` | an array type `[T; N]`                                                                                |
-| `E9018` | an `as` binding in a `match` arm                                                                      |
 | `E9019` | an interpolating command literal                                                                      |
 | `E9020` | a command literal                                                                                     |
 | `E9021` | a destructuring binding `(a, b) := …`                                                                 |
@@ -632,6 +631,7 @@ name now is the prelude rule (`E2061`), which is about the name rather than abou
 | `E9023` | —       | the list pattern is built; a NAMED rest is E9110                   |
 | `E9026` | —       | the struct pattern is built                                        |
 | `E9024` | —       | the or-pattern is built                                            |
+| `E9018` | —       | the `as` binding is built                                          |
 | `E9081` | —       | a public name takes the module tag a private one already had (#92) |
 | `E3047` | —       | a strong typedef takes its underlying type's prefix operators      |
 

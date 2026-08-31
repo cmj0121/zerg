@@ -2137,16 +2137,13 @@ fn main() {
 }
 EOF
 
-expect "$ZERG" as-binding-in-an-arm E9018 <<'EOF'
-enum E {
-	A(int)
-	B
-}
-
+# THE `as` BINDING IS BUILT, and this is where GRAMMAR does NOT put it: `sub-pattern` attaches
+# `as` to a `pattern-core`, and `match-arm` makes a range arm the SIBLING of a pattern rather
+# than one of its forms — so `1..=9 as n` is derived by nothing.
+expect "$ZERG" an-as-binding-on-a-range-arm E2004 <<'EOF'
 fn main() {
-	e := E.A(5)
-	print match e {
-		E.A(n) as whole => n
+	print match 5 {
+		1..=9 as n => n
 		_ => 0
 	}
 }

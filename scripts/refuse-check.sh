@@ -959,6 +959,25 @@ EOF
 
 # THE `is` FAMILY. The case above tests a primitive; docs name a STRUCT and the two error
 # kinds that are not in the taxonomy, and each is a different sentence out of the same rule.
+# A TUPLE PATTERN'S ARITY IS A FACT ABOUT THE TYPE, so it is checked rather than left to cc.
+# Both of these used to be an IndexError out of the compiler itself — the walk that registers an
+# arm's bindings indexed a type list that was not there.
+expect "$ZERG" a-tuple-pattern-of-the-wrong-arity E4082 <<'EOF'
+fn main() {
+	print match (1, 2) {
+		(a, b, c) => a
+	}
+}
+EOF
+
+expect "$ZERG" a-tuple-pattern-on-something-else E4083 <<'EOF'
+fn main() {
+	print match 1 {
+		(a, b) => a
+	}
+}
+EOF
+
 # A LIST PATTERN TAKES ONE `..`. With two, no element has a position: the ones after the first
 # are counted from the front and the ones before the second from the back, and nothing decides
 # where the middle belongs. The list pattern itself is still unbuilt (E9023); this is the shape
@@ -1859,7 +1878,11 @@ fn main() {
 }
 EOF
 
-expect "$ZERG" tuple-pattern-in-an-arm E9016 <<'EOF'
+# THE TUPLE PATTERN IS BUILT, and this is what its being a CATCH-ALL means: a pattern whose
+# elements all bind covers every tuple there is, so an arm after it is unreachable and E4032
+# says so. The working program moved to the codegen corpus; what is left refused is the
+# consequence, which is the half a reader is more likely to meet by accident.
+expect "$ZERG" an-arm-after-a-tuple-catch-all E4032 <<'EOF'
 fn main() {
 	t := (1, 2)
 	print match t {

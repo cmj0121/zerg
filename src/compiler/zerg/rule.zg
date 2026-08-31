@@ -354,6 +354,8 @@ pub enum Rule {
 	NamespaceCollision = 4077
 	DefaultReadsUnbuiltField = 4080
 	MapKeyHasNoHash = 4079
+	TuplePatternArity = 4082
+	TuplePatternNotATuple = 4083
 	MutateAValueNotAPlace = 4081
 
 	# building — the program as a set of files, which no single file's text answers: imports resolved
@@ -416,7 +418,6 @@ pub enum Rule {
 	NotYetFStringConversion = 9013
 	NotYetFStringSelfDoc = 9014
 	NotYetImplAssocType = 9015
-	NotYetTuplePattern = 9016
 	NotYetArrayType = 9017
 	NotYetAsPattern = 9018
 	NotYetCommandInterpolating = 9019

@@ -978,6 +978,10 @@ const char *zrt_display_uint(uint64_t v);
 const char *zrt_display_float(double v);
 const char *zrt_display_bool(bool v);
 
+/* zrt_debug_str is a `str` as it reads INSIDE a composite: quoted and escaped, so that two
+ * lists whose elements differ only by a separator do not render the same way. */
+const char *zrt_debug_str(const char *s);
+
 /* zrt_fmt_* render a value under a `:spec` (the f-string `{x:spec}` hole). Numbers
  * read sign / base (d/b/o/x/X/c) / '#' prefix / zero-pad / width / (float) precision;
  * a string reads width / align / precision (truncation). */

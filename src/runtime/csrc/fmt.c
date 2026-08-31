@@ -132,6 +132,46 @@ const char *zrt_display_bool(bool v) {
 	return (const char *)zrt_ref_payload(v ? (void *)&t : (void *)&f);
 }
 
+/* zrt_debug_str is a `str` as it reads INSIDE a composite: quoted, with the escapes that
+ * make the text unambiguous. `["a, b"]` and `["a", "b"]` are two different lists, and a
+ * rendering that dropped the quotes would spell them the same way.
+ *
+ * The escape set is the one the LEXER reads back (docs/surface/grammar.md): a quote, a
+ * backslash, and the three whitespace escapes. Everything else goes through as it is —
+ * including every byte of a UTF-8 sequence, which is text and not a control character. */
+const char *zrt_debug_str(const char *s) {
+	if (s == NULL) {
+		return dup_n("\"\"", 2);
+	}
+
+	size_t n = strlen(s);
+	size_t need = 2;
+	for (size_t i = 0; i < n; i++) {
+		char c = s[i];
+		need += (c == '"' || c == '\\' || c == '\n' || c == '\t' || c == '\r') ? 2 : 1;
+	}
+
+	/* WRITTEN STRAIGHT INTO THE CELL, in one pass over a length already counted: a
+	 * scratch buffer would be a second allocation and a second copy of the same bytes. */
+	char  *out = str_alloc(need + 1);
+	size_t j = 0;
+	out[j++] = '"';
+	for (size_t i = 0; i < n; i++) {
+		char c = s[i];
+		switch (c) {
+		case '"': out[j++] = '\\'; out[j++] = '"'; break;
+		case '\\': out[j++] = '\\'; out[j++] = '\\'; break;
+		case '\n': out[j++] = '\\'; out[j++] = 'n'; break;
+		case '\t': out[j++] = '\\'; out[j++] = 't'; break;
+		case '\r': out[j++] = '\\'; out[j++] = 'r'; break;
+		default: out[j++] = c; break;
+		}
+	}
+	out[j++] = '"';
+	out[j] = '\0';
+	return out;
+}
+
 /* --- spec parsing ----------------------------------------------------------- */
 
 /* The bounds. A width is a field a caller is asking to be allocated, and a precision is

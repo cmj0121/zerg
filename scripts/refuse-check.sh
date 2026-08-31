@@ -672,7 +672,11 @@ enum E[T] {
 fn main() { print 1 }
 EOF
 
-expect "$ZERG" associated-value-binding E9006 <<'EOF'
+# THE ASSOCIATED VALUE IS BUILT, and this is the reading it makes possible to get wrong: a type
+# is not a value, so `B.NOPE` is a name an `impl B` never declared. Before it, the type name
+# lowered AS a value and `zg_B.zg_NOPE` reached cc as `expected ')'` — an escape the standing
+# contract has no room for, and one every struct in the language could reach.
+expect "$ZERG" a-struct-qualified-name-that-is-not-one E4089 <<'EOF'
 struct B {
 	pub n: int
 }
@@ -681,7 +685,7 @@ impl B {
 	LIMIT := 5
 }
 
-fn main() { print 1 }
+fn main() { print B.NOPE }
 EOF
 
 # ONE NUMBER, TWO QUESTIONS (#87). `#[repr]`, `#[packed]` and `#[align]` are RESERVED on

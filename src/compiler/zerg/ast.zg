@@ -75,6 +75,16 @@ pub enum Ty {
 	# nothing, so forcing an absent one raises a message of its own.
 	TOpt(Ty)
 	TErr
+
+	# TRef is `mut &T`, and it is a TYPE rather than a marker on a declaration:
+	# GRAMMAR#param-type derives `( 'mut' '&' )? type`, so `fn(mut &int)` and `fn(int)` are
+	# two different function types and a value of one is not a value of the other.
+	#
+	# IT IS ONLY EVER A PARAMETER'S TYPE. A `mut &` is the caller's own storage lent for the
+	# duration of one call, so there is nothing for it to be the type OF anywhere else — not
+	# a binding, not a field, not a return. The parser builds it in the one position that
+	# derives it, which is what keeps that true without a rule saying so.
+	TRef(Ty)
 }
 
 # Expr is an expression node.
@@ -1452,12 +1462,23 @@ pub fn ty_eq(a: Ty, b: Ty) -> bool {
 		Ty.TChan(ae, ad)   => ty_eq_chan(ae, ad, b)
 		Ty.TEither(al, ar) => ty_eq_either(al, ar, b)
 		Ty.TFn(aps, ar)    => ty_eq_fn(aps, ar, b)
+		Ty.TRef(ae)        => ty_eq_ref(ae, b)
 		Ty.TTuple(aes)     => ty_eq_tuple(aes, b)
 		Ty.TUnknown        => false
 
 		# every remaining variant is a scalar with a spelling of its own, so the name IS
 		# the identity there — the one place the shortcut this function replaces was right
 		_ => ty_name(a) == ty_name(b)
+	}
+}
+
+# A `mut &T` IS EQUAL TO NOTHING BUT A `mut &` OF THE SAME TYPE, which is the whole reason
+# it is a type: `fn(mut &int)` and `fn(int)` differ in what the caller hands over, so a value
+# of one standing in for the other would be a pointer read as an integer.
+fn ty_eq_ref(ae: Ty, b: Ty) -> bool {
+	return match b {
+		Ty.TRef(be) => ty_eq(ae, be)
+		_           => false
 	}
 }
 
@@ -1552,6 +1573,7 @@ pub fn ty_name(t: Ty) -> str {
 		Ty.TChan(e, dir) => chan_ty_name(e, dir)
 		Ty.TEither(l, r) => either_name(l, r)
 		Ty.TOpt(e)       => f"{ty_name(e)}?"
+		Ty.TRef(e)       => f"mut &{ty_name(e)}"
 		Ty.TErr          => "Err"
 		Ty.TMap(k, v)    => f"map[{ty_name(k)}, {ty_name(v)}]"
 

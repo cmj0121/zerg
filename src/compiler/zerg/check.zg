@@ -1369,6 +1369,11 @@ fn chk_arg_says(key: str, pos: int) -> str {
 # It is the plain name of the slot, with no clause about what is wrong with it, so a borrow
 # rule and a fit rule can each finish the sentence their own way.
 pub fn chk_slot_says(key: str, pos: int) -> str {
+	# A CALL THROUGH A VALUE HAS NO NAME, and an empty key is how it says so. Backticks are
+	# for something the reader wrote, so quoting a phrase this compiler made up — "argument 1
+	# of `this call`" — points at a name no program contains.
+	return f"argument {strconv.to_string(pos, 10)} of this call" if key == ""
+
 	return f"argument {strconv.to_string(pos, 10)} of `{chk_call_name(key)}`"
 }
 

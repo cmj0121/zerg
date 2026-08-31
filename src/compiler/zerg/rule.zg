@@ -435,7 +435,6 @@ pub enum Rule {
 	NotYetIfExprBindingHead = 9032
 	NotYetAsm = 9033
 	NotYetClosureParamDefault = 9034
-	NotYetFnTypeMutRefParam = 9035
 	NotYetUnsafeSpecSignature = 9036
 	NotYetImplTypeParams = 9037
 	NotYetImplTypeArgument = 9038
@@ -462,7 +461,6 @@ pub enum Rule {
 	NotYetInOverType = 9062
 	NotYetFixedWidthLadder = 9063
 	NotYetSetBuiltin = 9064
-	NotYetFnValueMutRef = 9065
 	NotYetDelChannel = 9066
 	NotYetGenericConstructor = 9067
 	NotYetNilPattern = 9068

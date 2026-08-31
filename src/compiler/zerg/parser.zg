@@ -673,12 +673,9 @@ fn parse_param_types(mut &p: Parser) -> list[ast.Ty] {
 	expect(p, token.Kind.LParen)
 	mut out: list[ast.Ty] = []
 	for not p_at(p, token.Kind.RParen) and not p_at(p, token.Kind.Eof) {
-		# The prefix is READ, and the type behind it read too, before anything is refused: a
-		# sentence made at the `&` names a bracket, and a sentence made here names the type
-		# the marker is on. `mut` with no `&` is not a param-type at all — the same rule
-		# GRAMMAR#param states for a declaration — so expect answers for it.
+		# `mut` WITH NO `&` IS NOT A PARAM-TYPE AT ALL — the same rule GRAMMAR#param states for
+		# a declaration — so expect answers for it, and names the bracket that is missing.
 		mut is_ref := false
-		mt := cur(p)
 		if p_at(p, token.Kind.Mut) {
 			p_advance(p)
 			expect(p, token.Kind.Amp)
@@ -686,14 +683,16 @@ fn parse_param_types(mut &p: Parser) -> list[ast.Ty] {
 		}
 		t := parse_type(p)
 
-		# `mut &` in a type is real in the LANGUAGE: it is part of the type, so `fn(mut &int)`
-		# and `fn(int)` are distinct (docs/code/functions.md). It is refused here because the
-		# value side of it is refused downstream anyway — a held function is a bare pointer in
-		# this compiler and the call site reads its convention from the callee's NAME (E9065) —
-		# so accepting the spelling would only mean a type nothing can ever hold.
-		raise p_diag_at(p, mt.line, mt.col, rule.Rule.NotYetFnTypeMutRefParam, f"NotImplemented: a `mut &` parameter in a function type — GRAMMAR#param-type derives `( 'mut' '&' )? type`, and `mut &` is part of the type, so `fn(mut &{ast.ty_name(t)})` is a distinct type from `fn({ast.ty_name(t)})`. A function VALUE is a bare pointer here and the call site reads a `mut &` from the callee's NAME, which a value has not got, so the type is refused rather than spelled and never honoured") if is_ref
-
-		out.append(t)
+		# `mut &` IS PART OF THE TYPE (GRAMMAR#param-type, docs/code/functions.md): `fn(mut &int)`
+		# and `fn(int)` are two types, because they differ in what the caller hands over. So the
+		# marker is built INTO the type rather than kept beside it — which is also what lets a
+		# call through a value read the convention from the type it is calling, having no name
+		# to read it from.
+		if is_ref {
+			out.append(ast.Ty.TRef(t))
+		} else {
+			out.append(t)
+		}
 		p_list_sep(p, token.Kind.RParen, ")", "a parameter type list")
 	}
 	expect(p, token.Kind.RParen)

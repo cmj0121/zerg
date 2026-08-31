@@ -646,17 +646,21 @@ fn c_sub_active(mut &em: Emitter, sb: Subst) -> Subst {
 # c_type maps a value type to its C spelling.
 fn c_type(t: ast.Ty) -> str {
 	return match t {
-		Ty.TInt => "int64_t"
-		Ty.TFloat => "double"
-		Ty.TStr => "const char*"
-		Ty.TBool => "bool"
-		Ty.TVoid => "void"
-		Ty.TByte => "uint8_t"
-		Ty.TUint => "uint64_t"
-		Ty.TRune => "int32_t"
+		Ty.TInt       => "int64_t"
+		Ty.TFloat     => "double"
+		Ty.TStr       => "const char*"
+		Ty.TBool      => "bool"
+		Ty.TVoid      => "void"
+		Ty.TByte      => "uint8_t"
+		Ty.TUint      => "uint64_t"
+		Ty.TRune      => "int32_t"
 		Ty.TNamed(nm) => "zg_" + nm
-		Ty.TList(_) => "zrt_list"
-		Ty.TFn(_, _) => "zg_fnptr"
+		Ty.TList(_)   => "zrt_list"
+		Ty.TFn(_, _)  => "zg_fnptr"
+
+		# a `mut &T` is the caller's own storage lent for one call, which is a POINTER to it —
+		# the same C parameter a `mut &` on a declaration has always lowered to
+		Ty.TRef(e) => c_type(e) + "*"
 		Ty.TTuple(ts) => c_tuple_cname(ts)
 		Ty.TMap(_, _) => "zrt_map"
 		Ty.TChan(_, _) => "zrt_chan*"
@@ -9059,7 +9063,6 @@ fn c_ident_val(mut &em: Emitter, n: str, sb: Subst) -> str {
 	# only reached when nothing has bound the name, so a binding always wins — which is the
 	# ordinary scoping rule, and it means a local can shadow a function without surprise.
 	if c_is_free_fn(em, n) and not c_is_bound(em, n) {
-		c_no_ref_param_value(em, n)
 		c_chk_unsafe_fn(em, n, "naming it here would hand safe code the same call", c_sig_row_of(em, n))
 		em.used_fnptr = true
 		return f"((zg_fnptr){{(void (*)(void))zg_{c_fnval_thunk(em, n, c_fn_ty_of(em, n))}, NULL}})"
@@ -9177,7 +9180,14 @@ fn c_fn_ty_of(mut &em: Emitter, n: str) -> ast.Ty {
 	mut i := 0
 	for i < em.pr_fn.len() {
 		if em.pr_fn[i] == n {
-			ptys.append(em.pr_ty[i])
+			# THE MARKER RIDES IN THE TYPE. The table keeps `mut &` in a column of its own,
+			# because a declaration has a name to hang it on; a VALUE has not, so what the
+			# call site reads it from is the type — and that is what this builds.
+			if em.pr_ref[i] {
+				ptys.append(ast.Ty.TRef(em.pr_ty[i]))
+			} else {
+				ptys.append(em.pr_ty[i])
+			}
 		}
 		i = i + 1
 	}
@@ -9212,7 +9222,14 @@ fn c_args_typed(mut &em: Emitter, ftys: list[ast.Ty], args: list[ast.Expr], sb: 
 			out = out + ", "
 		}
 		mut val := ""
-		if i < ftys.len() {
+		if i < ftys.len() and c_ty_is_ref(ftys[i]) {
+			# A `mut &` SLOT IS THE CALLER'S OWN STORAGE, handed over to be written, so it is
+			# lowered like an assignment target rather than copied like every other argument.
+			# This is the same pair of steps `c_arg` takes for a call it has a name for; what
+			# differs is only where the convention was read from — the type, not the table.
+			check.chk_ref_arg(em, "", i + 1, args[i])
+			val = f"&({c_lvalue(em, args[i], sb)})"
+		} else if i < ftys.len() {
 			val = c_fit_copied(em, f"argument {strconv.to_string(i + 1, 10)} of this call", ftys[i], args[i], sb)
 		} else {
 			val = c_expr(em, args[i], sb)
@@ -9230,6 +9247,15 @@ fn c_args_typed(mut &em: Emitter, ftys: list[ast.Ty], args: list[ast.Expr], sb: 
 # field's type is wanted twice, for the cast and for the parameter list, and c_field_ty is a
 # scan of every field of every struct in the program; asking once is the whole reason this
 # is a function and not an arm of the match that calls it.
+# c_ty_is_ref answers whether a parameter slot is a `mut &` — the question a call through a
+# VALUE asks of the type, where a call by name asks the parameter table.
+pub fn c_ty_is_ref(t: ast.Ty) -> bool {
+	return match t {
+		Ty.TRef(_) => true
+		_          => false
+	}
+}
+
 fn c_fnfield_call(mut &em: Emitter, recv: str, meth: str, target: ast.Expr, args: list[ast.Expr], sb: Subst) -> str {
 	fty := c_field_ty(em, recv, meth)
 	tv := c_expr(em, target, sb)
@@ -12337,12 +12363,6 @@ fn c_lambda(mut &em: Emitter, ps: list[ast.Param], has_ret: bool, ret: ast.Ty, b
 		allps.append(pm)
 	}
 
-	for pm in ps {
-		if pm.is_ref {
-			c_no_ref_param(em, f"the parameter `{pm.name}` of a closure")
-		}
-	}
-
 	tag := strconv.to_string(em.lam_n, 10)
 	em.lam_n = em.lam_n + 1
 	name := "lambda__" + tag
@@ -12533,7 +12553,11 @@ fn c_fn_typed_at(want: ast.Ty, ps: list[ast.Param], has_ret: bool, ret: ast.Ty, 
 fn c_lambda_ty(ps: list[ast.Param], has_ret: bool, ret: ast.Ty) -> ast.Ty {
 	mut tys: list[ast.Ty] = []
 	for pm in ps {
-		tys.append(pm.ty)
+		if pm.is_ref {
+			tys.append(ast.Ty.TRef(pm.ty))
+		} else {
+			tys.append(pm.ty)
+		}
 	}
 	mut r := ast.Ty.TVoid
 	if has_ret {
@@ -12569,34 +12593,6 @@ pub fn c_name_in(names: list[str], name: str) -> bool {
 		return true if n == name
 	}
 	return false
-}
-
-# A `mut &` PARAMETER CANNOT SURVIVE THE TRIP THROUGH A FUNCTION VALUE. A held function is
-# one type here, `zg_fnptr`, cast back at the call from what the CALL SITE believes the
-# signature is — and what it believes comes from the parameter table, keyed by the callee's
-# NAME. A value has no name in that table, so `c_arg` found no row, skipped the borrow rules
-# and passed the argument by value into a C parameter declared `T*`. Both spellings
-# segfaulted: `f := fn(mut &a: int) { … }  f(x)` and `g := bump  g(x)`.
-#
-# It is not a lowering this compiler could quietly get right, either: `TFn` carries parameter
-# TYPES and no `mut &` flag, which is the same reason GRAMMAR's `param-type ::= ( 'mut' '&' )?
-# type` has no spelling here. So the function value is refused where it is MADE — at the
-# lambda, and at the name — rather than at a call that no longer knows what it is calling.
-fn c_no_ref_param(mut &em: Emitter, what: str) {
-	raise c_diag(em, rule.Rule.NotYetFnValueMutRef, f"NotImplemented: {what} is a `mut &`, and a function VALUE cannot carry one — a held function is a bare pointer here and the call site reads its signature from the callee's name, which a value has not got. Call it by name, or pass the value it should answer with")
-}
-
-# c_no_ref_param_value asks the same of a NAMED function about to become one. A lambda has
-# its parameters in hand; a name has only the table, so this is the same question as a scan
-# of it — and it names the parameter's POSITION, which is what the table keeps.
-fn c_no_ref_param_value(mut &em: Emitter, n: str) {
-	mut i := 0
-	for i < em.pr_fn.len() {
-		if em.pr_fn[i] == n and em.pr_ref[i] {
-			c_no_ref_param(em, f"parameter {strconv.to_string(em.pr_idx[i] + 1, 10)} of `{n}`")
-		}
-		i = i + 1
-	}
 }
 
 # --- defer ----------------------------------------------------------------------

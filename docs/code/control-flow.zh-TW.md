@@ -120,7 +120,9 @@ _E2073 `print` is a statement, and an expression is wanted here_(arm 裡的 `ret
 （`[a, b]`、`[a, ..]`、`[a, .., z]`）、以及一個 **range** arm（`1..=2 =>`，以 containment 比對）都會觸發。
 list 先以**長度**比對——指名每個元素的 pattern 用 `==`，帶 `..` 的用 `>=`——而 `..` 的位置決定其餘：在它之前的
 元素在自己的索引上，在它之後的則是距**尾端**那麼遠。只有 `[..]` 是 catch-all。一個 **or-pattern**（`A | B =>`，
-以及各分支綁同名同型的綁定形式 `A(x) | B(x) =>`）是 **[not yet]**：`GRAMMAR` 導得出它。
+以及綁定形式 `A(x) | B(x) =>`）也會觸發：它的降階是兩側條件的 **or**，而讓它成為一種形式的規則是**兩側綁同樣的
+名字**——arm 的 body 只有一個，所以只有一側供應的名字是一個「有時候才在」的名字（_E4088_）。有綁定時，那個名字
+讀的是**當時匹配的那一側**；而只要有一側涵蓋一切，整個就涵蓋一切：`_ | A` 就是多寫了幾個字的 `_`。
 
 **`str` literal** 的 arm 比的是**文字**,走的是 expression 的 `==` 所用的同一個 `strcmp`。它曾被降階成**指標**
 比較,所以 `match s { "y" => 1  _ => -1 }` 在 `s == "y"` 時回答 `-1`——而且無聲,因為結尾的 `_` 吸收掉每一次落空,
@@ -131,9 +133,6 @@ list 先以**長度**比對——指名每個元素的 pattern 用 `==`，帶 `.
 >
 > - **nested pattern**——`Left(Some(v))`，還有 `L(0)`——是 _E9076 NotImplemented: a sub-pattern inside a variant
 >   payload_,所以 payload 位置只收一個綁定名字或 `_`,每個 pattern 都只有一層深;
-> - **or-pattern** 是 _E9024 NotImplemented: an or-pattern_——否則那裡的 `|` 會被讀成位元運算子,把 `1 | 2 =>`
->   折成 `3 =>`、兩側都不中,那正是編譯器最不該給的靜默錯答案。`zerg fmt` 會改寫唯一有可用寫法的那個情況(連續整數
->   收成 range `1..=2`,規則 `F408`);
 > - **具名的 rest**——`[a, ..rest]`——是 _E9110 NotImplemented: a NAMED rest in a list pattern_。匿名的 `..`
 >   已經建好了；具名的那個會綁一個新的 list，而 `match` arm 是一個運算式、沒有地方放擁有它的暫存，所以每次
 >   使用那個名字都會再配置一份、而且一份都不釋放。

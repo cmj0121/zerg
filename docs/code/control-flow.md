@@ -151,8 +151,11 @@ pattern** (`[a, b]`, `[a, ..]`, `[a, .., z]`) and a **range** arm (`1..=2 =>`, w
 containment), all fire. A list is matched by **length first** — `==` for a pattern that names every
 element, `>=` for one carrying a `..` — and where the `..` sits decides the rest: an element before it is
 at its own index, one after it is that far from the **end**. Only `[..]` is a catch-all. An **or-pattern**
-(`A | B =>`, and the binding form `A(x) | B(x) =>` whose alternatives bind the same names at the same
-types) is **[not yet]**: `GRAMMAR` derives it and it is refused in the parser — _E9024_ (below).
+(`A | B =>`, and the binding form `A(x) | B(x) =>`) fires too: its lowering is the **or** of its sides'
+conditions, and the rule that makes it a form is that **both sides bind the same names** — the arm's body
+is one body, so a name only one side supplies is a name that is sometimes there (_E4088_). Where they do
+bind, the name reads through **whichever side matched**, and a side that covers everything makes the whole
+one cover it: `_ | A` is `_` with extra words.
 
 A **`str` literal** arm compares TEXT, through the same `strcmp` an expression's `==` uses. It lowered to
 a **pointer** comparison, so `match s { "y" => 1  _ => -1 }` answered `-1` for `s == "y"` — silently, since
@@ -163,10 +166,9 @@ the trailing `_` absorbs every miss and two equal literals may or may not share 
 >
 > - a **nested pattern** — `Left(Some(v))`, and `L(0)` too — is _E9076 NotImplemented: a sub-pattern inside a
 >   variant payload_, so a payload position takes a binding name or `_` and every pattern is one level deep;
-> - an **or-pattern** is _E9024 NotImplemented: an or-pattern_ — `|` there would otherwise read as the bitwise
->   operator, folding `1 | 2 =>` to `3 =>` and matching neither side, which is the silent wrong answer a
->   compiler must not give. `zerg fmt` rewrites the one case with a working spelling (consecutive integers
->   become the range `1..=2`, rule `F408`);
+> - a **NAMED rest** in a list pattern — `[a, ..rest]` — is _E9110_, and `[a, ..]` is not: a named one binds
+>   a fresh list, and a `match` arm is an expression with nowhere to keep it, so every use of the name would
+>   allocate another and release none;
 > - a **NAMED rest** — `[a, ..rest]` — is _E9110 NotImplemented: a NAMED rest in a list pattern_. The
 >   anonymous `..` is built; a named one binds a fresh list, and a `match` arm is an expression with
 >   nowhere to keep it, so every use of the name would allocate another and release none.

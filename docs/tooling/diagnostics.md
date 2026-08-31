@@ -402,6 +402,7 @@ shipping compiler rather than a part of it (the line
 | `E4085` | a struct pattern names `…` and the value is a …                                                       |
 | `E4086` | `…` has no field `…`                                                                                  |
 | `E4087` | a struct pattern names every field or ends in `..`                                                    |
+| `E4088` | the sides of an or-pattern bind the same names                                                        |
 | `E5001` | this entry file declares no `fn main`                                                                 |
 | `E5002` | cannot resolve import `…`, and where it was looked for                                                |
 | `E5007` | `…` is a module this build compiles and this module did not import                                    |
@@ -434,7 +435,6 @@ shipping compiler rather than a part of it (the line
 | `E9019` | an interpolating command literal                                                                      |
 | `E9020` | a command literal                                                                                     |
 | `E9021` | a destructuring binding `(a, b) := …`                                                                 |
-| `E9024` | an or-pattern                                                                                         |
 | `E9025` | `for mut v in …`                                                                                      |
 | `E9027` | a standalone `unsafe fn` declaration                                                                  |
 | `E9028` | an associated type projection `….…`                                                                   |
@@ -631,6 +631,7 @@ name now is the prelude rule (`E2061`), which is about the name rather than abou
 | `E9016` | —       | the tuple pattern is built                                         |
 | `E9023` | —       | the list pattern is built; a NAMED rest is E9110                   |
 | `E9026` | —       | the struct pattern is built                                        |
+| `E9024` | —       | the or-pattern is built                                            |
 | `E9081` | —       | a public name takes the module tag a private one already had (#92) |
 | `E3047` | —       | a strong typedef takes its underlying type's prefix operators      |
 

@@ -281,6 +281,7 @@ pub enum Rule {
 	# and scripts/method-gaps-check.sh is what holds it to the chapters. A per-chapter
 	# attribution here is a third copy, and both times it has been one it has drifted.
 	ListMethodUnknown = 3137
+	SpecDefaultReadsField = 3138
 
 	# emitting — a form this compiler will not lower
 	LoopKeywordOutsideLoop = 4001

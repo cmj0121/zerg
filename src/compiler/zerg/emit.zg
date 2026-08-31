@@ -16107,6 +16107,7 @@ fn c_emit_unit(prog0: ast.File, own0: ast.File, ms: Mods, whole: bool, want_lint
 	# and the specs, which need the same whole-program view for the same reason: an `impl`
 	# in one file names a spec declared in another, and the driver has already merged them
 	check.chk_spec_impls(em, f)
+	check.chk_spec_defaults(em, f)
 
 	# and the rendering overrides: c_render_override dispatches through a `display` /
 	# `debug` method only when its shape is the contract's, so the mis-shaped one must be

@@ -35,20 +35,36 @@ provided method 是**寫在 `this` 上其他 method 之上的 default body**，�
 不變式）。它讓一個 spec 只靠很小的 required 核心，就導出許多 method；實作者可以**繼承**、也可以**覆寫**
 其中一個。每個使用者 spec 都能帶這種 default——這就是**可擴充**的那一層。
 
-> **[not yet]** 帶 **body** 的 `spec` 成員在宣告處就被拒絕——_E9002 NotImplemented: a `spec` member with a
-> BODY_——所以下面這段宣告的是一個今天沒有程式載得動的介面。把簽章宣告出來、body 寫在每個 `impl` 裡;見
-> [Spec 與 Generics](specs.zh-TW.md)。
-
-```text
+```zerg
 spec Summable {
-    fn zero() -> This                       # required
-    fn add(other: This) -> This             # required
+ fn zero() -> This                       # required
+ fn add(other: This) -> This             # required
 
-    fn sum(items: list[This]) -> This {     # provided——只讀 method，不讀 field，也沒有 match
-        mut acc := This.zero()
-        for x in items { acc = acc.add(x) }
-        return acc
-    }
+ fn sum(items: list[This]) -> This {     # provided——只讀 method，不讀 field，也沒有 match
+  mut acc := this.zero()
+  for x in items {
+   acc = acc.add(x)
+  }
+  return acc
+ }
+}
+
+struct Cents {
+ pub v: int
+}
+
+impl Summable for Cents {
+ fn zero() -> Cents {
+  return Cents(0)
+ }
+
+ fn add(other: Cents) -> Cents {
+  return Cents(this.v + other.v)
+ }
+}
+
+fn main() {
+ print Cents(0).sum([Cents(1), Cents(2), Cents(3)]).v
 }
 ```
 

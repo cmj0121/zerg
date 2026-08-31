@@ -214,13 +214,10 @@ spec 的 method 分兩種：
   implementer **沿用**它、或以特化版**覆寫**（例如更快的 `contains`）；覆寫仍須維持慣常語意，且 `(型別, spec)` 的
   實作無論如何都保持 canonical。
 
-> **[not yet]** 一個帶 **body** 的 `spec` 成員會在**宣告處**被拒絕,而不只是在呼叫處:
-> _E9002 NotImplemented: a `spec` member with a BODY — a provided method's body is read and dropped here, so nothing in
-> it is checked and it is not the method that runs; declare the signature and write the body in each `impl`_。
-> 所以在這個編譯器裡,一個 `spec` 只有 required method,implementer 什麼都沒沿用到,而下面那套「免費得到一堆衍生
-> method」的經濟——`Iterator` 由 `next` 發放 `map` / `filter` / `count`——底下沒有任何機制。這道拒絕在形式被寫出來
-> 的那一點就指名了它,所以沒有任何程式走到 dispatch 這個問題。
->
+provided body 的 field-blind 是在**寫下它的 spec 上**被檢查的：在那裡讀 `this.n` 會拿到
+_E3138 `Greet.hello` reads `this.n`, and a spec is field-blind_。錯在 spec 而不在任何一個 implementer——這個 body
+對每個型別都是錯的，包含剛好帶著 `n` 的那個——所以它只被報一次，而且就算還沒有任何型別實作這個 spec 也會被報。
+
 > **[not yet]** 一個簽章可以是 **`unsafe`** 的——`GRAMMAR` 推導出 `fn-sig ::= 'unsafe'? 'mut'? 'fn' …`，所以
 > `spec` 裡的 `unsafe fn peek() -> int` 就是一個成員——而這個編譯器沒有建出它。它會被讀到簽章結束、然後被指名
 > 拒絕：_E9036 NotImplemented: the `unsafe` `spec` signature `peek`_，並帶上位置。理由與獨立的 `unsafe fn`
@@ -240,7 +237,7 @@ spec 的 method 分兩種：
 **dispatch 一致。** 每個 spec method，不論 required 或 provided，都解析到該型別的 **canonical impl**——有覆寫用
 覆寫、否則用 default。所以一個 default body 呼叫另一個 spec method 時，會叫到型別的覆寫（用 `next` 定義的 default
 `count`，會用被覆寫的 `next`）；**default 沒有靜態分派的例外**，而機制就是上面已經定義過的那一套。這對**直接在
-具體值上呼叫**也成立（**[not yet]**——provided method 在其宣告處就被拒絕,見上）:`c.provided()` 有覆寫就跑該型別
+具體值上呼叫**也成立:`c.provided()` 有覆寫就跑該型別
 的**覆寫**、否則跑 spec 的 **default body**——不需要裝箱,所以 provided method 並不侷限於動態分派那條路徑。
 
 ## Associated type 與 associated value

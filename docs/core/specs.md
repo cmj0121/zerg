@@ -280,14 +280,11 @@ A spec's methods come in two kinds:
   version (a faster `contains`, say); an override must still mean the conventional thing, and the
   `(type, spec)` implementation stays canonical either way.
 
-> **[not yet]** A `spec` member with a **body** is refused at the **declaration**, not merely at a call:
-> _E9002 NotImplemented: a `spec` member with a BODY — a provided method's body is read and dropped here, so
-> nothing in it is checked and it is not the method that runs; declare the signature and write the body in
-> each `impl`_. So a `spec` in this compiler has required methods only, an implementer inherits nothing, and
-> the free-derived-methods economy below — `Iterator` handing out `map` / `filter` / `count` from `next` — has
-> no mechanism under it. The refusal names the form at the point it is written, so no program reaches the
-> dispatch question at all.
->
+A provided body is held to field-blindness at the **spec**, where it is written: reading `this.n` there is
+_E3138 `Greet.hello` reads `this.n`, and a spec is field-blind_. The mistake is in the spec and not in any one
+implementer — the body is wrong for every type, including one that happens to carry an `n` — so it is reported
+once, and reported even when nothing implements the spec yet.
+
 > **[not yet]** A signature may be **`unsafe`** — `GRAMMAR` derives `fn-sig ::= 'unsafe'? 'mut'? 'fn' …`, so
 > `unsafe fn peek() -> int` inside a `spec` is a member — and this compiler does not build it. It is read to
 > the end of the signature and refused as itself: _E9036 NotImplemented: the `unsafe` `spec` signature `peek`_,
@@ -311,9 +308,9 @@ element type (`T` → `U`).
 implementation** — its override if it has one, else the default. So a default body that calls another spec
 method reaches the type's override (a defaulted `count` built on `next` uses an overridden `next`) — there is
 **no static-dispatch exception for defaults**, and the mechanism is the one already defined above. This holds
-for a **direct call on a concrete value** as well (**[not yet]** — a provided method is refused at its
-declaration, above, as _E9002_): `c.provided()` runs the type's **override** if it has one, else the spec's **default
-body** — with no boxing needed, so a provided method is not confined to the dynamic-dispatch path.
+for a **direct call on a concrete value** as well: `c.provided()` runs the type's **override** if it has
+one, else the spec's **default body** — with no boxing needed, so a provided method is not confined to the
+dynamic-dispatch path.
 
 ## Associated types and values
 

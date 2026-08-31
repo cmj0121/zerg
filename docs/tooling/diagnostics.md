@@ -324,6 +324,7 @@ shipping compiler rather than a part of it (the line
 | `E3135` | the field `…` on an Err — it has `msg` and `kind`                                                     |
 | `E3136` | `..=` with no upper bound is not a range                                                              |
 | `E3137` | the list method `…` — a list answers `len` and `append`, and is read with `xs[i]`                     |
+| `E3138` | `….…` reads `this.…`, and a spec is field-blind                                                       |
 | `E4001` | `…` outside of a loop: it belongs to a `for`, and a `select` arm is not one                           |
 | `E4002` | a `from` cause is an `Err`, and … is not one                                                          |
 | `E4004` | `…(…)` names one side of an `Either`, which holds exactly one value                                   |
@@ -418,7 +419,6 @@ shipping compiler rather than a part of it (the line
 | `E5016` | this unit emits more than `…` bytes of C — `$ZERG_EMIT_MAX`                                           |
 | `E5017` | an import reaches past a folder that declares a surface                                               |
 | `E9001` | a parameterized `…[…]` as …                                                                           |
-| `E9002` | a `spec` member with a BODY                                                                           |
 | `E9003` | a generic enum `…[…]`                                                                                 |
 | `E9004` | a generic struct `…[…]`                                                                               |
 | `E9005` | the decorator `#[…]`                                                                                  |
@@ -633,6 +633,7 @@ name now is the prelude rule (`E2061`), which is about the name rather than abou
 | `E9026` | —       | the struct pattern is built                                        |
 | `E9024` | —       | the or-pattern is built                                            |
 | `E9018` | —       | the `as` binding is built                                          |
+| `E9002` | —       | a `spec` member with a body is built; it is a provided default     |
 | `E9081` | —       | a public name takes the module tag a private one already had (#92) |
 | `E3047` | —       | a strong typedef takes its underlying type's prefix operators      |
 

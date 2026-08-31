@@ -39,20 +39,36 @@ invariant above). It lets a spec expose many methods from a small required core;
 **inherits** them or **overrides** one. Every user spec can carry these — this is the **extensible**
 tier.
 
-> **[not yet]** A `spec` member with a **body** is refused at the declaration — _E9002 NotImplemented: a
-> `spec` member with a BODY_ — so the block below declares an interface no program can carry today.
-> Declare the signature and write the body in each `impl`; see [Specs & Generics](specs.md).
-
-```text
+```zerg
 spec Summable {
-    fn zero() -> This                       # required
-    fn add(other: This) -> This             # required
+ fn zero() -> This                       # required
+ fn add(other: This) -> This             # required
 
-    fn sum(items: list[This]) -> This {     # provided — reads only methods, no fields, no match
-        mut acc := This.zero()
-        for x in items { acc = acc.add(x) }
-        return acc
-    }
+ fn sum(items: list[This]) -> This {     # provided — reads only methods, no fields, no match
+  mut acc := this.zero()
+  for x in items {
+   acc = acc.add(x)
+  }
+  return acc
+ }
+}
+
+struct Cents {
+ pub v: int
+}
+
+impl Summable for Cents {
+ fn zero() -> Cents {
+  return Cents(0)
+ }
+
+ fn add(other: Cents) -> Cents {
+  return Cents(this.v + other.v)
+ }
+}
+
+fn main() {
+ print Cents(0).sum([Cents(1), Cents(2), Cents(3)]).v
 }
 ```
 

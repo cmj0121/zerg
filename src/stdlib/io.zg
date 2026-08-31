@@ -129,3 +129,81 @@ pub fn write_file(path: str, data: list[byte]) {
 	__zrt_write_bytes(fd, data)
 	__zrt_close(fd)
 }
+
+# --- streams: Reader & Writer (docs/runtime/io.md) ---------------------------------------
+#
+# Each spec has ONE REQUIRED METHOD and the rest are provided defaults, so a new stream
+# supplies the primitive and inherits the conveniences. That is the shape the chapter
+# specifies, and it is what a spec's provided member is for.
+#
+# WHAT IS NOT HERE IS THE ITERATOR HALF. The chapter's `read() -> Iterator[str]`, `bytes()`
+# and `chunks(n)` are defaults over a protocol `for … in` does not walk yet, so they are not
+# written: a default that cannot be called is a promise, and the ones below are methods.
+
+# Reader is a source of bytes: one required leaf, and the whole-input reads over it.
+pub spec Reader {
+	fn read_bytes(n: uint) -> Result[list[byte]]
+
+	# read_all drains the stream to end of input. It is the whole-input read, over the
+	# required leaf, which is exactly what a provided default is for.
+	fn read_all() -> Result[list[byte]] {
+		mut out: list[byte] = []
+		for {
+			chunk := this.read_bytes(uint(4096))?
+			break if chunk.len() == 0
+
+			for b in chunk {
+				out.append(b)
+			}
+		}
+		return out
+	}
+
+	# read_text is read_all decoded, for a stream a reader knows is text. A stream that is
+	# not valid UTF-8 raises where the decode happens, which `guard` demotes.
+	fn read_text() -> Result[str] {
+		return str(this.read_all()?)
+	}
+}
+
+# Writer is a destination for bytes: one required leaf, and the str convenience over it.
+pub spec Writer {
+	fn write(bytes: list[byte]) -> Result[uint]
+
+	fn write_str(s: str) -> Result[uint] {
+		return this.write(bytearray(s))
+	}
+}
+
+# Fd is a raw file descriptor as a stream. It is the one concrete Reader and Writer this
+# phase has, and it is what a child process's three ends are.
+#
+# IT DOES NOT CLOSE ITSELF. The chapter's `File` is a `Ref[handle]` closed exactly once at
+# the last holder's scope exit, and that is the foreign-handle pattern this type is not: an
+# `Fd` is owned by whoever opened it — for a child's streams, the `Proc` that holds them.
+pub struct Fd {
+	pub fd: int
+}
+
+impl Reader for Fd {
+	fn read_bytes(n: uint) -> Result[list[byte]] {
+		return __zrt_read(this.fd)
+	}
+}
+
+impl Writer for Fd {
+	fn write(bytes: list[byte]) -> Result[uint] {
+		__zrt_write_bytes(this.fd, bytes)
+		return uint(bytes.len())
+	}
+}
+
+# release gives the descriptor back. It is a method on `Fd` and not on either spec, because
+# closing is not something every stream answers — a `Reader` may be a buffer — and it is not
+# spelled `close`, which is a reserved word (a channel's own closing).
+impl Fd {
+	# release gives the descriptor back to the OS. Whoever opened it owns it.
+	pub fn release() {
+		__zrt_close(this.fd)
+	}
+}

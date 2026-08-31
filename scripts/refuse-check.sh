@@ -980,7 +980,7 @@ EOF
 
 # A LIST PATTERN TAKES ONE `..`. With two, no element has a position: the ones after the first
 # are counted from the front and the ones before the second from the back, and nothing decides
-# where the middle belongs. The list pattern itself is still unbuilt (E9023); this is the shape
+# where the middle belongs. This is the shape that has no answer whatever the list pattern grows into,
 # that would have no answer even once it is.
 expect "$ZERG" a-list-pattern-with-two-rests E2078 <<'EOF'
 fn main() {
@@ -2394,12 +2394,23 @@ fn main() {
 }
 EOF
 
-expect "$ZERG" list-pattern E9023 <<'EOF'
+# THE LIST PATTERN IS BUILT, and the named rest is the half that is not: `..rest` binds a fresh
+# list, and a `match` arm is an expression with nowhere to declare the temporary that would own
+# it — so every use of the name would allocate another and release none.
+expect "$ZERG" a-named-rest-in-a-list-pattern E9110 <<'EOF'
 fn main() {
-	xs: list[int] = [1, 2, 3]
-	print match xs {
-		[a, ..] => a
-		_ => 0
+	print match [1, 2, 3] {
+		[a, ..rest] => a
+		[..] => 0
+	}
+}
+EOF
+
+expect "$ZERG" a-list-pattern-on-a-scalar E4084 <<'EOF'
+fn main() {
+	print match 1 {
+		[a] => a
+		[..] => 0
 	}
 }
 EOF

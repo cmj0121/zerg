@@ -4250,7 +4250,12 @@ fn parse_primary(mut &p: Parser) -> ast.Expr {
 	# so the parser saw a call with a stray token after it and said `expected `)`, found
 	# ``echo {n}```. GRAMMAR#fcmd-lit makes it a form of its own — one that runs through a shell
 	# and shell-quotes each hole — and it is refused as one.
-	raise p_diag(p, rule.Rule.NotYetCommandInterpolating, "NotImplemented: an interpolating command literal — " + p.toks[p.pos + 1].lexeme) if k == token.Kind.Ident and t.lexeme == "f" and peek_kind(p, 1) == token.Kind.Cmd
+	if k == token.Kind.Ident and t.lexeme == "f" and peek_kind(p, 1) == token.Kind.Cmd {
+		p_advance(p)
+		c := cur(p)
+		p_advance(p)
+		return cmd_call(p, c, cmd_argv(p, c, c.value))
+	}
 
 	if k == token.Kind.Ident {
 		# list[T](x) — a list-type conversion (e.g. bytearray(s))
@@ -4319,11 +4324,8 @@ fn parse_primary(mut &p: Parser) -> ast.Expr {
 	raise p_diag_at(p, t.line, t.col, rule.Rule.NotYetAsm, "NotImplemented: `asm(…)` — GRAMMAR has inline assembly with an operand list (GRAMMAR#asm-operand), and this compiler emits C and has no assembler of its own") if k == token.Kind.Asm
 
 	if k == token.Kind.Cmd {
-		# A command literal runs a process, and what the EXPRESSION is worth — an exit
-		# code, the output, a process handle — is a stdlib question GRAMMAR deliberately
-		# leaves open. Until that is answered it refuses by name: today it parsed as
-		# nothing at all, so `c := `echo hi`` silently bound 0.
-		raise p_diag(p, rule.Rule.NotYetCommandLiteral, "NotImplemented: a command literal — " + t.lexeme)
+		p_advance(p)
+		return cmd_call(p, t, cmd_argv(p, t, t.value))
 	}
 	if k == token.Kind.LParen {
 		# `(e)` is grouping and `(a, b)` is a tuple — the comma is what tells them apart,
@@ -4870,6 +4872,132 @@ fn fstr_expr(mut &p: Parser, t: token.Token) -> ast.Expr {
 fn fstr_join(acc: ast.Expr, have: bool, part: ast.Expr) -> ast.Expr {
 	return part if not have
 	return ast.Expr.EBinary("+", acc, part)
+}
+
+# --- a command literal (GRAMMAR#cmd-lit, GRAMMAR#fcmd-lit) --------------------------------
+#
+# `` `ls -l` `` IS `os.command(["ls", "-l"])` — a child process with its three streams
+# (docs/runtime/io.md), and the desugaring is a call the reader could have written.
+#
+# THE ARGUMENT VECTOR IS BUILT HERE AND THERE IS NO SHELL. The static text is split on
+# whitespace, quotes respected, and an interpolated `{x}` is ONE ELEMENT whatever is inside
+# it — so a path with a space in it stays one argument, and there is no string for a shell to
+# re-split. That is the whole safety property: with no shell there is nothing to inject into.
+fn cmd_argv(mut &p: Parser, t: token.Token, body: str) -> list[ast.Expr] {
+	b := bytearray(body)
+	n := b.len()
+	mut out: list[ast.Expr] = []
+	mut word: list[byte] = []
+	mut have := false
+	mut i := 0
+	for i < n {
+		c := b[i]
+		if c == b'{' and i + 1 < n and b[i + 1] == b'{' {
+			word.append(b'{')
+			have = true
+			i = i + 2
+		} else if c == b'{' {
+			# A HOLE ENDS THE WORD IT SITS IN, because a value spliced INTO a word would
+			# have to be joined to it as text — and text is the thing this form does not
+			# build. `ls {dir}` is two arguments; `ls -{flag}` is refused rather than
+			# quietly making one of them two.
+			cmd_whole_word(p, t, body, have)
+
+			end := fstr_hole_end(b, i)
+			src := fstr_slice(b, i + 1, end)
+			mut toks := lexer.tokenize(src)
+			fstr_place(toks, t)
+			mut hp := p_scratch(p, toks, 0)
+			e := parse_expr(hp)
+			cmd_one_expr(p, t, src, hp)
+
+			out.append(e)
+			i = end + 1
+			cmd_whole_word(p, t, body, i < n and not cmd_is_space(b[i]))
+		} else if cmd_is_space(c) {
+			if have {
+				out.append(ast.Expr.EStr(str(word)))
+				word = []
+				have = false
+			}
+			i = i + 1
+		} else if c == b'\'' or c == b'"' {
+			q := c
+			i = i + 1
+			for i < n and b[i] != q {
+				word.append(b[i])
+				i = i + 1
+			}
+			i = i + 1
+			have = true
+		} else {
+			word.append(c)
+			have = true
+			i = i + 1
+		}
+	}
+	if have {
+		out.append(ast.Expr.EStr(str(word)))
+	}
+	raise p_diag_at(p, t.line, t.col, rule.Rule.CommandEmpty, "a command literal names the program to run, and this one is empty") if out.len() == 0
+
+	return out
+}
+
+# cmd_whole_word is the one raise for a hole that is not a word of its own — asked on both
+# sides of it, because text before and text after are the same mistake. One raise site and one
+# sentence, which is what keeps a code an identity rather than two rules wearing one number.
+# cmd_one_expr is the f-string's own rule asked of a command literal's hole, and it is a
+# function for the reason cmd_whole_word is: the code is an identity, so the raise is one site.
+fn cmd_one_expr(mut &p: Parser, t: token.Token, src: str, mut &hp: Parser) {
+	raise p_diag_at(p, t.line, t.col, rule.Rule.CommandHoleManyExprs, "a command literal's hole is a single expression: {" + src + "}") if not p_at(hp, token.Kind.Eof) and not p_at(hp, token.Kind.Semi)
+}
+
+fn cmd_whole_word(mut &p: Parser, t: token.Token, body: str, joined: bool) {
+	raise p_diag_at(p, t.line, t.col, rule.Rule.CommandHoleInWord, f"a `{{…}}` in a command literal is ONE argument, so it cannot be joined to the text beside it — `{body}` splices into the middle of a word, and building the argument as text is what a shell would do") if joined
+}
+
+fn cmd_is_space(c: byte) -> bool {
+	return c == b' ' or c == b'\t' or c == b'\n' or c == b'\r'
+}
+
+# cmd_call is the call the literal IS: `os.command([…])`. It is spelled as an ordinary
+# namespaced call, so everything downstream — the checker, the emitter, the module graph —
+# sees what a reader would have written, and a file that has not imported `os` is told so by
+# the rule that already answers for an unimported module.
+fn cmd_call(mut &p: Parser, t: token.Token, argv: list[ast.Expr]) -> ast.Expr {
+	# AND THE MODULE HAS TO BE THERE. Without the import the call reaches the rule for a name
+	# nothing bound — "undefined name `os`" — which names a word the reader did not write. The
+	# literal is what they wrote, so the literal is what the sentence is about.
+	raise p_diag_at(p, t.line, t.col, rule.Rule.CommandNeedsOs, "a command literal is `os.command(…)` — a child process and its three streams — and this file does not `import \"os\"`") if not cmd_imports_os(p)
+
+	return ast.Expr.EMethod(ast.Expr.EIdent("os"), "command", [ast.Expr.EListLit(argv)])
+}
+
+# cmd_imports_os reads the file's own token stream for an `import "os"`, in either spelling —
+# the single form and the parenthesized group. It asks the TOKENS and not the parsed imports
+# because an expression is parsed by a scratch parser that has no file around it, and the one
+# thing every parser does hold is the tokens it was handed.
+fn cmd_imports_os(mut &p: Parser) -> bool {
+	mut i := 0
+	for i < p.toks.len() {
+		if p.toks[i].kind == token.Kind.Import {
+			mut j := i + 1
+			for j < p.toks.len() and cmd_import_run(p.toks[j].kind) {
+				return true if p.toks[j].kind == token.Kind.Str and p.toks[j].value == "os"
+
+				j = j + 1
+			}
+			i = j
+		} else {
+			i = i + 1
+		}
+	}
+	return false
+}
+
+fn cmd_import_run(k: token.Kind) -> bool {
+	return k == token.Kind.Str or k == token.Kind.LParen or k == token.Kind.RParen or k == token.Kind.Pub or k == token.Kind.Semi
 }
 
 pub fn fstr_slice(src: list[byte], lo: int, hi: int) -> str {

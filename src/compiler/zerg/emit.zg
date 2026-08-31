@@ -10532,6 +10532,11 @@ fn c_intrinsic_ret(name: str) -> ast.Ty {
 
 	return ast.Ty.TList(ast.Ty.TByte) if name == "__zrt_read"
 	return ast.Ty.TList(ast.Ty.TStr) if name == "__zrt_listdir"
+
+	# `[pid, stdin, stdout, stderr]` — a child and the parent's ends of its three streams. A
+	# list of four and not a struct, because that is what crosses this boundary without a new
+	# C type on either side of it.
+	return ast.Ty.TList(ast.Ty.TInt) if name == "__zrt_proc_open3"
 	return ast.Ty.TInt if name == "__zrt_open" or name == "__zrt_exec" or name == "__zrt_proc_spawn" or name == "__zrt_proc_wait"
 	return ast.Ty.TInt if name == "__zrt_open_write"
 	return ast.Ty.TInt if name == "__zrt_time_unix" or name == "__zrt_time_mono"

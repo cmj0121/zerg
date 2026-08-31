@@ -111,6 +111,10 @@ pub enum Rule {
 	ImplItemUnknown = 2077
 	ArrayLenNotConst = 2079
 	FStringSpecBrace = 2080
+	CommandHoleInWord = 2081
+	CommandEmpty = 2082
+	CommandNeedsOs = 2083
+	CommandHoleManyExprs = 2084
 
 	# checking — a form whose meaning does not hold together — reported against the tree, all at once
 	NotPublicMember = 3001
@@ -426,8 +430,6 @@ pub enum Rule {
 	NotYetNamedArgument = 9010
 	NotYetUnsafeExpr = 9011
 	NotYetImplAssocType = 9015
-	NotYetCommandInterpolating = 9019
-	NotYetCommandLiteral = 9020
 	NotYetDestructuringBinding = 9021
 	NotYetForMutBinding = 9025
 	NotYetUnsafeFn = 9027

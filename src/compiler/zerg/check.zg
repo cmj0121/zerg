@@ -1705,7 +1705,7 @@ fn chk_intrinsic_params(name: str) -> list[ast.Ty] {
 
 	return [ast.Ty.TFloat] if name == "__zrt_trunc"
 
-	return [ast.Ty.TList(ast.Ty.TStr)] if name == "__zrt_exec" or name == "__zrt_proc_spawn"
+	return [ast.Ty.TList(ast.Ty.TStr)] if name == "__zrt_exec" or name == "__zrt_proc_spawn" or name == "__zrt_proc_open3"
 
 	return [ast.Ty.TStr, ast.Ty.TStr] if name == "__zrt_set_env"
 

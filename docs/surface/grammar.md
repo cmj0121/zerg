@@ -186,10 +186,9 @@ cmd-lit     ::= '`' cmd-char* '`'                        # COMMAND literal — r
   cannot hold a NUL, so `\0` and `\u{0}` are invalid inside `"…"` (they are fine in a `rune` or `byte`).
 - **Command literal.** A backtick `` `git status` `` is a **command** — a child process run **directly** (no
   shell), its argv split on whitespace (quotes respected), so no interpolation and no injection/glob/pipe. The
-  interpolating `` f`…` `` form (group 5) instead runs through a **shell** and **shell-quotes** each hole
-  (`{x:raw}` opts out). Execution — pipes as `Reader`/`Writer`, the process `Ref[proc]` — is **stdlib**
-  ([Process & I/O](../runtime/io.md)), not grammar. Both forms are **[not yet]**, and the parser tells them
-  apart rather than passing either on: `E9020` for the plain literal, `E9019` for the interpolating one.
+  interpolating `` f`…` `` form (group 5) splices into the ARGV: each hole is one argument whatever is inside
+  it, and there is still no shell. Execution — the child's three streams — is **stdlib**
+  ([Process & I/O](../runtime/io.md)), not grammar: both forms desugar to `os.command(argv)`.
 
 `f"…"` string interpolation is **not** here — it is an expression, deferred to a later group and its own
 commit.
@@ -315,9 +314,8 @@ print       ::= 'print' expr
 A hole is **Python-style**: `expr`, then an optional `=`, `!` conversion, and `:` format spec. `f"sum={x + y}"`
 renders each hole through `display()` and joins the pieces — it **desugars at compile time** to `str`
 concatenation, with no runtime format engine. The same `{ … }` holes power the interpolating **command
-literal** `` f`…` `` (the group-3 command literal, **[not yet]** — _E9019 NotImplemented: an
-interpolating command literal_): it runs through a shell and
-**shell-quotes** each hole (`{x:raw}` opts out), so a value splices in as one safe argument.
+literal** `` f`…` `` (the group-3 command literal): each hole splices in as **one argument** of the child's
+argv, with no shell to re-split it ([Process & I/O](../runtime/io.md)).
 
 - **`{x}`** renders through `display`. **`{x!r}`** / **`{x!s}`** / **`{x!a}`** convert first — `debug` /
   `display` / ascii ([Format](../runtime/format.md)). **`{x=}`** is self-documenting: it emits the

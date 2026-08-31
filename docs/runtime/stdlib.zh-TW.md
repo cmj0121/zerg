@@ -90,9 +90,10 @@ leaf。
 ## `os`
 
 程序與平台資訊。`platform` / `arch` 在**編譯期**決定，因此指的是 binary 建置的目標。程式自己的引數由
-`fn main(args: list[str])` 取得，不在這裡。`run` 是唯一會啟動**另一個**程序的葉子——argv 直接交給 OS，沒有 shell
-也沒有 pipe，回來的是 exit status（死於信號時為 128+信號，無法執行時為 127）。有 shell 也有 pipe 的命令字面量見
-[Process 與 I/O](io.zh-TW.md)，仍是 **[not yet]**。
+`fn main(args: list[str])` 取得，不在這裡。`run` 啟動另一個程序並等它——argv 直接交給 OS，沒有 shell 也沒有
+pipe，回來的是 exit status（死於信號時為 128+信號，無法執行時為 127）。`command` 是同一種啟動、但把子行程的三個
+串流接上 **pipe**：它回答的是一個 `Proc` 而不是狀態碼，也就是 [Process 與 I/O](io.zh-TW.md) 那些命令字面量 desugar
+成的東西。
 
 | 函式                            | 摘要                                           |
 | ------------------------------- | ---------------------------------------------- |
@@ -101,6 +102,7 @@ leaf。
 | `del_env(key: str) -> bool`     | 移除 `key`；回答它原本**在不在**               |
 | `exit(code: int)`               | 以 `code` 結束程序（不返回）                   |
 | `run(argv: list[str])`          | 跑 `argv[0]`（找 PATH）並等待，`-> int` 狀態碼 |
+| `command(argv: list[str])`      | 帶三個 pipe 啟動它，`-> Proc`；不等待          |
 | `platform() -> str`             | 目標 OS——`"linux"`、`"darwin"`、`"windows"`、… |
 | `arch() -> str`                 | 目標 CPU——`"arm64"`、`"x86_64"`、…             |
 | `isatty(fd: int) -> bool`       | 這個描述子是不是終端機（0 入、1 出、2 錯）     |

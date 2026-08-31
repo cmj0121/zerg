@@ -175,10 +175,9 @@ cmd-lit     ::= '`' cmd-char* '`'                        # COMMAND literal——
   SQL/JSON/文字。**raw string** 加 `r` 前綴,**不**處理任何 escape——`r"C:\tmp\new"` 是十個字面字元。`str` 不能含
   NUL,所以 `\0` 與 `\u{0}` 在 `"…"` 內非法（在 `rune` 或 `byte` 內則可）。
 - **command literal。** 反引號 `` `git status` `` 是一個**命令**——一個**直接**執行（不經 shell）的子行程，argv 以
-  空白切分（尊重引號），因此沒有插值、沒有注入／glob／pipe。插值的 `` f`…` `` 形式（group 5）改為經過 **shell** 並
-  對每個 hole **shell-quote**（`{x:raw}` 可退出）。執行面——pipe 作為 `Reader`／`Writer`、行程 `Ref[proc]`——屬
-  **stdlib**（[Process & I/O](../runtime/io.zh-TW.md)），非文法。兩種形式皆為 **[not yet]**，而 parser 會把它們分開、
-  也不會把任何一種往下傳：純字面量是 `E9020`，內插的那個是 `E9019`。
+  空白切分（尊重引號），因此沒有插值、沒有注入／glob／pipe。插值的 `` f`…` `` 形式（group 5）是把值接進 **argv**：
+  每個 hole 就是一個引數，不管裡面是什麼，而且一樣沒有 shell。執行面——子行程的三個串流——屬
+  **stdlib**（[Process & I/O](../runtime/io.zh-TW.md)），非文法：兩種形式都 desugar 成 `os.command(argv)`。
 
 `f"…"` 字串插值**不在**此處——它是 expression，留待之後的 group 及其獨立 commit。
 
@@ -289,9 +288,8 @@ print       ::= 'print' expr
 
 洞是 **Python 式**：`expr`，其後選用 `=`、`!` 轉換、`:` format spec。`f"sum={x + y}"` 把每個洞經 `display()`
 算出並串接——**編譯期 desugar** 成 `str` 串接，沒有 runtime format engine。同一套 `{ … }` 洞也驅動插值的**命令
-literal** `` f`…` ``（group 3 的 command literal，**[not yet]**——_E9019 NotImplemented: an
-interpolating command literal_）：它經過 shell 執行並對每個洞 **shell-quote**
-（`{x:raw}` 可退出），使值以單一安全引數插入。
+literal** `` f`…` ``（group 3 的 command literal）：每個洞會以子行程 argv 的**一個引數**插入，沒有 shell 會再把
+它切一次（[Process 與 I/O](../runtime/io.zh-TW.md)）。
 
 - **`{x}`** 透過 `display` 渲染。**`{x!r}`** / **`{x!s}`** / **`{x!a}`** 先轉換——`debug` / `display` / ascii。
   （[Format](../runtime/format.zh-TW.md)）。**`{x=}`** 自述：輸出運算式原文與 `=`，再接值

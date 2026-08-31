@@ -39,8 +39,8 @@ _E9107 NotImplemented: the method `format` on a int_,因為這一列點名的 `F
 宣告,所以 `impl Add for P` 是 _E3013 no spec named `Add`_、`P(1) + P(2)` 是 _E3043_——見
 [Spec 與 Generics](../core/specs.zh-TW.md)。`==` 是例外,經 `#[derive(Eq)]` 或手寫的 `impl Eq`。
 
-兩種命令字面量都是 **[not yet]**,而且分得開:純 `` `…` `` 是 _E9020 NotImplemented: a command literal_,內插的
-`` f`…` ``（屬文法、未列於此）是 _E9019_。上表其餘各 desugar 一如所寫。
+兩種命令字面量都 desugar 成 `os.command(argv)`——一個子行程與它的三個串流,其中內插的 `` f`…` `` 把每個 hole
+接成**一個**引數（[Process 與 I/O](../runtime/io.zh-TW.md)）。上表其餘各 desugar 一如所寫。
 
 **文法有、而上表沒有的 sugar。** 有兩個文法推導得出的改寫是 **[not yet]**,因此它們不在上表、而不是被列成已落地:
 **解構綁定**——`(a, b) := e`（`E9021`）與它的 struct 形式 `P{x, y} := e`（`E9008`）,本編譯器要你改寫成一個名字加

@@ -97,10 +97,10 @@ The filesystem **structure** — a file's _contents_ are `io.read_file` / `io.wr
 
 Process and platform facts. `platform` / `arch` resolve at **compile time**, so they name the target the
 binary was built for. The program's own arguments arrive as `fn main(args: list[str])`, not from here.
-`run` is the one leaf that starts ANOTHER process — argv straight to the OS, no shell, no pipes, and the
-exit status back (128+signal when it died on one, 127 when it could not be executed). The command literals
-of [Process & I/O](io.md), which do have a shell and pipes, are **[not yet]** — _E9020_, and _E9019_ for the
-interpolating form.
+`run` starts another process and waits — argv straight to the OS, no shell, no pipes, and the exit status
+back (128+signal when it died on one, 127 when it could not be executed). `command` is the same launch with
+the child's three streams on PIPES: it answers a `Proc` rather than a status, and is what the command
+literals of [Process & I/O](io.md) desugar to.
 
 | Function                        | Summary                                              |
 | ------------------------------- | ---------------------------------------------------- |
@@ -109,6 +109,7 @@ interpolating form.
 | `del_env(key: str) -> bool`     | remove `key`; answers whether it WAS there           |
 | `exit(code: int)`               | terminate the process with `code` (does not return)  |
 | `run(argv: list[str])`          | run `argv[0]` (PATH-searched), wait, `-> int` status |
+| `command(argv: list[str])`      | start it with three pipes, `-> Proc`; do not wait    |
 | `platform() -> str`             | target OS — `"linux"`, `"darwin"`, `"windows"`, …    |
 | `arch() -> str`                 | target CPU — `"arm64"`, `"x86_64"`, …                |
 | `isatty(fd: int) -> bool`       | is this descriptor a terminal (0 in, 1 out, 2 err)   |

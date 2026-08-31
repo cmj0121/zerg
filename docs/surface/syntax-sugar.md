@@ -41,9 +41,9 @@ hole but that one ([Desugar](../tooling/desugar.md)).
 and at the release the binding's scope already performs. And the **operator** row desugars only where the
 operator is compiler-owned: no operator `spec` is declared, so `impl Add for P` is _E3013 no spec named
 `Add`_ and `P(1) + P(2)` is _E3043_ — see [Specs & Generics](../core/specs.md). `==` is the exception, via
-`#[derive(Eq)]` or a hand-written `impl Eq`. Both command literals are **[not yet]**, and they are told
-apart: the plain `` `…` `` is _E9020 NotImplemented: a command literal_, the interpolating `` f`…` ``
-(grammar, not listed here) _E9019_. Each desugaring above is otherwise exactly as written.
+`#[derive(Eq)]` or a hand-written `impl Eq`. Both command literals desugar to `os.command(argv)` — a child
+process and its three streams, with the interpolating `` f`…` `` splicing each hole in as ONE argument
+([Process & I/O](../runtime/io.md)). Each desugaring above is otherwise exactly as written.
 
 **Sugar the grammar has and this table does not.** Two rewrites the grammar derives are **[not yet]**, and
 so are absent above rather than listed as landed: a **destructuring binding** — `(a, b) := e` (`E9021`) and

@@ -190,6 +190,10 @@ shipping compiler rather than a part of it (the line
 | `E2078` | a list pattern takes ONE `..`                                                                         |
 | `E2079` | an array length is a compile-time constant, and `…` is not one                                        |
 | `E2080` | a format spec is made of `fmt-char`s and a brace is not one                                           |
+| `E2081` | a `{…}` in a command literal is ONE argument                                                          |
+| `E2082` | a command literal names the program to run, and this one is empty                                     |
+| `E2083` | a command literal is `os.command(…)`, and this file does not `import "os"`                            |
+| `E2084` | a command literal's hole is a single expression                                                       |
 | `E3001` | `…` is not a public member of module `…`                                                              |
 | `E3002` | `…` is not a place, and an assignment needs one                                                       |
 | `E3003` | cannot assign to `…`: it is a module `const`, and a constant is never written                         |
@@ -433,8 +437,6 @@ shipping compiler rather than a part of it (the line
 | `E9010` | the named argument `…:`                                                                               |
 | `E9011` | `unsafe { … }` as an EXPRESSION                                                                       |
 | `E9015` | an associated type binding `type … = …` in an `impl`                                                  |
-| `E9019` | an interpolating command literal                                                                      |
-| `E9020` | a command literal                                                                                     |
 | `E9021` | a destructuring binding `(a, b) := …`                                                                 |
 | `E9025` | `for mut v in …`                                                                                      |
 | `E9027` | a standalone `unsafe fn` declaration                                                                  |
@@ -637,6 +639,8 @@ name now is the prelude rule (`E2061`), which is about the name rather than abou
 | `E9035` | —       | `mut &` is part of a function type, and the type is built          |
 | `E9065` | —       | as above, on the value side: the marker rides in the type          |
 | `E9017` | —       | the fixed-size array is built; its length is part of its type      |
+| `E9019` | —       | the interpolating command literal is built; it splices into argv   |
+| `E9020` | —       | the command literal is built: a child process and three streams    |
 | `E9059` | —       | a composite renders structurally; the generator is the compiler's  |
 | `E9085` | —       | as above, for an enum: it renders by tag then payload              |
 | `E9012` | —       | the format spec is built, read by the value's own type             |

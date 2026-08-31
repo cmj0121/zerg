@@ -411,7 +411,6 @@ pub enum Rule {
 	# range because it is its own class: each of these retires when the form is built, and
 	# keeping that churn out of the five stage ranges is what keeps them dense
 	NotYetParameterizedSpec = 9001
-	NotYetSpecMemberBody = 9002
 	NotYetGenericEnum = 9003
 	NotYetGenericStruct = 9004
 	NotYetDecoratorLayout = 9005

@@ -12370,7 +12370,7 @@ fn c_lambda(mut &em: Emitter, ps: list[ast.Param], has_ret: bool, ret: ast.Ty, b
 	# the substitution still in force.
 	saved_sub := em.sub
 	em.sub = c_nosub()
-	em.lam_defs.append(c_fn(em, ast.FnDecl(name, "", allps, has_ret, ret, body, false, em.at_path, em.at_line, em.at_col, [], [], em.in_unsafe_fn, false, false)))
+	em.lam_defs.append(c_fn(em, ast.FnDecl(name, "", allps, has_ret, ret, body, false, em.at_path, em.at_line, em.at_col, [], [], em.in_unsafe_fn, false, false, true)))
 	em.sub = saved_sub
 	c_env_restore(em, saved_env)
 	em.open_scopes = saved_open
@@ -15459,6 +15459,65 @@ fn c_subst_all(ts: list[ast.Ty], sp: ast.SpecDecl, ip: ast.ImplDecl) -> list[ast
 	return out
 }
 
+# --- a spec's PROVIDED members (GRAMMAR#spec-member) ---------------------------------------
+#
+# `spec-member ::= fn-sig | fn-decl`: a member with a body is a DEFAULT, and an `impl` that
+# leaves it out gets that body rather than owing one. The expansion is what makes that true —
+# it seats the spec's declaration on the target as an ordinary method, so from here down the
+# default is indistinguishable from one the implementer wrote, and the requirement check, the
+# method namespace and the lowering all see it without knowing where it came from.
+#
+# IT IS DRIVEN BY THE UNIT'S OWN `impl` LIST, exactly as `derive` is driven by the unit's own
+# decorators. An impl is written in one unit, so the body is defined once; expanding over the
+# whole program instead would define `zg_P_hello` in every unit that can see the impl.
+
+# c_with_spec_defaults adds `one`'s missing default methods, reading the specs of `prog`.
+pub fn c_with_spec_defaults(prog: ast.File, one: ast.File) -> ast.File {
+	mut out := one
+	for ip in one.impls {
+		at := c_derive_spec_at(prog, ip.on)
+		continue if at < 0
+
+		sp := prog.specs[at]
+		for req in sp.reqs {
+			continue if not req.has_body
+
+			# AGAINST `one` AND NOT `prog`: a method is written in the same unit as its
+			# `impl` — the parser flattens the block into that file's functions — so the
+			# unit's own list is the honest answer to "did the implementer supply it".
+			# Asking the whole program instead made the second view find the FIRST view's
+			# generated default and skip it, so the body was declared and never defined.
+			continue if c_method_defined(one, ip.target, req.name)
+
+			out.fns.append(c_default_method(sp, ip, req))
+		}
+	}
+	return out
+}
+
+# c_with_spec_defaults_self is the whole-program view: every impl in it is its own unit's.
+pub fn c_with_spec_defaults_self(prog: ast.File) -> ast.File {
+	return c_with_spec_defaults(prog, prog)
+}
+
+fn c_method_defined(prog: ast.File, target: str, name: str) -> bool {
+	for fnd in prog.fns {
+		return true if fnd.recv == target and fnd.name == name
+	}
+	return false
+}
+
+# c_default_method is the spec's declaration seated on one target: the same body, with `This`
+# and the spec's own parameters resolved through the impl. The PLACE stays the spec's, because
+# that is where the body is written and so where a diagnostic about it belongs.
+fn c_default_method(sp: ast.SpecDecl, ip: ast.ImplDecl, req: ast.FnDecl) -> ast.FnDecl {
+	mut ps: list[ast.Param] = []
+	for pm in req.params {
+		ps.append(ast.Param(pm.name, c_spec_subst(pm.ty, sp, ip), pm.is_ref, pm.has_def, pm.def))
+	}
+	return ast.FnDecl(req.name, ip.target, ps, req.has_ret, c_spec_subst(req.ret, sp, ip), req.body, req.is_pub, req.path, req.line, req.col, req.tparams, req.tbounds, req.in_unsafe, false, false, true)
+}
+
 # c_with_derived expands every `#[derive(…)]` into the impl it stands for.
 pub fn c_with_derived(prog: ast.File) -> ast.File {
 	mut out := prog
@@ -15948,7 +16007,7 @@ fn c_emit_unit(prog0: ast.File, own0: ast.File, ms: Mods, whole: bool, want_lint
 	# first left `zg_ArgKind_eq` declared, called, and defined nowhere — a link error against
 	# a function the program never spells. Each expands from its own derive list, so the unit
 	# gets exactly the impls whose decorators are in it.
-	f0 := c_with_derived(c_with_builtin_specs(prog0))
+	f0 := c_with_spec_defaults_self(c_with_derived(c_with_builtin_specs(prog0)))
 
 	# THE FINDINGS SO FAR TRAVEL IN, in the `diags` slot. `chk_at_place` drops an exact repeat —
 	# same file, same line, same column, same sentence — so that one mistake earns one message;
@@ -15974,7 +16033,7 @@ fn c_emit_unit(prog0: ast.File, own0: ast.File, ms: Mods, whole: bool, want_lint
 	# in these passes and in any added later — `f.fns` holds functions only.
 	c_build_generics(em, f0)
 	f := c_without_templates(f0)
-	own := c_without_templates(c_with_derived(own0))
+	own := c_without_templates(c_with_spec_defaults(f0, c_with_derived(own0)))
 
 	# OVER `f0`, THE PROGRAM WITH ITS TEMPLATES STILL IN IT. A template is not a function
 	# to lower, which is what the removal above says, but it IS a name at the top level:

@@ -462,6 +462,12 @@ pub struct FnDecl {
 	# can ever be both — a single field would encode that fact a second time, where it could
 	# drift from the rule that enforces it.
 	pub is_fixture: bool
+
+	# has_body separates a spec's REQUIRED member from its PROVIDED one, which an empty `body`
+	# cannot: `fn f() { }` is a provided method that does nothing, and a signature with no body
+	# is a requirement — two different things with the same empty statement list. Everywhere
+	# else a FnDecl has a body by construction, so this is true for all of them but a spec's.
+	pub has_body: bool
 }
 
 # Diag is one finding about an ill-formed program: what is wrong, and where. It is a

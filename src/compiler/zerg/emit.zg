@@ -4477,30 +4477,154 @@ fn c_variant_field_ty(mut &em: Emitter, en: str, variant: str, idx: int) -> ast.
 # what made the shape look arbitrary. A bind arm holds the SCRUTINEE's own type, which is
 # the same thing c_arm_subst splices in as text one function along.
 fn c_bind_env(mut &em: Emitter, a: ast.Arm, st: ast.Ty) {
-	if a.pat == 1 {
-		c_add_var(em, a.bind, st, false, false)
-	} else if a.pat == 3 and c_is_either(st) {
-		# an Either's sides are not in the variant table: they are the TYPE's own two, so the
-		# binding takes whichever the pattern names. Answering `Err` for every Right is what a
-		# Result-shaped assumption looks like — a `Right(b)` over an `Either[A, B]` then had
-		# type Err, and `b.s` reached cc as an unmangled member of the wrong struct.
-		if a.binds.len() > 0 {
-			if c_result_tag(em, a.ctor) == 0 {
-				c_add_var(em, a.binds[0], c_either_left(st), false, false)
-			} else {
-				c_add_var(em, a.binds[0], c_either_right(st), false, false)
-			}
+	c_pat_env(em, a.pat, st)
+}
+
+# c_pat_env registers what a pattern binds, with the TYPE each name gets. It is the third walk
+# over the same tree and it exists because a body is typed before it is lowered: `match n { x =>
+# x }` typed its arm from a name nothing answered for, and the whole match came back TUnknown.
+fn c_pat_env(mut &em: Emitter, pt: ast.Pat, st: ast.Ty) {
+	bn := c_pat_bind_name(pt)
+	if bn != "" {
+		c_add_var(em, bn, st, false, false)
+		return
+	}
+
+	# an `as` name holds the WHOLE matched value, so it has the subject's own type — and the
+	# pattern under it is registered too, over the same type, because it is still destructuring
+	if c_pat_is_as(pt) {
+		c_add_var(em, c_pat_as_name(pt), st, false, false)
+		c_pat_env(em, c_pat_as_inner(pt), st)
+		return
+	}
+
+	# AN OR-PATTERN'S SIDES MUST BIND THE SAME NAMES. The arm's body is one body, so a name only
+	# one side supplies is a name that is sometimes there — and `docs/code/control-flow.md` says
+	# as much: the binding form is `A(x) | B(x)`, whose alternatives bind the same names at the
+	# same types. Without this the body would read a substitution that side never made, and what
+	# reached the reader would be a complaint about generated C.
+	if c_pat_is_or(pt) {
+		alts := c_pat_or_alts(pt)
+		mut j := 0
+		for j < alts.len() {
+			c_pat_env(em, alts[j], st)
+			j = j + 1
 		}
-	} else if a.pat == 3 {
-		# the SCRUTINEE'S enum names the variant: a constructor pattern is written inside a
-		# match on a value, so which enum's `Circle` this is was never in doubt — the table
-		# was what could not say it
-		en := c_named_of(st)
+
+		want := c_pat_binds(alts[0])
+		mut k := 1
+		for k < alts.len() {
+			why := c_or_binds_differ(want, c_pat_binds(alts[k]))
+			raise c_diag(em, rule.Rule.OrPatternBindsDiffer, f"the sides of an or-pattern bind the same names, and {why}") if why != ""
+			k = k + 1
+		}
+		return
+	}
+
+	# A STRUCT PATTERN NAMES ITS FIELDS, so it asks three questions the positional shapes do
+	# not — and all three are about the TYPE, which is why they are here, in the first walk.
+	if c_pat_is_struct(pt) {
+		want := c_pat_struct_name(pt)
+		sn := c_named_of(st)
+
+		# THE TYPE NAME IS AN ASSERTION, not a reference. GRAMMAR#struct-pat writes it, and the
+		# scrutinee's type is what decides which struct this is — so the name is here to be
+		# CHECKED against it, exactly as a variant pattern's qualifier is. A name that was read
+		# and thrown away would let `Q{x}` match a `P` and renaming a struct leave every
+		# pattern of it still matching.
+		raise c_diag(em, rule.Rule.StructPatternWrongType, f"a struct pattern names `{want}` and the value is a {ast.ty_name(st)}") if not c_is_struct_name(em, sn) or sn != want
+
+		fs := c_pat_struct_fields(pt)
+		ps := c_pat_struct_pats(pt)
+		have := c_struct_field_names(em, sn)
+
 		mut i := 0
-		for i < a.binds.len() {
-			c_add_var(em, a.binds[i], c_variant_field_ty(em, en, a.ctor, i), false, false)
+		for i < fs.len() {
+			raise c_diag(em, rule.Rule.StructPatternNoSuchField, f"`{want}` has no field `{fs[i]}`") if not c_name_in(have, fs[i])
 			i = i + 1
 		}
+
+		# WITHOUT `..` THE PATTERN NAMES EVERY FIELD, and the reader is told WHICH one is
+		# missing rather than that one is: a struct gaining a field should break the patterns
+		# that were written before it, by name, which is the whole reason the `..` is opt-in.
+		if not c_pat_struct_open(pt) {
+			mut k := 0
+			for k < have.len() {
+				raise c_diag(em, rule.Rule.StructPatternIncomplete, f"a struct pattern names every field or ends in `..`, and this one does not name `{have[k]}`") if not c_name_in(fs, have[k])
+				k = k + 1
+			}
+		}
+
+		mut j := 0
+		for j < fs.len() {
+			c_pat_env(em, ps[j], c_field_ty(em, sn, fs[j]))
+			j = j + 1
+		}
+		return
+	}
+
+	if c_pat_is_list(pt) {
+		elems := c_pat_list_elems(pt)
+
+		raise c_diag(em, rule.Rule.ListPatternNotAList, f"a list pattern matches a list, and this one is matched against a {ast.ty_name(st)}") if not c_is_list(st)
+
+		# A NAMED REST HAS NOWHERE TO LIVE. `..rest` binds a fresh list — a slice — and a
+		# binding here is spliced in as TEXT, so every use of the name would allocate another
+		# one and release none. A `match` lowers to a conditional expression, which has no place
+		# to declare the temporary that would own it. The anonymous `..` needs none, and is
+		# built.
+		raise c_diag(em, rule.Rule.NotYetListPatternRestBinding, "NotImplemented: a NAMED rest in a list pattern — `..rest` binds a fresh list and a `match` arm is an expression with nowhere to keep it; write `..` and index what you need") if c_pat_list_rest_name(pt) != ""
+
+		et := c_list_elem(st)
+		mut i := 0
+		for i < elems.len() {
+			c_pat_env(em, elems[i], et)
+			i = i + 1
+		}
+		return
+	}
+
+	if c_pat_is_tuple(pt) {
+		elems := c_pat_tuple_elems(pt)
+		ets := c_tuple_elems(st)
+
+		# THE SHAPE IS CHECKED IN THIS WALK because this is the FIRST of the three: the arm's
+		# environment is registered before its condition is lowered, so a pattern with the wrong
+		# arity indexed a type list that was not there and the compiler died of an IndexError —
+		# its own crash, reported about nothing, for a program that needed one sentence.
+		raise c_diag(em, rule.Rule.TuplePatternNotATuple, f"a tuple pattern matches a tuple, and this one is matched against a {ast.ty_name(st)}") if ets.len() == 0
+		raise c_diag(em, rule.Rule.TuplePatternArity, f"a tuple pattern names {strconv.to_string(elems.len(), 10)} element(s) and a {ast.ty_name(st)} has {strconv.to_string(ets.len(), 10)}") if elems.len() != ets.len()
+
+		mut i := 0
+		for i < elems.len() {
+			c_pat_env(em, elems[i], ets[i])
+			i = i + 1
+		}
+		return
+	}
+
+	ctor := c_pat_ctor(pt)
+	return if ctor == ""
+
+	names := c_payload_names(c_pat_payload(pt))
+	if c_is_either(st) {
+		# an Either's sides are not in the variant table: they are the TYPE's own two, so the
+		# binding takes whichever the pattern names. Answering `Err` for every Right is what a
+		# Result-shaped assumption looks like.
+		return if names.len() == 0
+		if c_result_tag(em, ctor) == 0 {
+			c_add_var(em, names[0], c_either_left(st), false, false)
+		} else {
+			c_add_var(em, names[0], c_either_right(st), false, false)
+		}
+		return
+	}
+
+	en := c_named_of(st)
+	mut i := 0
+	for i < names.len() {
+		c_add_var(em, names[i], c_variant_field_ty(em, en, ctor, i), false, false)
+		i = i + 1
 	}
 }
 
@@ -4670,17 +4794,32 @@ pub fn c_ns_names_mod(mut &em: Emitter, n: str, decl_mod: str) -> bool {
 # real surface and the import graph is a DAG anyway (E5014); the bound is here so that a bug in
 # the graph is a wrong answer rather than a dead compiler.
 fn c_ns_reexports(mut &em: Emitter, mod: str, want: str, depth: int) -> bool {
-	return false if depth > 8
+	mut seen: list[str] = []
+	return c_ns_reexports_in(em, mod, want, depth, seen)
+}
 
-	# THE ROW'S SCOPE IS A FILE and the question is about a MODULE, so the two are compared
-	# through `c_mod_of`. A binding belongs to the file that wrote it; a SURFACE belongs to the
-	# module — `import pub` in any one of a module's files puts the named module on that
-	# module's surface, which is what a dependent sees.
+# c_ns_reexports_in is the walk, and `seen` is what makes it a walk rather than a search.
+#
+# IT WAS EXPONENTIAL. `return true if c_ns_reexports(…)` does not return when the answer is
+# false — it falls through and keeps scanning — so every binding that matched at a level
+# expanded a whole subtree of its own, eight levels deep. The bound hid it: the shape only
+# shows when enough queries arrive, and adding one recursive type to the AST was enough to take
+# a nineteen-second build past three minutes.
+#
+# A MODULE EXPANDED ONCE IS EXPANDED, which is exactly true here because `import pub` forms a
+# DAG — `E5014` refuses a cycle — so a second visit can add no answer the first did not. The
+# depth bound stays: it is about a bug in the graph, not about this walk terminating.
+fn c_ns_reexports_in(mut &em: Emitter, mod: str, want: str, depth: int, mut &seen: list[str]) -> bool {
+	return false if depth > 8
+	return false if c_name_in(seen, mod)
+
+	seen.append(mod)
+
 	mut i := 0
 	for i < em.ns_names.len() {
 		if em.ns_pub[i] and check.c_mod_of(em, em.ns_at[i]) == mod {
 			return true if em.ns_mods[i] == want
-			return true if c_ns_reexports(em, em.ns_mods[i], want, depth + 1)
+			return true if c_ns_reexports_in(em, em.ns_mods[i], want, depth + 1, seen)
 		}
 		i = i + 1
 	}
@@ -9142,15 +9281,17 @@ fn c_check_arm_pats(mut &em: Emitter, arms: list[ast.Arm], st: ast.Ty) {
 	mut i := 0
 	for i < arms.len() {
 		a := arms[i]
-		if a.pat == 3 {
+		ctor := c_pat_ctor(a.pat)
+		qual := c_pat_qual(a.pat)
+		if ctor != "" {
 			# ASKED OF THE SUBJECT'S ENUM, which is the only enum a constructor pattern can
 			# name a variant of. It used to ask which enum owns the bare name program-wide and
 			# then compare: `match s { Red => … }` on a `Signal` was answered `Colour`, so the
 			# arm was refused as unable to match a subject it matches exactly.
 			en := c_named_of(st)
 
-			raise c_diag(em, rule.Rule.NoSuchVariantInPattern, f"no variant named `{a.ctor}` — a constructor pattern names a variant of the subject's enum") if not c_is_variant(em, a.ctor)
-			raise c_diag(em, rule.Rule.VariantPatternWrongEnum, f"variant pattern `{a.ctor}` cannot match a subject of type {ast.ty_name(st)}") if not c_is_variant_in(em, en, a.ctor)
+			raise c_diag(em, rule.Rule.NoSuchVariantInPattern, f"no variant named `{ctor}` — a constructor pattern names a variant of the subject's enum") if not c_is_variant(em, ctor)
+			raise c_diag(em, rule.Rule.VariantPatternWrongEnum, f"variant pattern `{ctor}` cannot match a subject of type {ast.ty_name(st)}") if not c_is_variant_in(em, en, ctor)
 
 			# THE QUALIFICATION MUST BE TRUE (GRAMMAR#variant-pat), and until now it was not
 			# asked at all. The two rules above look up the VARIANT and compare THAT to the
@@ -9163,12 +9304,12 @@ fn c_check_arm_pats(mut &em: Emitter, arms: list[ast.Arm], st: ast.Ty) {
 			# type is what decides which enum this is, and the name is here to be checked
 			# against it. That is why it never names a module — a module qualifier would be
 			# answering "which one", which the subject has already answered.
-			raise c_diag(em, rule.Rule.VariantPatternWrongQualifier, f"variant pattern `{a.qual}.{a.ctor}` names the enum `{a.qual}`, and the subject is a {ast.ty_name(st)} — the enum written in a pattern is checked against the subject, so it must be the subject's") if a.qual != "" and a.qual != en
+			raise c_diag(em, rule.Rule.VariantPatternWrongQualifier, f"variant pattern `{qual}.{ctor}` names the enum `{qual}`, and the subject is a {ast.ty_name(st)} — the enum written in a pattern is checked against the subject, so it must be the subject's") if qual != "" and qual != en
 
 			# HERE and not in c_bind_env, which is a lowering helper: c_arms calls it from
 			# both c_arm_cond and c_arm_body, so a check hung there fired twice for every
 			# arm but the last — the count of a diagnostic depended on where the arm sat.
-			check.chk_variant_arity(em, en, a.ctor, a.binds.len(), "pattern binds")
+			check.chk_variant_arity(em, en, ctor, c_payload_names(c_pat_payload(a.pat)).len(), "pattern binds")
 		}
 		i = i + 1
 	}
@@ -9227,12 +9368,131 @@ fn c_check_exhaustive(mut &em: Emitter, arms: list[ast.Arm], st: ast.Ty) {
 	raise c_diag(em, rule.Rule.MatchMissingCatchAll, "non-exhaustive match: missing a catch-all `_` arm")
 }
 
+# --- reading a pattern (GRAMMAR#pattern) --------------------------------------------------
+#
+# `Arm` used to carry four flat fields and an `int` kind, and every question below was asked of
+# that int. It is a tree now, so each question is asked of the shape it is about — and a shape
+# this compiler cannot lower is refused HERE, where the type is in hand, rather than at the
+# parse where only the tokens are (#110).
+
+# c_pat_catchall — does this pattern match everything? A binding and a wildcard do, and an `as`
+# does exactly when what it wraps does: `_ as whole` binds and still covers.
+fn c_pat_catchall(pt: ast.Pat) -> bool {
+	return match pt {
+		Pat.PWild         => true
+		Pat.PBind(_)      => true
+		Pat.PAs(inner, _) => c_pat_catchall(inner)
+
+		# A TUPLE COVERS EVERYTHING WHEN ITS ELEMENTS DO. `(x, y)` is a catch-all — a tuple has
+		# no alternative shapes, so what is left to miss is what its elements miss — and a rule
+		# that knew only `_` and a bare name called it a gap: a `match` on a pair whose last arm
+		# was `(x, y)` was "non-exhaustive, missing a catch-all `_`", about an arm that matches
+		# every pair there is.
+		Pat.PTuple(ps) => c_pats_catchall(ps)
+
+		# `[..]` COVERS EVERY LIST — no element to miss and no length to fail — and it is the
+		# only list pattern that does. `[a, ..]` needs one element and `[a, b]` needs exactly
+		# two, so both can be missed and neither closes a match.
+		Pat.PList(ps, rest, _) => ps.len() == 0 and rest >= 0
+
+		# A STRUCT HAS ONE SHAPE, so a pattern of the right type covers every value of it when
+		# each field pattern does. `P{..}` and `P{x, y}` are catch-alls; `P{x: 1, ..}` is not.
+		Pat.PStruct(_, _, ps, _) => c_pats_catchall(ps)
+
+		# ANY side covering everything makes the whole one cover it — `_ | A` is `_` with extra
+		# words. It is `or` and not `and` for that reason, which is the opposite of every other
+		# shape here.
+		Pat.POr(ps) => c_pats_any_catchall(ps)
+		_           => false
+	}
+}
+
+fn c_pats_any_catchall(ps: list[ast.Pat]) -> bool {
+	for pt in ps {
+		return true if c_pat_catchall(pt)
+	}
+	return false
+}
+
+fn c_pats_catchall(ps: list[ast.Pat]) -> bool {
+	for pt in ps {
+		return false if not c_pat_catchall(pt)
+	}
+	return true
+}
+
+# c_pat_ctor / c_pat_qual — the variant a pattern names, or "" for a pattern that names none.
+fn c_pat_ctor(pt: ast.Pat) -> str {
+	return match pt {
+		Pat.PVariant(_, c, _) => c
+		Pat.PAs(inner, _) => c_pat_ctor(inner)
+		_ => ""
+	}
+}
+
+fn c_pat_qual(pt: ast.Pat) -> str {
+	return match pt {
+		Pat.PVariant(q, _, _) => q
+		Pat.PAs(inner, _) => c_pat_qual(inner)
+		_ => ""
+	}
+}
+
+fn c_pat_is_lit(pt: ast.Pat) -> bool {
+	return match pt {
+		Pat.PLit(_) => true
+		Pat.PAs(inner, _) => c_pat_is_lit(inner)
+		_ => false
+	}
+}
+
+fn c_pat_lit(pt: ast.Pat) -> ast.Expr {
+	return match pt {
+		Pat.PLit(e) => e
+		Pat.PAs(inner, _) => c_pat_lit(inner)
+		_ => ast.Expr.ENil
+	}
+}
+
+# c_pat_bind_name — the name a binding pattern binds, or "" for one that binds nothing.
+fn c_pat_bind_name(pt: ast.Pat) -> str {
+	return match pt {
+		Pat.PBind(n) => n
+		_            => ""
+	}
+}
+
+fn c_pat_payload(pt: ast.Pat) -> list[ast.Pat] {
+	return match pt {
+		Pat.PVariant(_, _, ps) => ps
+		Pat.PAs(inner, _) => c_pat_payload(inner)
+		_ => []
+	}
+}
+
+# c_payload_names is a variant payload as the NAMES it binds, which is what the substitution
+# below splices. A payload element that is not a name is a pattern inside a pattern, and this
+# compiler lowers one level: it is refused by the caller, which has the place.
+fn c_payload_names(ps: list[ast.Pat]) -> list[str] {
+	mut out: list[str] = []
+	for pt in ps {
+		out.append(
+			match pt {
+				Pat.PBind(n) => n
+				Pat.PWild    => "_"
+				_            => ""
+			}
+		)
+	}
+	return out
+}
+
 # c_catchall_at is the index of the first UNGUARDED catch-all arm (`_` or a binding), or -1.
 fn c_catchall_at(arms: list[ast.Arm]) -> int {
 	mut i := 0
 	for i < arms.len() {
 		a := arms[i]
-		return i if (a.pat == 1 or a.pat == 2) and not a.has_guard
+		return i if c_pat_catchall(a.pat) and not a.has_guard
 		i = i + 1
 	}
 	return 0 - 1
@@ -9243,7 +9503,7 @@ fn c_arm_covers(arms: list[ast.Arm], ctor: str) -> bool {
 	mut i := 0
 	for i < arms.len() {
 		a := arms[i]
-		return true if a.pat == 3 and not a.has_guard and a.ctor == ctor
+		return true if not a.has_guard and ctor != "" and c_pat_covers_ctor(a.pat, ctor)
 		i = i + 1
 	}
 	return false
@@ -9261,7 +9521,7 @@ fn c_arm_covers_bool(arms: list[ast.Arm], v: bool) -> bool {
 	mut i := 0
 	for i < arms.len() {
 		a := arms[i]
-		return true if a.pat == 0 and not a.has_guard and c_is_bool_lit(a.lit, v)
+		return true if not a.has_guard and c_pat_is_lit(a.pat) and c_is_bool_lit(c_pat_lit(a.pat), v)
 		i = i + 1
 	}
 	return false
@@ -9297,31 +9557,121 @@ fn c_result_tag(mut &em: Emitter, ctor: str) -> int {
 # c_arm_subst extends sb with an arm's bindings: a bind arm aliases the scrutinee; an enum
 # constructor arm aliases each payload name to its `s.u.Var.fK` field access.
 fn c_arm_subst(mut &em: Emitter, a: ast.Arm, s: str, st: ast.Ty, sb: Subst) -> Subst {
-	return c_extend(sb, a.bind, s) if a.pat == 1
-	if a.pat == 3 and c_is_either(st) {
-		# `Left(v)` reads the value, `Right(e)` the Err; neither is a tagged union of the
-		# kind the variant table describes, so the field is named directly
-		return sb if a.binds.len() == 0
-		return c_extend(sb, a.binds[0], c_res_ok(s)) if c_result_tag(em, a.ctor) == 0
+	return c_pat_subst(em, a.pat, s, st, sb)
+}
 
-		return c_extend(sb, a.binds[0], c_res_err(s))
+# c_pat_subst is c_pat_cond's other half: what the pattern BINDS when it matches. The two walk
+# the same tree and must agree about the accessor for each position, which is why the accessor
+# is built the same way in both — an element of an element is a longer string, and nothing else.
+# c_sub_of — what a substitution maps `name` to, or "" for a name it does not carry.
+fn c_sub_of(sb: Subst, name: str) -> str {
+	mut i := 0
+	for i < sb.names.len() {
+		return sb.repls[i] if sb.names[i] == name
+		i = i + 1
 	}
-	if a.pat == 3 {
-		en := c_named_of(st)
+	return ""
+}
+
+fn c_pat_subst(mut &em: Emitter, pt: ast.Pat, s: str, st: ast.Ty, sb: Subst) -> Subst {
+	bn := c_pat_bind_name(pt)
+	return c_extend(sb, bn, s) if bn != ""
+
+	# `pattern as name` BINDS THE WHOLE and keeps destructuring: the name reads the subject
+	# itself, and the pattern inside it binds through the same accessor. Both, in that order,
+	# because the inner one may bind a name of its own and neither shadows the other.
+	return c_pat_subst(em, c_pat_as_inner(pt), s, st, c_extend(sb, c_pat_as_name(pt), s)) if c_pat_is_as(pt)
+
+	# AN OR-PATTERN'S BINDING IS WHICHEVER SIDE MATCHED, and a substitution is TEXT, so it is
+	# written as the choice it is: `x` becomes `(condA ? accA : accB)`. Both sides bind the same
+	# names — the rule in the first walk says so — and each side's accessor is what that side
+	# would have bound on its own.
+	if c_pat_is_or(pt) {
+		alts := c_pat_or_alts(pt)
+		mut r := sb
+		for nm in c_pat_binds(alts[0]) {
+			mut acc := ""
+			mut k := alts.len() - 1
+			for k >= 0 {
+				a := c_sub_of(c_pat_subst(em, alts[k], s, st, c_nosub()), nm)
+				if acc == "" {
+					acc = a
+				} else {
+					acc = f"({c_pat_cond(em, alts[k], s, st, sb)} ? {a} : {acc})"
+				}
+				k = k - 1
+			}
+			r = c_extend(r, nm, acc)
+		}
+		return r
+	}
+
+	if c_pat_is_struct(pt) {
+		sn := c_named_of(st)
+		fs := c_pat_struct_fields(pt)
+		ps := c_pat_struct_pats(pt)
 		mut r := sb
 		mut i := 0
-		for i < a.binds.len() {
-			mut acc := f"{s}.u.{a.ctor}.f{i}"
-			if c_is_boxed(em, en, a.ctor, i) {
-				# unbox a self-recursive payload back to the enum value
-				acc = f"(*(zg_{en}*)zrt_ref_payload({acc}))"
-			}
-			r = c_extend(r, a.binds[i], acc)
+		for i < fs.len() {
+			r = c_pat_subst(em, ps[i], f"{s}.zg_{fs[i]}", c_field_ty(em, sn, fs[i]), r)
 			i = i + 1
 		}
 		return r
 	}
-	return sb
+
+	if c_pat_is_list(pt) {
+		elems := c_pat_list_elems(pt)
+		rest := c_pat_list_rest(pt)
+		et := c_list_elem(st)
+		ct := c_type(et)
+		n := elems.len()
+		mut r := sb
+		mut i := 0
+		for i < n {
+			r = c_pat_subst(em, elems[i], c_list_pat_at(s, ct, i, rest, n), et, r)
+			i = i + 1
+		}
+		return r
+	}
+
+	if c_pat_is_tuple(pt) {
+		elems := c_pat_tuple_elems(pt)
+		ets := c_tuple_elems(st)
+		mut r := sb
+		mut i := 0
+		for i < elems.len() {
+			r = c_pat_subst(em, elems[i], f"{s}.f{i}", ets[i], r)
+			i = i + 1
+		}
+		return r
+	}
+
+	ctor := c_pat_ctor(pt)
+	return sb if ctor == ""
+
+	names := c_payload_names(c_pat_payload(pt))
+	if c_is_either(st) {
+		# `Left(v)` reads the value, `Right(e)` the Err; neither is a tagged union of the
+		# kind the variant table describes, so the field is named directly
+		return sb if names.len() == 0
+		return c_extend(sb, names[0], c_res_ok(s)) if c_result_tag(em, ctor) == 0
+
+		return c_extend(sb, names[0], c_res_err(s))
+	}
+
+	en := c_named_of(st)
+	mut r := sb
+	mut i := 0
+	for i < names.len() {
+		mut acc := f"{s}.u.{ctor}.f{i}"
+		if c_is_boxed(em, en, ctor, i) {
+			# unbox a self-recursive payload back to the enum value
+			acc = f"(*(zg_{en}*)zrt_ref_payload({acc}))"
+		}
+		r = c_extend(r, names[i], acc)
+		i = i + 1
+	}
+	return r
 }
 
 # c_arm_guard renders a match arm's `if …`. It is one function for the three places that
@@ -9342,51 +9692,365 @@ fn c_arm_cond(mut &em: Emitter, a: ast.Arm, s: str, st: ast.Ty, sb: Subst) -> st
 }
 
 fn c_arm_cond_in(mut &em: Emitter, a: ast.Arm, s: str, st: ast.Ty, sb: Subst) -> str {
-	if a.pat == 0 {
-		return c_arm_range(em, a, s, st, sb) if c_is_range(a.lit)
+	cond := c_pat_cond(em, a.pat, s, st, sb)
+
+	return f"({cond} && {c_arm_guard(em, a, c_arm_subst(em, a, s, st, sb))})" if a.has_guard
+
+	return cond
+}
+
+# c_tuple_elems — a tuple type's element types, or nothing for a type that is not one.
+fn c_tuple_elems(t: ast.Ty) -> list[ast.Ty] {
+	return match t {
+		Ty.TTuple(ts) => ts
+		_             => []
+	}
+}
+
+# --- lowering a pattern -------------------------------------------------------------------
+#
+# TWO FUNCTIONS OVER THE SAME TREE: what has to be true for this pattern to match, and what it
+# binds when it does. They recurse together because GRAMMAR#pattern recurses — a tuple's
+# elements are patterns, and each of them can be a tuple.
+#
+# THE SUBJECT IS A C EXPRESSION, not a variable. That is what the flat representation already
+# did for a variant payload — a binding is spliced in as the text `s.u.Ctor.f0` — and it is what
+# makes nesting free: an element of an element is just a longer accessor.
+
+# c_pat_list_cond is a list pattern's test, and the length is the first half of it: a list's
+# arity is a RUNTIME value, unlike a tuple's, so it is compared rather than checked — `==` for a
+# pattern that names every element, `>=` for one with a `..`, which says "at least these".
+fn c_pat_list_cond(mut &em: Emitter, pt: ast.Pat, s: str, st: ast.Ty, sb: Subst) -> str {
+	elems := c_pat_list_elems(pt)
+	rest := c_pat_list_rest(pt)
+	et := c_list_elem(st)
+	ct := c_type(et)
+	n := elems.len()
+	mut cmp := "=="
+	if rest >= 0 {
+		cmp = ">="
+	}
+	mut out := f"(zrt_list_len(&({s})) {cmp} (size_t){strconv.to_string(n, 10)})"
+	mut i := 0
+	for i < n {
+		c := c_pat_cond(em, elems[i], c_list_pat_at(s, ct, i, rest, n), et, sb)
+		if c != "1" {
+			out = f"({out} && {c})"
+		}
+		i = i + 1
+	}
+	return out
+}
+
+fn c_pat_cond(mut &em: Emitter, pt: ast.Pat, s: str, st: ast.Ty, sb: Subst) -> str {
+	# an `as` TESTS NOTHING of its own — it names what the pattern under it matched
+	return c_pat_cond(em, c_pat_as_inner(pt), s, st, sb) if c_pat_is_as(pt)
+
+	return c_pat_list_cond(em, pt, s, st, sb) if c_pat_is_list(pt)
+
+	# AN OR-PATTERN IS THE OR OF ITS ALTERNATIVES, which is the whole of its lowering — the
+	# work it takes is the RULE about what its sides may bind, and that is asked in the first
+	# walk where the types are.
+	if c_pat_is_or(pt) {
+		alts := c_pat_or_alts(pt)
+		mut out := ""
+		for a in alts {
+			c := c_pat_cond(em, a, s, st, sb)
+			if out == "" {
+				out = c
+			} else {
+				out = f"({out} || {c})"
+			}
+		}
+		return out
+	}
+
+	# A STRUCT HAS ONE SHAPE, so nothing about the struct itself is tested — the type already
+	# says it is a `P`. What is left is what the field patterns test, and a pattern that only
+	# binds tests nothing at all.
+	if c_pat_is_struct(pt) {
+		sn := c_named_of(st)
+		fs := c_pat_struct_fields(pt)
+		ps := c_pat_struct_pats(pt)
+		mut out := ""
+		mut i := 0
+		for i < fs.len() {
+			c := c_pat_cond(em, ps[i], f"{s}.zg_{fs[i]}", c_field_ty(em, sn, fs[i]), sb)
+			if c != "1" {
+				if out == "" {
+					out = c
+				} else {
+					out = f"({out} && {c})"
+				}
+			}
+			i = i + 1
+		}
+		return "1" if out == ""
+
+		return out
+	}
+
+	if c_pat_is_lit(pt) {
+		lit := c_pat_lit(pt)
+		return c_arm_range(em, lit, s, st, sb) if c_is_range(lit)
 
 		# a literal pattern is scrutinee-equals-literal, and that equality is SYNTHESISED here
 		# as text rather than built as an EBinary — so it meets no operand rule on the way
-		# through, and a pattern was a second spelling of `==` that nothing covered:
-		# `match x { nil => … }` over an optional lowered to a comparison with 0, exactly as
-		# `x == nil` used to in the file next door. One rule, two spellings.
+		# through, and a pattern was a second spelling of `==` that nothing covered.
 		#
-		# THAT ONE IS NOW REFUSED BY NAME instead. GRAMMAR#literal makes `nil` a literal and
+		# `nil` IS REFUSED BY NAME instead. GRAMMAR#literal makes it a literal and
 		# GRAMMAR#literal-pat makes a literal a pattern, so `match o { nil => … }` is the
-		# natural way to ask about absence, and answering it out of chk_binary with "an
-		# optional is not an operand of `==`" describes an operator the program never wrote.
-		# The condition alone would be easy — it is the presence test c_iflet already makes —
-		# but the arm beside it is not: a binding pattern binds the scrutinee, and over an
-		# optional that is the carrier rather than what it holds, so the arm answering `v`
-		# would answer the box. Named rather than half-built.
-		raise c_diag(em, rule.Rule.NotYetNilPattern, "NotImplemented: `nil` as a `match` pattern — GRAMMAR makes it a literal pattern, and this compiler would have to unwrap the carrier for the arm beside it as well. Ask with `if v := x { … } else { … }`, which binds what it holds, or with `??`") if c_is_nil_lit(a.lit) and c_is_carrier(st)
+		# natural way to ask about absence — and the arm beside it is what is not built: a
+		# binding pattern over an optional binds the CARRIER rather than what it holds.
+		raise c_diag(em, rule.Rule.NotYetNilPattern, "NotImplemented: `nil` as a `match` pattern — GRAMMAR makes it a literal pattern and this compiler compares it as one; write `if v := o { … }` for the presence test, or `o ?? d` for a default") if c_is_nil_lit(lit)
 
 		# the PATTERN is handed as both operands: this comparison is a scrutinee against a
 		# literal, and a literal pattern is always the one adopting the scrutinee's type, so
 		# there is no mixed pair to find and no scrutinee Expr in scope to look for one with
-		check.chk_binary(em, "==", st, c_infer(em, a.lit), a.lit, a.lit)
-
-		# AND THE GUARD, which this arm alone did not add. Every other shape does — the
-		# constructor pattern above, the range beside it, the wildcard below — so
-		# `match 1 { 1 if false => 10  _ => 0 }` answered `10`: the arm matched on the literal
-		# and the `if` was read, type-checked, and then dropped on the floor. A guard that
-		# parses and does nothing is worse than one that is refused.
-		eq := c_arm_eq(em, a, s, st, sb)
-		return f"({eq} && {c_arm_guard(em, a, c_arm_subst(em, a, s, st, sb))})" if a.has_guard
-
-		return eq
+		check.chk_binary(em, "==", st, c_infer(em, lit), lit, lit)
+		return c_arm_eq(em, lit, s, st, sb)
 	}
 
-	if a.pat == 3 {
-		mut base := f"({s}.tag == {c_variant_tag_in(em, c_named_of(st), a.ctor)})"
-		if c_is_either(st) {
-			base = f"({c_res_tag(s)} == {c_result_tag(em, a.ctor)})"
+	# A TUPLE MATCHES ELEMENT BY ELEMENT. `t.0` is already how a tuple is read, so the element
+	# access is the accessor the field path builds and the arity is the type's own — a pattern
+	# with the wrong number of elements is refused before this, where the count is a fact about
+	# the type rather than a C expression that will not compile.
+	if c_pat_is_tuple(pt) {
+		elems := c_pat_tuple_elems(pt)
+		ets := c_tuple_elems(st)
+
+		mut out := ""
+		mut i := 0
+		for i < elems.len() {
+			c := c_pat_cond(em, elems[i], f"{s}.f{i}", ets[i], sb)
+			if out == "" {
+				out = c
+			} else {
+				out = f"({out} && {c})"
+			}
+			i = i + 1
 		}
-		return f"({base} && {c_arm_guard(em, a, c_arm_subst(em, a, s, st, sb))})" if a.has_guard
-		return base
+		return "1" if out == ""
+
+		return out
 	}
-	return c_arm_guard(em, a, c_arm_subst(em, a, s, st, sb)) if a.has_guard
+
+	ctor := c_pat_ctor(pt)
+	if ctor != "" {
+		return f"({c_res_tag(s)} == {c_result_tag(em, ctor)})" if c_is_either(st)
+
+		return f"({s}.tag == {c_variant_tag_in(em, c_named_of(st), ctor)})"
+	}
 	return "1"
+}
+
+# c_pat_list_* read a list pattern's three parts. `rest` is the index the `..` sits at, or -1
+# for a pattern that matches on length alone — which is what decides whether the elements after
+# it are counted from the front or from the back.
+# c_pat_struct_* read a struct pattern's four parts. `open` is the `..` that says the fields not
+# written are not being asked about — without it, the pattern names them all and the emitter
+# says which one is missing.
+# c_pat_covers_ctor — does this pattern match the variant `ctor`? It walks an or-pattern because
+# `E.A(x) | E.B(x)` covers BOTH, and the exhaustiveness rule that asked `c_pat_ctor` got "" for
+# the whole thing: an arm naming two variants counted for neither, and the match was reported
+# non-exhaustive over cases it plainly handles.
+fn c_pat_covers_ctor(pt: ast.Pat, ctor: str) -> bool {
+	return true if c_pat_ctor(pt) == ctor
+
+	return match pt {
+		Pat.POr(ps) => c_pats_cover_ctor(ps, ctor)
+		Pat.PAs(inner, _) => c_pat_covers_ctor(inner, ctor)
+		_ => false
+	}
+}
+
+fn c_pats_cover_ctor(ps: list[ast.Pat], ctor: str) -> bool {
+	for pt in ps {
+		return true if c_pat_covers_ctor(pt, ctor)
+	}
+	return false
+}
+
+fn c_pat_is_as(pt: ast.Pat) -> bool {
+	return match pt {
+		Pat.PAs(_, _) => true
+		_             => false
+	}
+}
+
+fn c_pat_as_name(pt: ast.Pat) -> str {
+	return match pt {
+		Pat.PAs(_, n) => n
+		_             => ""
+	}
+}
+
+fn c_pat_as_inner(pt: ast.Pat) -> ast.Pat {
+	return match pt {
+		Pat.PAs(inner, _) => inner
+		_ => pt
+	}
+}
+
+fn c_pat_is_or(pt: ast.Pat) -> bool {
+	return match pt {
+		Pat.POr(_) => true
+		_          => false
+	}
+}
+
+fn c_pat_or_alts(pt: ast.Pat) -> list[ast.Pat] {
+	return match pt {
+		Pat.POr(ps) => ps
+		_           => []
+	}
+}
+
+# c_pat_binds — every name a pattern binds, in the order it binds them. It exists for the
+# or-pattern's one rule: `A(x) | B(x)` is a form and `A(x) | B(y)` is not, because the arm's body
+# reads a name that only one side supplies. Written as a walk so that a name nested three deep
+# counts exactly as much as one at the top.
+# c_or_binds_differ — "" when two sides of an or-pattern bind the same names, or the clause that
+# says how they do not. ONE function because it is ONE rule: raised at two sites it would be two
+# identities for one number, which `error-codes-check` refuses and which is how two sentences
+# about the same thing drift apart.
+fn c_or_binds_differ(want: list[str], got: list[str]) -> str {
+	return f"these bind {strconv.to_string(want.len(), 10)} and {strconv.to_string(got.len(), 10)}" if got.len() != want.len()
+
+	for nm in want {
+		return f"`{nm}` is not one of the other side's" if not c_name_in(got, nm)
+	}
+	return ""
+}
+
+fn c_pat_binds(pt: ast.Pat) -> list[str] {
+	bn := c_pat_bind_name(pt)
+	return [bn] if bn != ""
+
+	mut out: list[str] = []
+	for sub in c_pat_children(pt) {
+		for n in c_pat_binds(sub) {
+			out.append(n)
+		}
+	}
+	return out
+}
+
+# c_pat_children — the sub-patterns of a pattern, whatever shape it is. One function because
+# every walk over the tree wants the same answer, and a shape added to one list and not another
+# is the defect this whole change is about.
+fn c_pat_children(pt: ast.Pat) -> list[ast.Pat] {
+	return match pt {
+		Pat.PVariant(_, _, ps) => ps
+		Pat.PStruct(_, _, ps, _) => ps
+		Pat.PList(ps, _, _) => ps
+		Pat.PTuple(ps) => ps
+		Pat.POr(ps) => ps
+		Pat.PAs(inner, _) => [inner]
+		_ => []
+	}
+}
+
+fn c_pat_is_struct(pt: ast.Pat) -> bool {
+	return match pt {
+		Pat.PStruct(_, _, _, _) => true
+		_ => false
+	}
+}
+
+fn c_pat_struct_name(pt: ast.Pat) -> str {
+	return match pt {
+		Pat.PStruct(n, _, _, _) => n
+		_ => ""
+	}
+}
+
+fn c_pat_struct_fields(pt: ast.Pat) -> list[str] {
+	return match pt {
+		Pat.PStruct(_, fs, _, _) => fs
+		_ => []
+	}
+}
+
+fn c_pat_struct_pats(pt: ast.Pat) -> list[ast.Pat] {
+	return match pt {
+		Pat.PStruct(_, _, ps, _) => ps
+		_ => []
+	}
+}
+
+fn c_pat_struct_open(pt: ast.Pat) -> bool {
+	return match pt {
+		Pat.PStruct(_, _, _, o) => o
+		_ => false
+	}
+}
+
+# c_struct_field_names — every field a struct declares, in declaration order. It exists for the
+# completeness rule: a struct pattern with no `..` names them all, and the reader is told WHICH
+# one is missing rather than that one is.
+fn c_struct_field_names(mut &em: Emitter, sname: str) -> list[str] {
+	mut out: list[str] = []
+	mut i := 0
+	for i < em.fld_struct.len() {
+		if em.fld_struct[i] == sname {
+			out.append(em.fld_name[i])
+		}
+		i = i + 1
+	}
+	return out
+}
+
+fn c_pat_is_list(pt: ast.Pat) -> bool {
+	return match pt {
+		Pat.PList(_, _, _) => true
+		_ => false
+	}
+}
+
+fn c_pat_list_elems(pt: ast.Pat) -> list[ast.Pat] {
+	return match pt {
+		Pat.PList(ps, _, _) => ps
+		_ => []
+	}
+}
+
+fn c_pat_list_rest(pt: ast.Pat) -> int {
+	return match pt {
+		Pat.PList(_, r, _) => r
+		_ => 0 - 1
+	}
+}
+
+fn c_pat_list_rest_name(pt: ast.Pat) -> str {
+	return match pt {
+		Pat.PList(_, _, n) => n
+		_ => ""
+	}
+}
+
+# c_list_pat_at is the accessor for one element of a list pattern, and the whole of what `..`
+# means is in it: an element BEFORE the rest is at its own index, and one after it is that far
+# from the END. `[a, ..,  z]` over a list of five reads `xs[0]` and `xs[4]`.
+fn c_list_pat_at(s: str, ct: str, i: int, rest: int, n: int) -> str {
+	return f"(*({ct}*)zrt_list_at_ref(&({s}), (size_t)({i})))" if rest < 0 or i < rest
+
+	back := n - i
+	return f"(*({ct}*)zrt_list_at_ref(&({s}), zrt_list_len(&({s})) - (size_t)({back})))"
+}
+
+fn c_pat_is_tuple(pt: ast.Pat) -> bool {
+	return match pt {
+		Pat.PTuple(_) => true
+		_             => false
+	}
+}
+
+fn c_pat_tuple_elems(pt: ast.Pat) -> list[ast.Pat] {
+	return match pt {
+		Pat.PTuple(ps) => ps
+		_ => []
+	}
 }
 
 # c_range_needs_hi refuses an OPEN-ENDED range where the lowering has no length to put in place
@@ -9404,10 +10068,10 @@ fn c_range_needs_hi(mut &em: Emitter, e: ast.Expr, what: str) {
 # `match s { "y" => 1  _ => -1 }` answered `-1` for `s = "y"`. Two string literals that are equal
 # may or may not share storage, so the arm did not merely fail — it failed unpredictably, which
 # is the one kind of wrong answer a test can pass over.
-fn c_arm_eq(mut &em: Emitter, a: ast.Arm, s: str, st: ast.Ty, sb: Subst) -> str {
-	return f"(strcmp({s}, {c_expr(em, a.lit, sb)}) == 0)" if c_is_str(st)
+fn c_arm_eq(mut &em: Emitter, lit: ast.Expr, s: str, st: ast.Ty, sb: Subst) -> str {
+	return f"(strcmp({s}, {c_expr(em, lit, sb)}) == 0)" if c_is_str(st)
 
-	return f"({s} == {c_expr(em, a.lit, sb)})"
+	return f"({s} == {c_expr(em, lit, sb)})"
 }
 
 # c_arm_range lowers a RANGE arm's test. GRAMMAR defines `200..300 =>` as match-only sugar for
@@ -9422,18 +10086,18 @@ fn c_arm_eq(mut &em: Emitter, a: ast.Arm, s: str, st: ast.Ty, sb: Subst) -> str 
 # is materialised before the arms are laid out, so nothing is evaluated a second time here.
 # Like `c_arm_eq` above, the comparisons are built as TEXT rather than as an EBinary, so no
 # operand rule is met on the way through and `chk_binary` has to be asked for it here.
-fn c_arm_range(mut &em: Emitter, a: ast.Arm, s: str, st: ast.Ty, sb: Subst) -> str {
-	check.chk_binary(em, ">=", st, c_infer(em, c_range_lo(a.lit)), a.lit, a.lit)
-	lo := c_arm_bound(em, c_range_lo(a.lit), sb)
+fn c_arm_range(mut &em: Emitter, lit: ast.Expr, s: str, st: ast.Ty, sb: Subst) -> str {
+	check.chk_binary(em, ">=", st, c_infer(em, c_range_lo(lit)), lit, lit)
+	lo := c_arm_bound(em, c_range_lo(lit), sb)
 	mut base := f"({s} >= {lo})"
-	if not c_is_nil_lit(c_range_hi(a.lit)) {
-		hi := c_arm_bound(em, c_range_hi(a.lit), sb)
+	if not c_is_nil_lit(c_range_hi(lit)) {
+		hi := c_arm_bound(em, c_range_hi(lit), sb)
 		mut cmp := " < "
-		if c_range_incl(a.lit) {
+		if c_range_incl(lit) {
 			cmp = " <= "
 		}
 		base = f"(({s} >= {lo}) && ({s}{cmp}{hi}))"
-	} else if c_range_incl(a.lit) {
+	} else if c_range_incl(lit) {
 		# `500..=` is not a range: GRAMMAR gives '..=' a mandatory bound, and the parser reads
 		# the missing one as nil rather than saying so.
 		#
@@ -9445,9 +10109,10 @@ fn c_arm_range(mut &em: Emitter, a: ast.Arm, s: str, st: ast.Ty, sb: Subst) -> s
 		raise c_diag(em, rule.Rule.OpenRangeInclusive, "`..=` with no upper bound is not a range — write `500..` for open-ended")
 	}
 
-	# a guard on a range arm is AND-ed on, the way a constructor pattern's is: the range says
-	# which values reach the guard, and the guard has the last word
-	return f"({base} && {c_arm_guard(em, a, sb)})" if a.has_guard
+	# THE GUARD IS NO LONGER THIS FUNCTION'S. Every shape used to add it for itself — the
+	# literal, the constructor, the range, the wildcard — which is one rule written at four
+	# sites, and the literal arm is the one that forgot: `match 1 { 1 if false => 10  _ => 0 }`
+	# answered 10. `c_arm_cond_in` wraps the whole condition once, whatever shape produced it.
 	return base
 }
 
@@ -10551,7 +11216,9 @@ fn c_const_order(mut &em: Emitter, f: ast.File) -> list[int] {
 # an identity is `stdlib:io` or `project:util/text` — a root and a path under it — so the
 # same program built from a relative and an absolute entry sorts one way. Within a module
 # the table's own order stands, which is the source order the loader read the files in.
-fn c_const_seq(em: Emitter, f: ast.File) -> list[int] {
+# BY REFERENCE for `c_mod_of`'s reason: a value parameter copies every list on the Emitter and
+# drops every one again, once per constant.
+fn c_const_seq(mut &em: Emitter, f: ast.File) -> list[int] {
 	mut keys: list[str] = []
 	for c in f.consts {
 		keys.append(check.c_mod_of(em, c.path))

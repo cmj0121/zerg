@@ -107,6 +107,7 @@ pub enum Rule {
 	StatementAsExpr = 2073
 	DecoratorUnknown = 2076
 	UnsafeOpensNeither = 2075
+	ListPatternTwoRests = 2078
 	ImplItemUnknown = 2077
 
 	# checking — a form whose meaning does not hold together — reported against the tree, all at once
@@ -353,6 +354,13 @@ pub enum Rule {
 	NamespaceCollision = 4077
 	DefaultReadsUnbuiltField = 4080
 	MapKeyHasNoHash = 4079
+	TuplePatternArity = 4082
+	TuplePatternNotATuple = 4083
+	StructPatternWrongType = 4085
+	StructPatternNoSuchField = 4086
+	OrPatternBindsDiffer = 4088
+	StructPatternIncomplete = 4087
+	ListPatternNotAList = 4084
 	MutateAValueNotAPlace = 4081
 
 	# building — the program as a set of files, which no single file's text answers: imports resolved
@@ -415,16 +423,11 @@ pub enum Rule {
 	NotYetFStringConversion = 9013
 	NotYetFStringSelfDoc = 9014
 	NotYetImplAssocType = 9015
-	NotYetTuplePattern = 9016
 	NotYetArrayType = 9017
-	NotYetAsPattern = 9018
 	NotYetCommandInterpolating = 9019
 	NotYetCommandLiteral = 9020
 	NotYetDestructuringBinding = 9021
-	NotYetListPattern = 9023
-	NotYetOrPattern = 9024
 	NotYetForMutBinding = 9025
-	NotYetStructPatternInMatch = 9026
 	NotYetUnsafeFn = 9027
 	NotYetAssocTypeProjection = 9028
 	NotYetValueGenericParam = 9029
@@ -514,6 +517,7 @@ pub enum Rule {
 	# every exit unwinds to a mark. The channel case next door (9066) is the same absence read
 	# from the other side, and both retire when a release can be taken out of the middle.
 	NotYetDelOwning = 9108
+	NotYetListPatternRestBinding = 9110
 	NotYetUnsafeMethod = 9109
 }
 

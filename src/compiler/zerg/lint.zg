@@ -362,12 +362,31 @@ fn lint_key_seen(seen: list[str], k: str) -> bool {
 
 # lint_arm_key is what makes two arms the same one, or "" for an arm that cannot be compared.
 # A binding and a wildcard are deliberately unkeyed: they are E4032's question, not this one.
+fn lint_pat_lit_key(e: ast.Expr) -> str {
+	k := lint_lit_key(e)
+
+	return "" if k == ""
+
+	return "lit " + k
+}
+
 fn lint_arm_key(a: ast.Arm) -> str {
 	return "" if a.has_guard
-	return "lit " + lint_lit_key(a.lit) if a.pat == 0 and lint_lit_key(a.lit) != ""
-	return f"ctor {a.qual}.{a.ctor}" if a.pat == 3
 
-	return ""
+	return match a.pat {
+		# A literal that can be spelled as a key; a range cannot, and answers "" for itself.
+		Pat.PLit(e) => lint_pat_lit_key(e)
+
+		# A constructor arm is the same one when the qualifier and the variant agree. The
+		# PAYLOAD is deliberately not in the key: `E.Wrap(a)` and `E.Wrap(0)` are two patterns
+		# and only the second can be covered by the first, which is a question about
+		# containment rather than about sameness — E4032's, not this one.
+		Pat.PVariant(q, c, _) => f"ctor {q}.{c}"
+
+		# A binding and a wildcard are unkeyed on purpose: they cover everything, so an arm
+		# after one is unreachable rather than duplicated, and E4032 says so.
+		_ => ""
+	}
 }
 
 fn lint_lit_key(e: ast.Expr) -> str {

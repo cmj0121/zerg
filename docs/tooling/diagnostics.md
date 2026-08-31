@@ -187,6 +187,7 @@ shipping compiler rather than a part of it (the line
 | `E2075` | a top-level `unsafe` opens a group or marks a `fn`, and this is neither                               |
 | `E2076` | the decorator `#[…]` — the set is closed, so an unknown name is not a directive                       |
 | `E2077` | `…` is not an `impl` item                                                                             |
+| `E2078` | a list pattern takes ONE `..`                                                                         |
 | `E3001` | `…` is not a public member of module `…`                                                              |
 | `E3002` | `…` is not a place, and an assignment needs one                                                       |
 | `E3003` | cannot assign to `…`: it is a module `const`, and a constant is never written                         |
@@ -395,6 +396,13 @@ shipping compiler rather than a part of it (the line
 | `E4079` | a map key of type float — a float has no equality a hash can agree with                               |
 | `E4080` | the default on field `…` reads a field that is not an earlier one                                     |
 | `E4081` | `…` MUTATES its list, and a slice, a call result or a literal is a value                              |
+| `E4082` | a tuple pattern names … element(s) and a … has …                                                      |
+| `E4083` | a tuple pattern matches a tuple                                                                       |
+| `E4084` | a list pattern matches a list                                                                         |
+| `E4085` | a struct pattern names `…` and the value is a …                                                       |
+| `E4086` | `…` has no field `…`                                                                                  |
+| `E4087` | a struct pattern names every field or ends in `..`                                                    |
+| `E4088` | the sides of an or-pattern bind the same names                                                        |
 | `E5001` | this entry file declares no `fn main`                                                                 |
 | `E5002` | cannot resolve import `…`, and where it was looked for                                                |
 | `E5007` | `…` is a module this build compiles and this module did not import                                    |
@@ -422,16 +430,11 @@ shipping compiler rather than a part of it (the line
 | `E9013` | an f-string '!r' / '!s' / '!a' conversion                                                             |
 | `E9014` | the f-string '{expr=}' self-documenting form                                                          |
 | `E9015` | an associated type binding `type … = …` in an `impl`                                                  |
-| `E9016` | a tuple pattern in a `match` arm                                                                      |
 | `E9017` | an array type `[T; N]`                                                                                |
-| `E9018` | an `as` binding in a `match` arm                                                                      |
 | `E9019` | an interpolating command literal                                                                      |
 | `E9020` | a command literal                                                                                     |
 | `E9021` | a destructuring binding `(a, b) := …`                                                                 |
-| `E9023` | a list pattern in a `match` arm                                                                       |
-| `E9024` | an or-pattern                                                                                         |
 | `E9025` | `for mut v in …`                                                                                      |
-| `E9026` | a struct pattern `…{…}` in a `match` arm                                                              |
 | `E9027` | a standalone `unsafe fn` declaration                                                                  |
 | `E9028` | an associated type projection `….…`                                                                   |
 | `E9029` | a value generic parameter `…: …`                                                                      |
@@ -492,6 +495,7 @@ shipping compiler rather than a part of it (the line
 | `E9107` | the method `…` on a … — `display`, `debug`, `format`; `next` on a channel; `iter` on what `for` walks |
 | `E9108` | `del …` on an owning struct, list or map — the early free, where the release is a scope-exit unwind   |
 | `E9109` | an `unsafe fn` method in an `impl`                                                                    |
+| `E9110` | a NAMED rest in a list pattern                                                                        |
 
 They are reported the moment a file is **read**, before its imports are scanned — scanning
 them parses, and a parser handed unreadable text can only say something untrue about it.
@@ -623,6 +627,11 @@ name now is the prelude rule (`E2061`), which is about the name rather than abou
 | `E9082` | `E4077` | reachable only when the two files are literally one module         |
 | `E9098` | `E4078` | everything call-shaped left earlier                                |
 | `E9007` | `E2077` | the three item forms all have arms; a statement is none            |
+| `E9016` | —       | the tuple pattern is built                                         |
+| `E9023` | —       | the list pattern is built; a NAMED rest is E9110                   |
+| `E9026` | —       | the struct pattern is built                                        |
+| `E9024` | —       | the or-pattern is built                                            |
+| `E9018` | —       | the `as` binding is built                                          |
 | `E9081` | —       | a public name takes the module tag a private one already had (#92) |
 | `E3047` | —       | a strong typedef takes its underlying type's prefix operators      |
 

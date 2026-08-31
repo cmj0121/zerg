@@ -163,6 +163,7 @@ seed 全程維持句子比對:代碼是語言的契約,而 seed 是建置正式�
 | `E2075` | 頂層的 `unsafe` 開一個 group 或標記一個 `fn`,而這裡兩者皆非                                           |
 | `E2076` | decorator `#[…]` — 集合是封閉的,未知的名字不是指示詞                                                  |
 | `E2077` | `…` 不是 `impl` 的項目                                                                                |
+| `E2078` | list pattern 只能有一個 `..`                                                                          |
 | `E3001` | `…` 不是 module `…` 的公開成員                                                                        |
 | `E3002` | `…` 不是一個位置,而賦值需要一個                                                                       |
 | `E3003` | 不能對 `…` 賦值:它是 module `const`,而常數永遠不被寫入                                                |
@@ -371,6 +372,13 @@ seed 全程維持句子比對:代碼是語言的契約,而 seed 是建置正式�
 | `E4079` | float 當 map key — float 沒有 hash 能同意的相等                                                       |
 | `E4080` | 欄位 `…` 的預設值讀了一個不是「更早」的欄位                                                           |
 | `E4081` | `…` 會改動它的 list,而 slice、呼叫結果或字面量都是值                                                  |
+| `E4082` | tuple pattern 指名了 … 個元素,而 … 有 … 個                                                            |
+| `E4083` | tuple pattern 匹配的是 tuple                                                                          |
+| `E4084` | list pattern 匹配的是 list                                                                            |
+| `E4085` | struct pattern 指名的是 `…`,而值是 …                                                                  |
+| `E4086` | `…` 沒有欄位 `…`                                                                                      |
+| `E4087` | struct pattern 要指名每個欄位、或以 `..` 收尾                                                         |
+| `E4088` | or-pattern 的兩側綁同樣的名字                                                                         |
 | `E5001` | 這個進入點檔案沒有宣告 `fn main`                                                                      |
 | `E5002` | 無法解析 import `…`,以及它到哪裡找過                                                                  |
 | `E5007` | `…` 是這次建置編進來、而本 module 沒有 import 的 module                                               |
@@ -398,16 +406,11 @@ seed 全程維持句子比對:代碼是語言的契約,而 seed 是建置正式�
 | `E9013` | f-string 的 '!r' / '!s' / '!a' 轉換                                                                   |
 | `E9014` | f-string 的 '{expr=}' 自述形式                                                                        |
 | `E9015` | `impl` 裡的 associated type 綁定 `type … = …`                                                         |
-| `E9016` | `match` arm 裡的 tuple pattern                                                                        |
 | `E9017` | 陣列型別 `[T; N]`                                                                                     |
-| `E9018` | `match` arm 裡的 `as` 綁定                                                                            |
 | `E9019` | 會內插的 command literal                                                                              |
 | `E9020` | command literal                                                                                       |
 | `E9021` | 解構綁定 `(a, b) := …`                                                                                |
-| `E9023` | `match` arm 裡的 list pattern                                                                         |
-| `E9024` | or-pattern                                                                                            |
 | `E9025` | `for mut v in …`                                                                                      |
-| `E9026` | `match` arm 裡的 struct pattern `…{…}`                                                                |
 | `E9027` | 獨立的 `unsafe fn` 宣告                                                                               |
 | `E9028` | associated type 投影 `….…`                                                                            |
 | `E9029` | 值 generic 參數 `…: …`                                                                                |
@@ -468,6 +471,7 @@ seed 全程維持句子比對:代碼是語言的契約,而 seed 是建置正式�
 | `E9107` | … 上的方法 `…` —— `display`、`debug`、`format`;channel 上的 `next`;`for` 走得到的東西上的 `iter`      |
 | `E9108` | `del …` 用在擁有值（struct/list/map）上 —— 提早釋放,而 release 是 scope 退出時的 unwind               |
 | `E9109` | `impl` 裡的 `unsafe fn` 方法                                                                          |
+| `E9110` | list pattern 裡具名的 rest                                                                            |
 
 它們在檔案被**讀進來**的當下就報告，早於掃描它的 import——掃描 import 會 parse，而一個拿到
 讀不懂的文字的 parser，只能說出不真實的話。它以前說的正是這種話：`` `b'b` is not an
@@ -581,6 +585,11 @@ arm、同樣的形狀、同樣的兩個問題——而只有 map 那邊被問了
 | `E9082` | `E4077` | 只有在兩個檔案字面上就是同一個 module 時才到得了 |
 | `E9098` | `E4078` | 所有呼叫形狀的東西都更早離開了                   |
 | `E9007` | `E2077` | 三種項目形式都有分支;statement 不是其中任何一種  |
+| `E9016` | —       | tuple pattern 已經建好了                         |
+| `E9023` | —       | list pattern 已經建好了,具名的 rest 是 E9110     |
+| `E9026` | —       | struct pattern 已經建好了                        |
+| `E9024` | —       | or-pattern 已經建好了                            |
+| `E9018` | —       | `as` 綁定已經建好了                              |
 | `E9081` | —       | 公開名字拿到私有名字早就有的 module tag（#92）   |
 | `E3047` | —       | 強 typedef 承接底層型別的前綴運算子              |
 

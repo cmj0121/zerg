@@ -612,15 +612,6 @@ fn ident_name(e: ast.Expr) -> str {
 	}
 }
 
-# is_or_expr reports whether an expression is a bitwise-or at its top, which in a match arm
-# is the shape an or-pattern over LITERALS arrives in — parse_expr swallows the `|`.
-fn is_or_expr(e: ast.Expr) -> bool {
-	return match e {
-		Expr.EBinary(oper, x, y) => oper == "|"
-		_ => false
-	}
-}
-
 # --- types ---------------------------------------------------------------------
 
 # parse_type reads a type expression, including the two DIRECTIONAL channel spellings
@@ -4450,6 +4441,24 @@ fn at_named_range_arm(mut &p: Parser) -> bool {
 	return k == token.Kind.DotDot or k == token.Kind.DotDotEq
 }
 
+# at_range_arm is the whole of the `( pattern | range-arm )` decision. GRAMMAR#range-bound is
+# `'-'? literal | identifier`, so the `..` sits one token past a name or a literal and two past
+# a negated one — and a head that is neither opens a pattern.
+fn at_range_arm(mut &p: Parser) -> bool {
+	return at_named_range_arm(p) if p_at(p, token.Kind.Ident)
+
+	k := 1
+	if p_at(p, token.Kind.Minus) {
+		nk := peek_kind(p, 2)
+		return nk == token.Kind.DotDot or nk == token.Kind.DotDotEq
+	}
+
+	return false if p_at(p, token.Kind.LParen) or p_at(p, token.Kind.LBrack)
+
+	pk := peek_kind(p, k)
+	return pk == token.Kind.DotDot or pk == token.Kind.DotDotEq
+}
+
 # p_arm_body_stmt refuses a STATEMENT left standing after an arm's body, and it is one
 # function for the reason p_trailing_comma is: the two shapes that reach it — a leftover `=`
 # and a leftover `<-` — are one rule about what an arm's body may be, and writing them out
@@ -4461,34 +4470,135 @@ fn p_arm_body_stmt(mut &p: Parser, what: str) -> str {
 	return p_diag(p, rule.Rule.NotYetMatchArmStatement, f"NotImplemented: a match arm's body is an expression — {what} in an arm needs a block body, which this emitter cannot yet lower")
 }
 
-# parse_arm parses one `pattern [if guard] => body` arm. A bare identifier binds the
-# scrutinee (or is the `_` wildcard) unless a `..` follows it, which makes it a range bound;
-# anything else is a literal pattern matched by equality.
-fn parse_arm(mut &p: Parser) -> ast.Arm {
-	aline := cur(p).line
-	acol := cur(p).col
+# --- patterns (GRAMMAR#pattern) -----------------------------------------------------------
+#
+# FOUR PRODUCTIONS, FOUR FUNCTIONS, and the recursion is the point: `sub-pattern` holds a
+# `pattern-core`, a variant's payload and a tuple hold a `pattern-list`, a list element holds a
+# `pattern`, and a struct field holds one too. What stood here read ONE level and stored the
+# result in four flat fields on `Arm`, which is why every nested form was refused by name.
+#
+# NOTHING HERE IS RESOLVED. GRAMMAR#pattern makes the pattern grammar context-free — a bare
+# name is always a fresh binding, and what makes a constructor pattern one is its SHAPE (a
+# qualifier, or a payload list) and not the capital its name happens to start with. Asking what
+# a name MEANS is the emitter's, and `c_check_arm_pats` asks it.
 
-	# A TUPLE or LIST pattern in arm position — `(a, b) =>`, `[a, ..r] =>`. Both read as an
-	# EXPRESSION here, so the names in them came out undefined rather than bound, and the
-	# message named a symptom two steps from the form that was written.
-	raise p_diag(p, rule.Rule.NotYetTuplePattern, "NotImplemented: a tuple pattern in a `match` arm — this compiler destructures a tuple with `.0` / `.1`") if p_at(p, token.Kind.LParen)
-	raise p_diag(p, rule.Rule.NotYetListPattern, "NotImplemented: a list pattern in a `match` arm — this compiler destructures a list with indexing and `.slice`") if p_at(p, token.Kind.LBrack)
+# p_at_literal_word — the three reserved words GRAMMAR#literal also derives. They are the only
+# keywords a pattern may open with, and the reason the reserved-word rule below needs an
+# exception at all.
+fn p_at_literal_word(mut &p: Parser) -> bool {
+	return p_at(p, token.Kind.True) or p_at(p, token.Kind.False) or p_at(p, token.Kind.Nil)
+}
 
-	mut pat := 0
-	mut lit := ast.Expr.ENil
-	mut bind := ""
-	mut ctor := ""
-	mut qual := ""
-	mut binds: list[str] = []
-	if p_at(p, token.Kind.Ident) and not at_named_range_arm(p) {
-		mut name := cur(p).lexeme
+# p_pat_unbuilt refuses the pattern shapes this compiler does not lower, each by the name it has
+# always had. THEY ARE REFUSED AT THE PARSE because they are decided by SHAPE alone — no type is
+# consulted to know that a tuple pattern is one — and the stage a refusal comes from is part of
+# what a reader gets: a top-level script carrying an `as` pattern is answered about the `as`,
+# and not about the top-level statement the checker would reach first.
+#
+# It reads the built tree rather than the tokens, which is what the tree bought: the guessing
+# this used to do — is a `(` a tuple pattern or a parenthesised one? — is gone.
+fn p_pat_unbuilt(mut &p: Parser, pt: ast.Pat, line: int, col: int) {
+	msg := match pt {
+		Pat.PVariant(_, _, ps) => p_payload_unbuilt(p, ps, line, col)
+		_ => ""
+	}
+
+	raise msg if msg != ""
+}
+
+fn p_payload_unbuilt(mut &p: Parser, ps: list[ast.Pat], line: int, col: int) -> str {
+	for pt in ps {
+		return p_diag_at(p, line, col, rule.Rule.NotYetSubPatternInPayload, "NotImplemented: a sub-pattern inside a variant payload — GRAMMAR#variant-pat takes a `pattern-list`, and this compiler binds a name per field") if not p_pat_is_name(pt)
+	}
+	return ""
+}
+
+fn p_pat_is_name(pt: ast.Pat) -> bool {
+	return match pt {
+		Pat.PBind(_) => true
+		Pat.PWild    => true
+		_            => false
+	}
+}
+
+fn p_pattern(mut &p: Parser) -> ast.Pat {
+	mut alts: list[ast.Pat] = []
+	alts.append(p_sub_pattern(p))
+	for p_at(p, token.Kind.Pipe) {
+		p_advance(p)
+		alts.append(p_sub_pattern(p))
+	}
+
+	return alts[0] if alts.len() == 1
+
+	return ast.Pat.POr(alts)
+}
+
+fn p_sub_pattern(mut &p: Parser) -> ast.Pat {
+	core := p_pattern_core(p)
+
+	return core if not p_at(p, token.Kind.As)
+
+	p_advance(p)
+	return ast.Pat.PAs(core, p_name(p, "an `as` binding"))
+}
+
+# p_pattern_list reads `pattern ( ',' pattern )*` up to `close`, which is every place
+# GRAMMAR#pattern-list is used and the tuple's own body besides.
+fn p_pattern_list(mut &p: Parser, ck: token.Kind, closer: str, what: str) -> list[ast.Pat] {
+	mut out: list[ast.Pat] = []
+	for not p_at(p, ck) and not p_at(p, token.Kind.Eof) {
+		out.append(p_pattern(p))
+		p_list_sep(p, ck, closer, what)
+	}
+	expect(p, ck)
+	return out
+}
+
+fn p_pattern_core(mut &p: Parser) -> ast.Pat {
+	if p_at(p, token.Kind.LParen) {
+		p_advance(p)
+		return ast.Pat.PTuple(p_pattern_list(p, token.Kind.RParen, ")", "a tuple pattern"))
+	}
+
+	# `[a, b]`, `[a, ..rest]`, `[..]`. The rest element is recorded by INDEX rather than by a
+	# flag, because where it sits is what decides which elements are counted from the front and
+	# which from the back — and a list pattern with two of them has no such answer.
+	if p_at(p, token.Kind.LBrack) {
+		lb := cur(p)
 		p_advance(p)
 
-		# `Color.Green =>` — a variant NAMED BY ITS ENUM, the pattern half of the qualified
-		# form. The arm matches on the VARIANT, and the enum name is carried alongside rather
-		# than dropped: GRAMMAR#variant-pat says *the qualification must be true*, and a name
-		# that is read and thrown away cannot be held to that. Which enum it belongs to is
-		# still the emitter's question — this only makes the question askable.
+		mut elems: list[ast.Pat] = []
+		mut rest := -1
+		mut rest_name := ""
+		for not p_at(p, token.Kind.RBrack) and not p_at(p, token.Kind.Eof) {
+			if p_at(p, token.Kind.DotDot) {
+				raise p_diag_at(p, lb.line, lb.col, rule.Rule.ListPatternTwoRests, "a list pattern takes ONE `..` — with two, no element has a position, since the ones after the first are counted from the front and the ones before the second from the back") if rest >= 0
+				p_advance(p)
+				rest = elems.len()
+				if p_at(p, token.Kind.Ident) {
+					rest_name = p_name(p, "a rest binding")
+				}
+			} else {
+				elems.append(p_pattern(p))
+			}
+			p_list_sep(p, token.Kind.RBrack, "]", "a list pattern")
+		}
+		expect(p, token.Kind.RBrack)
+		return ast.Pat.PList(elems, rest, rest_name)
+	}
+
+	if p_at(p, token.Kind.Ident) {
+		# `p_name` AND NOT `cur(p).lexeme`, so the reserved-word rule has ONE identity. `This`
+		# is the reserved word an `Ident` can still be, and reading the lexeme here would have
+		# meant a second raise of E2013 — which `error-codes-check` refuses, and rightly: two
+		# spellings drift, and the one a reader meets decides what they believe.
+		mut name := p_name(p, "a pattern")
+
+		# `Colour.Red` — a variant NAMED BY ITS ENUM. The qualifier is carried rather than
+		# dropped: GRAMMAR#variant-pat says the qualification must be TRUE, and a name that is
+		# read and thrown away cannot be held to that.
+		mut qual := ""
 		mut qualified := false
 		if p_at(p, token.Kind.Dot) and peek_kind(p, 1) == token.Kind.Ident {
 			qual = name
@@ -4497,85 +4607,91 @@ fn parse_arm(mut &p: Parser) -> ast.Arm {
 			qualified = true
 		}
 
-		# `Move{x, y} =>` — a STRUCT PATTERN (GRAMMAR#struct-pat). `P{…}` after a name in arm
-		# position is that and nothing else, and it fell through to the arrow check, so the
-		# message was `expected `=>`, found `{`` — the token after the form rather than the
-		# form. The tuple and list patterns beside it are already refused by name.
-		raise p_diag(p, rule.Rule.NotYetStructPatternInMatch, f"NotImplemented: a struct pattern `{name}{{…}}` in a `match` arm — this compiler destructures a struct with field access, not with a pattern") if p_at(p, token.Kind.LBrace)
+		# `P{x, y: inner}` — a STRUCT PATTERN. A `..` says the fields not written are not being
+		# asked about; without it the pattern names every field and the emitter says so.
+		if p_at(p, token.Kind.LBrace) {
+			p_advance(p)
 
-		if name == "_" {
-			pat = 2
-		} else if qualified or p_at(p, token.Kind.LParen) {
-			# enum constructor pattern: `Enum.Variant` or `Enum.Variant(a, b)`. What makes it
-			# one is the SHAPE — a qualifier, or a payload list — and not the capital the name
-			# happens to start with. Which enum it belongs to is the emitter's question, and
-			# `c_check_arm_pats` already asks it of every constructor pattern.
-			pat = 3
-			ctor = name
+			mut fields: list[str] = []
+			mut pats: list[ast.Pat] = []
+			mut open := false
+			for not p_at(p, token.Kind.RBrace) and not p_at(p, token.Kind.Eof) {
+				if p_at(p, token.Kind.DotDot) {
+					p_advance(p)
+					open = true
+					p_list_sep(p, token.Kind.RBrace, "}", "a struct pattern")
+					continue
+				}
+				f := p_name(p, "a field pattern")
+				fields.append(f)
+
+				# `x` alone binds the field to its own name; `x: p` matches it against p.
+				if p_at(p, token.Kind.Colon) {
+					p_advance(p)
+					pats.append(p_pattern(p))
+				} else {
+					pats.append(ast.Pat.PBind(f))
+				}
+				p_list_sep(p, token.Kind.RBrace, "}", "a struct pattern")
+			}
+			expect(p, token.Kind.RBrace)
+			return ast.Pat.PStruct(name, fields, pats, open)
+		}
+
+		return ast.Pat.PWild if name == "_"
+
+		if qualified or p_at(p, token.Kind.LParen) {
+			mut payload: list[ast.Pat] = []
 			if p_at(p, token.Kind.LParen) {
 				p_advance(p)
-				for not p_at(p, token.Kind.RParen) and not p_at(p, token.Kind.Eof) {
-					# A SUB-PATTERN IN THE PAYLOAD. GRAMMAR#variant-pat's payload is a
-					# `pattern-list`, and `pattern` derives every pattern form there is —
-					# so `E.Wrap(Inner.A(n))` and `E.One(0)` are both derived. This loop
-					# reads a NAME and nothing else, so the first reported whatever token
-					# followed the inner name (``expected `,`, found `.` ``) and the second
-					# fell to p_name's own sentence: a token complaint with no code and no
-					# place, for a form the grammar has (docs/code/patterns.md says as much,
-					# and asks for exactly this).
-					# A RESERVED WORD IS NOT A SUB-PATTERN, and p_name below owns that
-					# sentence (E2013): `E.One(this)` is somebody naming a binding `this`,
-					# not writing a pattern inside a pattern, and answering it here would
-					# take a rule off a case that already had one.
-					pt := cur(p)
-					nested := p_at(p, token.Kind.Ident) and peek_kind(p, 1) == token.Kind.Dot
-					if (nested or not p_at(p, token.Kind.Ident)) and not reserved_word(pt.lexeme) {
-						raise p_diag_at(p, pt.line, pt.col, rule.Rule.NotYetSubPatternInPayload, f"NotImplemented: a sub-pattern inside a variant payload, beginning at `{token.says(pt)}` — GRAMMAR#variant-pat takes a `pattern-list` there and this compiler takes a binding name or `_`. Match one level, bind the payload, and `match` the binding in turn") if pt.lexeme != "_"
-					}
-					binds.append(p_name(p, "a pattern binding"))
-					p_list_sep(p, token.Kind.RParen, ")", "a pattern list")
-				}
-				expect(p, token.Kind.RParen)
+				payload = p_pattern_list(p, token.Kind.RParen, ")", "a pattern list")
 			}
-		} else {
-			# A BARE NAME IN PATTERN POSITION IS ALWAYS A FRESH BINDING (GRAMMAR#pattern), and
-			# nothing here has to be resolved to be parsed. It used to be a constructor pattern
-			# when it started with a capital, which made an arm's meaning a NAMING CONVENTION:
-			# rename the binding `Value` to `value` and the same arm stopped matching a variant
-			# and started binding the subject.
-			#
-			# The rule that stood here — "`{name}` is a variant of some enum" — could not
-			# be true, because the parser has resolved nothing and knows of no enum: it fired
-			# on a program that declared none, and named an enum that did not exist. It is
-			# retired rather than moved, because moving it to where the enums ARE known would
-			# put a program's legality back under an unrelated declaration — an enum gaining a
-			# variant would turn a working binding arm elsewhere into an error, which is the
-			# same file-order coupling GRAMMAR retired the bare-variant form to be rid of.
-			#
-			# What guards the mistake it was aimed at — `match c { Red => …  Green => … }`,
-			# meaning two variants and getting one catch-all — is E4032 in the emitter: a
-			# binding arm covers everything, so any arm after it is unreachable and said so.
-			pat = 1
-			bind = name
+			return ast.Pat.PVariant(qual, name, payload)
 		}
-	} else {
-		lit = parse_expr(p)
+
+		# A BARE NAME IN PATTERN POSITION IS ALWAYS A FRESH BINDING. It used to be a
+		# constructor pattern when it started with a capital, which made an arm's meaning a
+		# NAMING CONVENTION: rename the binding `Value` to `value` and the same arm stopped
+		# matching a variant and started binding the subject.
+		return ast.Pat.PBind(name)
 	}
 
-	# AN OR-PATTERN, `A | B =>` (GRAMMAR#pattern), which this compiler does not lower. It
-	# arrives in TWO shapes and the rule was written at one of them: a literal pattern lets
-	# parse_expr swallow the `|` as the bitwise operator, so `1 | 2` reached the emitter as a
-	# folded value and was named there; a name pattern stops before the `|`, and the parser
-	# died on "expected `=>`" — the message a typo gets, for a form GRAMMAR has.
-	#
-	# Both shapes are one rule, so it is written once, HERE: the parser is the only place
-	# that sees the bitwise-or expression and the leftover `|` token alike.
-	raise p_diag(p, rule.Rule.NotYetOrPattern, "NotImplemented: an or-pattern — `|` in a pattern is read as the bitwise operator here, so the arm would match neither side. Write consecutive integers as a range (`1..=2`), or one arm each") if p_at(p, token.Kind.Pipe) or is_or_expr(lit)
+	# A RESERVED WORD IN PATTERN POSITION IS SOMEBODY NAMING A BINDING, and `p_name` owns that
+	# sentence: `E.One(this)` is a binding called `this`, not a pattern inside a pattern. Three
+	# reserved words are LITERALS as well — GRAMMAR#literal derives `true`, `false` and `nil` —
+	# and those go on to the literal below, which is where a pattern that compares against one
+	# belongs.
+	raise p_name(p, "a pattern binding") if reserved_word(cur(p).lexeme) and not p_at_literal_word(p)
 
-	# `pattern as name` — the AS BINDING (GRAMMAR#sub-pattern), which binds the whole matched value
-	# while the pattern keeps destructuring. It fell through to the arrow check, so the
-	# message named `as` rather than the form it opens.
-	raise p_diag(p, rule.Rule.NotYetAsPattern, "NotImplemented: an `as` binding in a `match` arm — `pattern as name` binds the whole matched value, which this compiler does not carry alongside the destructured parts") if p_at(p, token.Kind.As)
+	# What is left is a literal, or a negated one (GRAMMAR#literal-pat). `parse_unary` and not
+	# `parse_expr`, because an or-pattern's `|` is the bitwise operator to an expression parser:
+	# `1 | 2` would be folded into the value 3 and the arm would match neither.
+	return ast.Pat.PLit(parse_unary(p))
+}
+
+# parse_arm parses one `pattern [if guard] => body` arm. A bare identifier binds the
+# scrutinee (or is the `_` wildcard) unless a `..` follows it, which makes it a range bound;
+# anything else is a literal pattern matched by equality.
+fn parse_arm(mut &p: Parser) -> ast.Arm {
+	aline := cur(p).line
+	acol := cur(p).col
+
+	# GRAMMAR#match-arm is `( pattern | range-arm ) …` — a range arm is the SIBLING of a
+	# pattern and not one of its forms, which is why it is decided here and nowhere below. It
+	# is folded into `PLit` because a range IS the literal the emitter compares against, and
+	# because nothing nested can be one: `list-pat-elem` derives a `pattern`, and `pattern`
+	# does not derive `range-arm`.
+	#
+	# ONE TOKEN OF LOOKAHEAD IS THE WHOLE DECISION. The pattern grammar is context-free, so
+	# the parser may not ask what a name MEANS; whether `LO..HI` names constants or nothing at
+	# all is the emitter's question.
+	mut pat := ast.Pat.PWild
+	if at_range_arm(p) {
+		pat = ast.Pat.PLit(parse_expr(p))
+	} else {
+		pat = p_pattern(p)
+		p_pat_unbuilt(p, pat, aline, acol)
+	}
 
 	mut has_guard := false
 	mut grd := ast.Expr.ENil
@@ -4603,7 +4719,7 @@ fn parse_arm(mut &p: Parser) -> ast.Arm {
 	# and the arm counted toward exhaustiveness as if it had no guard at all.
 	raise p_diag(p, rule.Rule.MatchGuardPlacement, "a match arm's guard goes before the `=>` — write `pattern if cond => body`") if p_at(p, token.Kind.If)
 
-	return ast.Arm(pat, lit, bind, ctor, qual, binds, has_guard, grd, body, aline, acol)
+	return ast.Arm(pat, has_guard, grd, body, aline, acol)
 }
 
 # --- f-strings ---------------------------------------------------------------------------

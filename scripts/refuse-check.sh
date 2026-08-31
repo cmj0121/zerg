@@ -362,21 +362,6 @@ fn main() {
 }
 EOF
 
-# GRAMMAR derives an or-pattern; neither compiler lowers one, and `|` in pattern position is
-# read as the bitwise operator — so `1 | 2` folded to `3` and the arm matched neither side,
-# compiled and run. Refusing it is the whole difference between a gap and a wrong answer.
-expect "$ZERG" or-pattern-in-a-match-arm E9024 <<'EOF'
-fn f(n: int) -> str {
-	return match n {
-		1 | 2 => "lo"
-		_ => "hi"
-	}
-}
-
-fn main() {
-	print f(3)
-}
-EOF
 
 # A match lowers to a chain of ternaries whose LAST arm is the final `else`, untested. So a
 # match missing a case never failed — it answered the last arm's body for everything nothing
@@ -959,6 +944,38 @@ EOF
 
 # THE `is` FAMILY. The case above tests a primitive; docs name a STRUCT and the two error
 # kinds that are not in the taxonomy, and each is a different sentence out of the same rule.
+# A TUPLE PATTERN'S ARITY IS A FACT ABOUT THE TYPE, so it is checked rather than left to cc.
+# Both of these used to be an IndexError out of the compiler itself — the walk that registers an
+# arm's bindings indexed a type list that was not there.
+expect "$ZERG" a-tuple-pattern-of-the-wrong-arity E4082 <<'EOF'
+fn main() {
+	print match (1, 2) {
+		(a, b, c) => a
+	}
+}
+EOF
+
+expect "$ZERG" a-tuple-pattern-on-something-else E4083 <<'EOF'
+fn main() {
+	print match 1 {
+		(a, b) => a
+	}
+}
+EOF
+
+# A LIST PATTERN TAKES ONE `..`. With two, no element has a position: the ones after the first
+# are counted from the front and the ones before the second from the back, and nothing decides
+# where the middle belongs. This is the shape that has no answer whatever the list pattern grows into,
+# that would have no answer even once it is.
+expect "$ZERG" a-list-pattern-with-two-rests E2078 <<'EOF'
+fn main() {
+	print match [1, 2, 3] {
+		[..a, ..b] => 0
+		_ => 1
+	}
+}
+EOF
+
 expect "$ZERG" is-a-struct E9078 'is P' <<'EOF'
 struct P {
 	pub a: int
@@ -1846,7 +1863,11 @@ fn main() {
 }
 EOF
 
-expect "$ZERG" tuple-pattern-in-an-arm E9016 <<'EOF'
+# THE TUPLE PATTERN IS BUILT, and this is what its being a CATCH-ALL means: a pattern whose
+# elements all bind covers every tuple there is, so an arm after it is unreachable and E4032
+# says so. The working program moved to the codegen corpus; what is left refused is the
+# consequence, which is the half a reader is more likely to meet by accident.
+expect "$ZERG" an-arm-after-a-tuple-catch-all E4032 <<'EOF'
 fn main() {
 	t := (1, 2)
 	print match t {
@@ -2071,30 +2092,58 @@ fn f(xs: [int; 3]) -> int {
 fn main() { print 1 }
 EOF
 
-expect "$ZERG" struct-pattern E9026 <<'EOF'
+# THE STRUCT PATTERN IS BUILT, and these are the three questions naming its fields makes it
+# ask. The type name is an ASSERTION and not a reference — the scrutinee's type decides which
+# struct the pattern is about — and without a `..` the pattern names every field, so a struct
+# gaining one breaks the patterns written before it BY NAME.
+expect "$ZERG" a-struct-pattern-naming-another-type E4085 <<'EOF'
+struct P {
+	pub x: int
+}
+
+struct Q {
+	pub x: int
+}
+
+fn main() {
+	print match P(1) {
+		Q{x} => x
+	}
+}
+EOF
+
+expect "$ZERG" a-struct-pattern-field-that-is-not-one E4086 <<'EOF'
 struct P {
 	pub x: int
 }
 
 fn main() {
-	p := P(1)
-	print match p {
-		P{x: a} => a
-		_ => 0
+	print match P(1) {
+		P{z} => z
 	}
 }
 EOF
 
-expect "$ZERG" as-binding-in-an-arm E9018 <<'EOF'
-enum E {
-	A(int)
-	B
+expect "$ZERG" a-struct-pattern-that-names-only-some E4087 <<'EOF'
+struct P {
+	pub x: int
+	pub y: int
 }
 
 fn main() {
-	e := E.A(5)
-	print match e {
-		E.A(n) as whole => n
+	print match P(1, 2) {
+		P{x} => x
+	}
+}
+EOF
+
+# THE `as` BINDING IS BUILT, and this is where GRAMMAR does NOT put it: `sub-pattern` attaches
+# `as` to a `pattern-core`, and `match-arm` makes a range arm the SIBLING of a pattern rather
+# than one of its forms — so `1..=9 as n` is derived by nothing.
+expect "$ZERG" an-as-binding-on-a-range-arm E2004 <<'EOF'
+fn main() {
+	print match 5 {
+		1..=9 as n => n
 		_ => 0
 	}
 }
@@ -2358,12 +2407,23 @@ fn main() {
 }
 EOF
 
-expect "$ZERG" list-pattern E9023 <<'EOF'
+# THE LIST PATTERN IS BUILT, and the named rest is the half that is not: `..rest` binds a fresh
+# list, and a `match` arm is an expression with nowhere to declare the temporary that would own
+# it — so every use of the name would allocate another and release none.
+expect "$ZERG" a-named-rest-in-a-list-pattern E9110 <<'EOF'
 fn main() {
-	xs: list[int] = [1, 2, 3]
-	print match xs {
-		[a, ..] => a
-		_ => 0
+	print match [1, 2, 3] {
+		[a, ..rest] => a
+		[..] => 0
+	}
+}
+EOF
+
+expect "$ZERG" a-list-pattern-on-a-scalar E4084 <<'EOF'
+fn main() {
+	print match 1 {
+		[a] => a
+		[..] => 0
 	}
 }
 EOF
@@ -2981,10 +3041,11 @@ EOF
 # reading the answer.
 
 # the NAME shape of the or-pattern, and the reason the rule lives in the parser. Its sibling
-# `or-pattern-in-a-match-arm` above is the LITERAL shape, where parse_expr swallows the `|`
-# into a bitwise-or; a name pattern stops before the `|` instead, so the arm never reached
-# the emitter at all and died on "expected `=>`". One rule, and only the parser sees both.
-expect "$ZERG" or-pattern-of-variant-names E9024 <<'EOF'
+# THE OR-PATTERN IS BUILT, and this is the rule that makes it one: the arm's body is ONE body,
+# so a name only one side supplies is a name that is sometimes there. `E.A | B` reads as a
+# variant on the left and a BINDING on the right — a bare name in pattern position always is —
+# so the two sides bind nothing and one thing.
+expect "$ZERG" an-or-pattern-whose-sides-bind-differently E4088 <<'EOF'
 enum E {
 	A
 	B

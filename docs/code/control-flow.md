@@ -146,11 +146,16 @@ guard-gap; a **redundant** arm (one an earlier arm already covers) is a warning.
 A **pattern** is one of: a **variant with a payload binding** (`Left(v)`) — bound **by copy**, like
 `?`/`return`, the source never invalidated; a **literal** (`0`, `"y"`, `true`, or a negative literal) —
 matched by value; a **nested** pattern (`Left(Some(v))`); or the **wildcard `_`**, matching anything and
-binding nothing. These, together with a **product pattern** (below) and a **range** arm (`1..=2 =>`, which
-matches by containment), all fire. An **or-pattern** (`A | B =>`, and the binding form
-`A(x) | B(x) =>` whose alternatives bind the same names at the same types) and a **list pattern**
-(`[h, ..t]`) are **[not yet]**: `GRAMMAR` derives both, and each is refused in the parser — _E9024_ and
-_E9023_ (below).
+binding nothing. These, together with a **product pattern** (below), a **list
+pattern** (`[a, b]`, `[a, ..]`, `[a, .., z]`) and a **range** arm (`1..=2 =>`, which matches by
+containment), all fire. A list is matched by **length first** — `==` for a pattern that names every
+element, `>=` for one carrying a `..` — and where the `..` sits decides the rest: an element before it is
+at its own index, one after it is that far from the **end**. Only `[..]` is a catch-all. An **or-pattern**
+(`A | B =>`, and the binding form `A(x) | B(x) =>`) fires too: its lowering is the **or** of its sides'
+conditions, and the rule that makes it a form is that **both sides bind the same names** — the arm's body
+is one body, so a name only one side supplies is a name that is sometimes there (_E4088_). Where they do
+bind, the name reads through **whichever side matched**, and a side that covers everything makes the whole
+one cover it: `_ | A` is `_` with extra words.
 
 A **`str` literal** arm compares TEXT, through the same `strcmp` an expression's `==` uses. It lowered to
 a **pointer** comparison, so `match s { "y" => 1  _ => -1 }` answered `-1` for `s == "y"` — silently, since
@@ -161,12 +166,12 @@ the trailing `_` absorbs every miss and two equal literals may or may not share 
 >
 > - a **nested pattern** — `Left(Some(v))`, and `L(0)` too — is _E9076 NotImplemented: a sub-pattern inside a
 >   variant payload_, so a payload position takes a binding name or `_` and every pattern is one level deep;
-> - an **or-pattern** is _E9024 NotImplemented: an or-pattern_ — `|` there would otherwise read as the bitwise
->   operator, folding `1 | 2 =>` to `3 =>` and matching neither side, which is the silent wrong answer a
->   compiler must not give. `zerg fmt` rewrites the one case with a working spelling (consecutive integers
->   become the range `1..=2`, rule `F408`);
-> - a **list pattern** is _E9023 NotImplemented: a list pattern in a `match` arm_ — destructure a list with
->   indexing and a slice instead.
+> - a **NAMED rest** in a list pattern — `[a, ..rest]` — is _E9110_, and `[a, ..]` is not: a named one binds
+>   a fresh list, and a `match` arm is an expression with nowhere to keep it, so every use of the name would
+>   allocate another and release none;
+> - a **NAMED rest** — `[a, ..rest]` — is _E9110 NotImplemented: a NAMED rest in a list pattern_. The
+>   anonymous `..` is built; a named one binds a fresh list, and a `match` arm is an expression with
+>   nowhere to keep it, so every use of the name would allocate another and release none.
 >
 > Refusing at the parse also empties the intended checker's one soft spot — exhaustiveness over **nested**
 > payloads was to prove the top-level variants without proving every nested combination — since no nested
@@ -187,9 +192,16 @@ allows on an existential is the boolean **`is`** test ([Specs & Generics](../cor
 as a binding that hands the concrete value back. A **product pattern** destructures
 a `struct` **by field** (`Div{q, r}`) or a tuple **positionally** (`(a, b)`), binding each part by copy;
 it works both in a `match` arm and at a plain `:=` binding (`(q, r) := divmod(x, y)`) — the way a multiple
-return is consumed. The product pattern is **[not yet]**: destructure with `.0` / `.1` and field access.
-Each of its four shapes is refused by its own name — `E9021` and `E9008` at a binding, `E9016` and `E9026` in
-an arm — so the tuple and the struct are told apart in the message rather than sharing one.
+return is consumed. **The tuple pattern is built in a `match` arm**, and it nests: an element is a pattern,
+so `((a, b), c)` and `((1, b), c)` are both arms, and a pattern whose elements all bind is a **catch-all**
+without saying `_`. Its arity is a fact about the type and is checked as one — _E4082 a tuple pattern names
+3 element(s) and a (int, int) has 2_, _E4083 a tuple pattern matches a tuple_. **The struct pattern is
+built there too**, and naming its fields is what makes it ask three questions the positional shapes do not:
+the type it names must be the value's — the name is an **assertion**, not a reference, so `Q{x}` over a `P`
+is _E4085_ — every field it names must exist (_E4086_), and without a `..` it names them **all** (_E4087_,
+which says which one is missing). That last one is the point of the opt-in: a struct gaining a field breaks
+the patterns written before it, by name. **At a `:=` binding** both are still **[not yet]** — `E9021` and
+`E9008` — so the arm and the binding are told apart in the message rather than sharing one.
 **Guard conditions** work — an
 arm may carry an **`if expr`** after its pattern (`Left(v) if v > 0`) that must also hold for the arm to
 fire; the guard sees the pattern's **bindings**, and on `A | B if c` (once or-patterns land — see above)

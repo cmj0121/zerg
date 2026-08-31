@@ -47,12 +47,14 @@ import (
 # Ignore is a parsed ignore file. An empty one matches nothing, which is what a walk with no
 # ignore file has — so the walk asks the same question either way and has no second path.
 pub struct Ignore {
-	pub pats: list[Pat]
+	pub pats: list[Glob]
 }
 
-# Pat is one line of it, already taken apart. Keeping the three questions as fields rather than
+# Glob is one line of it, already taken apart. It is `Glob` and not `Pat` because the type
+# namespace is program-wide: `ast.Pat` is the match pattern, this is a path glob, and one flat
+# space cannot hold both (E3077). Keeping the three questions as fields rather than
 # re-reading the text at each entry is what keeps the walk's inner loop about the walkdir.
-pub struct Pat {
+pub struct Glob {
 	pub text: str
 	pub anchored: bool
 	pub dir_only: bool
@@ -60,7 +62,7 @@ pub struct Pat {
 
 # ignore_none is the empty answer — no file, nothing excluded.
 fn ignore_none() -> Ignore {
-	mut pats: list[Pat] = []
+	mut pats: list[Glob] = []
 	return Ignore(pats)
 }
 
@@ -76,7 +78,7 @@ pub fn ignore_at(dir: str) -> Ignore {
 }
 
 fn ignore_read(path: str) -> Ignore {
-	mut pats: list[Pat] = []
+	mut pats: list[Glob] = []
 	mut n := 0
 	for raw in test.lines_of(str(io.read_file(path))) {
 		n = n + 1
@@ -100,7 +102,7 @@ fn ignore_read(path: str) -> Ignore {
 
 		continue if body == ""
 
-		pats.append(Pat(body, anchored, dir_only))
+		pats.append(Glob(body, anchored, dir_only))
 	}
 	return Ignore(pats)
 }

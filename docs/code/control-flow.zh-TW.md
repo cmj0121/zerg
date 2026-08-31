@@ -116,9 +116,13 @@ _E2073 `print` is a statement, and an expression is wanted here_(arm 裡的 `ret
 
 一個 **pattern** 是下列之一：**帶 payload 綁定的 variant**（`Left(v)`）——以 **copy** 綁定，一如 `?`/`return`、來源
 永不失效；**literal**（`0`、`"y"`、`true`、或負數 literal）——以值比對；**nested** pattern（`Left(Some(v))`）；
-或**萬用 `_`**，比對任何值、不綁定。這些連同下面的 **product pattern**、以及一個 **range** arm（`1..=2 =>`，以
-containment 比對）都會觸發。一個 **or-pattern**（`A | B =>`，以及各分支綁同名同型的綁定形式
-`A(x) | B(x) =>`）與一個 **list pattern**（`[h, ..t]`）是 **[not yet]**：`GRAMMAR` 兩者皆導得出。
+或**萬用 `_`**，比對任何值、不綁定。這些連同下面的 **product pattern**、一個 **list pattern**
+（`[a, b]`、`[a, ..]`、`[a, .., z]`）、以及一個 **range** arm（`1..=2 =>`，以 containment 比對）都會觸發。
+list 先以**長度**比對——指名每個元素的 pattern 用 `==`，帶 `..` 的用 `>=`——而 `..` 的位置決定其餘：在它之前的
+元素在自己的索引上，在它之後的則是距**尾端**那麼遠。只有 `[..]` 是 catch-all。一個 **or-pattern**（`A | B =>`，
+以及綁定形式 `A(x) | B(x) =>`）也會觸發：它的降階是兩側條件的 **or**，而讓它成為一種形式的規則是**兩側綁同樣的
+名字**——arm 的 body 只有一個，所以只有一側供應的名字是一個「有時候才在」的名字（_E4088_）。有綁定時，那個名字
+讀的是**當時匹配的那一側**；而只要有一側涵蓋一切，整個就涵蓋一切：`_ | A` 就是多寫了幾個字的 `_`。
 
 **`str` literal** 的 arm 比的是**文字**,走的是 expression 的 `==` 所用的同一個 `strcmp`。它曾被降階成**指標**
 比較,所以 `match s { "y" => 1  _ => -1 }` 在 `s == "y"` 時回答 `-1`——而且無聲,因為結尾的 `_` 吸收掉每一次落空,
@@ -129,10 +133,9 @@ containment 比對）都會觸發。一個 **or-pattern**（`A | B =>`，以及�
 >
 > - **nested pattern**——`Left(Some(v))`，還有 `L(0)`——是 _E9076 NotImplemented: a sub-pattern inside a variant
 >   payload_,所以 payload 位置只收一個綁定名字或 `_`,每個 pattern 都只有一層深;
-> - **or-pattern** 是 _E9024 NotImplemented: an or-pattern_——否則那裡的 `|` 會被讀成位元運算子,把 `1 | 2 =>`
->   折成 `3 =>`、兩側都不中,那正是編譯器最不該給的靜默錯答案。`zerg fmt` 會改寫唯一有可用寫法的那個情況(連續整數
->   收成 range `1..=2`,規則 `F408`);
-> - **list pattern** 是 _E9023 NotImplemented: a list pattern in a `match` arm_——改用索引與切片來解構一個 list。
+> - **具名的 rest**——`[a, ..rest]`——是 _E9110 NotImplemented: a NAMED rest in a list pattern_。匿名的 `..`
+>   已經建好了；具名的那個會綁一個新的 list，而 `match` arm 是一個運算式、沒有地方放擁有它的暫存，所以每次
+>   使用那個名字都會再配置一份、而且一份都不釋放。
 >
 > 在 parse 就拒絕,也把意圖中那個檢查器唯一的軟處掏空了:對**巢狀** payload 的 exhaustiveness 本來只證明頂層
 > variant、不證明每一種巢狀組合——而現在沒有巢狀 case 抵達得了它。
@@ -149,8 +152,14 @@ msg := match ev {
 值，如此而已；它對 existential 唯一允許的，是布林的 **`is`** 測試（見 [Spec 與 Generics](../core/specs.zh-TW.md)），用作**條件**、絕不作為交回
 具體值的綁定。一個 **product pattern** 能**依欄位**解構一個 `struct`（`Div{q, r}`）、或**依位置**解構一個 tuple（`(a, b)`），每一
 部分以 copy 綁定；它在 `match` arm 與普通的 `:=` 綁定（`(q, r) := divmod(x, y)`，也就是多重回傳被消費的方式）都可用；
-product pattern 是 **[not yet]**:用 `.0` / `.1` 與欄位存取來解構。它的四種樣子各自被自己的名字拒絕——綁定位置是
-`E9021` 與 `E9008`、arm 裡是 `E9016` 與 `E9026`——所以 tuple 與 struct 在訊息裡分得開,而不是共用一句。**guard 條件**可用:一個 arm 可在 pattern 之後帶一個
+**tuple pattern 在 `match` arm 裡已經建好了**,而且會巢狀:元素本身就是 pattern,所以 `((a, b), c)` 與
+`((1, b), c)` 都是 arm,而元素全部都是綁定的 pattern 就是一個 **catch-all**——不必寫 `_`。它的元數是型別的事實,
+也照事實檢查——_E4082 a tuple pattern names 3 element(s) and a (int, int) has 2_、
+_E4083 a tuple pattern matches a tuple_。**struct pattern 在那裡也建好了**,而「指名欄位」正是它比位置式的
+形狀多問三個問題的原因:它指名的型別必須就是那個值的型別——那個名字是**斷言**而不是引用,所以在一個 `P` 上寫
+`Q{x}` 是 _E4085_——它指名的每個欄位都必須存在（_E4086_）,而沒有 `..` 時它要指名**全部**（_E4087_,並說出少了
+哪一個）。最後那一條正是 opt-in 的用意:struct 新增一個欄位時,先前寫下的 pattern 應該被指名破壞。**在 `:=`
+綁定位置**兩者仍是 **[not yet]**——`E9021` 與 `E9008`——所以 arm 與綁定在訊息裡分得開,而不是共用一句。**guard 條件**可用:一個 arm 可在 pattern 之後帶一個
 **`if expr`**（`Left(v) if v > 0`），它也必須成立該 arm 才觸發；guard 看得到 pattern 的**綁定**，而在 `A | B if c`
 上（待 or-pattern 落地——見上）涵蓋**整個 or-pattern**。帶 guard 的 arm **不**計入 exhaustiveness，所以帶 guard 的
 case 仍需要一個無 guard 的 arm 或 `_`。一個 **range arm**（`200..300 =>`、`400..=499 =>`、`500.. =>`）是 match 專屬的

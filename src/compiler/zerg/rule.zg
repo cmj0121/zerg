@@ -107,6 +107,7 @@ pub enum Rule {
 	StatementAsExpr = 2073
 	DecoratorUnknown = 2076
 	UnsafeOpensNeither = 2075
+	ListPatternTwoRests = 2078
 	ImplItemUnknown = 2077
 
 	# checking — a form whose meaning does not hold together — reported against the tree, all at once

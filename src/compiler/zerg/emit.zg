@@ -4477,30 +4477,40 @@ fn c_variant_field_ty(mut &em: Emitter, en: str, variant: str, idx: int) -> ast.
 # what made the shape look arbitrary. A bind arm holds the SCRUTINEE's own type, which is
 # the same thing c_arm_subst splices in as text one function along.
 fn c_bind_env(mut &em: Emitter, a: ast.Arm, st: ast.Ty) {
-	if a.pat == 1 {
-		c_add_var(em, a.bind, st, false, false)
-	} else if a.pat == 3 and c_is_either(st) {
+	if c_pat_catchall(a.pat) {
+		bn := c_pat_bind_name(a.pat)
+		if bn != "" {
+			c_add_var(em, bn, st, false, false)
+		}
+		return
+	}
+
+	ctor := c_pat_ctor(a.pat)
+	return if ctor == ""
+
+	names := c_payload_names(c_pat_payload(a.pat))
+	if c_is_either(st) {
 		# an Either's sides are not in the variant table: they are the TYPE's own two, so the
 		# binding takes whichever the pattern names. Answering `Err` for every Right is what a
 		# Result-shaped assumption looks like — a `Right(b)` over an `Either[A, B]` then had
 		# type Err, and `b.s` reached cc as an unmangled member of the wrong struct.
-		if a.binds.len() > 0 {
-			if c_result_tag(em, a.ctor) == 0 {
-				c_add_var(em, a.binds[0], c_either_left(st), false, false)
-			} else {
-				c_add_var(em, a.binds[0], c_either_right(st), false, false)
-			}
+		return if names.len() == 0
+		if c_result_tag(em, ctor) == 0 {
+			c_add_var(em, names[0], c_either_left(st), false, false)
+		} else {
+			c_add_var(em, names[0], c_either_right(st), false, false)
 		}
-	} else if a.pat == 3 {
-		# the SCRUTINEE'S enum names the variant: a constructor pattern is written inside a
-		# match on a value, so which enum's `Circle` this is was never in doubt — the table
-		# was what could not say it
-		en := c_named_of(st)
-		mut i := 0
-		for i < a.binds.len() {
-			c_add_var(em, a.binds[i], c_variant_field_ty(em, en, a.ctor, i), false, false)
-			i = i + 1
-		}
+		return
+	}
+
+	# the SCRUTINEE'S enum names the variant: a constructor pattern is written inside a match
+	# on a value, so which enum's `Circle` this is was never in doubt — the table was what
+	# could not say it
+	en := c_named_of(st)
+	mut i := 0
+	for i < names.len() {
+		c_add_var(em, names[i], c_variant_field_ty(em, en, ctor, i), false, false)
+		i = i + 1
 	}
 }
 
@@ -9157,15 +9167,17 @@ fn c_check_arm_pats(mut &em: Emitter, arms: list[ast.Arm], st: ast.Ty) {
 	mut i := 0
 	for i < arms.len() {
 		a := arms[i]
-		if a.pat == 3 {
+		ctor := c_pat_ctor(a.pat)
+		qual := c_pat_qual(a.pat)
+		if ctor != "" {
 			# ASKED OF THE SUBJECT'S ENUM, which is the only enum a constructor pattern can
 			# name a variant of. It used to ask which enum owns the bare name program-wide and
 			# then compare: `match s { Red => … }` on a `Signal` was answered `Colour`, so the
 			# arm was refused as unable to match a subject it matches exactly.
 			en := c_named_of(st)
 
-			raise c_diag(em, rule.Rule.NoSuchVariantInPattern, f"no variant named `{a.ctor}` — a constructor pattern names a variant of the subject's enum") if not c_is_variant(em, a.ctor)
-			raise c_diag(em, rule.Rule.VariantPatternWrongEnum, f"variant pattern `{a.ctor}` cannot match a subject of type {ast.ty_name(st)}") if not c_is_variant_in(em, en, a.ctor)
+			raise c_diag(em, rule.Rule.NoSuchVariantInPattern, f"no variant named `{ctor}` — a constructor pattern names a variant of the subject's enum") if not c_is_variant(em, ctor)
+			raise c_diag(em, rule.Rule.VariantPatternWrongEnum, f"variant pattern `{ctor}` cannot match a subject of type {ast.ty_name(st)}") if not c_is_variant_in(em, en, ctor)
 
 			# THE QUALIFICATION MUST BE TRUE (GRAMMAR#variant-pat), and until now it was not
 			# asked at all. The two rules above look up the VARIANT and compare THAT to the
@@ -9178,12 +9190,12 @@ fn c_check_arm_pats(mut &em: Emitter, arms: list[ast.Arm], st: ast.Ty) {
 			# type is what decides which enum this is, and the name is here to be checked
 			# against it. That is why it never names a module — a module qualifier would be
 			# answering "which one", which the subject has already answered.
-			raise c_diag(em, rule.Rule.VariantPatternWrongQualifier, f"variant pattern `{a.qual}.{a.ctor}` names the enum `{a.qual}`, and the subject is a {ast.ty_name(st)} — the enum written in a pattern is checked against the subject, so it must be the subject's") if a.qual != "" and a.qual != en
+			raise c_diag(em, rule.Rule.VariantPatternWrongQualifier, f"variant pattern `{qual}.{ctor}` names the enum `{qual}`, and the subject is a {ast.ty_name(st)} — the enum written in a pattern is checked against the subject, so it must be the subject's") if qual != "" and qual != en
 
 			# HERE and not in c_bind_env, which is a lowering helper: c_arms calls it from
 			# both c_arm_cond and c_arm_body, so a check hung there fired twice for every
 			# arm but the last — the count of a diagnostic depended on where the arm sat.
-			check.chk_variant_arity(em, en, a.ctor, a.binds.len(), "pattern binds")
+			check.chk_variant_arity(em, en, ctor, c_payload_names(c_pat_payload(a.pat)).len(), "pattern binds")
 		}
 		i = i + 1
 	}
@@ -9242,12 +9254,96 @@ fn c_check_exhaustive(mut &em: Emitter, arms: list[ast.Arm], st: ast.Ty) {
 	raise c_diag(em, rule.Rule.MatchMissingCatchAll, "non-exhaustive match: missing a catch-all `_` arm")
 }
 
+# --- reading a pattern (GRAMMAR#pattern) --------------------------------------------------
+#
+# `Arm` used to carry four flat fields and an `int` kind, and every question below was asked of
+# that int. It is a tree now, so each question is asked of the shape it is about — and a shape
+# this compiler cannot lower is refused HERE, where the type is in hand, rather than at the
+# parse where only the tokens are (#110).
+
+# c_pat_catchall — does this pattern match everything? A binding and a wildcard do, and an `as`
+# does exactly when what it wraps does: `_ as whole` binds and still covers.
+fn c_pat_catchall(pt: ast.Pat) -> bool {
+	return match pt {
+		Pat.PWild => true
+		Pat.PBind(_) => true
+		Pat.PAs(inner, _) => c_pat_catchall(inner)
+		_ => false
+	}
+}
+
+# c_pat_ctor / c_pat_qual — the variant a pattern names, or "" for a pattern that names none.
+fn c_pat_ctor(pt: ast.Pat) -> str {
+	return match pt {
+		Pat.PVariant(_, c, _) => c
+		Pat.PAs(inner, _) => c_pat_ctor(inner)
+		_ => ""
+	}
+}
+
+fn c_pat_qual(pt: ast.Pat) -> str {
+	return match pt {
+		Pat.PVariant(q, _, _) => q
+		Pat.PAs(inner, _) => c_pat_qual(inner)
+		_ => ""
+	}
+}
+
+fn c_pat_is_lit(pt: ast.Pat) -> bool {
+	return match pt {
+		Pat.PLit(_) => true
+		Pat.PAs(inner, _) => c_pat_is_lit(inner)
+		_ => false
+	}
+}
+
+fn c_pat_lit(pt: ast.Pat) -> ast.Expr {
+	return match pt {
+		Pat.PLit(e) => e
+		Pat.PAs(inner, _) => c_pat_lit(inner)
+		_ => ast.Expr.ENil
+	}
+}
+
+# c_pat_bind_name — the name a binding pattern binds, or "" for one that binds nothing.
+fn c_pat_bind_name(pt: ast.Pat) -> str {
+	return match pt {
+		Pat.PBind(n) => n
+		_            => ""
+	}
+}
+
+fn c_pat_payload(pt: ast.Pat) -> list[ast.Pat] {
+	return match pt {
+		Pat.PVariant(_, _, ps) => ps
+		Pat.PAs(inner, _) => c_pat_payload(inner)
+		_ => []
+	}
+}
+
+# c_payload_names is a variant payload as the NAMES it binds, which is what the substitution
+# below splices. A payload element that is not a name is a pattern inside a pattern, and this
+# compiler lowers one level: it is refused by the caller, which has the place.
+fn c_payload_names(ps: list[ast.Pat]) -> list[str] {
+	mut out: list[str] = []
+	for pt in ps {
+		out.append(
+			match pt {
+				Pat.PBind(n) => n
+				Pat.PWild    => "_"
+				_            => ""
+			}
+		)
+	}
+	return out
+}
+
 # c_catchall_at is the index of the first UNGUARDED catch-all arm (`_` or a binding), or -1.
 fn c_catchall_at(arms: list[ast.Arm]) -> int {
 	mut i := 0
 	for i < arms.len() {
 		a := arms[i]
-		return i if (a.pat == 1 or a.pat == 2) and not a.has_guard
+		return i if c_pat_catchall(a.pat) and not a.has_guard
 		i = i + 1
 	}
 	return 0 - 1
@@ -9258,7 +9354,7 @@ fn c_arm_covers(arms: list[ast.Arm], ctor: str) -> bool {
 	mut i := 0
 	for i < arms.len() {
 		a := arms[i]
-		return true if a.pat == 3 and not a.has_guard and a.ctor == ctor
+		return true if not a.has_guard and c_pat_ctor(a.pat) == ctor and ctor != ""
 		i = i + 1
 	}
 	return false
@@ -9276,7 +9372,7 @@ fn c_arm_covers_bool(arms: list[ast.Arm], v: bool) -> bool {
 	mut i := 0
 	for i < arms.len() {
 		a := arms[i]
-		return true if a.pat == 0 and not a.has_guard and c_is_bool_lit(a.lit, v)
+		return true if not a.has_guard and c_pat_is_lit(a.pat) and c_is_bool_lit(c_pat_lit(a.pat), v)
 		i = i + 1
 	}
 	return false
@@ -9312,31 +9408,35 @@ fn c_result_tag(mut &em: Emitter, ctor: str) -> int {
 # c_arm_subst extends sb with an arm's bindings: a bind arm aliases the scrutinee; an enum
 # constructor arm aliases each payload name to its `s.u.Var.fK` field access.
 fn c_arm_subst(mut &em: Emitter, a: ast.Arm, s: str, st: ast.Ty, sb: Subst) -> Subst {
-	return c_extend(sb, a.bind, s) if a.pat == 1
-	if a.pat == 3 and c_is_either(st) {
+	bn := c_pat_bind_name(a.pat)
+	return c_extend(sb, bn, s) if bn != ""
+
+	ctor := c_pat_ctor(a.pat)
+	return sb if ctor == ""
+
+	names := c_payload_names(c_pat_payload(a.pat))
+	if c_is_either(st) {
 		# `Left(v)` reads the value, `Right(e)` the Err; neither is a tagged union of the
 		# kind the variant table describes, so the field is named directly
-		return sb if a.binds.len() == 0
-		return c_extend(sb, a.binds[0], c_res_ok(s)) if c_result_tag(em, a.ctor) == 0
+		return sb if names.len() == 0
+		return c_extend(sb, names[0], c_res_ok(s)) if c_result_tag(em, ctor) == 0
 
-		return c_extend(sb, a.binds[0], c_res_err(s))
+		return c_extend(sb, names[0], c_res_err(s))
 	}
-	if a.pat == 3 {
-		en := c_named_of(st)
-		mut r := sb
-		mut i := 0
-		for i < a.binds.len() {
-			mut acc := f"{s}.u.{a.ctor}.f{i}"
-			if c_is_boxed(em, en, a.ctor, i) {
-				# unbox a self-recursive payload back to the enum value
-				acc = f"(*(zg_{en}*)zrt_ref_payload({acc}))"
-			}
-			r = c_extend(r, a.binds[i], acc)
-			i = i + 1
+
+	en := c_named_of(st)
+	mut r := sb
+	mut i := 0
+	for i < names.len() {
+		mut acc := f"{s}.u.{ctor}.f{i}"
+		if c_is_boxed(em, en, ctor, i) {
+			# unbox a self-recursive payload back to the enum value
+			acc = f"(*(zg_{en}*)zrt_ref_payload({acc}))"
 		}
-		return r
+		r = c_extend(r, names[i], acc)
+		i = i + 1
 	}
-	return sb
+	return r
 }
 
 # c_arm_guard renders a match arm's `if …`. It is one function for the three places that
@@ -9357,8 +9457,9 @@ fn c_arm_cond(mut &em: Emitter, a: ast.Arm, s: str, st: ast.Ty, sb: Subst) -> st
 }
 
 fn c_arm_cond_in(mut &em: Emitter, a: ast.Arm, s: str, st: ast.Ty, sb: Subst) -> str {
-	if a.pat == 0 {
-		return c_arm_range(em, a, s, st, sb) if c_is_range(a.lit)
+	if c_pat_is_lit(a.pat) {
+		lit := c_pat_lit(a.pat)
+		return c_arm_range(em, a, s, st, sb) if c_is_range(lit)
 
 		# a literal pattern is scrutinee-equals-literal, and that equality is SYNTHESISED here
 		# as text rather than built as an EBinary — so it meets no operand rule on the way
@@ -9370,32 +9471,28 @@ fn c_arm_cond_in(mut &em: Emitter, a: ast.Arm, s: str, st: ast.Ty, sb: Subst) ->
 		# GRAMMAR#literal-pat makes a literal a pattern, so `match o { nil => … }` is the
 		# natural way to ask about absence, and answering it out of chk_binary with "an
 		# optional is not an operand of `==`" describes an operator the program never wrote.
-		# The condition alone would be easy — it is the presence test c_iflet already makes —
-		# but the arm beside it is not: a binding pattern binds the scrutinee, and over an
-		# optional that is the carrier rather than what it holds, so the arm answering `v`
-		# would answer the box. Named rather than half-built.
-		raise c_diag(em, rule.Rule.NotYetNilPattern, "NotImplemented: `nil` as a `match` pattern — GRAMMAR makes it a literal pattern, and this compiler would have to unwrap the carrier for the arm beside it as well. Ask with `if v := x { … } else { … }`, which binds what it holds, or with `??`") if c_is_nil_lit(a.lit) and c_is_carrier(st)
+		raise c_diag(em, rule.Rule.NotYetNilPattern, "NotImplemented: `nil` as a `match` pattern — GRAMMAR makes it a literal pattern and this compiler compares it as one; write `if v := o { … }` for the presence test, or `o ?? d` for a default") if c_is_nil_lit(lit)
 
 		# the PATTERN is handed as both operands: this comparison is a scrutinee against a
 		# literal, and a literal pattern is always the one adopting the scrutinee's type, so
 		# there is no mixed pair to find and no scrutinee Expr in scope to look for one with
-		check.chk_binary(em, "==", st, c_infer(em, a.lit), a.lit, a.lit)
+		check.chk_binary(em, "==", st, c_infer(em, lit), lit, lit)
 
 		# AND THE GUARD, which this arm alone did not add. Every other shape does — the
 		# constructor pattern above, the range beside it, the wildcard below — so
 		# `match 1 { 1 if false => 10  _ => 0 }` answered `10`: the arm matched on the literal
-		# and the `if` was read, type-checked, and then dropped on the floor. A guard that
-		# parses and does nothing is worse than one that is refused.
+		# and the `if` was read, type-checked, and then dropped on the floor.
 		eq := c_arm_eq(em, a, s, st, sb)
 		return f"({eq} && {c_arm_guard(em, a, c_arm_subst(em, a, s, st, sb))})" if a.has_guard
 
 		return eq
 	}
 
-	if a.pat == 3 {
-		mut base := f"({s}.tag == {c_variant_tag_in(em, c_named_of(st), a.ctor)})"
+	ctor := c_pat_ctor(a.pat)
+	if ctor != "" {
+		mut base := f"({s}.tag == {c_variant_tag_in(em, c_named_of(st), ctor)})"
 		if c_is_either(st) {
-			base = f"({c_res_tag(s)} == {c_result_tag(em, a.ctor)})"
+			base = f"({c_res_tag(s)} == {c_result_tag(em, ctor)})"
 		}
 		return f"({base} && {c_arm_guard(em, a, c_arm_subst(em, a, s, st, sb))})" if a.has_guard
 		return base
@@ -9420,9 +9517,10 @@ fn c_range_needs_hi(mut &em: Emitter, e: ast.Expr, what: str) {
 # may or may not share storage, so the arm did not merely fail — it failed unpredictably, which
 # is the one kind of wrong answer a test can pass over.
 fn c_arm_eq(mut &em: Emitter, a: ast.Arm, s: str, st: ast.Ty, sb: Subst) -> str {
-	return f"(strcmp({s}, {c_expr(em, a.lit, sb)}) == 0)" if c_is_str(st)
+	lit := c_pat_lit(a.pat)
+	return f"(strcmp({s}, {c_expr(em, lit, sb)}) == 0)" if c_is_str(st)
 
-	return f"({s} == {c_expr(em, a.lit, sb)})"
+	return f"({s} == {c_expr(em, lit, sb)})"
 }
 
 # c_arm_range lowers a RANGE arm's test. GRAMMAR defines `200..300 =>` as match-only sugar for
@@ -9438,17 +9536,18 @@ fn c_arm_eq(mut &em: Emitter, a: ast.Arm, s: str, st: ast.Ty, sb: Subst) -> str 
 # Like `c_arm_eq` above, the comparisons are built as TEXT rather than as an EBinary, so no
 # operand rule is met on the way through and `chk_binary` has to be asked for it here.
 fn c_arm_range(mut &em: Emitter, a: ast.Arm, s: str, st: ast.Ty, sb: Subst) -> str {
-	check.chk_binary(em, ">=", st, c_infer(em, c_range_lo(a.lit)), a.lit, a.lit)
-	lo := c_arm_bound(em, c_range_lo(a.lit), sb)
+	lit := c_pat_lit(a.pat)
+	check.chk_binary(em, ">=", st, c_infer(em, c_range_lo(lit)), lit, lit)
+	lo := c_arm_bound(em, c_range_lo(lit), sb)
 	mut base := f"({s} >= {lo})"
-	if not c_is_nil_lit(c_range_hi(a.lit)) {
-		hi := c_arm_bound(em, c_range_hi(a.lit), sb)
+	if not c_is_nil_lit(c_range_hi(lit)) {
+		hi := c_arm_bound(em, c_range_hi(lit), sb)
 		mut cmp := " < "
-		if c_range_incl(a.lit) {
+		if c_range_incl(lit) {
 			cmp = " <= "
 		}
 		base = f"(({s} >= {lo}) && ({s}{cmp}{hi}))"
-	} else if c_range_incl(a.lit) {
+	} else if c_range_incl(lit) {
 		# `500..=` is not a range: GRAMMAR gives '..=' a mandatory bound, and the parser reads
 		# the missing one as nil rather than saying so.
 		#

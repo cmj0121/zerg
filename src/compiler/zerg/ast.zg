@@ -207,19 +207,41 @@ pub enum Expr {
 # equality), 1 = binding (bind the scrutinee to `bind`), 2 = wildcard `_`, 3 = enum
 # constructor (`ctor` names the variant; `binds` names its payload fields). An arm may
 # carry an `if` guard.
-pub struct Arm {
-	pub pat: int
-	pub lit: Expr
-	pub bind: str
-	pub ctor: str
+# Pat is a PATTERN, and it is a tree because GRAMMAR#pattern is one: `sub-pattern` holds a
+# `pattern-core`, `variant-pat` and `tuple-pat` hold a `pattern-list`, `list-pat-elem` holds a
+# `pattern`, and `field-pat` holds one too. Every one of those is a pattern in a pattern.
+#
+# WHAT IT REPLACES was four flat fields on `Arm` — an `int` kind beside a literal, a name, a
+# constructor and a list of payload names — which could say the four shapes this compiler
+# lowered and could not say a fifth. Fourteen sites read that `int`, and a fifth shape meant a
+# fifteenth arm at every one of them: the "one rule, N slots" shape this repository keeps
+# finding in its own code (#110).
+pub enum Pat {
+	PWild      # `_`
+	PBind(str) # `x` — binds the whole scrutinee
+	PLit(Expr) # a literal, a negated literal, or a range
 
-	# qual is the ENUM the pattern was written with — the `Colour` of `Colour.Red` — and ""
-	# for an arm that names none. It is kept because GRAMMAR#variant-pat says *the
-	# qualification must be true*, and dropping it at the parse made that unaskable: a
-	# qualifier naming nothing at all was ignored, so `Nope.Red` matched a `Colour` exactly
-	# as `Colour.Red` does and renaming an enum left every pattern of it still matching.
-	pub qual: str
-	pub binds: list[str]
+	# `Colour.Red`, `E.Wrap(inner)`. `qual` is the enum the pattern NAMED, kept because
+	# GRAMMAR#variant-pat says the qualification must be TRUE and a name that is read and
+	# thrown away cannot be held to that.
+	PVariant(str, str, list[Pat]) # qual, ctor, payload
+
+	# `P{x, y: inner}` and `P{x, ..}`. Two parallel lists rather than a list of pairs, because
+	# a pair type here would be a struct nobody else needs; `rest` is the `..` that says the
+	# fields not written are not being asked about.
+	PStruct(str, list[str], list[Pat], bool)
+
+	# `[a, b]`, `[a, ..rest]`, `[..]`. `rest` is the index the `..` sits at, or -1 for a list
+	# pattern that matches on length alone; `rest_name` is "" for a `..` that binds nothing.
+	PList(list[Pat], int, str)
+
+	PTuple(list[Pat]) # `(a, b)`
+	POr(list[Pat])    # `1 | 2`
+	PAs(Pat, str)     # `pattern as name`
+}
+
+pub struct Arm {
+	pub pat: Pat
 	pub has_guard: bool
 	pub guard_expr: Expr
 	pub body: Expr
@@ -1210,12 +1232,41 @@ fn expr_parts_cat(xs: list[Expr], ys: list[Expr]) -> list[Expr] {
 	return out
 }
 
-# an arm's literal, its guard and its body are all expressions of the match that holds
+# pat_exprs is every EXPRESSION a pattern holds, and it is a walk rather than a field read
+# because a literal can sit at any depth: `E.Wrap(0)`, `[1, x]`, `P{n: 3}`, `1 | 2`. The flat
+# `Arm` this replaced had one literal and one level, so a rule that reads expressions — the
+# literal folder, the statement walks, the linter — saw the top one and nothing under it.
+pub fn pat_exprs(p: Pat) -> list[Expr] {
+	return match p {
+		Pat.PLit(e) => [e]
+		Pat.PVariant(_, _, ps) => pat_exprs_all(ps)
+		Pat.PStruct(_, _, ps, _) => pat_exprs_all(ps)
+		Pat.PList(ps, _, _) => pat_exprs_all(ps)
+		Pat.PTuple(ps) => pat_exprs_all(ps)
+		Pat.POr(ps) => pat_exprs_all(ps)
+		Pat.PAs(inner, _) => pat_exprs(inner)
+		_ => []
+	}
+}
+
+fn pat_exprs_all(ps: list[Pat]) -> list[Expr] {
+	mut out: list[Expr] = []
+	for p in ps {
+		for e in pat_exprs(p) {
+			out.append(e)
+		}
+	}
+	return out
+}
+
+# an arm's pattern, its guard and its body are all expressions of the match that holds
 # them — the body especially, since `match … { _ => <deep> }` is one expression tree
 fn expr_parts_arms(scrut: Expr, arms: list[Arm]) -> list[Expr] {
 	mut out: list[Expr] = [scrut]
 	for a in arms {
-		out.append(a.lit)
+		for e in pat_exprs(a.pat) {
+			out.append(e)
+		}
 		out.append(a.guard_expr)
 		out.append(a.body)
 	}

@@ -358,10 +358,35 @@ fn subst_exprs(su: TySubst, xs: list[ast.Expr]) -> list[ast.Expr] {
 	return out
 }
 
+# subst_pat walks a pattern for the one thing a type substitution can reach: the EXPRESSION a
+# literal pattern compares against. Every other part of a pattern is a name or a shape, and a
+# type argument changes neither — but the walk is still total, because a literal can be nested
+# inside any of them and a case that forgot one would substitute in some arms and not others.
+fn subst_pat(su: TySubst, pt: ast.Pat) -> ast.Pat {
+	return match pt {
+		Pat.PLit(e) => ast.Pat.PLit(subst_expr(su, e))
+		Pat.PVariant(q, c, ps) => ast.Pat.PVariant(q, c, subst_pats(su, ps))
+		Pat.PStruct(n, fs, ps, open) => ast.Pat.PStruct(n, fs, subst_pats(su, ps), open)
+		Pat.PList(ps, rest, rname) => ast.Pat.PList(subst_pats(su, ps), rest, rname)
+		Pat.PTuple(ps) => ast.Pat.PTuple(subst_pats(su, ps))
+		Pat.POr(ps) => ast.Pat.POr(subst_pats(su, ps))
+		Pat.PAs(inner, n) => ast.Pat.PAs(subst_pat(su, inner), n)
+		_ => pt
+	}
+}
+
+fn subst_pats(su: TySubst, ps: list[ast.Pat]) -> list[ast.Pat] {
+	mut out: list[ast.Pat] = []
+	for pt in ps {
+		out.append(subst_pat(su, pt))
+	}
+	return out
+}
+
 fn subst_arms(su: TySubst, arms: list[ast.Arm]) -> list[ast.Arm] {
 	mut out: list[ast.Arm] = []
 	for a in arms {
-		out.append(ast.Arm(a.pat, subst_expr(su, a.lit), a.bind, a.ctor, a.qual, a.binds, a.has_guard, subst_expr(su, a.guard_expr), subst_expr(su, a.body), a.line, a.col))
+		out.append(ast.Arm(subst_pat(su, a.pat), a.has_guard, subst_expr(su, a.guard_expr), subst_expr(su, a.body), a.line, a.col))
 	}
 	return out
 }

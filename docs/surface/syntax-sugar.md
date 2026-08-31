@@ -30,11 +30,8 @@ full treatment is in the [Language Reference](../language.md). Also in [繁體�
 
 **Status.** Every row above works except inside an f-string hole, plus `del ch` and the operator rows on a
 user-defined type. In a hole only the plain `{x}` form does: a **conversion** (`!r` / `!s` / `!a`) is
-`E9013`, a **format spec** (`{x:.2f}`) is `E9012`, and the self-documenting `f"{x=}"` is `E9014`. A
-**composite** hole is rejected too, so structural rendering is **[not yet]** — a `struct` by name
-(_E9059 NotImplemented:
-rendering a P as text_) and a `list` or `map` by an ordinary checked rule that blames a bridge the program
-never wrote (_E4011 `str(…)` over a list bridges bytes or code points_) — see
+`E9013`, a **format spec** (`{x:.2f}`) is `E9012`, and the self-documenting `f"{x=}"` is `E9014`. A **composite** hole renders
+structurally — `f"{p}"` is `P(x: 1)` — through the same generator `print` and `str(x)` reach; see
 [Formatting & Text](../runtime/format.md). The **desugared spelling is the same gap**: `x.format(spec)`
 written out is _E9107 NotImplemented: the method `format` on a int — a spec is unread here (`E9012` is the
 same gap spelled in an f-string hole), and `f"{x}"` renders without one_, because the `Format` protocol

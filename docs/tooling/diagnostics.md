@@ -465,7 +465,6 @@ shipping compiler rather than a part of it (the line
 | `E9056` | the list method `…`                                                                                   |
 | `E9057` | structural equality over a container                                                                  |
 | `E9058` | a refcounted box `Ref(x)` / `deref(r)`                                                                |
-| `E9059` | rendering a … as text                                                                                 |
 | `E9060` | a second `impl Into[…] for …`                                                                         |
 | `E9061` | `in` over … — its elements are compared with `==`, and this compiler does not write that comparison   |
 | `E9062` | `in` over … — a range's members are found by comparing its bounds                                     |
@@ -485,7 +484,6 @@ shipping compiler rather than a part of it (the line
 | `E9077` | a range used as a value                                                                               |
 | `E9078` | `is …` names one of the built-in error kinds                                                          |
 | `E9079` | the decorator `#[sealed]` — reserved                                                                  |
-| `E9085` | rendering a … as text — an enum has no name for its variant                                           |
 | `E9097` | main(args) in a program that uses concurrency                                                         |
 | `E9099` | … of the method `…` on a built-in receiver, which a thunk does not reach                              |
 | `E9100` | the map method `…`                                                                                    |
@@ -640,6 +638,8 @@ name now is the prelude rule (`E2061`), which is about the name rather than abou
 | `E9035` | —       | `mut &` is part of a function type, and the type is built          |
 | `E9065` | —       | as above, on the value side: the marker rides in the type          |
 | `E9017` | —       | the fixed-size array is built; its length is part of its type      |
+| `E9059` | —       | a composite renders structurally; the generator is the compiler's  |
+| `E9085` | —       | as above, for an enum: it renders by tag then payload              |
 | `E9081` | —       | a public name takes the module tag a private one already had (#92) |
 | `E3047` | —       | a strong typedef takes its underlying type's prefix operators      |
 

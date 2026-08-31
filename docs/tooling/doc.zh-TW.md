@@ -215,8 +215,8 @@ FUNCTIONS
 
 有兩種函式沒辦法用這個形式寫範例，而且兩種在今天的標準函式庫裡都有實例，不是假設：
 
-- **回答 `list`、`map` 或結構的函式。** 這個編譯器的 `print` 算繪不了任何複合型別（`E9059`），所以範例必須把答案化
-  約成印得出來的東西。`strings.split` 正是為了這個理由繞道 `join`——`strings.join(strings.split("a,b,c", ","), "|")`
+- **回答 `list`、`map` 或結構的函式。** `print` 現在會把複合型別結構化算繪，所以範例可以把答案整個秀出來——但把它
+  化約通常仍是比較好的範例。`strings.split` 正是為了這個理由繞道 `join`——`strings.join(strings.split("a,b,c", ","), "|")`
   印出 `a|b|c`，同時展示了那些片段**以及** `join` 是 `split` 的反向。issue
   [#16](https://github.com/cmj0121/zerg/issues/16) 把它記為 `E449`：複合型別沒有算繪。
 - **什麼都不回答的函式。** 對它 `print` 是「這個位置要一個值，而給它的是 nil」（`E3086`），所以 `os.set_env` 帶的是

@@ -29,10 +29,8 @@ Zerg 保持一個**精簡核心**,在其上疊了幾個方便的表面寫法—�
 
 **狀態。** 上表每一列皆可用，唯 f-string 的洞、`del ch`,以及使用者自訂型別上的運算子那幾列除外。洞裡只有純
 `{x}` 形式可用:**轉換**（`!r` / `!s` / `!a`）是 `E9013`、**format spec**（`{x:.2f}`）是 `E9012`、自述的
-`f"{x=}"` 是 `E9014`。**複合值**的洞同樣被拒,所以結構化渲染也是 **[not yet]**——`struct` 是指名的
-（_E9059 NotImplemented: rendering a P as text_）,而 `list` 或 `map` 走的是一條普通的受檢規則、且怪罪一個程式從未
-寫過的 bridge（_E4011 `str(…)` over a list bridges bytes or code points_）——見
-[格式化與文字](../runtime/format.zh-TW.md)。**desugar 之後的拼法是同一個缺口**:寫成 `x.format(spec)` 是
+`f"{x=}"` 是 `E9014`。**複合值**的洞會結構化渲染——`f"{p}"` 就是 `P(x: 1)`——走的是
+`print` 與 `str(x)` 抵達的同一個產生器;見 [格式化與文字](../runtime/format.zh-TW.md)。**desugar 之後的拼法是同一個缺口**:寫成 `x.format(spec)` 是
 _E9107 NotImplemented: the method `format` on a int — a spec is unread here (`E9012` is the same gap spelled
 in an f-string hole), and `f"{x}"` renders without one_,因為這一列點名的 `Format` protocol 還不是任何型別
 帶著的宣告。

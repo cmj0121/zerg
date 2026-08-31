@@ -296,8 +296,8 @@ _E4089 `P` has no associated value `NOPE`_,而那句話取代的是一次外漏:
   > `map` 或兩個 tuple 的 `xs == ys` 是 _E9057 NotImplemented: `==` on a `list[int]` — structural equality over
   > a container is unbuilt, and a container has no declaration to derive it on_。無名形式該有的東西在
   > 〈型別〉的「由組成部分繼承」規則底下——一個 tuple 恰在它每個部分都有 `Eq` 時有 `Eq`——而沒建出來的正是那個
-  > 推導。在那之前,請比較你真正想比較的那些元素。這與 [格式化](../runtime/format.zh-TW.md) 回報成 `E9059` 的是
-  > 同一個洞,只差一個運算子。
+  > 推導。在那之前,請比較你真正想比較的那些元素。[格式化](../runtime/format.zh-TW.md) 把同一個問題換一個動詞
+  > 問過並且答了:複合值會**結構化渲染**,而比較一個複合值才是還欠著的那件事。
 
 Zerg **不設兩值之間的 instance-identity 測試**：copy-by-value 下值的副本本就是不同 instance、且無 aliasing，
 「同一個 instance？」只對 channel 有意義——太 narrow、不值得一個運算子。相等在型別 opt-in 之處是**結構性**的 `Eq`。
@@ -331,8 +331,8 @@ Zerg **不設兩值之間的 instance-identity 測試**：copy-by-value 下值�
   **串接**成新字串（見 [Collection](../code/collections.zh-TW.md)）。
 - **`Into[T]`**——轉換 spec:型別宣告它能轉成什麼,泛型程式碼以它為 bound;轉換永遠**寫出來**、絕不由
   position 套用。它**不出貨任何內建 impl**——數字之間的轉換是 `T(x)`,轉成文字是 `str(x)`,而後者不需要 bound,
-  因為 `display` 是語言給的**渲染**、不是型別去實作的 spec。那跟「每個型別都有答案」不是同一句話:複合值與
-  `enum` 是 **[not yet]**,而 **channel**、**函式值**與 **nil** 根本沒有渲染（見
+  因為 `display` 是語言給的**渲染**、不是型別去實作的 spec。那跟「每個型別都有答案」不是同一句話:**channel**、**函式值**
+  與 **nil** 根本沒有渲染,而複合值與 `enum` 會結構化渲染（見
   [Format](../runtime/format.zh-TW.md)）。另見 [型別轉換](types.zh-TW.md#into--一個普通的轉換-spec)。
 
 **`Ref`——copy-by-ref（sealed）。** 與上面每個 spec 不同，實作它不加行為——它改變值的**表徵（representation）**。`Ref`

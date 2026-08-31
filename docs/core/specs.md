@@ -383,8 +383,8 @@ else is a spec a type **opts into**, a generic bound gating on it:
   > `list[int]` — structural equality over a container is unbuilt, and a container has no declaration to
   > derive it on_. What the unnamed forms are owed is under Types' parts-inheritance rule — a tuple has
   > `Eq` exactly when every part has it — and that derivation is the unbuilt half. Compare the elements
-  > you mean to compare meanwhile. It is the same hole [Format](../runtime/format.md) reports as `E9059`,
-  > one operator over.
+  > you mean to compare meanwhile. [Format](../runtime/format.md) asked the same question of a different
+  > verb and answered it: a composite RENDERS structurally, and comparing one is what is still owed.
 
 Zerg has **no instance-identity test** between two values: under copy-by-value distinct values are
 distinct instances and there's no aliasing, so "same instance?" would be meaningful only for a channel —
@@ -426,8 +426,8 @@ generic bound gates on it:
   it; a conversion is always **written**, never applied by a position. It ships **no built-in impls** —
   between numbers the conversion is `T(x)`, and to text it is `str(x)`, which needs no bound because
   `display` is a **rendering** the language gives rather than a spec a type implements. That is not the
-  same claim as "every type answers it": a composite and an `enum` are **[not yet]** — _E9059_ — and a **channel**, a
-  **function value** and **nil** have no rendering at all ([Format](../runtime/format.md)). See
+  same claim as "every type answers it": a **channel**, a **function value** and **nil** have no rendering
+  at all, while a composite and an `enum` render structurally ([Format](../runtime/format.md)). See
   [Type Conversion](types.md#into--an-ordinary-conversion-spec).
 
 **`Ref` — copy-by-ref (sealed).** Unlike every spec above, implementing it adds no behavior — it changes

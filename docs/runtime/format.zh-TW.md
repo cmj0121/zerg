@@ -17,55 +17,44 @@
 method 會在宣告處被拒絕。`print`、格式洞與 `str(…)` 都會採用 override，而只寫了 `debug` 的型別在每個渲染點
 都透過它渲染，因為 `display` 預設就是它。
 
-> **狀態。** 渲染一個**純量**、一個 **`str`**，或一個 **`Err`**——透過純 `{x}` 洞、`print`，或 f-string——可
-> 用，而且任何宣告了 override 的具名型別（`type X = Y`、`struct`、`enum`）都會**採用該 override**。一個 `Err`
-> 渲染為它的**訊息**；它的 kind 是拿來比較的（`e is IOError`），不是拿來讀出的。**沒有 override 的複合值**
-> （`struct`、`list`、`map`）**的結構化預設渲染**為 **[not yet]**：今日這樣的複合值會在**編譯期被拒絕**，而且
-> 是兩個門口兩個代碼——_E9059 NotImplemented: rendering a `P` as text — a composite needs the structural
-> `Display` this compiler does not generate; render its fields_ 用於 `print`、格式洞與 `str(x)`，而
-> _E4011 `str(…)` over a list bridges bytes or code points_ 用於引數是別種東西的 `list`。**`enum`** 是第三道門、
-> 第三個碼 —— _E9085 NotImplemented: rendering an `E` as text — an enum has no name for it_ —— 那是 0.2.0 的重新
-> 量測發現這裡沒有指名的(#74)。所以「每個值都能渲染」
-> 對純量、字串、錯誤與有 override 的型別現已成立，對一個**複合值**則待結構化 `debug` 落地。它並不是對其餘每一
-> 種接收者都成立：**channel**、**函式值**與 **nil** 不在等任何東西，下面那段講這三者的文字說明了為什麼就算結構
-> 化 `debug` 落地了也不會是它們的答案。因此結構化 `debug` 字串的確切拼法**尚未被釘定**（[not yet]）。
+> **狀態。** 除了一類之外,每個值都渲染得出來。**純量**、**`str`**、**`Err`** 與**複合值**——`struct`、`enum`、
+> `list`、`map`、tuple、陣列、載體——透過純 `{x}` 洞、`print`、`str(x)` 與那兩個 method 全都渲染得出來,而任何
+> 宣告了 override 的具名型別（`type X = Y`、`struct`、`enum`）會先採用該 override。一個 `Err` 渲染為它的**訊息**;
+> 它的 kind 是拿來比較的（`e is IOError`）,不是拿來讀出的。**渲染不出來**的是沒有任何部分、也不在等任何東西的
+> 那一類:**channel**、**函式值**——_E4076 a … is an identity rather than a value, and the language gives it no
+> rendering_——以及 **nil**,它根本不是一個值（_E3086 this rendering needs a value, and this one is nil_）。
 >
-> 這是同一個缺口的第三張臉：複合值也沒有結構化的**相等**，所以兩個 list 的 `xs == ys` 是 `E9057`
-> （[Spec 與泛型](../core/specs.zh-TW.md)）。渲染與比較是讀者最期待容器免費提供的兩件事，而兩者都沒有被推導出來。
+> **結構化的拼法就是這個語言自己的 literal。** 一個複合值渲染成讀者本來就會寫出來的那個 literal,只有一個差別,
+> 而那正是 developer 視角的重點:**複合值裡面的 `str` 會加引號並跳脫**,因為 `["a, b"]` 與 `["a", "b"]` 是兩個
+> 不同的 list。**單獨**的一個 `str` 就是它自己的文字——引號是**位置**的性質而不是視角的性質,這正是讓
+> `print s` 印出 `hi` 而 `print [s]` 印出 `["hi"]` 的那條規則。
 >
-> **這兩種渲染是靠名字抵達的,不是靠呼叫。** `str(x)`、洞與 `print` 在每個值上都會諮詢它們,而寫成
-> `x.display()` / `x.debug()` 時只會抵達 override:有宣告的型別由它回答,沒有宣告的值——一個 `int`、一個
-> `str`、一個 `list`、一個 `map`、一個 `Err`、一個載體——則是 **[not yet]**,_E9107 NotImplemented: the
-> method `display` on a int — `str(x)` renders it, and an `impl` on a declared type is how a type
-> overrides that_,`debug` 也是同一句 _NotImplemented: the method `debug` on a int_。每一種接收者都是同一個
-> 答案,而這正是「每個值」的意思:`map` 不會為了一個渲染而拿到 map 那句關於 `len` 與 `has` 的話。所以「每個值
-> 都能渲染」在上面三種拼法上成立、在第四種上還不成立。
+> | 形狀                | 渲染成                                                           |
+> | ------------------- | ---------------------------------------------------------------- |
+> | `list[T]`、`[T; N]` | `[1, 2]`                                                         |
+> | `map[K, V]`         | `{"k": 1}`——**插入**序,也就是 `for` 走訪它的那個順序             |
+> | tuple               | `(1, "x")`                                                       |
+> | `struct P`          | `P(x: 1, y: "a")`——那個 constructor,外加讀者否則得自己數的欄位名 |
+> | `enum E`            | `E.A`,帶 payload 的變體則是 `E.B(3)`                             |
+> | `T?`                | 那個值,或 `nil`                                                  |
+> | `Either[X, Y]`      | `Left(1)` / `Right(…)`——先 tag、再 payload                       |
 >
-> **在它落地之前要寫什麼,並不是每一種接收者都同一個答案**,這是把上一段拿回來對照這一段讀出來的。`str(x)`
-> 只在那個值本來就渲染得出來時才頂得上——一個純量、一個 `str`、一個 `Err`、一個 `list[byte]`、一個
-> `list[rune]`,或一個有 override 的型別。兩種 list 拼法都在,是因為 `str(…)` 會**橋接**它們——bytes 與碼位是
-> 回到字串的兩條路——決定這件事的是那座橋,不是「list」這個字。在 Status 那段所拒絕的複合值上,沒有東西可以頂上,因為第四種拼法等的就是前三種等的同一個
-> 缺口;訊息說的是這件事,而不是指名一個同一個編譯器會拒絕的運算式:_E9107 NotImplemented: the method
-> `display` on a list[int] — there is nothing to write in its place — this value has no rendering of its
-> own until the structural `Display` this compiler does not generate, so render its parts_。對一個複合值來說
-> 那是一個缺口，不是兩個。
+> 複合值沒有結構化的**相等**,那是同一個問題換一個動詞問:兩個 list 的 `xs == ys` 是 `E9057`
+> （[Spec 與泛型](../core/specs.zh-TW.md)）。渲染被推導出來而比較沒有——這是兩個各自的決定,理由是渲染是一種
+> 視角,而相等是一個關於值的主張。
 >
-> **有三種接收者兩邊都不在,而它們缺的東西跟複合值缺的並不一樣。** 複合值是在*等*:上面那個結構化的
-> `Display` 正是擋在它與渲染之間的東西,在那之前它的各個部分就是可以拿來渲染的。**channel** 與**函式值**則
-> 不在等任何東西。它們是身分而不是值——就是 `==` 被拒絕的那同一類,_E4034 a … is an identity rather than a
-> value, and the language gives it no equality_——所以沒有部分可以拿來頂上,而且就算 `Display` 落地了也不會是
-> 它們的答案:_E9107 NotImplemented: the method `display` on a chan[int] — there is nothing to write in its
-> place — a chan[int] is an identity rather than a value_。**三個 rendering 位置說同一句話** —— `print x`、
-> `str(x)` 與 `f"{x}"` 是同一個檢查,身分抵達那裡得到的是 _E4076 a … is an identity rather than a value, and
-> the language gives it no rendering_。那指名的不是任何未建形式:沒有東西在路上。**nil** 是第三種答案,因為 nil 根本不是一個值:沒
-> 有 `-> type` 的 `fn` 回答的就是它（[`GRAMMAR#fn-decl`](../../GRAMMAR)）,`str(f())` 會被指名這麼告知——
-> _E3086 this rendering needs a value, and this one is nil_——而讀者需要的是一個會回答出東西的 `fn`,不是一個
-> 渲染。所以 `str(x)` 頂得上第一組;第二組沒有東西可以頂上,但有東西可以等;而這三種沒有東西可以頂上,也沒有
-> 東西會來。
-
-**內插——`f"…"`。** 裸 `"…"` 是字面量（大括號是普通字元）。**`f`-string** 內嵌 `{ expr }`，透過 `display` 渲染
-再串接——`f"sum={x + y}"`——在**編譯期 desugar** 成 `str` 串接（Collections），不需 variadic、無 runtime 格式
-引擎。洞是 **Python 形狀**——`{ expr =? !conv? :spec? }`：
+> **四種拼法都抵達同一個產生器。** `str(x)`、洞、`print`,以及寫出來的 `x.display()` / `x.debug()`,都先諮詢
+> override、再落到結構化渲染,所以 `map` 不會為了一個渲染而拿到 map 那句關於 `len` 與 `has` 的話,而這四者之間
+> 也不可能對同一個值講出不一樣的答案。
+>
+> **哪裡都渲染不出來的那一類,用一句話說清楚。** **channel** 與**函式值**是身分而不是值——就是 `==` 被拒絕的那
+> 同一類,_E4034_——所以沒有部分可以拿來渲染,也沒有東西在路上:四種拼法都得到 _E4076 a … is an identity rather
+> than a value, and the language gives it no rendering_。**nil** 是第三種答案,因為 nil 根本不是一個值:沒有
+> `-> type` 的 `fn` 回答的就是它（[`GRAMMAR#fn-decl`](../../GRAMMAR)）,而 `str(f())` 會被指名告知——
+> _E3086 this rendering needs a value, and this one is nil_——讀者需要的是一個會回答東西的 `fn`,不是一個渲染。
+> **內插——`f"…"`。** 裸 `"…"` 是字面量（大括號是普通字元）。**`f`-string** 內嵌 `{ expr }`，透過 `display` 渲染
+> 再串接——`f"sum={x + y}"`——在**編譯期 desugar** 成 `str` 串接（Collections），不需 variadic、無 runtime 格式
+> 引擎。洞是 **Python 形狀**——`{ expr =? !conv? :spec? }`：
 
 - **`{x}`** 用 `display`；**轉換**可先換視圖——**`!r`** 用開發者 `debug`、**`!s`** 用 `display`、**`!a`** 用
   ASCII-escaped 的 debug。`f"{x!r}"` 把 `x` 以 `debug` 渲染。三者皆為 **[not yet]**——_E9013 NotImplemented: an

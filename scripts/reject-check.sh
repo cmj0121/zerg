@@ -2965,6 +2965,70 @@ fn main() {
 }
 EOF
 
+# --- a `mut &` through a function VALUE ------------------------------------------
+#
+# `mut &` is part of the TYPE (GRAMMAR#param-type), so a call through a value reads the
+# convention from what it is calling rather than from a name it has not got. These are the
+# three rules that used to be unreachable because the type itself was refused: two function
+# types that differ only in the marker are different types, and the borrow rules hold at a
+# call site with no name exactly as they do at one with a name.
+#
+# THE TWO BORROW RULES ARE THE SEED'S GAP, and a familiar one: the seed reads a `mut &` from
+# the callee's NAME, so a call through a value asks the rules of nothing at all and takes the
+# address of whatever it was handed. That is the same gap the shipping compiler had until the
+# marker moved into the type.
+
+reject bind-a-mut-ref-fn-to-a-plain-fn-type E3033 'cannot bind fn(mut &int) -> void to a fn(int) -> void binding' <<'EOF'
+fn bump(mut &n: int) {
+	n = n + 1
+}
+
+fn main() {
+	f: fn (int) = bump
+	mut x := 1
+	f(x)
+	print x
+}
+EOF
+
+reject bind-a-plain-fn-to-a-mut-ref-fn-type E3033 'cannot bind fn(int) -> void to a fn(mut &int) -> void binding' <<'EOF'
+fn plain(n: int) {
+	print n
+}
+
+fn main() {
+	f: fn (mut &int) = plain
+	mut x := 1
+	f(x)
+	print x
+}
+EOF
+
+reject a-borrow-of-a-value-through-a-fn-value E3022 'argument 1 of this call' seed-gap <<'EOF'
+fn bump(mut &n: int) {
+	n = n + 1
+}
+
+fn main() {
+	f: fn (mut &int) = bump
+	f(1 + 2)
+	print 1
+}
+EOF
+
+reject a-write-back-to-a-non-mut-through-a-fn-value E3024 'argument 1 of this call' seed-gap <<'EOF'
+fn bump(mut &n: int) {
+	n = n + 1
+}
+
+fn main() {
+	f: fn (mut &int) = bump
+	x := 1
+	f(x)
+	print x
+}
+EOF
+
 # --- a write needs storage all the way down -------------------------------------
 #
 # `chk_root_name` asks what the target is rooted at; these are the STEPS between. Each of

@@ -3154,33 +3154,6 @@ fn main() {
 }
 EOF
 
-# A `mut &` parameter cannot survive being turned into a bare function pointer: the call
-# site reads a signature from the callee's NAME, and a value has not got one. Both
-# spellings SEGFAULTED — the argument went in by value where a `T*` was declared.
-expect "$ZERG" mut-ref-param-on-a-closure E9065 <<'EOF'
-fn main() {
-	f := fn(mut &a: int) {
-		a = a + 1
-	}
-	mut x := 1
-	f(x)
-	print x
-}
-EOF
-
-expect "$ZERG" mut-ref-fn-taken-as-a-value E9065 <<'EOF'
-fn bump(mut &a: int) {
-	a = a + 1
-}
-
-fn main() {
-	g := bump
-	mut x := 1
-	g(x)
-	print x
-}
-EOF
-
 # GRAMMAR#del-stmt gives `del` a second meaning on a channel — drop a sender reference,
 # close the stream if it was the last. This compiler releases a channel where its
 # binding's scope ends, so `del ch` revoked the name and emitted nothing: the program
@@ -3506,22 +3479,6 @@ fn main() {
 		return x
 	}
 	print f(1)
-}
-EOF
-
-# GRAMMAR#param-type puts `mut &` in a function TYPE — `param-type ::= ( 'mut' '&' )? type`
-# — and docs/code/functions.md says the distinction is real and cannot be written down. It
-# was refused by the tuple/parameter-list reader's `expect(Comma)`, so `fn(mut &int) -> bool`
-# answered "expected `,`, found `&`": a punctuation complaint about a type the language has.
-expect "$ZERG" mut-ref-in-a-fn-type E9035 <<'EOF'
-fn bump(mut &n: int) -> bool {
-	n = n + 1
-	return true
-}
-
-fn main() {
-	g: fn(mut &int) -> bool = bump
-	print 1
 }
 EOF
 

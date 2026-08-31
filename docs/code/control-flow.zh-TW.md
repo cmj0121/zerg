@@ -116,9 +116,11 @@ _E2073 `print` is a statement, and an expression is wanted here_(arm 裡的 `ret
 
 一個 **pattern** 是下列之一：**帶 payload 綁定的 variant**（`Left(v)`）——以 **copy** 綁定，一如 `?`/`return`、來源
 永不失效；**literal**（`0`、`"y"`、`true`、或負數 literal）——以值比對；**nested** pattern（`Left(Some(v))`）；
-或**萬用 `_`**，比對任何值、不綁定。這些連同下面的 **product pattern**、以及一個 **range** arm（`1..=2 =>`，以
-containment 比對）都會觸發。一個 **or-pattern**（`A | B =>`，以及各分支綁同名同型的綁定形式
-`A(x) | B(x) =>`）與一個 **list pattern**（`[h, ..t]`）是 **[not yet]**：`GRAMMAR` 兩者皆導得出。
+或**萬用 `_`**，比對任何值、不綁定。這些連同下面的 **product pattern**、一個 **list pattern**
+（`[a, b]`、`[a, ..]`、`[a, .., z]`）、以及一個 **range** arm（`1..=2 =>`，以 containment 比對）都會觸發。
+list 先以**長度**比對——指名每個元素的 pattern 用 `==`，帶 `..` 的用 `>=`——而 `..` 的位置決定其餘：在它之前的
+元素在自己的索引上，在它之後的則是距**尾端**那麼遠。只有 `[..]` 是 catch-all。一個 **or-pattern**（`A | B =>`，
+以及各分支綁同名同型的綁定形式 `A(x) | B(x) =>`）是 **[not yet]**：`GRAMMAR` 導得出它。
 
 **`str` literal** 的 arm 比的是**文字**,走的是 expression 的 `==` 所用的同一個 `strcmp`。它曾被降階成**指標**
 比較,所以 `match s { "y" => 1  _ => -1 }` 在 `s == "y"` 時回答 `-1`——而且無聲,因為結尾的 `_` 吸收掉每一次落空,
@@ -132,7 +134,9 @@ containment 比對）都會觸發。一個 **or-pattern**（`A | B =>`，以及�
 > - **or-pattern** 是 _E9024 NotImplemented: an or-pattern_——否則那裡的 `|` 會被讀成位元運算子,把 `1 | 2 =>`
 >   折成 `3 =>`、兩側都不中,那正是編譯器最不該給的靜默錯答案。`zerg fmt` 會改寫唯一有可用寫法的那個情況(連續整數
 >   收成 range `1..=2`,規則 `F408`);
-> - **list pattern** 是 _E9023 NotImplemented: a list pattern in a `match` arm_——改用索引與切片來解構一個 list。
+> - **具名的 rest**——`[a, ..rest]`——是 _E9110 NotImplemented: a NAMED rest in a list pattern_。匿名的 `..`
+>   已經建好了；具名的那個會綁一個新的 list，而 `match` arm 是一個運算式、沒有地方放擁有它的暫存，所以每次
+>   使用那個名字都會再配置一份、而且一份都不釋放。
 >
 > 在 parse 就拒絕,也把意圖中那個檢查器唯一的軟處掏空了:對**巢狀** payload 的 exhaustiveness 本來只證明頂層
 > variant、不證明每一種巢狀組合——而現在沒有巢狀 case 抵達得了它。

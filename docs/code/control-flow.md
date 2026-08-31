@@ -146,11 +146,13 @@ guard-gap; a **redundant** arm (one an earlier arm already covers) is a warning.
 A **pattern** is one of: a **variant with a payload binding** (`Left(v)`) — bound **by copy**, like
 `?`/`return`, the source never invalidated; a **literal** (`0`, `"y"`, `true`, or a negative literal) —
 matched by value; a **nested** pattern (`Left(Some(v))`); or the **wildcard `_`**, matching anything and
-binding nothing. These, together with a **product pattern** (below) and a **range** arm (`1..=2 =>`, which
-matches by containment), all fire. An **or-pattern** (`A | B =>`, and the binding form
-`A(x) | B(x) =>` whose alternatives bind the same names at the same types) and a **list pattern**
-(`[h, ..t]`) are **[not yet]**: `GRAMMAR` derives both, and each is refused in the parser — _E9024_ and
-_E9023_ (below).
+binding nothing. These, together with a **product pattern** (below), a **list
+pattern** (`[a, b]`, `[a, ..]`, `[a, .., z]`) and a **range** arm (`1..=2 =>`, which matches by
+containment), all fire. A list is matched by **length first** — `==` for a pattern that names every
+element, `>=` for one carrying a `..` — and where the `..` sits decides the rest: an element before it is
+at its own index, one after it is that far from the **end**. Only `[..]` is a catch-all. An **or-pattern**
+(`A | B =>`, and the binding form `A(x) | B(x) =>` whose alternatives bind the same names at the same
+types) is **[not yet]**: `GRAMMAR` derives it and it is refused in the parser — _E9024_ (below).
 
 A **`str` literal** arm compares TEXT, through the same `strcmp` an expression's `==` uses. It lowered to
 a **pointer** comparison, so `match s { "y" => 1  _ => -1 }` answered `-1` for `s == "y"` — silently, since
@@ -165,8 +167,9 @@ the trailing `_` absorbs every miss and two equal literals may or may not share 
 >   operator, folding `1 | 2 =>` to `3 =>` and matching neither side, which is the silent wrong answer a
 >   compiler must not give. `zerg fmt` rewrites the one case with a working spelling (consecutive integers
 >   become the range `1..=2`, rule `F408`);
-> - a **list pattern** is _E9023 NotImplemented: a list pattern in a `match` arm_ — destructure a list with
->   indexing and a slice instead.
+> - a **NAMED rest** — `[a, ..rest]` — is _E9110 NotImplemented: a NAMED rest in a list pattern_. The
+>   anonymous `..` is built; a named one binds a fresh list, and a `match` arm is an expression with
+>   nowhere to keep it, so every use of the name would allocate another and release none.
 >
 > Refusing at the parse also empties the intended checker's one soft spot — exhaustiveness over **nested**
 > payloads was to prove the top-level variants without proving every nested combination — since no nested

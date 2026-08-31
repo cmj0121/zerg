@@ -362,21 +362,6 @@ fn main() {
 }
 EOF
 
-# GRAMMAR derives an or-pattern; neither compiler lowers one, and `|` in pattern position is
-# read as the bitwise operator — so `1 | 2` folded to `3` and the arm matched neither side,
-# compiled and run. Refusing it is the whole difference between a gap and a wrong answer.
-expect "$ZERG" or-pattern-in-a-match-arm E9024 <<'EOF'
-fn f(n: int) -> str {
-	return match n {
-		1 | 2 => "lo"
-		_ => "hi"
-	}
-}
-
-fn main() {
-	print f(3)
-}
-EOF
 
 # A match lowers to a chain of ternaries whose LAST arm is the final `else`, untested. So a
 # match missing a case never failed — it answered the last arm's body for everything nothing
@@ -3059,10 +3044,11 @@ EOF
 # reading the answer.
 
 # the NAME shape of the or-pattern, and the reason the rule lives in the parser. Its sibling
-# `or-pattern-in-a-match-arm` above is the LITERAL shape, where parse_expr swallows the `|`
-# into a bitwise-or; a name pattern stops before the `|` instead, so the arm never reached
-# the emitter at all and died on "expected `=>`". One rule, and only the parser sees both.
-expect "$ZERG" or-pattern-of-variant-names E9024 <<'EOF'
+# THE OR-PATTERN IS BUILT, and this is the rule that makes it one: the arm's body is ONE body,
+# so a name only one side supplies is a name that is sometimes there. `E.A | B` reads as a
+# variant on the left and a BINDING on the right — a bare name in pattern position always is —
+# so the two sides bind nothing and one thing.
+expect "$ZERG" an-or-pattern-whose-sides-bind-differently E4088 <<'EOF'
 enum E {
 	A
 	B

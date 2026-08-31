@@ -4989,6 +4989,12 @@ fn fstr_hole(mut &p: Parser, t: token.Token, hole: str, mut &lead: str) -> ast.E
 		fspec = fstr_slice(b, cut + 1, b.len())
 	}
 
+	# A BRACE IS NOT A `fmt-char` (GRAMMAR#fmt-char excludes `{` and `}`), so a spec holding one
+	# is not a spec — Python's nested replacement field is a form this grammar does not derive.
+	# It used to reach the runtime as an unreadable spec and end the program there, which is a
+	# refusal made at the worst possible time about a text that was in the source all along.
+	raise p_diag_at(p, t.line, t.col, rule.Rule.FStringSpecBrace, f"a format spec is made of `fmt-char`s and a brace is not one (GRAMMAR#fmt-char) — `{fspec}` holds one, and a spec is not a place a second hole may open") if fstr_has_brace(fspec)
+
 	mut src := fstr_slice(b, 0, cut)
 
 	# `{x=}` RENDERS THE EXPRESSION'S SOURCE TEXT, then `=`, then the value. The text is a fact

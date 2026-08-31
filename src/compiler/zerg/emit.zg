@@ -13777,6 +13777,8 @@ fn c_fmt_hole(mut &em: Emitter, x: ast.Expr, conv: str, fspec: str, sb: Subst) -
 	em.used_rt = true
 	em.used_str = true
 
+	c_fmt_spec_type(em, t, conv, fspec)
+
 	return f"{c_fmt_num_fn(t)}({c_expr(em, x, sb)}, {c_str_lit(fspec)})" if conv == "" and fspec != "" and c_fmt_is_number(t)
 
 	text := c_render_of(em, t, c_expr(em, x, sb), conv == "r" or conv == "a")
@@ -13787,6 +13789,62 @@ fn c_fmt_hole(mut &em: Emitter, x: ast.Expr, conv: str, fspec: str, sb: Subst) -
 	return out if fspec == ""
 
 	return f"zrt_fmt_str({out}, {c_str_lit(fspec)})"
+}
+
+# c_fmt_spec_type holds a spec's TYPE LETTER to what the value can render as. Both halves are
+# in the source — the spec is a literal and the type is inferred — so a program the runtime
+# would always end the same way is refused here instead. The sentences are the runtime's own,
+# because they are answers to the same question asked one stage earlier.
+fn c_fmt_spec_type(mut &em: Emitter, t: ast.Ty, conv: str, fspec: str) {
+	says := c_fmt_spec_says(t, conv, c_fmt_spec_letter(fspec))
+	if says != "" {
+		check.chk_at(em, rule.Rule.FStringSpecType, says)
+	}
+}
+
+# c_fmt_spec_says is why this letter is wrong for this value, or "" when it is not. It is ONE
+# sentence-maker and one raise site, which is what keeps the three readings one rule: a code is
+# an identity, and three raises under it would be three rules wearing one number.
+fn c_fmt_spec_says(t: ast.Ty, conv: str, c: byte) -> str {
+	return "" if c == b'\0'
+
+	# A CONVERSION HAS ALREADY MADE IT TEXT, so the spec that follows one is a str's whatever
+	# the value was — which is the same order the lowering runs in.
+	if conv != "" or not c_fmt_is_number(t) {
+		return "" if c == b's'
+
+		return "a str renders as `s`, and a format spec asked for another"
+	}
+
+	if c_is_float(t) {
+		return "" if c_fmt_float_letter(c)
+
+		return "a float renders as `e`, `f` or `g` (in either case), and a format spec asked for another"
+	}
+	return "" if c_fmt_int_letter(c)
+
+	return "an int renders as `b`, `o`, `x`, `X`, `c` or `d`, and a format spec asked for another"
+}
+
+# c_fmt_spec_letter is the spec's trailing TYPE letter, or NUL for a spec that names none. A
+# width and a precision end in digits and a fill character is not last, so the last byte being
+# a letter is the whole of the question.
+fn c_fmt_spec_letter(fspec: str) -> byte {
+	b := bytearray(fspec)
+	return b'\0' if b.len() == 0
+
+	c := b[b.len() - 1]
+	return c if ascii.is_alpha(c)
+
+	return b'\0'
+}
+
+fn c_fmt_int_letter(c: byte) -> bool {
+	return c == b'b' or c == b'o' or c == b'x' or c == b'X' or c == b'c' or c == b'd'
+}
+
+fn c_fmt_float_letter(c: byte) -> bool {
+	return c == b'e' or c == b'E' or c == b'f' or c == b'F' or c == b'g' or c == b'G'
 }
 
 fn c_fmt_is_number(t: ast.Ty) -> bool {

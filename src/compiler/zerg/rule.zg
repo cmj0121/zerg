@@ -110,6 +110,7 @@ pub enum Rule {
 	ListPatternTwoRests = 2078
 	ImplItemUnknown = 2077
 	ArrayLenNotConst = 2079
+	FStringSpecBrace = 2080
 
 	# checking — a form whose meaning does not hold together — reported against the tree, all at once
 	NotPublicMember = 3001
@@ -285,6 +286,7 @@ pub enum Rule {
 	ArrayLitLen = 3139
 	ArrayIndexConst = 3140
 	ArrayMethodUnknown = 3141
+	FStringSpecType = 3142
 	SpecDefaultReadsField = 3138
 
 	# emitting — a form this compiler will not lower
@@ -423,9 +425,6 @@ pub enum Rule {
 	NotYetCallee = 9009
 	NotYetNamedArgument = 9010
 	NotYetUnsafeExpr = 9011
-	NotYetFStringFormatSpec = 9012
-	NotYetFStringConversion = 9013
-	NotYetFStringSelfDoc = 9014
 	NotYetImplAssocType = 9015
 	NotYetCommandInterpolating = 9019
 	NotYetCommandLiteral = 9020

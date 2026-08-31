@@ -69,16 +69,22 @@ time** to `str` concatenation (Collections), with no variadics and no runtime fo
 **Python-shaped** — `{ expr =? !conv? :spec? }`:
 
 - **`{x}`** uses `display`; a **conversion** picks another view first — **`!r`** the developer `debug`,
-  **`!s`** `display`, **`!a`** an ASCII-escaped debug. `f"{x!r}"` renders `x` through `debug`. All three
-  are **[not yet]** — _E9013 NotImplemented: an f-string '!r' / '!s' / '!a' conversion_.
+  **`!s`** `display`, **`!a`** an ASCII-escaped debug. `f"{x!r}"` renders `x` through `debug`, which is the
+  same text `x.debug()` answers.
 - **`{x=}`** is self-documenting: it prints the expression's source text, `=`, then the value —
-  `f"{n=}"` → `n=42` (compose with the rest: `f"{n=:04d}"`). **[not yet]** — recognized and then **refused by
-  the parser** (`E9014`) this phase.
+  `f"{n=}"` → `n=42` (compose with the rest: `f"{n=:04}"`).
 - **`{x:spec}`** hands the spec string to the type's **`Format`** protocol — `f"{pi:.2f}"`, `f"{n:04d}"`,
   `f"{p:>10}"`. This is a **per-type protocol**, not a `display` parameter: the language fixes only the
   `:spec` **syntax** (opaque text up to `}`); what a spec **means** is the type's own — the stdlib numbers
-  and `str` read the usual `[[fill]align][sign][#][0][width][.precision][type]`, mirroring Python. A format
-  spec is **[not yet]** — _E9012 NotImplemented: an f-string ':spec' format spec_.
+  and `str` read the usual `[[fill]align][sign][#][0][width][.precision][type]`, mirroring Python. A value
+  the language gives no numeric reading — a composite, or anything behind a conversion — is **rendered
+  first and then read as text**, which is what makes one spec syntax serve every value.
+
+  A `type` letter the value cannot render as is refused where it is written — _E3142 an int renders as
+  `b`, `o`, `x`, `X`, `c` or `d`, and a format spec asked for another_ — because the spec is a literal and
+  the type is inferred, so a program the runtime would end the same way on every run does not build. A
+  **brace** inside a spec is not a `fmt-char` at all (`GRAMMAR#fmt-char`), so Python's nested replacement
+  field is _E2080_ rather than a spec: `f"{n:>{4}}"` does not derive.
 
   > **A spec is text the program wrote, and every field of it is bounded.** The `type` letter is a
   > **closed set** per rendering — a float takes `e E f F g G`, an int `b o x X c d`, a `str` `s` — and

@@ -57,14 +57,18 @@ method 會在宣告處被拒絕。`print`、格式洞與 `str(…)` 都會採用
 > 引擎。洞是 **Python 形狀**——`{ expr =? !conv? :spec? }`：
 
 - **`{x}`** 用 `display`；**轉換**可先換視圖——**`!r`** 用開發者 `debug`、**`!s`** 用 `display`、**`!a`** 用
-  ASCII-escaped 的 debug。`f"{x!r}"` 把 `x` 以 `debug` 渲染。三者皆為 **[not yet]**——_E9013 NotImplemented: an
-  f-string '!r' / '!s' / '!a' conversion_。
-- **`{x=}`** 自述：印出運算式原文、`=`，再接值——`f"{n=}"` → `n=42`（可與其餘組合：`f"{n=:04d}"`）。**[not yet]**
-  ——被辨識之後由 **parser 拒絕**（`E9014`）。
+  ASCII-escaped 的 debug。`f"{x!r}"` 把 `x` 以 `debug` 渲染,那正是 `x.debug()` 回答的同一段文字。
+- **`{x=}`** 自述：印出運算式原文、`=`，再接值——`f"{n=}"` → `n=42`（可與其餘組合：`f"{n=:04}"`）。
 - **`{x:spec}`** 把 spec 字串交給型別的 **`Format`** 協定——`f"{pi:.2f}"`、`f"{n:04d}"`、`f"{p:>10}"`。這是
   **per-type 協定**、非 `display` 參數：語言只固定 `:spec` 的**語法**（到 `}` 為止的不透明文字）；一個 spec 的**意義**
-  由型別自定——stdlib 數字與 `str` 讀常見的 `[[fill]align][sign][#][0][width][.precision][type]`，比照 Python。對
-  format spec 為 **[not yet]**——_E9012 NotImplemented: an f-string ':spec' format spec_。
+  由型別自定——stdlib 數字與 `str` 讀常見的 `[[fill]align][sign][#][0][width][.precision][type]`，比照 Python。語言
+  沒有給數值讀法的值——一個複合值,或任何在轉換後面的東西——會**先被渲染、再當文字讀**,這正是同一套 spec 語法能服務
+  每一種值的原因。
+
+  值渲染不出來的 `type` 字母會在寫下它的地方被拒絕——_E3142 an int renders as `b`, `o`, `x`, `X`, `c` or `d`, and a
+  format spec asked for another_——因為 spec 是字面量、型別是推論出來的,所以一個 runtime 每次都會用同樣方式結束的
+  程式根本不會建起來。spec 裡的**大括號**根本不是 `fmt-char`（`GRAMMAR#fmt-char`）,所以 Python 的巢狀替換欄位是
+  _E2080_ 而不是一個 spec:`f"{n:>{4}}"` 推導不出來。
 
   > **spec 是程式自己寫的文字,而它的每一個欄位都有界。** `type` 字母對每一種渲染都是**封閉集合**——float 取
   > `e E f F g G`，int 取 `b o x X c d`——其中 `c` 把 int 當作它指名的**碼位**渲染,並拒絕任何 `str` 裝不下的

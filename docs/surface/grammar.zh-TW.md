@@ -289,12 +289,13 @@ print       ::= 'print' expr
 
 洞是 **Python 式**：`expr`，其後選用 `=`、`!` 轉換、`:` format spec。`f"sum={x + y}"` 把每個洞經 `display()`
 算出並串接——**編譯期 desugar** 成 `str` 串接，沒有 runtime format engine。同一套 `{ … }` 洞也驅動插值的**命令
-literal** `` f`…` ``（group 3 的 command literal，**[not yet]**）：它經過 shell 執行並對每個洞 **shell-quote**
+literal** `` f`…` ``（group 3 的 command literal，**[not yet]**——_E9019 NotImplemented: an
+interpolating command literal_）：它經過 shell 執行並對每個洞 **shell-quote**
 （`{x:raw}` 可退出），使值以單一安全引數插入。
 
 - **`{x}`** 透過 `display` 渲染。**`{x!r}`** / **`{x!s}`** / **`{x!a}`** 先轉換——`debug` / `display` / ascii。
-  三者皆為 **[not yet]**——洞裡的轉換是 `E9013`（[Format](../runtime/format.zh-TW.md)）。**`{x=}`** 自述：
-  輸出運算式原文與 `=`，再接值（`f"{n=}"` → `n=42`）——同樣是 **[not yet]**（`E9014`）。
+  （[Format](../runtime/format.zh-TW.md)）。**`{x=}`** 自述：輸出運算式原文與 `=`，再接值
+  （`f"{n=}"` → `n=42`）。
 - **`{x:spec}`** 把 `spec` 交給型別的 **`Format`** protocol——`f"{pi:.2f}"`、`f"{n:04d}"`、`f"{p:>10}"`。spec
   **字串的意義由型別決定**（stdlib 數字/`str` 讀常見的 fill/align/sign/`#`/`0`/width/`.precision`/type）；文法
   只當它是到 `}` 為止的不透明字串。

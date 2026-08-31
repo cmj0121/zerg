@@ -27,13 +27,12 @@ Zerg 保持一個**精簡核心**,在其上疊了幾個方便的表面寫法—�
 | `del ch`                           | 撤銷名字**並**放掉這個持有者（要結束 stream 請用 `close(ch)`）   |
 | `assert c`                         | 運算元暫時變數,再 `raise AssertionError(<訊息>) if not (c)`      |
 
-**狀態。** 上表每一列皆可用，唯 f-string 的洞、`del ch`,以及使用者自訂型別上的運算子那幾列除外。洞裡只有純
-`{x}` 形式可用:**轉換**（`!r` / `!s` / `!a`）是 `E9013`、**format spec**（`{x:.2f}`）是 `E9012`、自述的
-`f"{x=}"` 是 `E9014`。**複合值**的洞會結構化渲染——`f"{p}"` 就是 `P(x: 1)`——走的是
-`print` 與 `str(x)` 抵達的同一個產生器;見 [格式化與文字](../runtime/format.zh-TW.md)。**desugar 之後的拼法是同一個缺口**:寫成 `x.format(spec)` 是
-_E9107 NotImplemented: the method `format` on a int — a spec is unread here (`E9012` is the same gap spelled
-in an f-string hole), and `f"{x}"` renders without one_,因為這一列點名的 `Format` protocol 還不是任何型別
-帶著的宣告。
+**狀態。** 上表每一列皆可用，唯 `del ch` 以及使用者自訂型別上的運算子那幾列除外。f-string 的洞會讀它全部三種
+尾巴——**轉換**（`!r` / `!s` / `!a`）、**format spec**（`{x:.2f}`）與自述的 `f"{x=}"`——而**複合值**的洞會結構化
+渲染,`f"{p}"` 就是 `P(x: 1)`,走的是 `print` 與 `str(x)` 抵達的同一個產生器;見
+[格式化與文字](../runtime/format.zh-TW.md)。一個 spec **desugar 之後的拼法**仍然是缺口:寫成 `x.format(spec)` 是
+_E9107 NotImplemented: the method `format` on a int_,因為這一列點名的 `Format` protocol 還不是任何型別帶著的
+宣告——所以 `zerg desugar` 會把每一種洞寫出來,唯獨那一種不會（見 [Desugar](../tooling/desugar.zh-TW.md)）。
 
 **`del ch`** 是 **[not yet]**:_E9066 NotImplemented: `del ch` on a CHANNEL_,它指向 `close(ch)`,以及 binding
 的 scope 本來就會做的那次釋放。而**運算子**那一列只有在運算子屬編譯器所有時才 desugar:沒有任何運算子 `spec` 被

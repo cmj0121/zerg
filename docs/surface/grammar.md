@@ -315,13 +315,13 @@ print       ::= 'print' expr
 A hole is **Python-style**: `expr`, then an optional `=`, `!` conversion, and `:` format spec. `f"sum={x + y}"`
 renders each hole through `display()` and joins the pieces — it **desugars at compile time** to `str`
 concatenation, with no runtime format engine. The same `{ … }` holes power the interpolating **command
-literal** `` f`…` `` (the group-3 command literal, **[not yet]**): it runs through a shell and
+literal** `` f`…` `` (the group-3 command literal, **[not yet]** — _E9019 NotImplemented: an
+interpolating command literal_): it runs through a shell and
 **shell-quotes** each hole (`{x:raw}` opts out), so a value splices in as one safe argument.
 
 - **`{x}`** renders through `display`. **`{x!r}`** / **`{x!s}`** / **`{x!a}`** convert first — `debug` /
-  `display` / ascii. All three are **[not yet]** — a conversion in a hole is `E9013`
-  ([Format](../runtime/format.md)). **`{x=}`** is self-documenting: it emits the expression's source text
-  and `=`, then the value (`f"{n=}"` → `n=42`) — **[not yet]** as well (`E9014`).
+  `display` / ascii ([Format](../runtime/format.md)). **`{x=}`** is self-documenting: it emits the
+  expression's source text and `=`, then the value (`f"{n=}"` → `n=42`).
 - **`{x:spec}`** hands `spec` to the type's **`Format`** protocol — `f"{pi:.2f}"`, `f"{n:04d}"`,
   `f"{p:>10}"`. The spec **string's meaning is the type's** (stdlib numbers/`str` read the usual
   fill/align/sign/`#`/`0`/width/`.precision`/type); the grammar treats it as opaque up to `}`.

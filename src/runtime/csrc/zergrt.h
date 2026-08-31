@@ -823,6 +823,11 @@ int64_t zrt_exec(zrt_list argv);
 int64_t zrt_proc_spawn(zrt_list argv);
 int64_t zrt_proc_wait(int64_t pid);
 
+/* zrt_proc_open3 starts a child with its three standard streams on pipes and answers
+ * `[pid, stdin, stdout, stderr]` — the parent's ends. A negative pid (a one-element list) is
+ * the failure. */
+zrt_list zrt_proc_open3(zrt_list argv);
+
 /* zrt_mkdir creates a directory and any missing parents (`mkdir -p`), reporting whether
  * it exists afterwards. Creating one that is already there is success. */
 bool zrt_mkdir(const char *path);

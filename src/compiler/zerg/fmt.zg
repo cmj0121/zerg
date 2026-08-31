@@ -474,8 +474,27 @@ fn fmt_arm_head_ends(mut &toks: list[token.Token], at: int) -> bool {
 	for i < toks.len() {
 		k := toks[i].kind
 
-		return false if is_semi(k) or is_comment(k) or is_lbrace(k)
+		return false if is_semi(k) or is_comment(k)
 		return true if k == token.Kind.FatArrow and depth == 0
+
+		# A `{` AFTER A NAME IS A STRUCT PATTERN'S, and every other `{` ends the head. That is
+		# the one signal available at this layer, and it is enough: GRAMMAR#struct-pat writes
+		# `type-name '{'` with nothing between them, and a block never follows a bare name in
+		# arm-head position. Before this, the `{` of `P{x, y} =>` was read as a block opener —
+		# so the arm had no head, `zerg fmt` produced something that would not parse, and its
+		# own safety check refused to write the file rather than destroy it.
+		if is_lbrace(k) {
+			return false if i == at or toks[i - 1].kind != token.Kind.Ident
+
+			depth = depth + 1
+			i = i + 1
+			continue
+		}
+		if is_rbrace(k) {
+			depth = depth - 1
+			i = i + 1
+			continue
+		}
 
 		if is_bracket(k) {
 			depth = depth + 1
@@ -908,12 +927,83 @@ pub fn fmt_next_code(mut &toks: list[token.Token], at: int) -> int {
 # Nothing caught it, because `make fmt-self` covers the compiler and the stdlib and neither
 # of them writes a map literal.
 fn fmt_opens_block(mut &toks: list[token.Token], at: int) -> bool {
+	return false if fmt_brace_is_pattern(toks, at)
+
 	p := fmt_prev_code(toks, at)
 
 	return true if p < 0
 	return true if not fmt_wants_value(toks[p].kind)
 
 	return not fmt_brace_is_map(toks, at)
+}
+
+# fmt_brace_is_pattern — the `{` of a STRUCT PATTERN, which is not a block and not a map.
+#
+# `P{x, y} => …` and `if c { … }` look the same at this layer: a `{` after a name. What tells
+# them apart is where the matching `}` lands — a pattern's is followed by the `=>` that ends the
+# arm head, and a block's is not. A NESTED one (`Wrap{inner: P{x}, tag}`) is followed by a `,`
+# or a `}` instead, so the question is asked again of the brace outside it, which terminates at
+# the outermost one.
+#
+# THIS IS THE ONE PLACE the decision lives, which is why it is asked here rather than at each of
+# the eight sites that consult `is_lbrace`. Before it, `P{x} => x` had its `{` read as a block
+# opener: `zerg fmt` produced source that would not parse, and its own safety check refused to
+# write the file — which is the formatter behaving exactly as it should about a form it could
+# not print (#110).
+# fmt_enclosing_brace is the `{` that HOLDS the one at `at`, or -1 at the outermost. It walks
+# LEFT, which is what makes the recursion above terminate: each step is strictly nearer index 0.
+fn fmt_enclosing_brace(mut &toks: list[token.Token], at: int) -> int {
+	mut depth := 0
+	mut i := at - 1
+	for i >= 0 {
+		k := toks[i].kind
+		if is_rbrace(k) {
+			depth = depth + 1
+		} else if is_lbrace(k) {
+			return i if depth == 0
+
+			depth = depth - 1
+		}
+		i = i - 1
+	}
+	return 0 - 1
+}
+
+fn fmt_brace_is_pattern(mut &toks: list[token.Token], at: int) -> bool {
+	p := fmt_prev_code(toks, at)
+
+	return false if p < 0 or toks[p].kind != token.Kind.Ident
+
+	mut depth := 0
+	mut i := at
+	for i < toks.len() {
+		k := toks[i].kind
+		if is_lbrace(k) {
+			depth = depth + 1
+		} else if is_rbrace(k) {
+			depth = depth - 1
+			if depth == 0 {
+				n := fmt_next_code(toks, i)
+
+				return false if n < 0
+				return true if toks[n].kind == token.Kind.FatArrow
+
+				# NESTED INSIDE ANOTHER PATTERN: ask the brace that HOLDS this one, which is
+				# found by walking OUT and not by asking what this `}` closes. Asking the
+				# latter was a recursion that never moved — the first version of this looked up
+				# the opener of the brace it was already standing in, and overflowed the stack
+				# on the compiler's own sources.
+				o := fmt_enclosing_brace(toks, at)
+
+				return false if o < 0
+				return fmt_brace_is_pattern(toks, o) if toks[n].kind == token.Kind.Comma or is_rbrace(toks[n].kind)
+
+				return false
+			}
+		}
+		i = i + 1
+	}
+	return false
 }
 
 # fmt_wants_value is every token a VALUE may follow. It is written as the smaller list on
@@ -2461,6 +2551,11 @@ fn fmt_space_between(mut &toks: list[token.Token], i: int, prev2: token.Kind, pr
 	# stand apart from the head that opens them. Same token, two rules, told apart by what is
 	# in front of the `{` (fmt_opens_block) and, for the `}`, by what its own opener was.
 	return false if is_lbrace(prev) and not fmt_opens_block(toks, i - 1)
+
+	# `P{x}` AND NOT `P {x}`. GRAMMAR#struct-pat writes `type-name '{'` with nothing between
+	# them, which is what tells a pattern from the `if c { … }` beside it — and a formatter that
+	# inserted a space there would be printing a form the grammar does not have.
+	return false if is_lbrace(k) and fmt_brace_is_pattern(toks, i)
 	return false if is_rbrace(k) and not fmt_rbrace_closes_block(toks, i)
 
 	if is_open(k) and binds_tight(prev) {

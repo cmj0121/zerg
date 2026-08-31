@@ -65,6 +65,9 @@ pub fn desugar_src_off(src: str, off: list[str], path: str) -> str {
 	if not fmt.fmt_is_off(off, "D103") {
 		toks = dsg_ranges(toks)
 	}
+	if not fmt.fmt_is_off(off, "D105") {
+		toks = dsg_fstrings(toks)
+	}
 
 	# F403 runs, and it is the only F4xx rule that does. It is not here for its own sake:
 	# where a wrapped group's closer goes (F105) is decided from the LINE its opener was on,
@@ -648,6 +651,185 @@ fn dsg_step_continues(mut &body: list[token.Token], step: list[token.Token]) -> 
 #
 # It declines on a comment anywhere in the statement, for D101's reason: the rewrite becomes
 # several statements and a comment runs to the end of whichever line it lands on.
+# --- D105: an f-string becomes the concatenation it is sugar for --------------------------
+#
+# `f"a{x}b"` IS `"a" + str(x) + "b"` — the parser builds exactly that tree, so writing it out
+# is what the sugar means rather than a second lowering of it. The two emit byte-identical C
+# for the same reason `D101`'s pair does: the rewrite produces the nodes the parser produced.
+#
+# A HOLE'S TAIL HAS A CORE SPELLING ONLY WHERE ONE EXISTS. `{x}` is `str(x)`, `{x=}` prefixes
+# the expression's own source text, `{x!s}` is `x.display()` and `{x!r}` is `x.debug()`. A
+# `:spec` is `x.format(spec)`, which this compiler does not build (`E9107`), and `!a` has no
+# written spelling at all — so a literal holding either is LEFT ALONE, whole. It is left whole
+# and not in part because an f-string is one token: half a rewrite would be a literal that no
+# longer says what it said.
+fn dsg_fstrings(mut &toks: list[token.Token]) -> list[token.Token] {
+	mut out: list[token.Token] = []
+	for t in toks {
+		if t.kind == token.Kind.FStr and dsg_fstr_core(t.value) {
+			dsg_emit_fstr(t, out)
+		} else {
+			out.append(t)
+		}
+	}
+	return out
+}
+
+# dsg_fstr_core answers whether every hole in this literal has a core spelling. A literal with
+# no hole at all is a plain string and is rewritten to one, which is the same statement.
+fn dsg_fstr_core(body: str) -> bool {
+	b := bytearray(body)
+	n := b.len()
+	mut i := 0
+	for i < n {
+		c := b[i]
+		if (c == b'{' or c == b'}') and i + 1 < n and b[i + 1] == c {
+			i = i + 2
+		} else if c == b'\\' {
+			i = i + 2
+		} else if c == b'{' {
+			end := parser.fstr_hole_end(b, i)
+			hole := bytearray(parser.fstr_slice(b, i + 1, end))
+			cut := parser.fstr_tail(hole)
+
+			return false if cut < hole.len() and hole[cut] == b':'
+			return false if cut < hole.len() and hole[cut] == b'!' and (hole[cut + 1] == b'a' or cut + 2 < hole.len())
+
+			i = end + 1
+		} else {
+			i = i + 1
+		}
+	}
+	return true
+}
+
+# dsg_emit_fstr writes the concatenation, part by part, in the order the parser folds them:
+# the leading run of text is emitted even when empty, so the fold is seeded with a `str`.
+fn dsg_emit_fstr(t: token.Token, mut &out: list[token.Token]) {
+	b := bytearray(t.value)
+	n := b.len()
+	mut have := false
+	mut lo := 0
+	mut i := 0
+	for i < n {
+		c := b[i]
+		if (c == b'{' or c == b'}') and i + 1 < n and b[i + 1] == c {
+			i = i + 2
+		} else if c == b'\\' {
+			i = i + 2
+		} else if c == b'{' {
+			txt := parser.fstr_slice(b, lo, i)
+			if txt != "" or not have {
+				dsg_fstr_join(t, have, out)
+				out.append(token.Token(token.Kind.Str, dsg_quote_text(txt), txt, t.line, t.col))
+				have = true
+			}
+			end := parser.fstr_hole_end(b, i)
+			dsg_fstr_join(t, have, out)
+			dsg_emit_hole(t, parser.fstr_slice(b, i + 1, end), out)
+			have = true
+			i = end + 1
+			lo = i
+		} else {
+			i = i + 1
+		}
+	}
+	tail := parser.fstr_slice(b, lo, n)
+	if tail != "" or not have {
+		dsg_fstr_join(t, have, out)
+		out.append(token.Token(token.Kind.Str, dsg_quote_text(tail), tail, t.line, t.col))
+	}
+}
+
+fn dsg_fstr_join(t: token.Token, have: bool, mut &out: list[token.Token]) {
+	if have {
+		out.append(token.Token(token.Kind.Plus, "+", "", t.line, t.col))
+	}
+}
+
+# dsg_emit_hole writes ONE hole as the call it is sugar for. The `=` form prefixes the
+# expression's own source text, which is a fact only the text has — the same reason the parser
+# splices it there rather than carrying it.
+fn dsg_emit_hole(t: token.Token, hole: str, mut &out: list[token.Token]) {
+	hb := bytearray(hole)
+	cut := parser.fstr_tail(hb)
+	mut conv := ""
+	if cut < hb.len() and hb[cut] == b'!' {
+		conv = str([hb[cut + 1]])
+	}
+
+	mut src := parser.fstr_slice(hb, 0, cut)
+	sb := bytearray(src)
+	if parser.fstr_is_selfdoc(sb) {
+		mut k := sb.len() - 1
+		for k >= 0 and sb[k] == b' ' {
+			k = k - 1
+		}
+		src = parser.fstr_slice(sb, 0, k)
+		lead := src + "="
+		out.append(token.Token(token.Kind.Str, dsg_quote_src(lead), lead, t.line, t.col))
+		out.append(token.Token(token.Kind.Plus, "+", "", t.line, t.col))
+	}
+
+	if conv == "" {
+		out.append(token.Token(token.Kind.Ident, "str", "", t.line, t.col))
+		out.append(token.Token(token.Kind.LParen, "(", "", t.line, t.col))
+		dsg_hole_expr(t, src, out)
+		out.append(token.Token(token.Kind.RParen, ")", "", t.line, t.col))
+		return
+	}
+
+	# A CONVERSION IS A METHOD ON THE VALUE, so the expression is parenthesized: `x + 1` with
+	# a `.debug()` on the end of it is a call on `1`.
+	out.append(token.Token(token.Kind.LParen, "(", "", t.line, t.col))
+	dsg_hole_expr(t, src, out)
+	out.append(token.Token(token.Kind.RParen, ")", "", t.line, t.col))
+	out.append(token.Token(token.Kind.Dot, ".", "", t.line, t.col))
+	out.append(token.Token(token.Kind.Ident, dsg_conv_meth(conv), "", t.line, t.col))
+	out.append(token.Token(token.Kind.LParen, "(", "", t.line, t.col))
+	out.append(token.Token(token.Kind.RParen, ")", "", t.line, t.col))
+}
+
+fn dsg_conv_meth(conv: str) -> str {
+	return "debug" if conv == "r"
+
+	return "display"
+}
+
+# dsg_hole_expr re-lexes the hole's expression and copies its tokens onto the output, on the
+# f-string's own line — the tokens count from the hole's first column otherwise, and the
+# printer reads a line to decide where a break belongs.
+fn dsg_hole_expr(t: token.Token, src: str, mut &out: list[token.Token]) {
+	for k in lexer.tokenize(src) {
+		if k.kind != token.Kind.Eof and not fmt.is_semi(k.kind) {
+			out.append(token.Token(k.kind, k.lexeme, k.value, t.line, t.col))
+		}
+	}
+}
+
+# dsg_quote_src writes one str literal holding an EXPRESSION'S SOURCE. That text
+# may hold a quote of its own — `f"{d["k"]=}"` — and a literal built by wrapping it in quotes
+# ended two characters in.
+#
+# A TEXT PART IS NOT ESCAPED AND MUST NOT BE (dsg_quote_text). It is a slice of a literal that
+# already holds its escapes as they were written, so escaping the backslash again would turn
+# the `\n` a reader wrote into a backslash and an `n`.
+fn dsg_quote_text(txt: str) -> str {
+	return f"\"{txt}\""
+}
+
+fn dsg_quote_src(txt: str) -> str {
+	mut out: list[byte] = [b'"']
+	for c in bytearray(txt) {
+		if c == b'"' or c == b'\\' {
+			out.append(b'\\')
+		}
+		out.append(c)
+	}
+	out.append(b'"')
+	return str(out)
+}
+
 fn dsg_asserts(mut &toks: list[token.Token], base: str) -> list[token.Token] {
 	mut out: list[token.Token] = []
 	mut i := 0

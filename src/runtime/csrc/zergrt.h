@@ -474,6 +474,18 @@ zrt_err zrt_taken_err(void);
 #define ZRT_MSG_SHIFT_WIDTH  "shift distance outside the type width"
 #define ZRT_MSG_DIV_ZERO     "division by zero"
 #define ZRT_MSG_MOD_ZERO     "remainder by zero"
+#define ZRT_MSG_INDEX        "index out of range"
+
+/* zrt_arr_index is the bound check of a FIXED-SIZE ARRAY, and it answers the INDEX rather
+ * than the slot: `a.v[zrt_arr_index(i, N)]` stays an lvalue, so one helper serves the read
+ * and the write. A list's check lives in zrt_list_at, which has the header to read the
+ * length from; an array's length is in its C type, so it is passed in. */
+static inline int64_t zrt_arr_index(int64_t i, int64_t n) {
+	if (i < 0 || i >= n) {
+		zrt_abort_kind(ZRT_ERR_INDEX, ZRT_MSG_INDEX);
+	}
+	return i;
+}
 
 static inline int64_t zrt_add_i64(int64_t a, int64_t b) {
 	int64_t r;

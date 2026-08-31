@@ -4499,7 +4499,6 @@ fn p_at_literal_word(mut &p: Parser) -> bool {
 # this used to do — is a `(` a tuple pattern or a parenthesised one? — is gone.
 fn p_pat_unbuilt(mut &p: Parser, pt: ast.Pat, line: int, col: int) {
 	msg := match pt {
-		Pat.PList(_, _, _) => p_diag_at(p, line, col, rule.Rule.NotYetListPattern, "NotImplemented: a list pattern in a `match` arm — this compiler destructures a variant payload and nothing else")
 		Pat.PStruct(n, _, _, _) => p_diag_at(p, line, col, rule.Rule.NotYetStructPatternInMatch, f"NotImplemented: a struct pattern `{n}{{…}}` in a `match` arm — this compiler destructures a variant payload and nothing else")
 		Pat.POr(_) => p_diag_at(p, line, col, rule.Rule.NotYetOrPattern, "NotImplemented: an or-pattern — `A | B` in a pattern matches either, and this compiler lowers one pattern per arm")
 		Pat.PAs(_, _) => p_diag_at(p, line, col, rule.Rule.NotYetAsPattern, "NotImplemented: an `as` binding in a `match` arm — `pattern as name` binds the whole matched value while the pattern keeps destructuring")

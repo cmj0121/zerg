@@ -4490,6 +4490,27 @@ fn c_pat_env(mut &em: Emitter, pt: ast.Pat, st: ast.Ty) {
 		return
 	}
 
+	if c_pat_is_list(pt) {
+		elems := c_pat_list_elems(pt)
+
+		raise c_diag(em, rule.Rule.ListPatternNotAList, f"a list pattern matches a list, and this one is matched against a {ast.ty_name(st)}") if not c_is_list(st)
+
+		# A NAMED REST HAS NOWHERE TO LIVE. `..rest` binds a fresh list — a slice — and a
+		# binding here is spliced in as TEXT, so every use of the name would allocate another
+		# one and release none. A `match` lowers to a conditional expression, which has no place
+		# to declare the temporary that would own it. The anonymous `..` needs none, and is
+		# built.
+		raise c_diag(em, rule.Rule.NotYetListPatternRestBinding, "NotImplemented: a NAMED rest in a list pattern — `..rest` binds a fresh list and a `match` arm is an expression with nowhere to keep it; write `..` and index what you need") if c_pat_list_rest_name(pt) != ""
+
+		et := c_list_elem(st)
+		mut i := 0
+		for i < elems.len() {
+			c_pat_env(em, elems[i], et)
+			i = i + 1
+		}
+		return
+	}
+
 	if c_pat_is_tuple(pt) {
 		elems := c_pat_tuple_elems(pt)
 		ets := c_tuple_elems(st)
@@ -9295,6 +9316,11 @@ fn c_pat_catchall(pt: ast.Pat) -> bool {
 		# was `(x, y)` was "non-exhaustive, missing a catch-all `_`", about an arm that matches
 		# every pair there is.
 		Pat.PTuple(ps) => c_pats_catchall(ps)
+
+		# `[..]` COVERS EVERY LIST — no element to miss and no length to fail — and it is the
+		# only list pattern that does. `[a, ..]` needs one element and `[a, b]` needs exactly
+		# two, so both can be missed and neither closes a match.
+		Pat.PList(ps, rest, _) => ps.len() == 0 and rest >= 0
 		_ => false
 	}
 }
@@ -9452,6 +9478,21 @@ fn c_pat_subst(mut &em: Emitter, pt: ast.Pat, s: str, st: ast.Ty, sb: Subst) -> 
 	bn := c_pat_bind_name(pt)
 	return c_extend(sb, bn, s) if bn != ""
 
+	if c_pat_is_list(pt) {
+		elems := c_pat_list_elems(pt)
+		rest := c_pat_list_rest(pt)
+		et := c_list_elem(st)
+		ct := c_type(et)
+		n := elems.len()
+		mut r := sb
+		mut i := 0
+		for i < n {
+			r = c_pat_subst(em, elems[i], c_list_pat_at(s, ct, i, rest, n), et, r)
+			i = i + 1
+		}
+		return r
+	}
+
 	if c_pat_is_tuple(pt) {
 		elems := c_pat_tuple_elems(pt)
 		ets := c_tuple_elems(st)
@@ -9535,7 +9576,34 @@ fn c_tuple_elems(t: ast.Ty) -> list[ast.Ty] {
 # did for a variant payload — a binding is spliced in as the text `s.u.Ctor.f0` — and it is what
 # makes nesting free: an element of an element is just a longer accessor.
 
+# c_pat_list_cond is a list pattern's test, and the length is the first half of it: a list's
+# arity is a RUNTIME value, unlike a tuple's, so it is compared rather than checked — `==` for a
+# pattern that names every element, `>=` for one with a `..`, which says "at least these".
+fn c_pat_list_cond(mut &em: Emitter, pt: ast.Pat, s: str, st: ast.Ty, sb: Subst) -> str {
+	elems := c_pat_list_elems(pt)
+	rest := c_pat_list_rest(pt)
+	et := c_list_elem(st)
+	ct := c_type(et)
+	n := elems.len()
+	mut cmp := "=="
+	if rest >= 0 {
+		cmp = ">="
+	}
+	mut out := f"(zrt_list_len(&({s})) {cmp} (size_t){strconv.to_string(n, 10)})"
+	mut i := 0
+	for i < n {
+		c := c_pat_cond(em, elems[i], c_list_pat_at(s, ct, i, rest, n), et, sb)
+		if c != "1" {
+			out = f"({out} && {c})"
+		}
+		i = i + 1
+	}
+	return out
+}
+
 fn c_pat_cond(mut &em: Emitter, pt: ast.Pat, s: str, st: ast.Ty, sb: Subst) -> str {
+	return c_pat_list_cond(em, pt, s, st, sb) if c_pat_is_list(pt)
+
 	if c_pat_is_lit(pt) {
 		lit := c_pat_lit(pt)
 		return c_arm_range(em, lit, s, st, sb) if c_is_range(lit)
@@ -9588,6 +9656,47 @@ fn c_pat_cond(mut &em: Emitter, pt: ast.Pat, s: str, st: ast.Ty, sb: Subst) -> s
 		return f"({s}.tag == {c_variant_tag_in(em, c_named_of(st), ctor)})"
 	}
 	return "1"
+}
+
+# c_pat_list_* read a list pattern's three parts. `rest` is the index the `..` sits at, or -1
+# for a pattern that matches on length alone — which is what decides whether the elements after
+# it are counted from the front or from the back.
+fn c_pat_is_list(pt: ast.Pat) -> bool {
+	return match pt {
+		Pat.PList(_, _, _) => true
+		_ => false
+	}
+}
+
+fn c_pat_list_elems(pt: ast.Pat) -> list[ast.Pat] {
+	return match pt {
+		Pat.PList(ps, _, _) => ps
+		_ => []
+	}
+}
+
+fn c_pat_list_rest(pt: ast.Pat) -> int {
+	return match pt {
+		Pat.PList(_, r, _) => r
+		_ => 0 - 1
+	}
+}
+
+fn c_pat_list_rest_name(pt: ast.Pat) -> str {
+	return match pt {
+		Pat.PList(_, _, n) => n
+		_ => ""
+	}
+}
+
+# c_list_pat_at is the accessor for one element of a list pattern, and the whole of what `..`
+# means is in it: an element BEFORE the rest is at its own index, and one after it is that far
+# from the END. `[a, ..,  z]` over a list of five reads `xs[0]` and `xs[4]`.
+fn c_list_pat_at(s: str, ct: str, i: int, rest: int, n: int) -> str {
+	return f"(*({ct}*)zrt_list_at_ref(&({s}), (size_t)({i})))" if rest < 0 or i < rest
+
+	back := n - i
+	return f"(*({ct}*)zrt_list_at_ref(&({s}), zrt_list_len(&({s})) - (size_t)({back})))"
 }
 
 fn c_pat_is_tuple(pt: ast.Pat) -> bool {

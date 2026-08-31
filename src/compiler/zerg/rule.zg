@@ -356,6 +356,7 @@ pub enum Rule {
 	MapKeyHasNoHash = 4079
 	TuplePatternArity = 4082
 	TuplePatternNotATuple = 4083
+	ListPatternNotAList = 4084
 	MutateAValueNotAPlace = 4081
 
 	# building — the program as a set of files, which no single file's text answers: imports resolved
@@ -423,7 +424,6 @@ pub enum Rule {
 	NotYetCommandInterpolating = 9019
 	NotYetCommandLiteral = 9020
 	NotYetDestructuringBinding = 9021
-	NotYetListPattern = 9023
 	NotYetOrPattern = 9024
 	NotYetForMutBinding = 9025
 	NotYetStructPatternInMatch = 9026
@@ -516,6 +516,7 @@ pub enum Rule {
 	# every exit unwinds to a mark. The channel case next door (9066) is the same absence read
 	# from the other side, and both retire when a release can be taken out of the middle.
 	NotYetDelOwning = 9108
+	NotYetListPatternRestBinding = 9110
 	NotYetUnsafeMethod = 9109
 }
 

@@ -2107,16 +2107,47 @@ fn f(xs: [int; 3]) -> int {
 fn main() { print 1 }
 EOF
 
-expect "$ZERG" struct-pattern E9026 <<'EOF'
+# THE STRUCT PATTERN IS BUILT, and these are the three questions naming its fields makes it
+# ask. The type name is an ASSERTION and not a reference — the scrutinee's type decides which
+# struct the pattern is about — and without a `..` the pattern names every field, so a struct
+# gaining one breaks the patterns written before it BY NAME.
+expect "$ZERG" a-struct-pattern-naming-another-type E4085 <<'EOF'
+struct P {
+	pub x: int
+}
+
+struct Q {
+	pub x: int
+}
+
+fn main() {
+	print match P(1) {
+		Q{x} => x
+	}
+}
+EOF
+
+expect "$ZERG" a-struct-pattern-field-that-is-not-one E4086 <<'EOF'
 struct P {
 	pub x: int
 }
 
 fn main() {
-	p := P(1)
-	print match p {
-		P{x: a} => a
-		_ => 0
+	print match P(1) {
+		P{z} => z
+	}
+}
+EOF
+
+expect "$ZERG" a-struct-pattern-that-names-only-some E4087 <<'EOF'
+struct P {
+	pub x: int
+	pub y: int
+}
+
+fn main() {
+	print match P(1, 2) {
+		P{x} => x
 	}
 }
 EOF

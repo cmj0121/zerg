@@ -222,9 +222,11 @@ and never an error reported by the C compiler or the linker against generated co
 > rather than a lowering. It is one gap owed once and not a property of any one rule. Closing it needs a body
 > checked against a type parameter's **bounds** rather than against a concrete type — `x.show()` on a
 > `T: Show` has no method to resolve until `T` is one, and lowering is defined only over concrete types —
-> which is a checker this compiler does not have — a door with a threshold in
-> [FUTURE.md](../FUTURE.md#checking-a-template-nobody-instantiates), because the gap it closes is a
-> template with no reader.
+> which is a checker this compiler does not have.
+>
+> **[implementation-defined]** WHEN a template is checked is this implementation's. Checking one against
+> its bounds before any call asks for it is a different compiler, and what it would find is a template that
+> ships uncalled — a cost the specification does not require anybody to pay.
 
 One consequence is worth writing down here, because no single chapter owns it: a program with no `fn main` is
 grammatical — `program ::= stmt-list`, the `nop` program the grammar opens with — so what rejects it is the
@@ -297,9 +299,9 @@ with that handler's diagnostic intact. The two windows the handler claims are **
 coroutine's guard page exactly, and the single page below `main`'s stack bound — which is also the whole of
 what it can misname: an access into that one page under `main` reads as an overflow.
 
-That is the language's rule rather than a shortfall against it. A runtime that owned and grew its own
-stacks could check call depth before the fault and unwind cleanly instead; that is a
-[door](../FUTURE.md#a-depth-checked-stack-overflow), not a promise this page makes.
+That is the language's rule rather than a shortfall against it. **[implementation-defined]**: a runtime that
+owned and grew its own stacks could check call depth before the fault and unwind cleanly instead. What is
+pinned is that the depth is bounded and that reaching the bound ends the program by name.
 
 ## The C the reference implementation emits
 

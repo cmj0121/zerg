@@ -3,6 +3,7 @@
 # the marker's first six significant words — see scripts/deviation-check.sh for why the
 # key is a slug and not a line number.
 #
-# A line comes off when its marker is DISPOSED OF, three ways and no others: the compiler
-# is fixed, the specification moves, or it becomes a door in FUTURE.md with a threshold.
+# A line comes off when its marker is DISPOSED OF, two ways and no others: the compiler is
+# fixed, or the specification moves — which includes deciding not to require the thing, in
+# the chapter where a reader would ask.
 # The release closes when nothing but this header is left.

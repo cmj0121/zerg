@@ -108,8 +108,9 @@ and run by a gate.
 directory holds, and how the specification is meant to be read. Syntax is normative in
 [`GRAMMAR`](GRAMMAR); semantics are normative in the chapters under [`docs/`](docs).
 
-**[`FUTURE.md`](FUTURE.md)** is the other half: what the language decided **not** to have, and the
-threshold that would reopen each case. Nothing in it is part of the specification.
+**What the language decided NOT to have** is in the specification too, in the chapter that owns the
+question — there is no separate file of deferred features. A requirement the specification declines to pin
+carries **[implementation-defined]** where a reader meets it.
 
 ## Status
 

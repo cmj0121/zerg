@@ -125,8 +125,20 @@ impl Show for Shape {
 ## 可 derive 的 spec 清單
 
 這組受祝福的 spec——每個都有一份 compiler 擁有的 canonical 結構解讀。每一個都經由 `derive` **opt-in**;
-**沒有自動 derive 的相等**、也沒有隱式的 `Object`。**`Eq`** 已實作;**`Ord`**、**`Hash`**、**`Encode`**、
-**`Decode`** 在此規範、但 **[not yet]**——指名其一是 `E9054`。
+**沒有**自動導出的相等,也沒有隱含的 `Object` spec。**`Eq`** 與 **`From`** 已建;**`Ord`**、**`Hash`**、
+**`Encode`** 與 **`Decode`** 在此規範、但 **[not yet]**——指名其一是 `E9054`。
+
+**`From`** 是其中唯一不讀型別自身結構、而讀變體的:在 `enum` 上它生成每個變體所蘊含的那個轉換,對每個帶單一
+payload 的變體各一份 `impl Into[E] for P`,於是一層的錯誤只要 `e.into()` 就成為呼叫者的,不必為每個變體手寫一次
+`match`。這正是這個語言選擇要付的那筆包裝費——它沒有開放式的 error downcast,而取而代之的答案就是每層一個 error
+enum。這個轉換仍然是**寫出來的**:位置從不做轉換,所以 `?` 自己不會把錯誤抬上去。不帶 payload 的變體不蘊含任何
+轉換,會被略過;兩個帶同一型別的變體會給那個型別兩個轉換,因此被拒絕(_E4091_)——一個型別對一個目的地只有一份
+`Into`。
+
+**沒有 `#[derive(Reflect)]`,而要有它的門檻是一個呼叫者。** 描述一個型別有哪些欄位、各是什麼型別的 per-type
+常數是導得出來的——那些知識本來就是 compiler 的——但目前還沒有任何東西需要一份 `Encode` / `Decode` 沒有更直接
+回答的通用描述。要它的理由是「一份被多個 derive 共用的描述,比多個各自去讀結構的 derive 便宜」;在呼叫者出現
+之前,那是一筆沒有人可省的節省。
 
 > **[not yet]** 在**帶 payload 的** `enum` 上的 `#[derive(Eq)]` 尚未實作,並由它自己的代碼拒絕——_E9055 … it
 > carries a payload (`A`), and this compiler derives equality for a fieldless enum, whose variants differ

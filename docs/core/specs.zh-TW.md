@@ -32,6 +32,12 @@ boxed，具體值就被隱藏、**永遠無法還原**（不能 downcast、不�
 反抹除）。它的**身分**是另一回事：**`x is T`** 問「這個 boxed 值的具體型別是不是 `T`」、產出一個純 **`bool`**，
 答案是從 box 本就帶著的 dispatch 身分讀出來的（見下方「型別測試」）。
 
+**沒有 `dyn`，將來也不會有。** existential 的兩種編碼這裡都已經有了：**開放**的那個是 closure——一個持有被捕獲
+實作者的函式值結構，也就是 [`#[obj]`](#obj把一個-spec-的方法當成值持有) 生成的東西——而**封閉**的那個是 `enum`，
+它的 `match` 會把具體型別交還。`dyn` 這個關鍵字會是前者的第三種拼法，只是把 vtable 放在 closure 已經在的位置。
+無論其他怎麼變，有兩件事都留在門外：**每個 instance 一個 header**，那會讓每個值為多數程式沒有的使用點付費、而且
+仍然解決不了異質大小；以及 **object-safety 閘**，因為 `#[obj]` 已經據以拒絕的那張表就是同一張。
+
 在一個 boxed 值上，**unary** 操作會 dispatch 到真實型別、可用：它的 spec method，加上 `copy`（產生一個獨立的新
 box——內含 `Ref` 值 refcount-bump）與 `debug`，以及結構性記憶體操作（`del`、傳參、存欄位、送 channel）。但
 **binary same-type** 操作——`Eq` 的 `==` / `!=`、`Ord` 比較、以及因此的 `Hash` keying——**不可用**：它們的 `other: This`

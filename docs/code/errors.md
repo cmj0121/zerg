@@ -179,8 +179,12 @@ What it cannot do is unwind. The stack that would run the pending `defer`s is th
 are **skipped**, no `guard` can demote it, and `err is StackOverflowError` is unwritable — there is no
 value to ask about. It is also the one end a coroutine does **not** contain: an ordinary abort with no
 handler ends only that coroutine, while an overflow ends the process. See
-[Conformance](../conformance.md) for the contract this sits outside of, and
-[the door](../../FUTURE.md#a-depth-checked-stack-overflow) for what a depth-checked safety net would take.
+[Conformance](../conformance.md) for the contract this sits outside of.
+
+> **[implementation-defined]** HOW an overflow is detected is this implementation's. A runtime that owned
+> and grew its own stacks could check call depth before the fault and unwind cleanly; this one takes the
+> fault and names it. What the specification pins is that the depth is bounded and that reaching the bound
+> ends the program by name — not the mechanism that notices.
 
 A **`DeadlockError`** — every coroutine blocked with no progress possible — is now the clean abort the spec
 asks for: it unwinds, runs the pending `defer`s, and a `guard` catches it. It is raised on `main`'s

@@ -44,7 +44,11 @@ _E3081 the closure parameter `x` has no type, and this position gives it none_�
 > **[not yet]** 共用 indexed-callee 形狀的兩個形式仍未建置:透過容器裡的函式**值**呼叫 `fs[0](x)`,以及 optional
 > method call `p?.m(…)`。第三個已經離開這個語言:使用點的顯式型別引數——`id[int](7)`——不再是一個形式,因為
 > postfix 的中括號一律是索引（見[文法](../surface/grammar.zh-TW.md)）,而且它會被指名拒絕——_E2035 `id[int](…)`
-> writes a call's type arguments, and a postfix `[ … ]` is an index_。型別引數從引數型別推論,是今天實例化一個
+> writes a call's type arguments, and a postfix `[ … ]` is an index_。
+>
+> **它也不會換個拼法回來。** 一個 generic 的型別是從它的**引數**取得的,而推論不夠時由**帶型別的 binding** 導引
+> ——`xs: list[int] = empty()`。要重開這個問題,得先有一個「帶型別的位置也修不了的推論失敗」,而看起來像那樣的
+> 唯一一個——型別參數只出現在回傳位置——正好就是 binding 的型別回答掉的。型別引數從引數型別推論,是今天實例化一個
 > generic 的唯一途徑。
 >
 > `mut &` 的區分是**由型別帶著的**：`fn(mut &int)` 與 `fn(int)` 是兩個型別，其中一個的值不是另一個的值——

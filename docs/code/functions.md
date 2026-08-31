@@ -55,6 +55,11 @@ type, and this position gives it none_.
 > bracket is always an index ([Grammar](../surface/grammar.md)), and it is refused by name — _E2035
 > `id[int](…)` writes a call's type arguments, and a postfix `[ … ]` is an index_.
 >
+> **And it is not coming back under another spelling.** A generic takes its type from its ARGUMENTS, and
+> where inference is not enough a **typed binding** steers it — `xs: list[int] = empty()`. Reopening the
+> question would need an inference failure a typed position cannot fix, and the one that looks like it — a
+> type parameter appearing only in the return — is exactly what the binding's type answers.
+>
 > The `mut &` distinction is **carried by the type**: `fn(mut &int)` and `fn(int)` are two types, and a value
 > of one is not a value of the other — _E3033 cannot bind fn(mut &int) -> void to a fn(int) -> void binding_.
 > A call through a value reads the convention from the type it is calling, having no callee name to read it

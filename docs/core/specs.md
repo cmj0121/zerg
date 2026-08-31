@@ -45,6 +45,22 @@ concrete type is to have kept it, never to un-erase one). Its **identity** is a 
 T`** asks whether the boxed value's concrete type is `T` and yields a plain **`bool`**, read off the
 dispatch identity the box already carries (Type tests, below).
 
+**There is no `dyn`, and there will not be.** Both encodings of an existential are already here: the **open**
+one is a closure — a struct of function values over a captured implementer, which is what
+[`#[obj]`](#obj--a-specs-methods-held-as-values) generates — and the **closed** one is an `enum`, whose
+`match` gives back the concrete type. A `dyn` keyword would be a third spelling of the first, with a vtable
+where the closure already is. Two things stay out whatever else changes: a **per-instance header**, which
+would make every value pay for a use site most programs do not have and would still not solve heterogeneous
+size; and an **object-safety gate**, since the matrix `#[obj]` already refuses by is the same one.
+
+**There is no `dyn`, and there will not be.** Both encodings of an existential are already here: the **open**
+one is a closure — a struct of function values over a captured implementer, which is what
+[`#[obj]`](#obj--a-specs-methods-held-as-values) generates — and the **closed** one is an `enum`, whose
+`match` gives back the concrete type. A `dyn` keyword would be a third spelling of the first, with a vtable
+where the closure already is. Two things stay out whatever else changes: a **per-instance header**, which
+would make every value pay for a use site most programs do not have and would still not solve heterogeneous
+size; and an **object-safety gate**, since the matrix `#[obj]` already refuses by is the same one.
+
 On a boxed value, **unary** operations dispatch to the real type and work: its spec methods, plus `copy`
 (producing an independent box — a contained `Ref` refcount-bumps) and `debug`, and the structural memory
 ops (`del`, pass, store, send). The **binary same-type** operations — `Eq`'s `==` / `!=`, `Ord`

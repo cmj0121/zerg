@@ -415,6 +415,9 @@ shipping compiler rather than a part of it (the line
 | `E4087` | a struct pattern names every field or ends in `..`                                                    |
 | `E4088` | the sides of an or-pattern bind the same names                                                        |
 | `E4089` | `…` has no associated value `…`                                                                       |
+| `E4090` | cannot derive `From` for `…`: it is not an enum                                                       |
+| `E4091` | cannot derive `From` for `…`: two variants carry one payload type                                     |
+| `E4092` | cannot derive `From` for `…`: no variant carries exactly one payload                                  |
 | `E5001` | this entry file declares no `fn main`                                                                 |
 | `E5002` | cannot resolve import `…`, and where it was looked for                                                |
 | `E5007` | `…` is a module this build compiles and this module did not import                                    |

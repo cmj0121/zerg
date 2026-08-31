@@ -812,29 +812,6 @@ struct P {
 fn main() { print 1 }
 EOF
 
-# `#[derive(From)]` IS THE ONE ENTRY IN FUTURE.md WITH A MEASURED DEMAND, and the exact form
-# it is written in there — on an error enum, generating the wrapping `?` needs at a boundary
-# — was pinned by nothing. The case above is a struct and a spec the program declares; this
-# is an enum and a spec nothing declares, which is the other side of E4024's sentence and the
-# side a reader following FUTURE.md arrives at. It stops matching the day the derive lands.
-expect "$ZERG" derive-from-on-an-error-enum E4024 'cannot derive `From`' <<'EOF'
-struct IoError {
-	pub code: int
-}
-
-struct ParseError {
-	pub code: int
-}
-
-#[derive(From)]
-enum AppError {
-	Io(IoError)
-	Parse(ParseError)
-}
-
-fn main() { print 1 }
-EOF
-
 # A DECORATOR WITH NOTHING UNDER IT AT ALL — the last item in the file. This is the whole of
 # what E2007 says, and it used to be said about `#[derive(Eq)] fn main()` as well, where there
 # very much IS a declaration under it: the pending list was only ever drained by a `struct`,

@@ -2948,6 +2948,45 @@ fn main() {
 }
 EOF
 
+# --- `#[derive(From)]` --------------------------------------------------------------
+#
+# It wraps a VARIANT'S PAYLOAD into the enum that holds it, so the three refusals are about
+# what it has to read: a type with no variants, two variants that would give one payload type
+# two conversions, and an enum with no payload to wrap at all.
+
+reject derive-from-on-a-struct E4090 'is not an enum' <<'EOF'
+#[derive(From)]
+struct Q {
+	pub y: int
+}
+
+fn main() { print 1 }
+EOF
+
+reject derive-from-two-variants-of-one-type E4091 'both carry a `P`' <<'EOF'
+struct P {
+	pub x: int
+}
+
+#[derive(From)]
+enum E {
+	A(P)
+	B(P)
+}
+
+fn main() { print 1 }
+EOF
+
+reject derive-from-with-nothing-to-wrap E4092 'no variant of `E` carries exactly one' <<'EOF'
+#[derive(From)]
+enum E {
+	A
+	B
+}
+
+fn main() { print 1 }
+EOF
+
 # --- the command literal -----------------------------------------------------------
 #
 # `` `ls -l` `` IS `os.command(["ls", "-l"])` — an argument vector and no shell — so the two

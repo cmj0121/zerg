@@ -1091,7 +1091,7 @@ fn chk_super_impl(sp: ast.SpecDecl, ip: ast.ImplDecl, args: list[ast.Ty]) -> ast
 
 	mut out: list[ast.Ty] = []
 	for a in args {
-		out.append(chk_spec_subst(a, sp, ip))
+		out.append(emit.c_spec_subst(a, sp, ip))
 	}
 	return ast.ImplDecl(ip.on, out, ip.target, ip.path, ip.line, ip.col)
 }
@@ -1113,7 +1113,7 @@ fn chk_impl_member(mut &em: emit.Emitter, f: ast.File, ip: ast.ImplDecl, sp: ast
 # chk_sig_differs answers WHY two signatures differ, or "" when they do not.
 #
 # Both signatures carry their receiver as the first parameter — a required one gets `This`,
-# which chk_spec_subst turns into the target — so the two are the same shape and are
+# which emit.c_spec_subst turns into the target — so the two are the same shape and are
 # compared position for position with nothing to offset. That is also what makes `mut fn`
 # comparable: it rides as the receiver's `mut &`, exactly like any other parameter's.
 fn chk_sig_differs(sp: ast.SpecDecl, ip: ast.ImplDecl, req: ast.FnDecl, sup: ast.FnDecl) -> str {
@@ -1134,7 +1134,7 @@ fn chk_sig_differs(sp: ast.SpecDecl, ip: ast.ImplDecl, req: ast.FnDecl, sup: ast
 		}
 		return f"parameter {at} is named `{g.name}`, and the spec names it `{w.name}` — a named argument selects by that name, so it is part of the contract" if w.name != g.name
 
-		wt := chk_spec_subst(w.ty, sp, ip)
+		wt := emit.c_spec_subst(w.ty, sp, ip)
 
 		return f"parameter `{g.name}` is {ast.ty_name(g.ty)}, and the spec declares {ast.ty_name(wt)}" if not ast.ty_eq(wt, g.ty)
 		return f"parameter `{g.name}` is `mut &` and the spec's is not" if g.is_ref and not w.is_ref
@@ -1148,54 +1148,10 @@ fn chk_sig_differs(sp: ast.SpecDecl, ip: ast.ImplDecl, req: ast.FnDecl, sup: ast
 	return "it returns nothing, and the spec declares a result" if req.has_ret and not sup.has_ret
 	return "it returns a value, and the spec declares none" if sup.has_ret and not req.has_ret
 
-	rt := chk_spec_subst(req.ret, sp, ip)
+	rt := emit.c_spec_subst(req.ret, sp, ip)
 	return f"it returns {ast.ty_name(sup.ret)}, and the spec declares {ast.ty_name(rt)}" if req.has_ret and not ast.ty_eq(rt, sup.ret)
 
 	return ""
-}
-
-# chk_spec_subst turns a type written in a SPEC into the type it means for one `impl`.
-#
-# Two things in a required signature are not concrete types yet. `This` is the implementing
-# type — inside an `impl` the parser already resolves it (parser.zg), so the supplied
-# signature holds the target and the required one must be brought to meet it. And a
-# parameterized spec's own `K` is whatever `impl Ix[int]` bound it to, which is why the
-# impl's type arguments are kept rather than skipped.
-fn chk_spec_subst(t: ast.Ty, sp: ast.SpecDecl, ip: ast.ImplDecl) -> ast.Ty {
-	return match t {
-		Ty.TNamed(n) => chk_subst_named(n, sp, ip)
-		Ty.TList(e) => ast.Ty.TList(chk_spec_subst(e, sp, ip))
-		Ty.TOpt(e) => ast.Ty.TOpt(chk_spec_subst(e, sp, ip))
-		Ty.TMap(k, v) => ast.Ty.TMap(chk_spec_subst(k, sp, ip), chk_spec_subst(v, sp, ip))
-		Ty.TChan(e, d) => ast.ty_chan(chk_spec_subst(e, sp, ip), d, "\n" + ast.place_line(ip.path, ip.line, ip.col))
-		Ty.TEither(l, r) => ast.Ty.TEither(chk_spec_subst(l, sp, ip), chk_spec_subst(r, sp, ip))
-		Ty.TTuple(es) => ast.Ty.TTuple(chk_subst_all(es, sp, ip))
-		Ty.TFn(ps, r) => ast.Ty.TFn(chk_subst_all(ps, sp, ip), chk_spec_subst(r, sp, ip))
-		_ => t
-	}
-}
-
-fn chk_subst_named(n: str, sp: ast.SpecDecl, ip: ast.ImplDecl) -> ast.Ty {
-	return ast.Ty.TNamed(ip.target) if n == "This"
-
-	mut i := 0
-	for i < sp.params.len() {
-		# an argument the impl did not give leaves the parameter as it stands, so the
-		# mismatch is reported about the type the reader wrote rather than about a
-		# substitution that did not happen
-		return ip.args[i] if sp.params[i] == n and i < ip.args.len()
-
-		i = i + 1
-	}
-	return ast.Ty.TNamed(n)
-}
-
-fn chk_subst_all(ts: list[ast.Ty], sp: ast.SpecDecl, ip: ast.ImplDecl) -> list[ast.Ty] {
-	mut out: list[ast.Ty] = []
-	for t in ts {
-		out.append(chk_spec_subst(t, sp, ip))
-	}
-	return out
 }
 
 # chk_int_literal rejects an integer literal that does not fit an i64.

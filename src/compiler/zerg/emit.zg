@@ -15415,6 +15415,50 @@ fn c_declares_spec(prog: ast.File, name: str) -> bool {
 # field. What comes back is an ordinary ImplDecl, so it registers in the method namespace,
 # meets the duplicate-impl check, and emits — with nothing downstream knowing it was derived.
 
+# c_spec_subst turns a type written in a SPEC into the type it means for one `impl`.
+#
+# Two things in a required signature are not concrete types yet. `This` is the implementing
+# type — inside an `impl` the parser already resolves it (parser.zg), so the supplied
+# signature holds the target and the required one must be brought to meet it. And a
+# parameterized spec's own `K` is whatever `impl Ix[int]` bound it to, which is why the
+# impl's type arguments are kept rather than skipped.
+pub fn c_spec_subst(t: ast.Ty, sp: ast.SpecDecl, ip: ast.ImplDecl) -> ast.Ty {
+	return match t {
+		Ty.TNamed(n) => c_subst_named(n, sp, ip)
+		Ty.TList(e) => ast.Ty.TList(c_spec_subst(e, sp, ip))
+		Ty.TOpt(e) => ast.Ty.TOpt(c_spec_subst(e, sp, ip))
+		Ty.TMap(k, v) => ast.Ty.TMap(c_spec_subst(k, sp, ip), c_spec_subst(v, sp, ip))
+		Ty.TChan(e, d) => ast.ty_chan(c_spec_subst(e, sp, ip), d, "\n" + ast.place_line(ip.path, ip.line, ip.col))
+		Ty.TEither(l, r) => ast.Ty.TEither(c_spec_subst(l, sp, ip), c_spec_subst(r, sp, ip))
+		Ty.TTuple(es) => ast.Ty.TTuple(c_subst_all(es, sp, ip))
+		Ty.TFn(ps, r) => ast.Ty.TFn(c_subst_all(ps, sp, ip), c_spec_subst(r, sp, ip))
+		_ => t
+	}
+}
+
+fn c_subst_named(n: str, sp: ast.SpecDecl, ip: ast.ImplDecl) -> ast.Ty {
+	return ast.Ty.TNamed(ip.target) if n == "This"
+
+	mut i := 0
+	for i < sp.params.len() {
+		# an argument the impl did not give leaves the parameter as it stands, so the
+		# mismatch is reported about the type the reader wrote rather than about a
+		# substitution that did not happen
+		return ip.args[i] if sp.params[i] == n and i < ip.args.len()
+
+		i = i + 1
+	}
+	return ast.Ty.TNamed(n)
+}
+
+fn c_subst_all(ts: list[ast.Ty], sp: ast.SpecDecl, ip: ast.ImplDecl) -> list[ast.Ty] {
+	mut out: list[ast.Ty] = []
+	for t in ts {
+		out.append(c_spec_subst(t, sp, ip))
+	}
+	return out
+}
+
 # c_with_derived expands every `#[derive(…)]` into the impl it stands for.
 pub fn c_with_derived(prog: ast.File) -> ast.File {
 	mut out := prog

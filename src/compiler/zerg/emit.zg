@@ -7859,8 +7859,12 @@ fn c_specified_method(mut &em: Emitter, tty: ast.Ty, meth: str) {
 # neither. They are built-in renderings and not methods of any spec, so they answer for every
 # value that renders at all — which is now every scalar, every `str`, every `Err` and every
 # composite, through the one generator the other three spellings go through.
-fn c_render_meth(mut &em: Emitter, target: ast.Expr, tty: ast.Ty, sb: Subst) -> str {
-	return c_render_of(em, tty, c_expr(em, target, sb), false)
+fn c_render_meth(mut &em: Emitter, target: ast.Expr, meth: str, tty: ast.Ty, sb: Subst) -> str {
+	# `debug` IS THE DEVELOPER VIEW and `display` the human one, and for every value but a
+	# `str` they are the same text — a composite's parts are rendered as debug either way,
+	# because a rendering nobody can read back is not a developer view. So the METHOD picks
+	# the flag, which is what makes `x.debug()` and `f"{x!r}"` one answer.
+	return c_render_of(em, tty, c_expr(em, target, sb), meth == "debug")
 }
 
 fn c_meth_kind(mut &em: Emitter, tty: ast.Ty, meth: str) -> MethKind {
@@ -7931,7 +7935,7 @@ fn c_method(mut &em: Emitter, target: ast.Expr, meth: str, args: list[ast.Expr],
 	tty := c_infer(em, target)
 	recv := c_named_of(tty)
 	return match c_meth_kind(em, tty, meth) {
-		MethKind.MRender => c_render_meth(em, target, tty, sb)
+		MethKind.MRender => c_render_meth(em, target, meth, tty, sb)
 		MethKind.MList => c_list_method(em, target, meth, args, tty, sb)
 		MethKind.MArr => c_arr_method(em, meth, tty)
 		MethKind.MMap => c_map_method(em, target, meth, args, tty, sb)

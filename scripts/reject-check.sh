@@ -776,11 +776,13 @@ fn main() {
 }
 EOF
 
-# THE SAME RULE AT THE NAME, not only at the call. A bare function name where a value is
-# wanted IS that function, so binding it and calling the binding would be the identical
-# call one line later — a rule that only watched call sites would be one `f := poke` away
-# from meaning nothing.
-reject unsafe-group-fn-as-a-value E3083 'hand safe code the same call' <<'EOF'
+# THE SAME RULE THROUGH A VALUE, which is where the marker had to become part of the TYPE.
+# Binding the name is ordinary code now — an unsafe function is storable, which is what makes
+# a table of them writable at all — and the value it binds is an `unsafe fn(…)`, so the CALL
+# one line later is the checked thing. Before the type could carry the marker, the value
+# became a plain `fn` and the rule had nothing left to read, which is why the NAME was refused
+# instead.
+reject unsafe-fn-called-through-a-value E3149 'this value is an `unsafe fn() -> int`' <<'EOF'
 unsafe {
 	fn poke() -> int {
 		return 7
@@ -2945,6 +2947,104 @@ enum Shape {
 fn main() {
 	s := Shape.Line(7, 8)
 	print("built")
+}
+EOF
+
+# --- group 12: the unsafe boundary, raw pointers, inline assembly ------------------
+#
+# `unsafe` marks a boundary the compiler does not check, so what it guards is checked instead:
+# every raw-pointer OPERATION and every `asm` is legal only inside it, and both the TYPE of a
+# pointer and the TYPE of an unsafe function are writable anywhere. That split is GRAMMAR's —
+# describing pointer-shaped data is safe; reading through one is not.
+#
+# THE ASM ORDER IS A LANGUAGE RULE AND NOT AN EMITTER DETAIL. A C compiler numbers `%0`, `%1`,
+# … outputs first, so an operand list written the other way round would have the reader
+# counting one order and the template numbering another. Renumbering would need the emitter to
+# PARSE the template, and the template is opaque — which is the whole reason it can be handed
+# to `cc` unread.
+
+reject asm-outside-unsafe E3143 'legal only inside `unsafe`' <<'EOF'
+fn main() {
+	asm("nop")
+	print 1
+}
+EOF
+
+reject asm-an-input-before-an-output E3144 'BEFORE its `in` ones' <<'EOF'
+fn main() {
+	mut x := 0
+	y := 7
+	unsafe {
+		asm("mov %1, %0", in("r") y, out("=r") x)
+	}
+	print x
+}
+EOF
+
+reject asm-template-is-not-a-string E2085 'opens with its TEMPLATE' <<'EOF'
+fn main() {
+	unsafe {
+		asm(1)
+	}
+	print 1
+}
+EOF
+
+reject asm-constraint-is-not-a-string E2086 'CONSTRAINT is a string literal' <<'EOF'
+fn main() {
+	y := 1
+	unsafe {
+		asm("nop", in(2) y)
+	}
+	print 1
+}
+EOF
+
+reject asm-operand-head-is-none-of-the-four E2087 'in`, `out`, `inout` or `clobber`' <<'EOF'
+fn main() {
+	mut x := 0
+	unsafe {
+		asm("nop", into("=r") x)
+	}
+	print x
+}
+EOF
+
+reject a-raw-pointer-operation-outside-unsafe E3145 'raw-pointer operation' <<'EOF'
+fn main() {
+	mut n := 1
+	p := addr(n)
+	print 1
+}
+EOF
+
+reject a-load-through-an-untyped-pointer E3146 'needs a pointee' <<'EOF'
+fn main() {
+	mut n := 1
+	unsafe {
+		b := ptr(addr(n))
+		print b.load()
+	}
+}
+EOF
+
+reject a-pointer-operation-with-the-wrong-arity E3147 '`load` takes 0 arguments' <<'EOF'
+fn main() {
+	mut n := 1
+	unsafe {
+		p: ptr[int] = addr(n)
+		print p.load(1)
+	}
+}
+EOF
+
+reject a-pointer-cast-of-something-that-is-not-an-address E3148 'a value is not an address' <<'EOF'
+fn main() {
+	b := true
+	unsafe {
+		p := ptr(b)
+		print 1
+	}
 }
 EOF
 
@@ -5590,9 +5690,9 @@ EOF
 # The grammar makes the binding module-PRIVATE, which is what these cases pin, and it is the
 # whole of the crossing: without the `pub` a reader outside is refused by the ordinary
 # visibility rule, so there is no second rule owed. A SAME-module safe read or write stays
-# legal, deliberately — GRAMMAR says "callable only from unsafe" of the `fn` alone, and with
-# `unsafe { … }` as an expression still E9011 no function body can open an unsafe context, so
-# a rule there would make the group unreachable from anything a program can write.
+# legal, deliberately — GRAMMAR says "callable only from unsafe" of the `fn` alone, and a
+# binding is not a call. What reads a mutable global is ordinary code in the module that
+# declared it; what may not is another module, which the visibility rule already answers.
 
 reject a-pub-mutable-global E3108 at=2:2 <<'EOF'
 unsafe {

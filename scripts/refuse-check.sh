@@ -1053,7 +1053,7 @@ EOF
 
 # A NAME NOTHING BINDS is the commonest mistake anyone makes, and it used to be spelled
 # `zg_<n>` and handed to cc. So did a call to a function nothing declares — which is also
-# how the specified-but-unbuilt raw-pointer builtins arrived.
+# how a specified-but-unbuilt built-in such as `sizeof` arrived.
 expect "$ZERG" undefined-name E3069 <<'EOF'
 fn main() {
 	print nope
@@ -1182,12 +1182,6 @@ EOF
 # program naming one of these has not made a typo, and "undefined name `sizeof`" told the
 # reader the language does not have a form the documentation describes and the SEED builds.
 # Every one of these was reported as an unknown name until the emitter learned the list.
-expect "$ZERG" raw-pointer-builtin E9045 <<'EOF'
-fn main() {
-	mut n := 1
-	print addr(n)
-}
-EOF
 
 expect "$ZERG" refcounted-box-builtin E9058 <<'EOF'
 fn main() {
@@ -1804,7 +1798,6 @@ fn main() { print "x" }
 EOF
 
 
-
 # --- null safety: an optional says what it is at every edge ------------------------
 
 expect "$ZERG" optional-into-a-value E4021 <<'EOF'
@@ -2162,62 +2155,6 @@ spec Show {
 fn main() { print 1 }
 EOF
 
-expect "$ZERG" unsafe-block E9011 <<'EOF'
-fn main() {
-	n := unsafe {
-		5
-	}
-	print n
-}
-EOF
-
-# A standalone `unsafe fn` is a DECLARATION — GRAMMAR#fn-decl is where `unsafe` sits — and
-# it is refused as itself, with a place. It used to fall into the top-level statement
-# fallback and answer "NotImplemented: unsafe", the block-expression's sentence about a
-# form that is not a block; and reading the `fn` as safe instead would erase the one thing
-# the keyword says while the trust boundary stays unenforced (docs/runtime/ffi.md).
-expect "$ZERG" unsafe-fn-declaration E9027 <<'EOF'
-unsafe fn g() -> int {
-	return 2
-}
-
-fn main() {
-	print g()
-}
-EOF
-
-# `pub unsafe fn` is the SAME declaration with its visibility marker, and it earns the
-# same sentence. It used to be told "`pub` binds to a declaration, and a statement takes
-# none" — which is false twice over: it IS a declaration, and the statement fallback was
-# never the right reader for it.
-expect "$ZERG" pub-unsafe-fn-declaration E9027 <<'EOF'
-pub unsafe fn g() -> int {
-	return 2
-}
-
-fn main() {
-	print g()
-}
-EOF
-
-expect "$ZERG" raw-pointer-type E9045 <<'EOF'
-fn f(p: ptr) -> int {
-	return 1
-}
-
-fn main() { print 1 }
-EOF
-
-# THE THIRD POSITION, and the one a signature reads last: a raw pointer as the RESULT. The
-# funnel that names every built-in this compiler has not got is one function, so a place is
-# owed at each of the three the same way — and none of them carried one.
-expect "$ZERG" raw-pointer-return-type E9045 <<'EOF'
-fn f() -> ptr[int] {
-	return 0
-}
-
-fn main() { print 1 }
-EOF
 
 expect "$ZERG" destructuring-binding E9021 <<'EOF'
 fn main() {
@@ -2895,22 +2832,6 @@ fn main() {
 }
 EOF
 
-# `ptr` INSIDE an `unsafe` group, which is the one place the language says it belongs — so
-# this is not `raw-pointer-type` above with extra braces: that case shows the bare signature
-# is refused, this one shows the refusal is about the type not being built rather than about
-# where it was written.
-expect "$ZERG" ptr-type-in-an-unsafe-group E9045 <<'EOF'
-unsafe {
-	fn f(p: ptr) -> int {
-		return 1
-	}
-}
-
-fn main() {
-	print 1
-}
-EOF
-
 expect "$ZERG" associated-type-projection E9028 <<'EOF'
 spec It {
 	fn next() -> int
@@ -3209,21 +3130,10 @@ fn main() {
 }
 EOF
 
-# `NotImplemented: unsafe` and `NotImplemented: asm` — the keyword and nothing else. A
-# marker that names no form, gives no place, and does not say that the module-level
-# `unsafe { … }` GROUP spelled the same way does work.
-expect "$ZERG" unsafe-as-an-expression E9011 <<'EOF'
-fn main() {
-	x := unsafe { 3 + 4 }
-	print x
-}
-EOF
-
-# THE OTHER HALF OF THAT NUMBER. A top-level `unsafe` opens a GROUP or marks a `fn`, and a
-# third thing used to fall through to the statement fallback, be read as an EXPRESSION, and
-# meet E9011 above — an answer describing a form the file does not contain (there is no
-# expression in `unsafe struct P`) under a code that says the language HAS the form. GRAMMAR
-# derives no `unsafe struct` in any position, so the split leaves E9011's sentence true (#87).
+# A TOP-LEVEL `unsafe` OPENS A GROUP OR MARKS A `fn`, and a third thing used to fall through
+# to the statement fallback and be read as an EXPRESSION — an answer describing a form the file
+# does not contain, since there is no expression in `unsafe struct P`. GRAMMAR derives no
+# `unsafe struct` in any position, which is what this code says (#87).
 expect "$ZERG" a-top-level-unsafe-that-opens-neither E2075 <<'EOF'
 unsafe struct P {
 	pub x: int
@@ -3234,12 +3144,6 @@ fn main() {
 }
 EOF
 
-expect "$ZERG" inline-assembly E9033 <<'EOF'
-fn main() {
-	asm("nop")
-	print 1
-}
-EOF
 
 # `nil` AS A PATTERN. GRAMMAR#literal makes `nil` a literal and GRAMMAR#literal-pat makes a
 # literal a pattern, so this is a well-formed program and belongs here rather than in
@@ -3318,8 +3222,8 @@ EOF
 # GRAMMAR#fn-sig opens a spec member with `'unsafe'? 'mut'? 'fn'`, so `unsafe fn f()` in a
 # spec IS a derivation. It used to be turned away by E2036 — the catch-all for a token that
 # starts no member at all — which DENIED the derivation and cited GRAMMAR#spec-member while
-# doing it. A top-level `unsafe fn` gets E9027 and a place, so the two spellings of one
-# unenforced trust boundary now answer alike.
+# doing it. A top-level `unsafe fn` is BUILT, so what is left here is the one spelling of the
+# marker this compiler does not read: a spec's required signature.
 expect "$ZERG" unsafe-in-a-spec-signature E9036 <<'EOF'
 spec Raw {
 	unsafe fn peek() -> int
@@ -3403,20 +3307,6 @@ fn main() {
 			n
 		}
 	}
-}
-EOF
-
-# GRAMMAR#fn-type carries an `unsafe` marker, and `unsafe` is a trust boundary this compiler
-# does not enforce — so the TYPE is refused rather than spelled and never honoured. Both type
-# positions reported the token after the keyword before this: neither named the form.
-expect "$ZERG" an-unsafe-fn-type E9073 <<'EOF'
-fn f(x: int) -> int {
-	return x
-}
-
-fn main() {
-	g: unsafe fn(int) -> int = f
-	print g(1)
 }
 EOF
 

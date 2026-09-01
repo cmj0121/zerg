@@ -756,13 +756,25 @@ module.exports = grammar({
 				repeat(seq(",", $.asm_operand)),
 				")",
 			),
+		// GRAMMAR#asm-operand has four heads and NOT `lateout`, which this rule carried from
+		// another language's inline assembly: a `clobber` names registers and binds no value,
+		// which is why it is a branch of its own rather than an optional expression.
 		asm_operand: ($) =>
-			seq(
-				choice("in", "out", "lateout", "inout"),
-				"(",
-				$.string_literal,
-				")",
-				optional($._expression),
+			choice(
+				seq(
+					choice("in", "out", "inout"),
+					"(",
+					$.string_literal,
+					")",
+					$._expression,
+				),
+				seq(
+					"clobber",
+					"(",
+					$.string_literal,
+					repeat(seq(",", $.string_literal)),
+					")",
+				),
 			),
 
 		// --- patterns -------------------------------------------------------------------------

@@ -124,6 +124,17 @@ fn gen_match_inner(tparams: list[str], mut &sol: list[ast.Ty], decl: ast.Ty, act
 # gen_parts is a type's SUB-TYPES, in written order — the one place this file knows how a
 # type is built out of others. A scalar has none, and so does a name: a `TNamed` reaching
 # here is a struct or an enum, whose fields are not the type's arguments.
+#
+# FOUR SHAPES WERE MISSING, and every one of them was added to `Ty` after this was written:
+# the array, the `mut &`, the raw pointer and the `unsafe` marker. What falls out of that is a
+# refusal whose sentence is FALSE — `fn first[T](xs: [T; 2])` was told *the type parameter `T`
+# is not decided by this call: no argument's type mentions it*, about an argument whose type
+# says `T` in plain sight. A catch-all is what let each of them arrive silently; the arms are
+# written out for the reason `expr_parts` writes its out.
+#
+# AN ARRAY'S LENGTH IS NOT A PART. It is part of the type and not a type, so it takes no arm
+# here — two arrays of different lengths bind their element the same way, and the mismatch is
+# reported by the ordinary argument rule against the specialization's own signature.
 fn gen_parts(t: ast.Ty) -> list[ast.Ty] {
 	return match t {
 		Ty.TList(e) => [e]
@@ -132,6 +143,10 @@ fn gen_parts(t: ast.Ty) -> list[ast.Ty] {
 		Ty.TMap(k, v) => [k, v]
 		Ty.TTuple(es) => es
 		Ty.TEither(x, y) => [x, y]
+		Ty.TArr(e, n) => [e]
+		Ty.TRef(e) => [e]
+		Ty.TPtr(e) => [e]
+		Ty.TUnsafe(e) => [e]
 		Ty.TFn(ps, r) => gen_fn_parts(ps, r)
 		_ => []
 	}
@@ -194,6 +209,11 @@ fn subst_ty(su: TySubst, t: ast.Ty) -> ast.Ty {
 		}
 		return t
 	}
+
+	# THE SAME FOUR `gen_parts` WAS MISSING, and the same consequence one shape over: a
+	# specialization that did not rewrite through an array left `[T; 2]` in the signature it
+	# built, so the parameter the solver had just decided was still a name in the type it was
+	# decided for.
 	return match t {
 		Ty.TList(e) => ast.Ty.TList(subst_ty(su, e))
 		Ty.TOpt(e) => ast.Ty.TOpt(subst_ty(su, e))
@@ -201,7 +221,10 @@ fn subst_ty(su: TySubst, t: ast.Ty) -> ast.Ty {
 		Ty.TMap(k, v) => ast.Ty.TMap(subst_ty(su, k), subst_ty(su, v))
 		Ty.TTuple(es) => ast.Ty.TTuple(subst_tys(su, es))
 		Ty.TEither(x, y) => ast.Ty.TEither(subst_ty(su, x), subst_ty(su, y))
-		Ty.TFn(ps, r) => ast.Ty.TFn(subst_tys(su, ps), subst_ty(su, r))
+		Ty.TArr(e, n) => ast.Ty.TArr(subst_ty(su, e), n)
+		Ty.TRef(e) => ast.Ty.TRef(subst_ty(su, e))
+		Ty.TPtr(e) => ast.Ty.TPtr(subst_ty(su, e))
+		Ty.TUnsafe(e) => ast.Ty.TUnsafe(subst_ty(su, e))
 		_ => t
 	}
 }
@@ -270,7 +293,7 @@ fn subst_stmt(su: TySubst, s: ast.Stmt) -> ast.Stmt {
 		# inside a template kept its `T` and the specialization was refused with
 		# _E4056 no type named `T`_ — a legal program, turned away with a reason that is not
 		# true, which sends the reader looking for a declaration they wrote in the signature.
-		Stmt.SScope(b) => ast.Stmt.SScope(subst_block(su, b))
+		Stmt.SScope(b, u) => ast.Stmt.SScope(subst_block(su, b), u)
 
 		# AND THE CATCH-ALL IS GONE. Twice now a form that carries something has been left
 		# unsubstituted by `_ => s` — the `assert` above and the block above that — and each

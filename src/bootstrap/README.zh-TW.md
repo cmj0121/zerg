@@ -412,6 +412,13 @@ chan[int]() }`——或任何不是字面值、模組常數，或它們之間算
   永遠不會被 `make oracle` 拿去比對。`scripts/reject-check.sh` 的
   `an-associated-fn-reached-through-an-instance` 帶著 `seed-gap` 標記。
 
+- **泛型跨過 array 或 borrow 會編錯。** `zerg` 會把型別參數解出來、並代換過型別由之組成的每一種形狀;種子則會帶著
+  它編不動的 C 走到 cc —— _field has incomplete type 'void'_ —— `fn first[T](xs: [T; 2])` 和
+  `fn put[T](mut &slot: T, v: T)` 都是。
+
+  這對 bootstrap 不花任何代價:編譯器自己的原始碼沒有寫過跨這兩種形狀的泛型,而種子建不起來的程式是一個
+  **skip**、不是一次比對。`test-data/codegen/generic_shapes.zg` 連同它的理由列在表上。
+
 ## 修改種子時
 
 讓一項改動可以放心進行的不變量：**自舉原始碼所產生的 C 不得變動**。若那是真正的死碼移除，前後產生的 C 會逐位元組

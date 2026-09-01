@@ -3002,7 +3002,7 @@ fn parse_with(mut &p: Parser) -> ast.Stmt {
 		body.append(st)
 	}
 
-	return ast.Stmt.SScope(body)
+	return ast.Stmt.SScope(body, false)
 }
 
 fn parse_block(mut &p: Parser) -> list[ast.Stmt] {
@@ -3253,7 +3253,18 @@ fn parse_stmt_node(mut &p: Parser) -> ast.Stmt {
 	# The refusal that stood here said this compiler gives every binding the enclosing
 	# FUNCTION's scope. That stopped being true when scope ids and the release registry
 	# landed; nothing had asked it since, because no form could produce the node.
-	return ast.Stmt.SScope(parse_block(p)) if k == token.Kind.LBrace
+	return ast.Stmt.SScope(parse_block(p), false) if k == token.Kind.LBrace
+
+	# `unsafe { … }` AS A STATEMENT is that same block with the marker (GRAMMAR#unsafe-expr), and
+	# nothing about it wants a value. Reading it as an expression made it one: the block became a
+	# statement expression whose result is discarded, so a `return` inside it was a jump out of
+	# the middle of an expression — which the function's own answer rule read as `nil` — and
+	# `stmt_kids`, which answers "holds nothing" for an expression statement, stepped over every
+	# statement written inside it.
+	if k == token.Kind.Unsafe and peek_kind(p, 1) == token.Kind.LBrace {
+		p_advance(p)
+		return ast.Stmt.SScope(parse_block(p), true)
+	}
 
 	# A DESTRUCTURING BINDING OR ASSIGNMENT — `(a, b) := e`, `mut (a, b) := e`, `P{x, y} := e`
 	# and the two written with `=` (GRAMMAR#binding, GRAMMAR#bind-target, GRAMMAR#reassign,

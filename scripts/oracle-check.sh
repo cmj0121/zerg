@@ -49,9 +49,14 @@ fail=0
 # seed_reason is WHY the seed turned a program away, with the file and the line stripped off.
 # The position moves every time the program above it is edited; the sentence is what says
 # whether this is the same gap as yesterday.
+#
+# AND THE COLOUR STRIPPED. The seed's logger writes its own failures through zerolog, which
+# emits ANSI escapes whatever it is writing to — so a gap recorded that way put control
+# characters in a ledger a person reads and a `grep` has to match exactly.
 seed_reason() {
 	"$ZERG0" build --emit bin -o "$tmp/probe" "$1" 2>&1 |
 		head -1 |
+		sed -E 's|\x1b\[[0-9;]*m||g' |
 		sed -E 's|^.*\.zg:[0-9]+:[0-9]+: ||'
 }
 

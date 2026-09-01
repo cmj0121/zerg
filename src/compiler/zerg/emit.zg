@@ -4592,6 +4592,43 @@ fn c_bind_env(mut &em: Emitter, a: ast.Arm, st: ast.Ty) {
 # c_pat_env registers what a pattern binds, with the TYPE each name gets. It is the third walk
 # over the same tree and it exists because a body is typed before it is lowered: `match n { x =>
 # x }` typed its arm from a name nothing answered for, and the whole match came back TUnknown.
+# c_struct_shape is the three questions a `Name{ … }` SHAPE asks of the type it is written
+# against, and it answers with the struct's name so the caller can read a field's type from it.
+#
+# ONE FUNCTION BECAUSE GRAMMAR GIVES THE SHAPE ONE PRODUCTION. A `match` arm's struct-pat and a
+# destructuring target's are the same derivation in two positions (GRAMMAR#struct-pat is a
+# `pattern-core` and a `bind-target` both), so a rule asked at one of them is one position away
+# from meaning nothing — which is exactly what `Q{x} := p` did while this lived inside the
+# pattern walk: it bound `x` out of a `P` under a name no type in the program has.
+fn c_struct_shape(mut &em: Emitter, st: ast.Ty, want: str, fs: list[str], open: bool) -> str {
+	sn := c_named_of(st)
+
+	# THE TYPE NAME IS AN ASSERTION, not a reference. GRAMMAR writes it, and the value's type is
+	# what decides which struct this is — so the name is here to be CHECKED against it, exactly
+	# as a variant pattern's qualifier is. A name that was read and thrown away would let `Q{x}`
+	# match a `P` and renaming a struct leave every shape of it still matching.
+	raise c_diag(em, rule.Rule.StructPatternWrongType, f"a struct pattern names `{want}` and the value is a {ast.ty_name(st)}") if not c_is_struct_name(em, sn) or sn != want
+
+	have := c_struct_field_names(em, sn)
+	mut i := 0
+	for i < fs.len() {
+		raise c_diag(em, rule.Rule.StructPatternNoSuchField, f"`{want}` has no field `{fs[i]}`") if not c_name_in(have, fs[i])
+		i = i + 1
+	}
+
+	# WITHOUT `..` THE SHAPE NAMES EVERY FIELD, and the reader is told WHICH one is missing
+	# rather than that one is: a struct gaining a field should break what was written before it,
+	# by name, which is the whole reason the `..` is opt-in.
+	if not open {
+		mut k := 0
+		for k < have.len() {
+			raise c_diag(em, rule.Rule.StructPatternIncomplete, f"a struct pattern names every field or ends in `..`, and this one does not name `{have[k]}`") if not c_name_in(fs, have[k])
+			k = k + 1
+		}
+	}
+	return sn
+}
+
 fn c_pat_env(mut &em: Emitter, pt: ast.Pat, st: ast.Ty) {
 	bn := c_pat_bind_name(pt)
 	if bn != "" {
@@ -4633,36 +4670,9 @@ fn c_pat_env(mut &em: Emitter, pt: ast.Pat, st: ast.Ty) {
 	# A STRUCT PATTERN NAMES ITS FIELDS, so it asks three questions the positional shapes do
 	# not — and all three are about the TYPE, which is why they are here, in the first walk.
 	if c_pat_is_struct(pt) {
-		want := c_pat_struct_name(pt)
-		sn := c_named_of(st)
-
-		# THE TYPE NAME IS AN ASSERTION, not a reference. GRAMMAR#struct-pat writes it, and the
-		# scrutinee's type is what decides which struct this is — so the name is here to be
-		# CHECKED against it, exactly as a variant pattern's qualifier is. A name that was read
-		# and thrown away would let `Q{x}` match a `P` and renaming a struct leave every
-		# pattern of it still matching.
-		raise c_diag(em, rule.Rule.StructPatternWrongType, f"a struct pattern names `{want}` and the value is a {ast.ty_name(st)}") if not c_is_struct_name(em, sn) or sn != want
-
 		fs := c_pat_struct_fields(pt)
 		ps := c_pat_struct_pats(pt)
-		have := c_struct_field_names(em, sn)
-
-		mut i := 0
-		for i < fs.len() {
-			raise c_diag(em, rule.Rule.StructPatternNoSuchField, f"`{want}` has no field `{fs[i]}`") if not c_name_in(have, fs[i])
-			i = i + 1
-		}
-
-		# WITHOUT `..` THE PATTERN NAMES EVERY FIELD, and the reader is told WHICH one is
-		# missing rather than that one is: a struct gaining a field should break the patterns
-		# that were written before it, by name, which is the whole reason the `..` is opt-in.
-		if not c_pat_struct_open(pt) {
-			mut k := 0
-			for k < have.len() {
-				raise c_diag(em, rule.Rule.StructPatternIncomplete, f"a struct pattern names every field or ends in `..`, and this one does not name `{have[k]}`") if not c_name_in(fs, have[k])
-				k = k + 1
-			}
-		}
+		sn := c_struct_shape(em, st, c_pat_struct_name(pt), fs, c_pat_struct_open(pt))
 
 		mut j := 0
 		for j < fs.len() {
@@ -10904,6 +10914,7 @@ fn c_stmt(mut &em: Emitter, s: ast.Stmt, ind: str) -> str {
 	return match s {
 		Stmt.SLet(name, ty, has_type, is_mut, is_const, ival) => c_let(em, name, ty, has_type, is_mut, is_const, ival, ind)
 		Stmt.SAssign(lhs, rhs) => c_assign(em, lhs, rhs, ind)
+		Stmt.SDestructure(t, v, is_bind, is_mut, is_const) => c_destructure(em, t, v, is_bind, is_mut, is_const, ind)
 		Stmt.SPrint(e) => c_print(em, e, ind)
 		Stmt.SReturn(has_val, e) => c_return(em, has_val, e, ind)
 		Stmt.SReturnIf(val, cond) => c_return_if(em, val, cond, ind)
@@ -11094,6 +11105,94 @@ fn c_fill_elems(mut &em: Emitter, v: ast.Expr, n: ast.Expr) -> list[ast.Expr] {
 # c_assign lowers `lhs = rhs`. Re-assigning a list literal to a name re-initialises the
 # list (leak-style: the old buffer is abandoned); otherwise the lhs (a name, field, or
 # index) is emitted as a C lvalue.
+# c_destructure lowers `(a, b) := e`, `P{x, y} := e` and the two written with `=`
+# (GRAMMAR#bind-target, GRAMMAR#assign-target).
+#
+# IT BUILDS STATEMENTS AND LOWERS THOSE, rather than writing C. What a leaf needs is exactly
+# what an ordinary binding or assignment needs — the copy, the carrier wrap, the release
+# registered at the declaration, the checks — and every one of those lives in `c_let` and
+# `c_assign`. A second lowering here would be a second place for all of it to be right, which
+# is the shape this compiler keeps finding wrong in itself.
+#
+# THE VALUE IS READ ONCE, INTO A TEMPORARY, BEFORE ANY LEAF IS WRITTEN. That is not an
+# optimisation, it is the meaning: `(a, b) = (b, a)` is a swap, and a lowering that assigned
+# leaf by leaf out of the source expression would read `b` after it had already been written.
+fn c_destructure(mut &em: Emitter, t: ast.Target, v: ast.Expr, is_bind: bool, is_mut: bool, is_const: bool, ind: str) -> str {
+	tmp := c_tmp(em, "zg_dt")
+	mut body: list[ast.Stmt] = [ast.Stmt.SLet(tmp, ast.Ty.TUnknown, false, false, false, v)]
+	c_target_stmts(em, t, ast.Expr.EIdent(tmp), c_infer(em, v), is_bind, is_mut, is_const, body)
+
+	mut out := ""
+	for st in body {
+		out = out + c_stmt(em, st, ind)
+	}
+	return out
+}
+
+# c_target_stmts walks one target beside the expression that READS it, and appends the
+# statement each leaf is. The two shapes differ only in how a position is spelled: a tuple
+# position is `.0`, a struct position is `.field`, and both are an EField because a tuple is
+# read back by static index.
+fn c_target_stmts(mut &em: Emitter, t: ast.Target, src: ast.Expr, sty: ast.Ty, is_bind: bool, is_mut: bool, is_const: bool, mut &out: list[ast.Stmt]) {
+	match t {
+		Target.TgtWild => c_target_nothing(em)
+		Target.TgtPlace(e) => c_target_leaf(em, e, src, is_bind, is_mut, is_const, out)
+		Target.TgtTuple(ts) => c_target_tuple(em, ts, src, sty, is_bind, is_mut, is_const, out)
+		Target.TgtStruct(nm, fs, ts, open) => c_target_struct(em, nm, fs, ts, open, src, sty, is_bind, is_mut, is_const, out)
+	}
+}
+
+# A `_` READS NOTHING. GRAMMAR#assign-target has no wildcard of its own — the discard is the
+# pattern spelling — and what it means here is that the position is skipped: no name is minted
+# and no storage is written, so there is no statement to append.
+fn c_target_nothing(mut &em: Emitter) {
+	em.tmp_n = em.tmp_n
+}
+
+fn c_target_leaf(mut &em: Emitter, e: ast.Expr, src: ast.Expr, is_bind: bool, is_mut: bool, is_const: bool, mut &out: list[ast.Stmt]) {
+	if is_bind {
+		out.append(ast.Stmt.SLet(c_target_name(em, e), ast.Ty.TUnknown, false, is_mut, is_const, src))
+		return
+	}
+	out.append(ast.Stmt.SAssign(e, src))
+}
+
+fn c_target_name(mut &em: Emitter, e: ast.Expr) -> str {
+	return match e {
+		Expr.EIdent(n) => n
+		_ => ""
+	}
+}
+
+# THE TYPE IS THREADED RATHER THAN INFERRED FROM THE TEMPORARY. The statements are built before
+# any of them is lowered, so the temporary is not a name the emitter knows yet — asking it what
+# `zg_dt1` holds answers `?`, and a rule that reads `?` is a rule that never fires.
+fn c_target_tuple(mut &em: Emitter, ts: list[ast.Target], src: ast.Expr, sty: ast.Ty, is_bind: bool, is_mut: bool, is_const: bool, mut &out: list[ast.Stmt]) {
+	els := c_tuple_elems(sty)
+	mut i := 0
+	for sub in ts {
+		mut et := ast.Ty.TUnknown
+		if i < els.len() {
+			et = els[i]
+		}
+		c_target_stmts(em, sub, ast.Expr.EField(src, strconv.to_string(i, 10)), et, is_bind, is_mut, is_const, out)
+		i = i + 1
+	}
+}
+
+# A STRUCT TARGET IS A `struct-pat` IN ANOTHER POSITION, so it asks the same three questions of
+# the type: the name is an assertion, every field it lists must exist, and without a `..` it
+# names them all. `c_struct_shape` is where those live, once.
+fn c_target_struct(mut &em: Emitter, nm: str, fs: list[str], ts: list[ast.Target], open: bool, src: ast.Expr, sty: ast.Ty, is_bind: bool, is_mut: bool, is_const: bool, mut &out: list[ast.Stmt]) {
+	sn := c_struct_shape(em, sty, nm, fs, open)
+
+	mut i := 0
+	for sub in ts {
+		c_target_stmts(em, sub, ast.Expr.EField(src, fs[i]), c_field_ty(em, sn, fs[i]), is_bind, is_mut, is_const, out)
+		i = i + 1
+	}
+}
+
 fn c_assign(mut &em: Emitter, lhs: ast.Expr, rhs: ast.Expr, ind: str) -> str {
 	check.chk_assignable(em, lhs)
 

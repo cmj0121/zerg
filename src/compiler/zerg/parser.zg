@@ -2033,7 +2033,14 @@ fn parse_spec(mut &p: Parser, is_pub: bool) -> ast.SpecDecl {
 			# (the sig_unsafe column), and a `spec` member sits in no group. The signature is
 			# discarded by the raise below in any case.
 			sig := parse_fn_head(p, false, "This", u_mut, false)
-			raise p_diag_at(p, u.line, u.col, rule.Rule.NotYetUnsafeSpecSignature, f"NotImplemented: the `unsafe` `spec` signature `{sig.name}` — GRAMMAR#fn-sig derives `'unsafe'? 'mut'? 'fn'`, so this IS a spec member; `unsafe` marks a trust boundary this compiler does not enforce yet (docs/runtime/ffi.md), so the signature is refused rather than read as a safe one and its `unsafe` dropped")
+
+			# THE REASON IS NOT THE BOUNDARY ANY MORE. It said "`unsafe` marks a trust
+			# boundary this compiler does not enforce yet", which was true until group 12
+			# built it — a declaration carries the marker and the caller rule reads it. What
+			# is missing is one step further in: a spec's signature is a REQUIREMENT, and
+			# what an implementer owes for an unsafe one — whether a safe `fn` satisfies it,
+			# or the other way round — is a rule this compiler has not got.
+			raise p_diag_at(p, u.line, u.col, rule.Rule.NotYetUnsafeSpecSignature, f"NotImplemented: the `unsafe` `spec` signature `{sig.name}` — GRAMMAR#fn-sig derives `'unsafe'? 'mut'? 'fn'`, so this IS a spec member; what an implementer owes for an unsafe REQUIREMENT is a rule this compiler has not got (docs/core/specs.md), so the signature is refused rather than read as a safe one and its `unsafe` dropped")
 		}
 
 		# `mut fn` is part of a fn-sig (GRAMMAR#fn-sig), and it is INTERFACE: a `mut fn` method
@@ -2704,6 +2711,7 @@ fn parse_impl(mut &p: Parser, mut &fns: list[ast.FnDecl], mut &impls: list[ast.I
 			p_advance(p)
 			is_pub = true
 		}
+
 		mut recv_mut := false
 		if p_at(p, token.Kind.Mut) {
 			mt := cur(p)

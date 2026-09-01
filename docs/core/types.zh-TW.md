@@ -311,11 +311,12 @@ tuple 的結果是 **first-class**——可存、可傳、可解構——所以�
 
 建立一個值的**唯一原語是 struct literal**——它會指名每個欄位，所以只在「每個欄位都可見」處才能用。所謂
 **constructor 不是獨立特性**：它就是一個（通常 `pub` 的）associated function，內部回傳一個 literal；該函式在型別
-自己的 module 內執行，能在**建構當下**就把型別的 invariant 立好（**[not yet]**——associated function 會被指名
-拒絕,_E9051 `User.from_id(…)` is an associated function_,所以本節推理所依據的那種「立 invariant 的 constructor」
-今天要寫成自由函式）。**私有欄位是外部永遠指不出的欄位**：它必須帶預設值
+自己的 module 內執行，能在**建構當下**就把型別的 invariant 立好。inherent `impl` 裡的一個 `fn` 是 associated
+function 還是方法,由它的 **body** 決定:[`GRAMMAR#impl-decl`](../../GRAMMAR) 把線畫在 `this` 上——不用它的 `fn`
+不帶 receiver,要透過**型別**去叫,`User.from_id(…)`。**私有欄位是外部永遠指不出的欄位**：它必須帶預設值
 （見下），所以外部的建構把它省略掉、由宣告決定它的值。要讓 literal 本身在 module 之外不可用，那是 `#[sealed]`
-decorator 的職責——**[not yet]**，所以今天只要型別可及，literal 就可及。
+decorator 的職責——**[not yet]**,_E9079 NotImplemented: the decorator `#[sealed]`_,所以今天只要型別可及,
+literal 就可及。
 
 > **[not yet]** struct literal **只依位置**綁定,所以那個指名欄位的形式並不存在:`P(a: 1, b: 2)` 報
 > _NotImplemented: the named argument `a:` — this compiler binds arguments by position only_

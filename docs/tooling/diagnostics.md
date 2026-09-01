@@ -346,6 +346,9 @@ shipping compiler rather than a part of it (the line
 | `E3147` | `…` takes … arguments and this gives …                                                                |
 | `E3148` | `ptr…(…)` casts a raw pointer or an address, and … is neither                                         |
 | `E3149` | this value is an `unsafe fn(…)`, callable only from unsafe                                            |
+| `E3150` | `…` declares no `…` — an `impl` declares the methods and associated fns it has                        |
+| `E3151` | `…` is a METHOD of `…`, reached through an instance                                                   |
+| `E3152` | `…` is an ASSOCIATED FN of `…`, reached through the type                                              |
 | `E4001` | `…` outside of a loop: it belongs to a `for`, and a `select` arm is not one                           |
 | `E4002` | a `from` cause is an `Err`, and … is not one                                                          |
 | `E4004` | `…(…)` names one side of an `Either`, which holds exactly one value                                   |
@@ -467,7 +470,6 @@ shipping compiler rather than a part of it (the line
 | `E9048` | the `spec` `…` used as a TYPE (…)                                                                     |
 | `E9049` | `…` MUTATES its list, and `…` is a value rather than a place                                          |
 | `E9050` | an open-ended range has no upper bound here                                                           |
-| `E9051` | `….…(…)` is an associated function                                                                    |
 | `E9052` | a map key of type …                                                                                   |
 | `E9054` | `#[derive(…)]`                                                                                        |
 | `E9055` | `#[derive(Eq)]` on `…`                                                                                |
@@ -661,6 +663,7 @@ name now is the prelude rule (`E2061`), which is about the name rather than abou
 | `E9008` | —       | the struct shape is built in a target too, not only an arm         |
 | `E9021` | —       | the destructuring binding is built; a target is not a pattern      |
 | `E9072` | —       | the destructuring assignment is built; the value is read once      |
+| `E9051` | —       | the associated fn is built; the body decides which it is           |
 | `E3047` | —       | a strong typedef takes its underlying type's prefix operators      |
 
 **One of them moved nowhere**, and it is the only row whose second column is empty. `E3047`

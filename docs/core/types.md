@@ -371,12 +371,14 @@ and need an explicit `ok_or` / `ok` to cross.
 The one primitive for building a value is the **struct literal** — it names every field, so it is
 usable only where every field is visible. A "constructor" is not a separate feature: it is an ordinary
 (usually `pub`) associated function that returns a literal, which runs inside the type's module and can
-establish the type's invariant at the moment of construction (**[not yet]** — an associated function is
-refused by name, _E9051 `User.from_id(…)` is an associated function_, so the invariant-establishing
-constructor this section reasons from is written as a free function today). A **private field is one an outsider never
+establish the type's invariant at the moment of construction. What makes a `fn` in an inherent `impl` an
+associated function rather than a method is its **body**: [`GRAMMAR#impl-decl`](../../GRAMMAR) draws the
+line at `this` — a `fn` that does not use it takes no receiver and is reached through the **type**,
+`User.from_id(…)`. A **private field is one an outsider never
 names**: it must carry a default (below), so an outside construction leaves it off and the declaration
 decides its value. Making the literal itself unavailable outside the module is what the `#[sealed]`
-decorator is for — **[not yet]**, so today the literal is reachable wherever the type is.
+decorator is for — **[not yet]**, _E9079 NotImplemented: the decorator `#[sealed]`_, so today the literal is
+reachable wherever the type is.
 
 > **[not yet]** The struct literal binds **by position only**, so the form that names a field does not exist:
 > `P(a: 1, b: 2)` reports _E9010 NotImplemented: the named argument `a:` — this compiler binds arguments by

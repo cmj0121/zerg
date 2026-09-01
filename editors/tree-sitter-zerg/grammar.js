@@ -81,6 +81,16 @@ module.exports = grammar({
 		[$.block, $.unsafe_group],
 		[$.list_literal, $.list_pattern],
 		[$._bind_target, $._primary],
+
+		// `(a, b) = …` and `(a, b)` the tuple EXPRESSION are the same tokens until the `=`, and
+		// so are a leaf that is an lvalue and the same name read as a value — GRAMMAR#assign-target
+		// against GRAMMAR#tuple-lit, which is a decision no amount of lookahead makes locally.
+		[$._lvalue, $._primary, $.identifier_pattern],
+		[$._lvalue, $._primary],
+		[$._lvalue, $._postfix_expression],
+		[$.field_target, $.field_pattern],
+		[$.struct_assign_target, $.struct_pattern],
+		[$._lvalue, $.identifier_pattern],
 		[$._primary, $.literal_pattern],
 		[$._primary, $._range_bound],
 		[$.type_identifier, $.qualified_type, $._primary],
@@ -189,7 +199,40 @@ module.exports = grammar({
 			choice($.identifier, $.tuple_pattern, $.struct_pattern),
 
 		assignment: ($) =>
-			seq(field("target", $._lvalue), "=", field("value", $._expression)),
+			seq(
+				field("target", $._assign_target),
+				"=",
+				field("value", $._expression),
+			),
+
+		// GRAMMAR#assign-target — an lvalue, or a tuple or struct SHAPE whose leaves are
+		// lvalues. It is not `_bind_target`: a binding MINTS its names and an assignment writes
+		// into storage that already exists, so a leaf here is a whole postfix chain.
+		_assign_target: ($) =>
+			choice($._lvalue, $.tuple_assign_target, $.struct_assign_target),
+
+		tuple_assign_target: ($) =>
+			seq("(", sepBy1(",", $._assign_target), ")"),
+
+		struct_assign_target: ($) =>
+			seq(
+				$.type_identifier,
+				"{",
+				optional(
+					choice(
+						seq(
+							sepBy1(",", $.field_target),
+							optional(seq(",", "..")),
+						),
+						"..",
+					),
+				),
+				"}",
+			),
+
+		// GRAMMAR#field-target — the field, and optionally where it is aimed.
+		field_target: ($) =>
+			seq($.identifier, optional(seq(":", $._assign_target))),
 
 		_lvalue: ($) =>
 			choice($.identifier, $.field_expression, $.index_expression),

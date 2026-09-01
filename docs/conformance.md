@@ -63,6 +63,11 @@ The distinction that matters is between the second marker and the third. A **[no
 is honest: the compiler says the form's name and stops. It usually says it as a
 `NotImplemented`, and a handful of forms are turned away by an ordinary checked rule
 instead — the chapter says which, and the point is the naming rather than the wording.
+**A refusal also says where the form is specified**: the production it narrows
+(`GRAMMAR#bind-target`) or, where the form is not a production — a built-in, a method, a
+standard-library name — the chapter that gives it (`docs/code/collections.md`). Naming the
+form without naming where it is written down leaves a reader unable to tell a hole in the
+grammar from a name the standard library has not got.
 A **[deviation]** is a program
 that compiles and behaves differently from what is written here — and the project's
 standing rule is that a form is implemented or refused by name, never silently wrong, so a

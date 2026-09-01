@@ -1359,17 +1359,13 @@ pub fn parse_at(src: str, path: str) -> ast.File {
 			# every use answered `undefined name` about a name the module plainly declares.
 			consts.append(p_top_binding(p, "", false, false, is_pub, in_unsafe, t.line, t.col))
 		} else if p_at(p, token.Kind.Unsafe) and (peek_kind(p, 1) == token.Kind.Fn or (peek_kind(p, 1) == token.Kind.Mut and peek_kind(p, 2) == token.Kind.Fn)) {
-			# a standalone `unsafe fn` — GRAMMAR#fn-decl spells it (`'pub'? 'unsafe'?
-			# 'mut'? 'fn'`), and it IS a declaration. Refusing it is right — nothing here
-			# records the marker, so reading the `fn` as safe would erase the one thing the
-			# keyword says, which is the caller rule the GROUP form now carries (E3083) — but
-			# it must be refused AS ITSELF: the statement fallback below answered
-			# "NotImplemented: unsafe" about the block-expression, and the `pub` variant was
-			# told it had marked a statement, about a form that is a declaration. `is_pub` is
-			# already consumed, so `pub unsafe fn` lands here too and both spellings get this
-			# one message; `t` is the declaration's first token, so the refusal carries the
-			# place a declaration owes.
-			raise p_diag_at(p, t.line, t.col, rule.Rule.NotYetUnsafeFn, "NotImplemented: a standalone `unsafe fn` declaration — `unsafe` marks a trust boundary this compiler does not enforce yet (docs/runtime/ffi.md), so the function is refused rather than read as a safe `fn`")
+			# A STANDALONE `unsafe fn` — GRAMMAR#fn-decl spells it (`'pub'? 'unsafe'?
+			# 'mut'? 'fn'`), and it IS a declaration. What the marker does is what the
+			# module-level GROUP's marker does: it records `in_unsafe` on the declaration,
+			# and the caller rule (E3083) reads that — so the single-function form and the
+			# group form are one rule with two spellings rather than two rules.
+			p_advance(p)
+			fns.append(parse_fn(p, is_pub, "", false, true, false, false))
 		} else if p_at(p, token.Kind.Unsafe) and peek_kind(p, 1) == token.Kind.LBrace {
 			# a module-level `unsafe { … }` group opens. Every item inside goes through
 			# the arms above exactly as it would outside — the group is a CONTEXT, not a
@@ -4315,12 +4311,14 @@ fn parse_primary(mut &p: Parser) -> ast.Expr {
 		return ast.Expr.EGuard(parse_block(p))
 	}
 
-	# GRAMMAR#unsafe-expr and GRAMMAR#asm-expr, the two block-EXPRESSIONS this parser names
-	# and does not build. The `unsafe` block used to be swallowed whole with its statements
-	# never run, and naming it was only half the fix: both markers were the keyword and
-	# nothing else — `NotImplemented: unsafe` — so they named no form, carried no place, and
-	# let `unsafe` read as unsupported when the module-level GROUP spelled the same way works.
-	raise p_diag_at(p, t.line, t.col, rule.Rule.NotYetUnsafeExpr, "NotImplemented: `unsafe { … }` as an EXPRESSION — GRAMMAR makes it a block whose value the expression takes, and this compiler builds only the module-level `unsafe { … }` GROUP, which declares items rather than yielding a value") if k == token.Kind.Unsafe
+	# GRAMMAR#unsafe-expr — `unsafe { … }` where an expression is wanted. It is the block and
+	# the trust boundary together: the value is the block's, and the raw operations inside are
+	# legal because the author vouched for them.
+	if k == token.Kind.Unsafe {
+		p_advance(p)
+		return ast.Expr.EUnsafe(parse_block(p))
+	}
+
 	raise p_diag_at(p, t.line, t.col, rule.Rule.NotYetAsm, "NotImplemented: `asm(…)` — GRAMMAR has inline assembly with an operand list (GRAMMAR#asm-operand), and this compiler emits C and has no assembler of its own") if k == token.Kind.Asm
 
 	if k == token.Kind.Cmd {

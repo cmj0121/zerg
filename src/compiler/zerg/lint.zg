@@ -756,6 +756,7 @@ fn lint_captures_expr(e: ast.Expr, w: LWhere, refs: list[str], mut &muts: list[s
 	match e {
 		Expr.EGuard(b) => lint_captures_body(b, w, refs, muts, out)
 		Expr.EBlock(b) => lint_captures_body(b, w, refs, muts, out)
+		Expr.EUnsafe(b) => lint_captures_body(b, w, refs, muts, out)
 		Expr.EFn(ps, has_ret, ret, b) => lint_captures_body(b, w, refs, muts, out)
 		Expr.ECall(nm, args, _) => lint_captures_each(args, w, refs, muts, out)
 		Expr.EMethod(t, m, args) => lint_captures_each(args, w, refs, muts, out)
@@ -1078,8 +1079,9 @@ fn collect_binds_let(name: str, value: ast.Expr, w: LWhere, mut &names: list[str
 # statement that holds the guard rather than from a statement of its own.
 fn collect_binds_expr(e: ast.Expr, w: LWhere, mut &names: list[str], mut &ats: list[LWhere]) {
 	match e {
-		Expr.EGuard(body_b) => collect_binds_at(body_b, w, names, ats)
-		Expr.EBlock(body_b) => collect_binds_at(body_b, w, names, ats)
+		Expr.EGuard(body_b)  => collect_binds_at(body_b, w, names, ats)
+		Expr.EBlock(body_b)  => collect_binds_at(body_b, w, names, ats)
+		Expr.EUnsafe(body_b) => collect_binds_at(body_b, w, names, ats)
 
 		# a closure's body is a block too, and `walk_body` already counts the reads inside one
 		# — so without this the bindings in a closure were collected by nobody and answered to

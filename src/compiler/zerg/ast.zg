@@ -220,6 +220,12 @@ pub enum Expr {
 	# only from parse_primary.
 	EBlock(list[Stmt])
 
+	# EUnsafe is `unsafe { … }` WHERE AN EXPRESSION IS WANTED (GRAMMAR#unsafe-expr) — the same
+	# block, inside which the raw operations are legal. It is a node of its own and not an
+	# EBlock carrying a flag, because what it marks is a CONTEXT the emitter enters and leaves:
+	# a bare block nested inside one is still unsafe, and a function called from one is not.
+	EUnsafe(list[Stmt])
+
 	# EIs is the type test `x is Name` (GRAMMAR#cmp-expr, at the comparison level and equally
 	# non-associative). The right side is held as a NAME rather than a parsed Ty because
 	# the grammar spells it `type-name` and nothing resolves it here — the emitter decides
@@ -1191,6 +1197,7 @@ pub fn expr_kind(e: Expr) -> str {
 		Expr.ECoalesce(a, b, jump) => "coalesce"
 		Expr.EGuard(body) => "guard"
 		Expr.EBlock(body) => "block-expr"
+		Expr.EUnsafe(_) => "unsafe-block"
 		Expr.EIs(x, name) => "is " + name
 		Expr.EIn(x, set) => "in"
 		_ => "?"
@@ -1245,6 +1252,7 @@ pub fn expr_parts(e: Expr) -> list[Expr] {
 		Expr.ECoalesce(a, b, _) => [a, b]
 		Expr.EGuard(_) => expr_parts_none()
 		Expr.EBlock(_) => expr_parts_none()
+		Expr.EUnsafe(_) => expr_parts_none()
 		Expr.EIs(x, _) => [x]
 		Expr.EIn(x, set) => [x, set]
 	}

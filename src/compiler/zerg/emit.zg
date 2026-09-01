@@ -750,6 +750,7 @@ fn c_opt_wrap(mut &em: Emitter, where: str, elem: ast.Ty, e: ast.Expr, sb: Subst
 fn c_is_block_expr(e: ast.Expr) -> bool {
 	return match e {
 		Expr.EBlock(_) => true
+		Expr.EUnsafe(_) => true
 		_ => false
 	}
 }
@@ -5643,6 +5644,7 @@ fn c_expr_node(mut &em: Emitter, e: ast.Expr, sb: Subst) -> str {
 		Expr.ECoalesce(a, b, jump) => c_coalesce(em, a, b, jump, sb)
 		Expr.EGuard(body) => c_guard(em, body, sb)
 		Expr.EBlock(body) => c_block_expr(em, body, sb)
+		Expr.EUnsafe(body) => c_unsafe_expr(em, body, sb)
 		Expr.EIs(x, name) => c_is_test(em, x, name, sb)
 		Expr.EIn(x, set) => c_in_test(em, x, set, sb)
 	}
@@ -5802,6 +5804,22 @@ fn c_block_expr(mut &em: Emitter, body: list[ast.Stmt], sb: Subst) -> str {
 	# renders to exactly nothing above.
 	return out + "(void)0; })" if inner == "" and not needs
 	return out + "})"
+}
+
+# c_unsafe_expr lowers `unsafe { … }` in expression position (GRAMMAR#unsafe-expr). It IS the
+# block expression, with the trust boundary open for the statements inside it — which is the
+# whole of what the keyword does here: `unsafe` marks a region the author vouches for, and what
+# it unlocks is the raw operations and the calls to other unsafe functions.
+#
+# THE FLAG IS SAVED AND RESTORED, the discipline c_fn already follows for the same field: a
+# block-expression is lowered in the middle of an enclosing function's expression, so leaving
+# it set would make the rest of that function unsafe by accident.
+fn c_unsafe_expr(mut &em: Emitter, body: list[ast.Stmt], sb: Subst) -> str {
+	saved := em.in_unsafe_fn
+	em.in_unsafe_fn = true
+	out := c_block_expr(em, body, sb)
+	em.in_unsafe_fn = saved
+	return out
 }
 
 # c_block_val_ty is a block expression's value type, and c_guard_val_ty is the same question
@@ -10355,8 +10373,9 @@ fn c_infer_node(mut &em: Emitter, e: ast.Expr) -> ast.Ty {
 		Expr.ECoalesce(a, b, jump) => c_infer_coalesce(em, a, b)
 		Expr.EGuard(body) => ast.Ty.TEither(c_guard_elem(c_guard_val_ty(em, body)), ast.Ty.TErr)
 		Expr.EBlock(body) => c_block_val_ty(em, body)
+		Expr.EUnsafe(body) => c_block_val_ty(em, body)
 		Expr.EIs(x, name) => ast.Ty.TBool
-		Expr.EIn(x, set) => ast.Ty.TBool
+		Expr.EIn(x, set)  => ast.Ty.TBool
 	}
 }
 
@@ -10748,6 +10767,7 @@ fn c_discards_a_value(e: ast.Expr) -> bool {
 	return match e {
 		Expr.EGuard(_) => true
 		Expr.EBlock(_) => true
+		Expr.EUnsafe(_) => true
 		Expr.EMatch(_, _) => true
 		_ => false
 	}

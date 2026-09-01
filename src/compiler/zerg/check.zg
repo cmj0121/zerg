@@ -506,7 +506,11 @@ pub fn chk_unsafe_reachable(mut &em: emit.Emitter, name: str, callee_unsafe: boo
 	# functions that touch it are declared together, and they reach each other.
 	return if em.in_unsafe_fn
 
-	chk_at(em, rule.Rule.UnsafeNameInSafeCode, f"`{name}` is declared in a module-level `unsafe {{ … }}` group, so it is an unsafe fn — GRAMMAR group 12 makes it callable only from unsafe, and {what}")
+	# THE SENTENCE NAMES THE MARKER AND NOT THE SPELLING. It used to say "declared in a
+	# module-level `unsafe { … }` group", which was the only way to be one — and stopped being
+	# true the day a standalone `unsafe fn` was built. Both spellings record the same thing on
+	# the declaration, so the rule is about that and the message says so.
+	chk_at(em, rule.Rule.UnsafeNameInSafeCode, f"`{name}` is an unsafe fn — declared `unsafe fn`, or inside a module-level `unsafe {{ … }}` group — and GRAMMAR group 12 makes it callable only from unsafe, and {what}")
 }
 
 # chk_note is chk_at for something that is NOT an error. `L5xx` is the family that needs it:

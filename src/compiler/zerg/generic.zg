@@ -319,6 +319,7 @@ fn subst_expr(su: TySubst, e: ast.Expr) -> ast.Expr {
 		Expr.ECoalesce(a, b, jump) => ast.Expr.ECoalesce(subst_expr(su, a), subst_expr(su, b), subst_block(su, jump))
 		Expr.EGuard(b) => ast.Expr.EGuard(subst_block(su, b))
 		Expr.EBlock(b) => ast.Expr.EBlock(subst_block(su, b))
+		Expr.EUnsafe(b) => ast.Expr.EUnsafe(subst_block(su, b))
 		Expr.EIs(x, nm) => ast.Expr.EIs(subst_expr(su, x), nm)
 		Expr.EIn(x, s) => ast.Expr.EIn(subst_expr(su, x), subst_expr(su, s))
 

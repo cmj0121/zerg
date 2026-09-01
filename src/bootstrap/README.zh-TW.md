@@ -394,6 +394,15 @@ chan[int]() }`——或任何不是字面值、模組常數，或它們之間算
   種子會編譯的東西裡沒有一份寫成這兩種形狀,而「種子接受、`zerg` 拒絕」的程式永遠不會被 `make oracle` 拿去比對。
   `scripts/reject-check.sh` 的 `local-shadows-namespace` 帶著 `seed-gap` 標記。
 
+- **destructuring target 裡的 struct 形狀不檢查型別名字。** GRAMMAR 導得出 `Name{ … }` 的每個位置,`zerg` 都問
+  同樣三個問題——名字是一個斷言、它列出的每個欄位都存在、沒有 `..` 就要列全——所以在一個 `P` 上寫 `Q{x} := p`
+  是 `E4085`,在兩個欄位的 struct 上寫 `P{x} := p` 是 `E4087`。種子有 destructuring target 這個形式,卻一條規則
+  都沒有,所以這兩支程式都建得起來,而且從錯的形狀裡綁出東西。
+
+  這對 bootstrap 不花任何代價:種子會編譯的東西裡沒有一份寫成這兩種形狀,而「種子接受、`zerg` 拒絕」的程式永遠
+  不會被 `make oracle` 拿去比對。`scripts/reject-check.sh` 的 `a-struct-target-naming-the-wrong-type` 和
+  `a-struct-target-missing-a-field-and-a-rest` 各自帶著 `seed-gap` 標記。
+
 ## 修改種子時
 
 讓一項改動可以放心進行的不變量：**自舉原始碼所產生的 C 不得變動**。若那是真正的死碼移除，前後產生的 C 會逐位元組

@@ -7,7 +7,9 @@ Zerg package 如何與 **C ABI** 交界——這是唯一一處 Zerg 值變成 C
 
 > **[not yet]** **兩條邊都沒有建，所以本章是一份設計、而不是一份描述。** 外部呼叫所處的 `unsafe` 情境就是它
 > 停下來的地方：**block-expression** 形式被指名拒絕、帶位置（`E9011`），獨立的 **`unsafe fn`** 也是（`E9027`），
-> 上面那些 binding 用來拼寫的 **`unsafe fn` 型別**同樣如此（`E9073`）——import 那條邊也就一起沒了。出貨的標準
+> 上面那些 binding 用來拼寫的 **`unsafe fn` 型別**同樣如此（`E9073`）——import 那條邊也就一起沒了。內聯組語也被
+> 一併拒絕：`asm(…)` 是 _E9033 NotImplemented: `asm(…)` — GRAMMAR has inline assembly with an operand list
+> (GRAMMAR#asm-operand)_。出貨的標準
 > 函式庫裡沒有 `ffi` 模組，所以 `import "ffi"` 就在 import 那一步失敗——_E5002 cannot resolve import `ffi` under
 > any source root_——而不是拖到該 binding 需要的那個 `unsafe` 上。module 層級的
 > **分組**是有建的那一種形式，為的是它的 `mut` binding；一個既沒開分組、也沒標記 `fn` 的頂層 `unsafe` 是一個

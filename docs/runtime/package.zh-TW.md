@@ -152,7 +152,8 @@ belong to whoever declared them, and an impl belongs with one of the two_ 拒絕
 **一個 module 就是一個目錄**；裡面的檔案是共享同一命名空間的實體切片——檔案數量是排版、不是語意。module 是預設的
 私有單位：一個未加標記的宣告在該 module 的各檔案間可見，但不越出 module（見可見性）。
 
-import path 是一個**前綴**加一個**套件路徑**（`GRAMMAR#import-path`）。套件路徑是由套件名組成的目錄路徑；
+import path 是一個**前綴**加一個**套件路徑**（`GRAMMAR#import-path`、
+[`GRAMMAR#package-path`](../../GRAMMAR)）。套件路徑是由套件名組成的目錄路徑；
 **前綴決定它在哪個根之下**展開，而**磁碟上有什麼，永遠不會改變它在哪個根之下**：
 
 | 寫法                      | 根                                | 落在磁碟上                                     |
@@ -163,7 +164,7 @@ import path 是一個**前綴**加一個**套件路徑**（`GRAMMAR#import-path`
 | `import "github.com/a/b"` | 遠端套件                          | **[not yet]** —— 已保留，並具名拒收            |
 
 三個根用同一條規則展開套件路徑，所以佈局規則只有一條、不是三條。分類器是**名字文法的推論**、不是它旁邊的另一條
-規則：`package-name` 是 `[a-z][a-z0-9_]*`，不能含 `.`，所以第一段含點的東西不可能是套件名，只能是 host。
+規則：一個 [`GRAMMAR#package-name`](../../GRAMMAR) 是 `[a-z][a-z0-9_]*`，不能含 `.`，所以第一段含點的東西不可能是套件名，只能是 host。
 
 **讀一個 import 就知道它指的是三者中的哪一個。** 新增、刪除或改名一個檔案，只能改變一個 import 是否**解析得到**
 ——永遠不會改變它指的是哪一類東西。這就是為什麼一個叫 `io.zg` 的檔案，再也搶不走旁邊每個檔案的標準函式庫 `io`。

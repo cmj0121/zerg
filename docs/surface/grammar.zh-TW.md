@@ -84,11 +84,11 @@ for {
 }
 ```
 
-之後每個 group 都會為 `statement` 增添一種形式（binding、expression statement、declaration……）；`nop` 始終是
-那個永遠可用、永遠無作用的 statement。
+之後每個 group 都會為 `statement` 增添一種形式（binding、expression statement、declaration……）；
+[`GRAMMAR#nop`](../../GRAMMAR) 始終是那個永遠可用、永遠無作用的 statement。
 
-comment 不是 statement——`#` 一路到行尾。`##` 起始一個 **doc comment**（附著於其後的宣告），`#[` 起始一個
-decorator（group 7）；Zerg **沒有 block comment**：
+comment 不是 statement——`#` 一路到行尾（[`GRAMMAR#COMMENT`](../../GRAMMAR)）。`##` 起始一個 **doc comment**
+（[`GRAMMAR#DOC-COMMENT`](../../GRAMMAR)，附著於其後的宣告），`#[` 起始一個 decorator（group 7）；Zerg **沒有 block comment**：
 
 ```zerg
 # 整行註解
@@ -99,7 +99,7 @@ fn answer() -> int { return 42 }
 
 ## Group 2 — Lexical
 
-原始碼是 UTF-8。水平空白（space、tab）分隔 token；換行只作為 statement 分隔符（group 1）才有意義。換行是 LF
+原始碼是 UTF-8。水平空白（[`GRAMMAR#WS`](../../GRAMMAR)——space、tab）分隔 token；換行只作為 statement 分隔符（group 1）才有意義。換行是 LF
 或 CRLF——`\r` 屬於它後面的那個換行，而不屬於空白類，所以出現在其他位置的 `\r` 不是任何 token 的一部分，會在
 原處被拒絕（在字串或 rune 字面量內則是普通內容）。lexical
 group 界定「token 是什麼」：
@@ -115,7 +115,8 @@ DOC-COMMENT ::= '##' [^\n]*                       # doc comment；附著於其�
 block      ::= '{' stmt-list '}'
 ```
 
-**identifier** 以字母或 `_` 開頭，其後接字母、數字或 `_`。**保留字（keyword）**永遠不會是 identifier；完整的
+**identifier**（[`GRAMMAR#identifier`](../../GRAMMAR)）以字母或 `_` 開頭，其後接字母、數字或 `_`。
+**保留字**（[`GRAMMAR#keyword`](../../GRAMMAR)）永遠不會是 identifier；完整的
 保留字集合為：
 
 ```text
@@ -131,7 +132,7 @@ unsafe ptr   asm     assert
 
 （`derive` 不是關鍵字——它是 `#[derive(…)]` 裡的 decorator 名稱。）
 
-**block** 以大括號包住一串 statement——之後的 group 會把它掛在 function、loop 或 conditional 的主體上，**同時它
+**block**（[`GRAMMAR#block`](../../GRAMMAR)）以大括號包住一串 statement——之後的 group 會把它掛在 function、loop 或 conditional 的主體上，**同時它
 也是一個值**：block 是一個 **expression**（`primary`，group 4），其值是**最後一個 statement 的值**——expression
 statement 交出它的 expression，其他任何 statement、以及空的 block，都交出 `nil`。ASI 的 `;` 只**分隔**
 statement，並不像某些語言的結尾 `;` 那樣把值丟掉，所以 `guard { … }` 與 `match` 的 arm 都能裝好幾個 statement
@@ -146,7 +147,8 @@ entry（兩者皆 `{ … }` composite）。struct **值**沒有 brace literal—
 
 ## Group 3 — Literals
 
-literal 表示一個常數值：
+literal 表示一個常數值。**`true`** 與 **`false`** 是 [`GRAMMAR#bool-lit`](../../GRAMMAR)、**`nil`** 是
+[`GRAMMAR#nil-lit`](../../GRAMMAR)；其餘見下。
 
 ```text
 literal     ::= bool-lit | nil-lit | float-lit | int-lit
@@ -163,18 +165,26 @@ raw-str-lit ::= 'r' '"' raw-char* '"'
 cmd-lit     ::= '`' cmd-char* '`'                        # COMMAND literal——直接執行、不經 shell（f 形式：group 5）
 ```
 
-- **數字。** 整數為十進位或帶基底——`0x1F`、`0o17`、`0b1010`。float 有小數部分、指數，或兩者——`1.0`、`1e3`、
+- **數字。** 整數（[`GRAMMAR#int-lit`](../../GRAMMAR)）為十進位（[`GRAMMAR#dec-int`](../../GRAMMAR)）或帶
+  基底——`0x1F`（[`GRAMMAR#hex-int`](../../GRAMMAR)）、`0o17`（[`GRAMMAR#oct-int`](../../GRAMMAR)）、`0b1010`
+  （[`GRAMMAR#bin-int`](../../GRAMMAR)）。float 有小數部分、指數
+  （[`GRAMMAR#exponent`](../../GRAMMAR)），或兩者——`1.0`、`1e3`、
   `6.022e23`。數字 literal 是**未定型的**：採用其 position 要求的型別（整數預設 `int`，帶小數/指數者預設 `float`）。`_`
   可**分組數字**，只允許在數字之間——`1_000_000`、`0xDE_AD_BE_EF`。正負號不屬 literal；`-5` 是對 `5` 施加一元
   減號（運算子）。
-- **`rune` 與 `byte`。** **`rune`** 是單引號內的一個 Unicode code point——`'a'`、`'\n'`、`'\u{1F600}'`。
-  **`byte`** 是一個 octet，加 `b` 前綴——`b'a'`、`b'\x41'`——或用 cast 寫成 `byte(0x41)`。單引號留給這兩者；字串
+- **`rune` 與 `byte`。** **`rune`**（[`GRAMMAR#rune-lit`](../../GRAMMAR)）是單引號內的一個 Unicode code
+  point——`'a'`、`'\n'`（[`GRAMMAR#escape`](../../GRAMMAR)）、`'\u{1F600}'`。
+  **`byte`**（[`GRAMMAR#byte-lit`](../../GRAMMAR)）是一個 octet，加 `b` 前綴——`b'a'`、`b'\x41'`
+  （[`GRAMMAR#byte-escape`](../../GRAMMAR)，`\xNN` 那一族）——或用 cast 寫成 `byte(0x41)`。單引號留給這兩者；字串
   用雙引號。
-- **`str`、多行與 raw string。** **`str`** 用雙引號並處理 escape（`\n \t \r \0 \\ \" \'` 與 `\u{…}`）。**三引號**
+- **`str`、多行與 raw string。** **`str`**（[`GRAMMAR#str-lit`](../../GRAMMAR)）用雙引號並處理 escape（`\n \t \r \0 \\ \" \'` 與
+  `\u{…}`）。**三引號**
   `"""…"""` 的 `str` 相同但**可跨行**——換行為字面,內部單一 `"` 或 `""` 免 escape（只有 `"""` 結束它）,適合
-  SQL/JSON/文字。**raw string** 加 `r` 前綴,**不**處理任何 escape——`r"C:\tmp\new"` 是十個字面字元。`str` 不能含
+  SQL/JSON/文字。**raw string**（[`GRAMMAR#raw-str-lit`](../../GRAMMAR)）加 `r` 前綴,**不**處理任何 escape——
+  `r"C:\tmp\new"` 是十個字面字元。`str` 不能含
   NUL,所以 `\0` 與 `\u{0}` 在 `"…"` 內非法（在 `rune` 或 `byte` 內則可）。
-- **command literal。** 反引號 `` `git status` `` 是一個**命令**——一個**直接**執行（不經 shell）的子行程，argv 以
+- **command literal。** 反引號 `` `git status` ``（[`GRAMMAR#cmd-lit`](../../GRAMMAR)，其內文是一串
+  [`GRAMMAR#cmd-char`](../../GRAMMAR)）是一個**命令**——一個**直接**執行（不經 shell）的子行程，argv 以
   空白切分（尊重引號），因此沒有插值、沒有注入／glob／pipe。插值的 `` f`…` `` 形式（group 5）是把值接進 **argv**：
   每個 hole 就是一個引數，不管裡面是什麼，而且一樣沒有 shell。執行面——子行程的三個串流——屬
   **stdlib**（[Process & I/O](../runtime/io.zh-TW.md)），非文法：兩種形式都 desugar 成 `os.command(argv)`。
@@ -183,7 +193,8 @@ cmd-lit     ::= '`' cmd-char* '`'                        # COMMAND literal——
 
 ## Group 4 — Bindings & Expressions
 
-**binding** 引入一個名字；reassign 更新一個既有名字。**模組層級**的 binding 前面的 `pub`
+**binding**（[`GRAMMAR#binding`](../../GRAMMAR)）引入一個名字；**reassign**
+（[`GRAMMAR#reassign`](../../GRAMMAR)）更新一個既有名字。**模組層級**的 binding 前面的 `pub`
 把它暴露給 package 的其餘部分，和其他宣告上的 `pub` 一樣；區塊裡面沒有東西可以暴露，寫了就是錯誤：
 
 ```text
@@ -197,10 +208,13 @@ assign-target ::= lvalue | '(' assign-target ( ',' assign-target )* ')'
 field-target  ::= identifier ( ':' assign-target )?
 ```
 
-`:=` 綁定一個**全新、immutable** 的名字並**推斷**其型別；`mut x := …` 使其可重綁；`const x := …` 是 immutable
+`:=` 綁定一個**全新、immutable** 的名字（[`GRAMMAR#bind-target`](../../GRAMMAR)）並**推斷**其型別；`mut x := …` 使其可重綁；`const x := …` 是
+immutable
 **且 shadow-proof**（沒有任何綁定可遮蔽它，它也不可遮蔽既有可見名字——兩向皆 error）。**帶型別註記**的綁定寫成
 `name: T = expr`——它固定型別並**依語境定型** RHS（裸 `[…]` 成為 `list`，或對 `[T; N]` 目標成為陣列）；開頭的 `:`
-正是它有別於 `=` **reassign**（更新既有 `mut` 綁定或 field／元素）之處。單獨一個 expression——一次 call，
+正是它有別於 `=` **reassign** 之處——後者更新一個既有的 [`GRAMMAR#lvalue`](../../GRAMMAR)：一個名字、一個
+field、一個 tuple 元素，或一個索引。一個 [`GRAMMAR#assign-target`](../../GRAMMAR) 是其中之一、或它們組成的形狀，
+其 struct 形式用 [`GRAMMAR#field-target`](../../GRAMMAR) 指名欄位。單獨一個 expression——一次 call，
 或為副作用而跑的 `match`——就是一個 statement。`:=` 可**解構**成
 新名字（`(q, r) := divmod(x, y)`，group 6），而 `=` **對映到既有 lvalue**——`(a, b) = swap(a, b)`、
 `Div{q, r} = divmod(x, y)`——每個葉子可以是任意 lvalue（`(a, obj.f) = …`）。兩個方向都是 **[not yet]**，而且
@@ -208,7 +222,12 @@ field-target  ::= identifier ( ':' assign-target )?
 目標（_E9072 a destructuring assignment `(a, b) = …`_），而 struct 形狀則是它讀不懂的
 pattern（_E9008 a struct pattern `Div{…}`_）。
 
-expression 是一條優先序 cascade。每個二元層級都是**左結合**；**比較是非結合**——`a < b < c` 依設計無法 parse。
+expression 是一條優先序 cascade，每一層一條 production：[`GRAMMAR#or-expr`](../../GRAMMAR)、
+[`GRAMMAR#and-expr`](../../GRAMMAR)、比較（[`GRAMMAR#cmp-op`](../../GRAMMAR)）、
+[`GRAMMAR#add-expr`](../../GRAMMAR) 與 [`GRAMMAR#add-op`](../../GRAMMAR)、
+[`GRAMMAR#mul-expr`](../../GRAMMAR) 與 [`GRAMMAR#mul-op`](../../GRAMMAR)、前綴
+（[`GRAMMAR#unary-op`](../../GRAMMAR)），以及作用在 [`GRAMMAR#primary`](../../GRAMMAR) 上的
+[`GRAMMAR#postfix`](../../GRAMMAR)。每個二元層級都是**左結合**；**比較是非結合**——`a < b < c` 依設計無法 parse。
 
 > 一個開不出這個編譯器讀得懂的產生式的 token,會在它所在的位置被拒絕,而不是被帶進樹裡:
 > _E2074 `…` is not an expression this compiler reads_。它是上面每一個具名形式底下的兜底,所以一個不是運算式
@@ -235,8 +254,9 @@ expression 是一條優先序 cascade。每個二元層級都是**左結合**；
 `v in r` 是 `r.contains(v)` 的**語法糖**——`Range` / `contains` 機制在 stdlib。（group 8 的 `??` 仍是唯一最鬆的二元
 運算子,比 `or` 更鬆。）
 
-null-safety 與 error 運算子（`?` `??` `?.` `!`）在 group 8;postfix 三個（`?` `!` `?.`）併入上面的 `postfix`,
-`??` 則在最鬆的層級。
+null-safety 與 error 運算子（`?` `??` `?.` `!`）在 group 8;postfix 三個（`?` `!` `?.`）併入上面的
+`postfix`,而 `??`（[`GRAMMAR#coalesce-expr`](../../GRAMMAR)，其右臂是
+[`GRAMMAR#coalesce-rhs`](../../GRAMMAR)）則在最鬆的層級。
 
 postfix 的 `[…]` **一律是索引**。型別引數只寫在**型別位置**（group 7），兩個表面不再共用一對中括號,這裡也就沒有
 任何東西需要先解析才能剖析——不需要 turbofish,也不需要符號表。泛型呼叫由引數型別**推斷**其型別引數;推斷不足時,
@@ -260,11 +280,13 @@ map-lit   ::= '{' map-entry ( ',' map-entry )* '}'   # {k: v, …}
 map-entry ::= expr ':' expr
 ```
 
-- **tuple `(a, b)`**——括號內 2+ 元素;單一 `(expr)` 只是分組,故無 1-tuple、無空 `()`。這正是讓 `divmod` 能
+- **tuple `(a, b)`**（[`GRAMMAR#tuple-lit`](../../GRAMMAR)）——括號內 2+ 元素;單一 `(expr)` 只是分組,故無 1-tuple、無空 `()`。這正是讓
+  `divmod` 能
   `return (q, r)` 的關鍵。以**靜態索引**讀回元素——`t.0`、`t.1`——而非 `t[i]`:tuple 是異質的,索引須為編譯期常數
   才能得知元素型別（`a.0.1` 是 `(a.0).1`,絕非 float）。**沒有 tuple struct**——`type P = (A, B)` 是具名位置式型別,
   `struct` 則是具名欄位式。
-- **list `[1, 2, 3]`**(空 `[]`),有序。在型別為 `[T; N]` 的 position 上,長度吻合的 list 字面量**採用**該陣列型別。
+- **list `[1, 2, 3]`**（[`GRAMMAR#list-lit`](../../GRAMMAR),空 `[]`）,有序。在型別為 `[T; N]` 的 position 上,長度吻合的 list
+  字面量**採用**該陣列型別。
   **fill 形式 `[v; N]`** 是 `N` 份 `v`(`N` 為 const-expr,鏡射 `[T; N]` 陣列型別的 `;`)——建大陣列而不必逐一列出。
 - **map `{k: v}`**(空 `{:}`)。`:` 正是分辨 `{…}` 是 **map** 還是 **block** 的依據——`k: v` 不是 statement,所以帶
   冒號的大括號無歧義;而**裸元素**的 `{…}` **恆為 block**。
@@ -275,7 +297,8 @@ map-entry ::= expr ':' expr
 
 ### 字串插值與 `print`
 
-**f-string** 是一種 primary expression——帶 `{ expr }` 洞的字串：
+**f-string**（[`GRAMMAR#fstr-lit`](../../GRAMMAR)）是一種 primary expression——帶 `{ expr }` 洞
+（[`GRAMMAR#interp`](../../GRAMMAR)）的字串，而 [`GRAMMAR#print`](../../GRAMMAR) 是把它秀出來的那個 statement：
 
 ```text
 fstr-lit    ::= 'f' '"' ( fstr-char | escape | '{{' | '}}' | interp )* '"'
@@ -288,18 +311,20 @@ print       ::= 'print' expr
 
 洞是 **Python 式**：`expr`，其後選用 `=`、`!` 轉換、`:` format spec。`f"sum={x + y}"` 把每個洞經 `display()`
 算出並串接——**編譯期 desugar** 成 `str` 串接，沒有 runtime format engine。同一套 `{ … }` 洞也驅動插值的**命令
-literal** `` f`…` ``（group 3 的 command literal）：每個洞會以子行程 argv 的**一個引數**插入，沒有 shell 會再把
+literal** `` f`…` ``（[`GRAMMAR#fcmd-lit`](../../GRAMMAR)）：每個洞會以子行程 argv 的**一個引數**插入，沒有 shell 會再把
 它切一次（[Process 與 I/O](../runtime/io.zh-TW.md)）。
 
-- **`{x}`** 透過 `display` 渲染。**`{x!r}`** / **`{x!s}`** / **`{x!a}`** 先轉換——`debug` / `display` / ascii。
+- **`{x}`** 透過 `display` 渲染。**`{x!r}`** / **`{x!s}`** / **`{x!a}`**
+  （[`GRAMMAR#conversion`](../../GRAMMAR)）先轉換——`debug` / `display` / ascii。
   （[Format](../runtime/format.zh-TW.md)）。**`{x=}`** 自述：輸出運算式原文與 `=`，再接值
   （`f"{n=}"` → `n=42`）。
-- **`{x:spec}`** 把 `spec` 交給型別的 **`Format`** protocol——`f"{pi:.2f}"`、`f"{n:04d}"`、`f"{p:>10}"`。spec
+- **`{x:spec}`**（[`GRAMMAR#format-spec`](../../GRAMMAR)）把 `spec` 交給型別的 **`Format`**
+  protocol——`f"{pi:.2f}"`、`f"{n:04d}"`、`f"{p:>10}"`。spec
   **字串的意義由型別決定**（stdlib 數字/`str` 讀常見的 fill/align/sign/`#`/`0`/width/`.precision`/type）；文法
   只當它是到 `}` 為止的不透明字串。
 - 純 `"…"` 是 literal（大括號是普通字元）；只有 f-string 會讀 `{…}`，而 `{{` / `}}` 寫出字面大括號。
 
-**`print`** 把一個值的 `display()` 加換行寫到 stdout——保留字、恆在 scope、best-effort（永不 raise），所以
+**`print`**（[`GRAMMAR#print`](../../GRAMMAR)）把一個值的 `display()` 加換行寫到 stdout——保留字、恆在 scope、best-effort（永不 raise），所以
 `print f"hello {name}"` 是最小程式。
 
 ## Group 5 — Functions
@@ -318,19 +343,24 @@ closure-param ::= ( 'mut' '&' )? identifier ( ':' type )? ( '=' expr )?   # clos
 ```
 
 - **宣告 vs expression。** `fn name(…) -> R { … }` 綁定一個名字；**匿名** `fn(…) -> R { … }` 是 expression
-  （一個 closure）。`pub` 匯出宣告的名字，且不屬型別。
+  （[`GRAMMAR#fn-expr`](../../GRAMMAR)，一個 closure），它的參數是
+  [`GRAMMAR#closure-param-list`](../../GRAMMAR)。函式的**型別**是 [`GRAMMAR#fn-type`](../../GRAMMAR)，作用在一串
+  [`GRAMMAR#param-type`](../../GRAMMAR) 組成的 [`GRAMMAR#param-type-list`](../../GRAMMAR) 上；沒有 body 的簽章
+  ——一個 spec 的要求——是 [`GRAMMAR#fn-sig`](../../GRAMMAR)。`pub` 匯出宣告的名字，且不屬型別。
 - **推斷的 closure 參數。** **closure** 可省略參數的 `: type`——`xs.map(fn(x) { x *% 2 })`——由編譯器依 closure
   被檢查時的函式型別推斷（引數宣告的參數型別，或帶型別註記綁定的 RHS）。具名 `fn` 宣告則不行:簽章即契約。
 - **closure 捕獲是 immutable 的。** closure 以**複製、唯讀**捕獲值與 channel——**不能改**捕獲的變數。這是刻意的:
   value 語意下改捕獲對外本就不可見、無 GC 的 by-ref 捕獲會懸空、而 immutable 捕獲正是讓 `spawn` 的 closure
   **無 data race** 的原因。可變 closure 想做的三件事各有對應慣用法:用 `for` 迴圈**累加**
   （`for x in xs { sum = sum + x }`）、把**狀態**放進帶 `mut fn` 的 `struct`、用 `chan` 傳遞**並行**狀態。
-- **Return。** `return expr` 帶值離開，單獨 `return` 則不帶值。**省略 `-> type`** 表示函式回傳 `nil`。**尾隨
+- **Return。** [`GRAMMAR#return`](../../GRAMMAR) 帶值離開，單獨 `return` 則不帶值。**省略
+  [`GRAMMAR#ret-type`](../../GRAMMAR)** 表示函式回傳 `nil`。**尾隨
   `if`** 使其條件化——`return MAX if v > MAX` 是 `if v > MAX { return MAX }` 的 sugar（亦可 bare `return if done`），
   與 `break if` / `continue if` / `raise e if` 同一個後置 `if`;條件為 false 時直接落下。開頭的 `if` _帶 block_ 則是回傳一個
   if-expression（`return if c { a } else { b }`）;條件式 return 的 `if` 只取裸條件、不帶 block。
-- **參數。** 參數**以值傳遞**（copy），可帶**預設值** `= expr`。call 端的 **named argument** 是 `name: value`
-  （group 4 的 `arg` 形式）：positional 參數在前，之後任一個可具名，一旦具名其餘也須具名——這正是能跳過有預設值
+- **參數。** 一個 [`GRAMMAR#param`](../../GRAMMAR)——[`GRAMMAR#param-list`](../../GRAMMAR) 的一員——**以值傳遞**
+  （copy），可帶**預設值** `= expr`。call 端的 **named argument** 是 `name: value`（一個
+  [`GRAMMAR#arg-list`](../../GRAMMAR) 裡的 [`GRAMMAR#arg`](../../GRAMMAR)）：positional 參數在前，之後任一個可具名，一旦具名其餘也須具名——這正是能跳過有預設值
   參數的方式。
 - **`mut &`——可變參考。** `mut &x` 傳一個**可變參考**:callee 可改 `x`,且改動**影響 caller 的引數**。兩個控制相遇——
   **caller** 決定自己的變數是否 `mut`,**callee** 用 `mut &` 決定是否寫回——所以可見的變更需要**兩者兼具**,且引數須為
@@ -375,38 +405,50 @@ list-pat      ::= '[' ( list-pat-elem ( ',' list-pat-elem )* )? ']'   # 至多�
 list-pat-elem ::= pattern | '..' identifier?
 ```
 
-- **Block 與 `with`。** 裸 `{ … }` 開一層 **nested scope**——其 binding 與 scope-owned 值在 `}` 釋放。block 同時
+- **Block 與 `with`。** 裸 `{ … }`（[`GRAMMAR#block`](../../GRAMMAR)）開一層 **nested scope**——其 binding 與 scope-owned 值在 `}`
+  釋放。block 同時
   是一種 **expression**（`primary`，group 4）:它的**值 = 最後一個 statement 的值**——expr-statement 給出其 expr;
   其他 statement 或空 block 給出 `nil`。ASI `;` 只**分隔**、不丟棄值,所以 `guard { … }` 與多敘述的 `match` arm
-  （`P => { …; v }`）都能產出。**`with expr as y { … }`** 是那個裸 block 的**純語法** sugar——
+  （`P => { …; v }`）都能產出。**`with expr as y { … }`**（[`GRAMMAR#with-stmt`](../../GRAMMAR)）是那個裸 block 的**純語法** sugar——
   `with acquire() as y { … }` → `{ y := acquire(); … }`。當資源只為其 scope 而用（如持有的 lock），`as y` 可省,
   而**無名形式仍然綁定**:`e; …` 會讓值死在該敘述而不是 `}`。這個形式**不引入自己的 teardown**——釋放一個值的
   是資源清理群組,未變。
-- **`if`。** 條件是 `bool`——沒有 truthiness。**binding head** `if x := expr { … }` 只在 `expr` 存在時執行區塊
-  （one-arm-`match` 的 sugar）。`else if` / `else` 照常串接。帶**必要 `else`** 的 `if` 同時是一個**運算式**
+- **`if`。** 條件是 `bool`——沒有 truthiness。一個 [`GRAMMAR#if-head`](../../GRAMMAR) 是那個條件、或一個
+  **binding head** `if x := expr { … }`，後者只在 `expr` 存在時執行區塊（one-arm-`match` 的 sugar）。statement
+  形式是 [`GRAMMAR#if-stmt`](../../GRAMMAR)，值形式是 [`GRAMMAR#if-expr`](../../GRAMMAR)。`else if` / `else` 照常串接。帶**必要
+  `else`** 的 `if` 同時是一個**運算式**
   （`x := if c { a } else { b }`）——產出被選中分支的 block 值,且每個分支須同型別;statement 位置則以 statement
   形式為準（值被丟棄）。
-- **`for`。** 唯一的迴圈，三種形式：**`for { … }`** 無限（以 `break` / `return` 離開）、**`for cond { … }`** 當
+- **`for`。** [`GRAMMAR#for-stmt`](../../GRAMMAR) 是唯一的迴圈，三種形式：**`for { … }`** 無限（以 `break` / `return` 離開）、**`for cond {
+… }`** 當
   `cond`（`bool`）成立時重複、與 **`for x in it { … }`** 走訪 `Iterable`，`x` 以 copy 綁定（**`for mut x`** 就地
   綁定）。有 `mut` 或 `identifier in` 接在 `for` 後就是 iterate 形式;裸 `for expr` 則是 while 條件。沒有 C 式三段
-  `for`。**`break` / `continue`** 作用於最近的迴圈；**`break if c`** 與 **`continue if c`** 是
+  `for`。**[`GRAMMAR#break`](../../GRAMMAR) / [`GRAMMAR#continue`](../../GRAMMAR)** 作用於最近的迴圈；
+  **`break if c`** 與 **`continue if c`** 是
   `if c { break }` / `if c { continue }`
   的 sugar。**沒有 loop label**——要退出外層迴圈，抽成函式並 `return`（或用 flag 搭配 `break if`）。
-- **`match`。** 一個 expression：依序比對各 arm，取第一個吻合並產出，且每個 arm 產出**同一型別**——所以 `match`
+- **`match`。** [`GRAMMAR#match-expr`](../../GRAMMAR) 是一個 expression：依序比對各 arm，取第一個吻合並產出，且每個 arm 產出**同一型別**——所以 `match`
   可用於 `:=`、`return` 或引數。結尾的 **`_`** 涵蓋其餘。arm 以 **`=>`** 分隔 pattern 與 body——刻意與函式回傳型別的
   **`->`** 區別，兩者不會混淆。
-- **Pattern** 以 copy 解構：帶 payload 綁定的 **variant**（`Left(v)`、巢狀 `Left(Some(v))`）、**struct**
-  （`Div{q, r}`）、**tuple**（`(a, b)`）、**literal**（可帶負號 `-1`,以 `equal` 比對）、單純的**綁定**名字、**or-pattern**
-  （`A | B`，兩側綁同名）、或萬用字元 **`_`**。tuple 或 struct pattern 也能在 `:=` 綁定處解構——
+- **Pattern**（[`GRAMMAR#pattern`](../../GRAMMAR)——逗號分隔的
+  [`GRAMMAR#pattern-list`](../../GRAMMAR) 正是 variant payload 與 tuple 收的東西——由
+  [`GRAMMAR#sub-pattern`](../../GRAMMAR) 以 `|` 串起，每個作用在 [`GRAMMAR#pattern-core`](../../GRAMMAR) 上）
+  以 copy 解構：帶 payload 綁定的 **variant**（[`GRAMMAR#variant-pat`](../../GRAMMAR)，`Left(v)`、巢狀
+  `Left(Some(v))`）、**struct**（[`GRAMMAR#struct-pat`](../../GRAMMAR)，其成員是
+  [`GRAMMAR#field-pat`](../../GRAMMAR)，`Div{q, r}`）、**tuple**（[`GRAMMAR#tuple-pat`](../../GRAMMAR)，
+  `(a, b)`）、**literal**（[`GRAMMAR#literal-pat`](../../GRAMMAR)，可帶負號 `-1`,以 `equal` 比對）、單純的
+  **綁定**名字（[`GRAMMAR#binding-pat`](../../GRAMMAR)）、**or-pattern**（`A | B`，兩側綁同名）、或萬用字元
+  **`_`**。tuple 或 struct pattern 也能在 `:=` 綁定處解構——
   `(q, r) := divmod(x, y)`。
 - **Guard。** arm 可在 pattern 後加 `if expr`（`Some(v) if v > 0 => …`）——一個能看見 pattern 綁定、且必須成立的
   條件;`A | B if c` 時涵蓋整個 or-pattern。帶 guard 的 arm **不計入 exhaustiveness**（compiler 無法證明 guard 成
   立），所以該 case 仍需一個無 guard 的 arm（或 `_`）。
-- **Range arm。** **僅 match 專用**的 `200..300 =>` / `400..=499 =>` / `500.. =>` 是 guard 的**語法糖**——
+- **Range arm。** **僅 match 專用**的 [`GRAMMAR#range-arm`](../../GRAMMAR)——`200..300 =>` / `400..=499 =>` /
+  `500.. =>`——是 guard 的**語法糖**——
   `_ if _ in <range>`——所以以 **containment**（`..` 運算子）比對,非 `equal`,並繼承 guard 的 exhaustiveness（不算
   涵蓋）。它**不綁定**;要用該值就寫顯式 `x if x in <range>`。bound 為編譯期常數;range arm 由其 `..` 辨識。
 - **Rest 與部分。** **struct pattern 必須列全 field**,否則以 `..` 結尾——`Div{q, r}`（全）、`Div{q, ..}`（略過
-  其餘）、`Div{..}`（任意）。預設列全表示加一個 field 會**弄壞**舊 pattern,逼你檢視。**list pattern** 比對 list——
+  其餘）、`Div{..}`（任意）。預設列全表示加一個 field 會**弄壞**舊 pattern,逼你檢視。**list pattern**（[`GRAMMAR#list-pat`](../../GRAMMAR)）比對 list——
   `[a, b]`、`[head, ..tail]`、`[..init, last]`、`[]`——**至多一個 `..`**;`..name` 把略過的一段綁成 list,裸 `..`
   丟棄（struct 的 `..` 只忽略、不綁）。pattern 位置的 `..` 是 **rest**,與值層的 range `..` 不同。
 - **variant 或 binding** 由**語法**決定,永不由 scope 決定:variant **一律由它的 enum 指名**——`Color.Red`、
@@ -458,12 +500,18 @@ deco-item   ::= identifier ( '(' deco-arg ( ',' deco-arg )* ')' )?
 deco-arg    ::= type-name | const-expr        # derive(Encode, Decode)、align(16)、align(SIZE*2)
 ```
 
-- **Type 表達式。** 一個**名字**加選用**型別引數**（`int`、`User`、`list[int]`、`Either[A, B]`）；一個 **tuple
-  type** `(A, B)`；一個**陣列** `[T; N]`（`;` 的另一用途）；一個**通道** `chan[T]`，帶 Go 式方向——`<-chan[T]`
+- **Type 表達式。** 一個 [`GRAMMAR#type`](../../GRAMMAR) 是一個 [`GRAMMAR#base-type`](../../GRAMMAR) 加上
+  選用的結尾 `?`。base type 是一個**名字**加選用**型別引數**（[`GRAMMAR#type-args`](../../GRAMMAR) 由
+  [`GRAMMAR#generic-arg`](../../GRAMMAR) 組成）——`int`、`User`、`list[int]`、`Either[A, B]`；一個 **tuple
+  type**（[`GRAMMAR#tuple-type`](../../GRAMMAR)）`(A, B)`；一個**陣列**
+  （[`GRAMMAR#array-type`](../../GRAMMAR)）`[T; N]`（`;` 的另一用途）；一個**通道** `chan[T]`，帶 Go 式方向——`<-chan[T]`
   為 receive-only（receiver）、`chan[T]<-` 為 send-only（sender）；或一個**函式型別** `fn(P…) -> R`
   （group 5）。結尾的 **`?`** 使任何型別成為 **optional**——`str?`。型別名只是 identifier,所以內建**數值**型別集合
   （`int`、`uint`、`float`,以及任何固定寬度 `i32`/`u8`/`f64`/…）是 **stdlib** 的決定,非文法。
-- **`struct` / `enum`。** 具名、定型 field 的**乘積**，或每個 variant 帶選用 payload 的**和**——`Circle(float)`、
+- **`struct` / `enum`。** [`GRAMMAR#struct-decl`](../../GRAMMAR) 是具名、定型 field 的**乘積**（一個
+  [`GRAMMAR#field-list`](../../GRAMMAR) 由 [`GRAMMAR#field`](../../GRAMMAR) 組成），
+  [`GRAMMAR#enum-decl`](../../GRAMMAR) 則是每個 [`GRAMMAR#variant`](../../GRAMMAR) 帶選用 payload 的**和**
+  （一個 [`GRAMMAR#variant-list`](../../GRAMMAR)）——`Circle(float)`、
   `Rect(float, float)`。field 與 variant 的分隔**完全比照 statement**（換行，或單行用 `;`）——兩者之間**沒有
   `,`**；payload `(A, B)` 內的 `,` 才是一般清單。兩者皆可泛型——`enum Either[X, Y] { … }`。
 - **Enum 判別值。** 當**每個** variant 皆無 payload 時,variant 可帶顯式整數**判別值**——`enum Status { Ok = 200;
@@ -482,14 +530,17 @@ tags: str? }` → `Config(host: "x")` 得 `port = 8080`、`tags = nil`,而省略
   function 不能同名（Zerg 無 overloading）。field-wise `T(...)` 是**公開且基元**;自訂 constructor
   是具名關聯函式（inherent `impl`）,內部經 `T(...)` 建。**`#[sealed]`** *原意*是把 `T(...)` 降為模組私有(外部須改走
   公開的自訂 constructor、模組內部仍以 `T(...)` 建),但這個階段是**被識別並拒絕、尚未實作**(見 [Decorators](../core/decorators.zh-TW.md))。
-- **`type X = Y`。** 一個**強 typedef**——全新、獨立的型別,非透明別名,在 runtime 降低成 `Y`。`generics?` 槽會被
+- **`type X = Y`。** [`GRAMMAR#type-decl`](../../GRAMMAR) 是一個**強 typedef**——全新、獨立的型別,非透明別名,在 runtime 降低成
+  `Y`。`generics?` 槽會被
   **解析**,但**泛型** alias `type X[T] = …` 這個階段**尚未實作**(在語意分析階段被拒絕)。
 - **編譯期常數（隱含）。** 編譯期摺疊是**隱含**的、與 `const` 關鍵字無關（`const` 只標記 shadow-proof 綁定，見
   group 4）。任何 RHS 是 `const-expr` 的綁定（`:=` 或 `const`）都會被**編譯期摺疊**，並可用於任何需要編譯期值之處：
   陣列長度 `[T; N]`、enum discriminant、decorator 引數。若某名字用在這類位置但其 RHS 不可摺疊 → 使用點
   編譯錯誤。`const-expr` 是編譯器**無求值引擎**下能摺疊的 `expr`——literal、其他可摺疊名字、discriminant 與運算子；
   **無 function call**（故 `sizeof`/`len` 不是 const-expr）。
-- **泛型與 bound。** 參數列 `[T, …]` 可對各參數加 spec 約束——`[T: Ord]`、`+` 合取 `[K: Hash + Eq, V]`。同一套
+- **泛型與 bound。** 一個 [`GRAMMAR#generics`](../../GRAMMAR) 參數列 `[T, …]` 可對各
+  [`GRAMMAR#type-param`](../../GRAMMAR) 加 spec 約束（[`GRAMMAR#bound`](../../GRAMMAR)）——`[T: Ord]`、`+` 合取 `[K: Hash + Eq,
+V]`。同一套
   `bound` 也是 spec 的 **super-spec**(`spec Ord: Eq`——`impl Ord` 便連帶需要 `impl Eq`,且 `Ord` body 可對 `This`
   呼叫 `Eq`)。`impl` 自身的型別參數放在 **`impl` 之後**——`impl[T] Summable for list[T]`——故 `T` 可用於目標型別。
   泛型 **monomorphize**:每個相異型別引數各生一份特化的 C 函式,所以 bound 是承重的(它指名要特化的 impl,泛型碼裡
@@ -506,21 +557,24 @@ tags: str? }` → `Config(host: "x")` 得 `port = 8080`、`tags = nil`,而省略
   得知 `T` 有哪些方法,無法 monomorphize。要接受多種型別就**參數化一個 spec**、一型別一 impl:`spec Indexable[K, V]`
   搭配 `impl Indexable[int, T]`（元素）與 `impl Indexable[Range, list[T]]`（slice）——`xs[k]` 便依 `k` 的型別靜態
   分派——或用 `enum` 做 runtime 選擇。
-- **`spec`。** 行為介面：成員為**必要**（只有簽名、無 body）或**提供**（完整方法）。就這樣而已——spec 承載
+- **`spec`。** [`GRAMMAR#spec-decl`](../../GRAMMAR) 是行為介面，其
+  [`GRAMMAR#spec-member`](../../GRAMMAR) 為**必要**（只有簽名、無 body）或**提供**（完整方法）。就這樣而已——spec 承載
   **行為,別的都不承載**,而那正是下一條的主題。方法**不宣告
   receiver**——`this` 在方法內為隱式,透過被呼叫的 instance 取得；若 `fn` 用到 `this` 卻無 instance 綁定則為編譯
   錯誤。self 型別是 **`This`**。`impl … for …` 由手寫為某型別提供 spec 的方法。
 - **Inherent `impl`。** 無 `for` 的 `impl User { … }` 加入**不綁任何 spec** 的方法——named constructor
   `User.from_json(…)`（關聯函式,不用 `this`,以 `Type.f(…)` 呼叫）或私有方法 `u.recompute()`（用 `this`,以
-  `x.f(…)` 呼叫）。一個型別上所有方法/關聯函式共用一個命名空間,不論 inherent 或來自 spec,**重名即錯**。
+  `x.f(…)` 呼叫）。一個 impl 也持有一個 [`GRAMMAR#val-bind`](../../GRAMMAR)——`SIZE := 4096`，一個每個型別一份
+  的編譯期值。一個型別上所有方法/關聯函式共用一個命名空間,不論 inherent 或來自 spec,**重名即錯**。
 - **沒有 associated type,也沒有 associated value。** spec 既不宣告由 `impl` 填入的型別（`type Item`,投影成
   `I.Item`）,也不宣告由它供給的編譯期值（`BITS: int`,綁成 `BITS := 32`）;兩者都被具名拒絕——_E2011 an
   associated type is not a `spec` member — a spec carries BEHAVIOUR and nothing else_。單一輸出的協定改以
   參數化 spec 表達——`Iterable[T]`,每個型別至多一個 impl,所以 `for x in it` 仍然只有一種元素型別——而每個 impl
   一份的常數是 associated fn。型別裡的 `.` 鏈留給**模組限定**（`text.Splitter`,group 10）,那是它原本同時承載的
   另一件事。
-- **Decorator 與 `#[derive(…)]`。** **decorator** `#[…]` 是 compiler 指令；其 `decorator?` 前綴可領**任何
-  statement**,宣告也在內（`statement` 與 `decorated-decl`，group 1）並綁定之。哪個 decorator 能用在哪個位置是**語意**
+- **Decorator 與 `#[derive(…)]`。** **decorator** `#[…]` 是 compiler 指令，其引數是
+  [`GRAMMAR#deco-arg`](../../GRAMMAR)；其前綴可領**任何 statement**,宣告也在內
+  （[`GRAMMAR#decorated-decl`](../../GRAMMAR)，group 1）並綁定之。哪個 decorator 能用在哪個位置是**語意**
   規則——`struct`/`enum` 上的 `#[derive(Encode, Decode)]` 請 compiler 讀該型別的**結構**、**生成**所列 spec 的
   canonical impl（見 [Derive & Default Behavior](../core/derive.zh-TW.md)）；一般 statement 上的 `#[allow(L103)]`
   壓下它涵蓋範圍內的 lint finding,而 `#[derive]` 放在那裡是編譯錯誤。**一個項目一個 decorator**:要掛好幾個就寫
@@ -536,8 +590,11 @@ tags: str? }` → `Config(host: "x")` 得 `port = 8080`、`tags = nil`,而省略
 ## Group 8 — Null-safety & Errors
 
 失敗分**兩層**。**可回復**失敗是 sum type 的普通值——`Either[X, Y]`、`Result[T]` = `Either[T, Err]`、以及
-`T?` = `Either[T, nil]`（placeholder 為 `nil`）。**bug** 是**abort**,會 unwind stack（跑 `defer`）。六個運算子在兩層
-間搭橋,另有一個敘述跨層陳述一項主張:
+`T?` = `Either[T, nil]`（placeholder 為 `nil`）。**bug** 是**abort**,會 unwind stack（跑 `defer`）——作為 expression 是
+[`GRAMMAR#raise`](../../GRAMMAR)，作為 statement 是 [`GRAMMAR#raise-stmt`](../../GRAMMAR)。六個運算子在兩層間
+搭橋,另有一個敘述跨層陳述一項主張。一個 [`GRAMMAR#diverge`](../../GRAMMAR) 是能站在 `??` 右邊代替值的東西：
+一個 `break`、一個 `continue`、一個 `return` 或一個 `raise`——不產出值的那種臂。
+[`GRAMMAR#guard-expr`](../../GRAMMAR) 則是把 abort 降級成 `Result` 的那個 block:
 
 ```text
 coalesce-expr ::= or-expr ( '??' coalesce-rhs )?
@@ -583,19 +640,24 @@ recv-arm    ::= ( ( identifier | '_' ) ':=' )? '<-' expr '=>' stmt
 send-arm    ::= expr '<-' expr '=>' stmt
 ```
 
-- **`spawn f(args)`** 啟動一個 **fire-and-forget** coroutine（Go 的 `go`）——無 handle、無 join;只能透過 channel
+- **`spawn f(args)`**（[`GRAMMAR#spawn-stmt`](../../GRAMMAR)）啟動一個 **fire-and-forget** coroutine
+  （Go 的 `go`）——無 handle、無 join;只能透過 channel
   觀察。capture 限 immutable 值與 channel。
-- **`chan[T](cap?)`** 建立 channel——容量 `0`（預設）是無緩衝 **rendezvous**。裸 `chan[T]` 為雙向,可透過型別標註
+- **`chan[T](cap?)`**（[`GRAMMAR#chan-new`](../../GRAMMAR)）建立 channel——容量 `0`（預設）是無緩衝
+  **rendezvous**。裸 `chan[T]` 為雙向,可透過型別標註
   窄化成 `<-chan[T]` / `chan[T]<-`。
-- **`ch <- v`** 送出（無值；對已關閉 channel 會 abort）。**`<-ch`** 接收，產出 **`T?`**——串流結束後就是 `nil`，
+- **`ch <- v`**（[`GRAMMAR#send-stmt`](../../GRAMMAR)）送出（無值；對已關閉 channel 會 abort）。**`<-ch`** 接收，產出 **`T?`**——串流結束後就是
+  `nil`，
   而且之後每次都是。**崩潰**關閉是失敗而不是缺席，會**raise**，帶著生產者自己的 `Err`。所以 `<-ch ?? d`、`<-ch!`、
   `<-ch?` 與 `if v := <-ch { … }` 就是 receive 的運算子，而 **`chan[T?]` 被拒絕**——否則 `nil` 會同時代表值與結束。
-- **`select { … }`** 是唯一的多路等待：它**挑**一條 ready 的 arm（公平 tie）並執行；receive arm 綁的是一個普通的
-  **`T`**，因為乾淨結束的 channel 會退出等待而不是觸發。**`for select { … }`** 是同一種等待的迴圈形式——一圈一條
+- **`select { … }`**（[`GRAMMAR#select-stmt`](../../GRAMMAR)）是唯一的多路等待：它**挑**一條 ready 的 arm
+  （公平 tie）並執行；receive arm（[`GRAMMAR#recv-arm`](../../GRAMMAR)）綁的是一個普通的 **`T`**，因為乾淨結束
+  的 channel 會退出等待而不是觸發，而 send arm（[`GRAMMAR#send-arm`](../../GRAMMAR)）在送得出去時觸發。
+  **`for select { … }`**（[`GRAMMAR#for-select`](../../GRAMMAR)）是同一種等待的迴圈形式——一圈一條
   ready 的 arm——並在所盯的 receive channel 全部結束時結束。**沒有終局 arm**。**`_`** 在此刻沒有 arm ready 時觸發
   （非阻塞），而且不是耗盡狀態的答案；它是 **contextual**、只在 arm 開頭特殊，也是 arm 唯一能開頭的裸識別字。
   **沒有 `yield`**。
-- **`close(ch)`** 用來**提早**結束一條 stream。channel 平常會在最後一個 sender 離開時**自己**關閉——那是日常形式，
+- **`close(ch)`**（[`GRAMMAR#close-stmt`](../../GRAMMAR)）用來**提早**結束一條 stream。channel 平常會在最後一個 sender 離開時**自己**關閉——那是日常形式，
   也是崩潰中的 producer 唯一能走的那條。`close` 是**敘述、不是呼叫**：它是關鍵字，不指涉任何函式、也不產生值，
   所以不能被傳遞、綁定或 spawn；`defer` 把它列為唯一一個非運算式的形式（**`defer close(ch)`**）。它標記的是
   **channel**、不是某個持有者——每個 handle 仍可讀、buffered 的值仍會排空、關兩次什麼都不改，而 **receive-only**
@@ -614,7 +676,8 @@ init-decl   ::= 'init' '(' ')' block
 
 - **`pub`**（已是每個宣告的前綴）是唯一的可見性標記：普通宣告是 **module-private**,`pub` 對**同 package 其餘**
   公開,而 package 的公開 API 是其**根 module** 的 `pub` 表面。
-- **`import "path"`** 綁定一個 **namespace**——路徑是**字串**,其**末段**命名該綁定（`import "util/text"` 綁
+- **`import "path"`**（[`GRAMMAR#import-stmt`](../../GRAMMAR)，一或多個
+  [`GRAMMAR#import-spec`](../../GRAMMAR)）綁定一個 **namespace**——路徑是**字串**,其**末段**命名該綁定（`import "util/text"` 綁
   `text`）,以 `.` 存取:`text.split(…)`。**`as`** 改名（`import "a/text" as at`）,兩個末段同名的 import 便靠它
   並存;與本地名字衝突即錯,用 `as` 解。spec 前置 **`pub`** 會把該 namespace **re-export** 到本 module 表面——
   `import pub "util/text"`——根 module 用來組出 package 公開 API 的唯一機制。**多個 import 成群**寫在括號清單裡,
@@ -630,7 +693,7 @@ init-decl   ::= 'init' '(' ')' block
   不需分隔符（每個 spec 是 `pub`? 加一個字串再加可選的 `as name`）,`( … )` 內的換行不具意義。**沒有 selective
   （`from … import`）或 glob import**——要 unqualified 使用某成員,就本地綁定（`split := text.split`）,因為函式是值。
 
-- **`init()`** 是 module 的**惰性**初始化,首次使用時執行。一個 module 可宣告**多個** `init()`;它們依**宣告
+- **`init()`**（[`GRAMMAR#init-decl`](../../GRAMMAR)）是 module 的**惰性**初始化,首次使用時執行。一個 module 可宣告**多個** `init()`;它們依**宣告
   （FIFO）順序**執行,每個**恰好一次**。**safe 程式碼無可變全域**:頂層 binding 不可 `mut`——頂層 `:=` 是**不可變
   的模組常數**,於 init 時求值。唯一例外是 module 層級 **`unsafe { … }`** 分組內的 `mut` 綁定(group 12);要安全共享可變全域狀態,用不可變 `:=`
   持有 stdlib **`Atomic[T]`**。
@@ -646,11 +709,12 @@ defer-stmt ::= 'defer' ( expr | close-stmt )   # 一個運算式，或唯一那�
 del-stmt   ::= 'del' identifier
 ```
 
-- **`defer expr`** 在**所在 block 退出**時執行 `expr`,**每一條離開路徑**都跑——正常、`return`、或 abort unwind——
+- **`defer expr`**（[`GRAMMAR#defer-stmt`](../../GRAMMAR)）在**所在 block 退出**時執行 `expr`,**每一條離開路徑**都跑——正常、`return`、或 abort
+  unwind——
   以後登記先跑的順序。它是「綁在 scope 上副作用」的 procedural 工具（放鎖、flush buffer、關 scope-local 資源）。
   它另外也接受 **`close(ch)`**（group 9）；之所以要特別列出，是因為 `close` 是關鍵字而非被呼叫者，單靠
   `defer expr` 永遠碰不到它。
-- **`del name`** **當下**撤銷該名字對其儲存的存取;唯有被撤銷的是**擁有權**存取且無其他 holder 時才釋放儲存。對
+- **`del name`**（[`GRAMMAR#del-stmt`](../../GRAMMAR)）**當下**撤銷該名字對其儲存的存取;唯有被撤銷的是**擁有權**存取且無其他 holder 時才釋放儲存。對
   `Ref[T]` / `chan` 則是放掉一個 refcount **並且**撤銷名字，所以名字之後不能再用——`del ch` 不是用來結束一條
   stream 的（那是 `close(ch)`，或該 binding 的 scope 離開）。
 - 軸上第三點——**`Ref[T]` drop** 於最後 holder 的 scope 退出時——不是 statement,由 scope ownership 掉出來。分界是
@@ -672,8 +736,10 @@ asm-operand ::= 'in' '(' str-lit ')' expr | 'out' '(' str-lit ')' lvalue
               | 'inout' '(' str-lit ')' lvalue | 'clobber' '(' str-lit ( ',' str-lit )* ')'
 ```
 
-- **`unsafe { … }`。** 依**位置**分兩種形態。在**函式**體內是 **block-expression**（yields 區塊值），其內 raw 操作
-  合法；其外皆為編譯錯誤。在 **module** 層級，同一個 `unsafe { … }` 是**宣告分組**：其內每個項目都是 unsafe——`fn`
+- **`unsafe { … }`。** 依**位置**分兩種形態。在**函式**體內是 [`GRAMMAR#unsafe-expr`](../../GRAMMAR)，一個
+  **block-expression**（yields 區塊值），其內 raw 操作
+  合法；其外皆為編譯錯誤。在 **module** 層級，同一個 `unsafe { … }` 是 [`GRAMMAR#unsafe-group`](../../GRAMMAR)，一個**宣告分組**：其內
+  每個 [`GRAMMAR#unsafe-item`](../../GRAMMAR) 都是 unsafe——`fn`
   是 unsafe fn，而 `mut` 綁定是 module-private 的可變**全域**（持久；此分組把名字歸屬到 module，並非新的 value scope）。
   `unsafe` 是**信任邊界**——編譯器對其內容不作記憶體安全保證，由作者背書。**`unsafe fn`** 是單一函式形式；unsafe fn
   只能從另一個 `unsafe` context **呼叫**。
@@ -687,13 +753,14 @@ asm-operand ::= 'in' '(' str-lit ')' expr | 'out' '(' str-lit ')' lvalue
   be imported_,而不是讓一個沒人宣告的型別走到 emitter（程式裡自己寫的泛型 `struct` 才是通用的 `E9004`）。
   `Atomic[int]`、**memory-ordering 引數**與泛型 **`Atomic[T]`** 都搆不到,而預期中的 `Atomic[int]`（循序一致）
   所倚賴的 `Ref[T]` 是 `E9058`。
-- **Raw pointer（`ptr` / `ptr[T]`）。** `ptr` 是平台字寬的原始**位址**（C 的 `void*` / `uintptr`）；`ptr[T]` 把該
+- **Raw pointer（[`GRAMMAR#ptr-type`](../../GRAMMAR)，`ptr` / `ptr[T]`）。** `ptr` 是平台字寬的原始**位址**（C 的 `void*` /
+  `uintptr`）；`ptr[T]` 把該
   位址定型到 pointee `T`（同寬——`[T]` 只為 load/store/offset 提供型別）。因 `T` 為任意型別，**函式指標**免費得到
   ——`ptr[fn(int) -> nil]`（interrupt vector）——`ptr[ptr[T]]` 與裸 `ptr` 亦然。`ptr` **本就可空**（位址 `0`）且與
   `T?` **正交**——**無 `ptr[T]?`**；以 `p == 0` 檢查。**型別**可出現在簽名/欄位（描述指標形狀資料），但每個**操作**
   ——`addr(x)`、`p.load()`、`p.store(v)`、`p.offset(n)`、cast、volatile/atomic——都是 **unsafe stdlib intrinsic**
   （非文法），只在 `unsafe` 內合法。**無 `*`/`&` 運算子**；中括號型別讓指標與 `list[T]` / `Ref[T]` / `chan[T]` 一致。
-- **Inline assembly（`asm`）。** 一個 template 字串（多行可用三引號）加上把 Zerg 值綁到暫存器/constraint 的 operand。
+- **Inline assembly（[`GRAMMAR#asm-expr`](../../GRAMMAR)）。** 一個 template 字串（多行可用三引號）加上把 Zerg 值綁到暫存器/constraint 的 operand。
   `out` / `inout` / `clobber` 為 **contextual**（只在 asm operand list 內特殊；`in` 本就是 keyword）。constraint 字串
   （`"rax"`、`"r"`、`"m"` …）在此不透明——其意義屬目標 backend。`asm` 僅限 `unsafe`；**syscall** 由此發出。
 

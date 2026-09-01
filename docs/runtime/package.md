@@ -192,8 +192,9 @@ A **module is a directory**; the files inside it are physical slices that share 
 number of files is layout, not meaning. A module is the default privacy unit: a plain declaration is
 visible across the module's files but not outside it (see Visibility).
 
-An import path is a **prefix** and a **package path** (`GRAMMAR#import-path`). The package path is a
-directory path made of package names; the **prefix decides which root** it is expanded under, and
+An import path is a **prefix** and a **package path** (`GRAMMAR#import-path`,
+[`GRAMMAR#package-path`](../../GRAMMAR)). The package path is a directory path made of package
+names; the **prefix decides which root** it is expanded under, and
 **nothing on disk changes which root**:
 
 | Written                   | Root                     | On disk                                        |
@@ -204,9 +205,9 @@ directory path made of package names; the **prefix decides which root** it is ex
 | `import "github.com/a/b"` | a remote package         | **[not yet]** — _E9105_, refused by name       |
 
 The three roots expand a package path by the same rule, so there is one layout rule rather than three.
-The classifier is a **consequence of the name grammar** and not a rule beside it: a `package-name` is
-`[a-z][a-z0-9_]*` and cannot hold a `.`, so a first segment that holds one cannot be a package name and
-can only be a host.
+The classifier is a **consequence of the name grammar** and not a rule beside it: a
+[`GRAMMAR#package-name`](../../GRAMMAR) is `[a-z][a-z0-9_]*` and cannot hold a `.`, so a first segment
+that holds one cannot be a package name and can only be a host.
 
 **Reading an import tells you which of the three it names.** Adding, removing or renaming a file can
 change only whether an import RESOLVES — never what kind of thing it names. That is what stops a file

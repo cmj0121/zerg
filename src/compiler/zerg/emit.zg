@@ -5857,6 +5857,20 @@ fn c_block_expr(mut &em: Emitter, body: list[ast.Stmt], sb: Subst) -> str {
 	return out + "})"
 }
 
+# c_scope lowers a block STATEMENT. `unsafe` is the same block with the trust boundary open for
+# the statements inside it, and the flag is saved and restored for c_unsafe_expr's reason: a
+# scope is lowered in the middle of an enclosing function, so leaving it set would make the rest
+# of that function unsafe by accident.
+fn c_scope(mut &em: Emitter, body: list[ast.Stmt], is_unsafe: bool, ind: str) -> str {
+	return c_block(em, body, ind) if not is_unsafe
+
+	saved := em.in_unsafe_fn
+	em.in_unsafe_fn = true
+	out := c_block(em, body, ind)
+	em.in_unsafe_fn = saved
+	return out
+}
+
 # c_unsafe_expr lowers `unsafe { … }` in expression position (GRAMMAR#unsafe-expr). It IS the
 # block expression, with the trust boundary open for the statements inside it — which is the
 # whole of what the keyword does here: `unsafe` marks a region the author vouches for, and what
@@ -6132,7 +6146,7 @@ fn c_guard_no_jump(mut &em: Emitter, body: list[ast.Stmt], in_loop: bool) {
 			# E9043 that names the form never fired, and what the reader got instead was
 			# _E3032 this function's answer is int, and this gives Result[int]_ — a true
 			# sentence about a consequence, pointing nowhere near the `return` that caused it
-			Stmt.SScope(body_b) => c_guard_no_jump(em, body_b, in_loop)
+			Stmt.SScope(body_b, _) => c_guard_no_jump(em, body_b, in_loop)
 			_ => c_skip()
 		}
 	}
@@ -10966,7 +10980,7 @@ fn c_stmt(mut &em: Emitter, s: ast.Stmt, ind: str) -> str {
 		Stmt.SForIn(var, iter, body) => c_forin(em, var, iter, body, ind)
 		Stmt.SRaise(x, hc, c) => c_raise(em, x, hc, c, ind)
 		Stmt.SAssert(body) => c_assert(em, body, ind)
-		Stmt.SScope(body) => c_block(em, body, ind)
+		Stmt.SScope(body, is_unsafe) => c_scope(em, body, is_unsafe, ind)
 		Stmt.SDefer(x) => c_defer(em, x, ind)
 		Stmt.SSpawn(x) => c_spawn(em, x, ind)
 		Stmt.SSend(ch, v) => c_send(em, ch, v, ind)
@@ -16010,7 +16024,7 @@ fn c_check_loop_jump(mut &em: Emitter, body: list[ast.Stmt], in_loop: bool) {
 			# refusal a reader got was cc's: _'break' statement not in loop or switch
 			# statement_, against generated code, about a rule this compiler has and did not
 			# apply. `break` on its own at the same place has always been E4001.
-			Stmt.SScope(body_b) => c_check_loop_jump(em, body_b, in_loop)
+			Stmt.SScope(body_b, _) => c_check_loop_jump(em, body_b, in_loop)
 			_ => c_skip()
 		}
 	}
@@ -16187,7 +16201,7 @@ fn c_stmt_diverges(s: ast.Stmt) -> bool {
 		# a bare block diverges when its body does, and nothing else about it matters here.
 		# Without this arm `fn f() -> int { { return 3 } }` was _E4023 its body falls off the
 		# end_ — a function whose only exit is a `return`, told it has none.
-		Stmt.SScope(b) => c_body_diverges(b)
+		Stmt.SScope(b, _) => c_body_diverges(b)
 		_ => false
 	}
 }

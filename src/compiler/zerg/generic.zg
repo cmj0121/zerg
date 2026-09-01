@@ -293,7 +293,7 @@ fn subst_stmt(su: TySubst, s: ast.Stmt) -> ast.Stmt {
 		# inside a template kept its `T` and the specialization was refused with
 		# _E4056 no type named `T`_ — a legal program, turned away with a reason that is not
 		# true, which sends the reader looking for a declaration they wrote in the signature.
-		Stmt.SScope(b) => ast.Stmt.SScope(subst_block(su, b))
+		Stmt.SScope(b, u) => ast.Stmt.SScope(subst_block(su, b), u)
 
 		# AND THE CATCH-ALL IS GONE. Twice now a form that carries something has been left
 		# unsubstituted by `_ => s` — the `assert` above and the block above that — and each

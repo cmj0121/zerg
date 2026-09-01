@@ -503,7 +503,7 @@ fn writes_this_in(s: ast.Stmt, refs: list[str]) -> bool {
 
 		# the two blocks this had not got: a bare `{ … }`, and an `assert`, whose statements
 		# are the author's own condition. A write to `this` inside either is a write.
-		Stmt.SScope(b) => writes_this(b, refs)
+		Stmt.SScope(b, _) => writes_this(b, refs)
 		Stmt.SAssert(b) => writes_this(b, refs)
 		_ => false
 	}
@@ -588,7 +588,7 @@ fn lint_opt_body(body: list[ast.Stmt], at: LWhere, ret_opt: bool, mut &out: list
 			Stmt.SForSelect(arms) => lint_opt_arms(arms, w, ret_opt, out)
 
 			# a bare `{ … }` is a block this walk owes a descent, like every other one here
-			Stmt.SScope(b) => lint_opt_body(b, w, ret_opt, out)
+			Stmt.SScope(b, _) => lint_opt_body(b, w, ret_opt, out)
 			_ => lint_skip()
 		}
 	}
@@ -724,7 +724,7 @@ fn lint_captures_body(body: list[ast.Stmt], at: LWhere, refs: list[str], mut &mu
 			# and a bare `{ … }`, which is where a `spawn` or a `defer` can just as well be
 			# written — the capture rules are about statements, not about which brackets
 			# happen to be around them
-			Stmt.SScope(b) => lint_captures_body(b, w, refs, muts, out)
+			Stmt.SScope(b, _) => lint_captures_body(b, w, refs, muts, out)
 			_ => lint_skip()
 		}
 		i = i + 1
@@ -1054,7 +1054,7 @@ fn collect_binds_at(body: list[ast.Stmt], at: LWhere, mut &names: list[str], mut
 
 			# a binding made in a bare block is a binding, the same way one made in a select
 			# arm is — which is the note the `_arms` helper below already carries
-			Stmt.SScope(body_b) => collect_binds_at(body_b, w, names, ats)
+			Stmt.SScope(body_b, _) => collect_binds_at(body_b, w, names, ats)
 			_ => skip()
 		}
 	}
@@ -1206,7 +1206,7 @@ pub fn walk_body(body: list[ast.Stmt], mut &ids: list[str], mut &calls: list[str
 			# from it both fired on correct code: `L102 private function never called` about
 			# a function called on the line above, and `L101` about an import the block is
 			# the only user of.
-			Stmt.SScope(b) => walk_body(b, ids, calls, ns)
+			Stmt.SScope(b, _) => walk_body(b, ids, calls, ns)
 
 			# AND NO CATCH-ALL. This walk answers "is this name used anywhere", so a
 			# statement it does not descend into is a name it will call dead — the `assert`

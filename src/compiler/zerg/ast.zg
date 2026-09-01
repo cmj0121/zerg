@@ -414,10 +414,18 @@ pub enum Stmt {
 	SContinue
 	SNop
 
-	# SScope is a bare `{ … }` block used as a STATEMENT (GRAMMAR#compound-stmt). It opens a
-	# scope and nothing else: the bindings made in it end at its `}`, which is the whole
-	# reason to write one — and the whole of what `with` expands to.
-	SScope(list[Stmt])
+	# SScope is a `{ … }` block used as a STATEMENT (GRAMMAR#compound-stmt). It opens a scope
+	# and nothing else: the bindings made in it end at its `}`, which is the whole reason to
+	# write one — and the whole of what `with` expands to.
+	#
+	# THE BOOL IS `unsafe`. GRAMMAR#unsafe-expr is that same block with a marker, and in
+	# statement position that is all it is — so it is this node with the flag set, not an
+	# expression whose value is discarded. It used to be the latter, and two things followed
+	# from it: a `return` inside one was a control transfer out of a GNU statement expression,
+	# which the function's own answer rule then read as `nil`; and `stmt_kids` answers "holds
+	# nothing" for an expression statement, so every walk that descends into blocks stepped
+	# straight over everything written inside an `unsafe { … }`.
+	SScope(list[Stmt], bool)
 
 	# SDefer is `defer f(a)`. GRAMMAR runs it at the enclosing BLOCK's exit, on every path
 	# out, last-scheduled-first.
@@ -1206,6 +1214,14 @@ fn spec_member_kind(m: FnDecl) -> str {
 	return " (required)"
 }
 
+# scope_kind says which of the two a block statement is, because the `--emit ast` view exists to
+# answer "did the parser see what I wrote" and `unsafe` is written.
+fn scope_kind(is_unsafe: bool) -> str {
+	return "unsafe-scope" if is_unsafe
+
+	return "scope"
+}
+
 fn fn_kind(f: FnDecl) -> str {
 	return "pub fn" if f.is_pub
 	return "fn"
@@ -1254,7 +1270,7 @@ fn dump_stmt(s: Stmt, ind: str) -> str {
 		Stmt.SExpr(x) => f"{ind}expr {expr_kind(x)}\n"
 		Stmt.SIf(cond, then_b, has_else, else_b) => dump_if(cond, then_b, else_b, ind)
 		Stmt.SIfLet(name, value, then_b, has_else, else_b) => ind + "if-let " + name + "\n" + dump_block(then_b, ind + "\t") + dump_block(else_b, ind + "\t")
-		Stmt.SScope(body_b) => ind + "scope\n" + dump_block(body_b, ind + "\t")
+		Stmt.SScope(body_b, is_unsafe) => ind + scope_kind(is_unsafe) + "\n" + dump_block(body_b, ind + "\t")
 		Stmt.SFor(is_cond, cond, body_b) => ind + "for " + expr_kind(cond) + "\n" + dump_block(body_b, ind + "\t")
 		Stmt.SForIn(name, iter, body_b) => ind + "for " + name + " in " + expr_kind(iter) + "\n" + dump_block(body_b, ind + "\t")
 		Stmt.SForSelect(arms) => ind + "for-select\n"
@@ -1553,7 +1569,7 @@ pub fn stmt_exprs(s: Stmt) -> list[Expr] {
 		Stmt.SBreak => stmt_exprs_none()
 		Stmt.SContinue => stmt_exprs_none()
 		Stmt.SNop => stmt_exprs_none()
-		Stmt.SScope(_) => stmt_exprs_none()
+		Stmt.SScope(_, _) => stmt_exprs_none()
 		Stmt.SDefer(v) => [v]
 		Stmt.SSpawn(v) => [v]
 		Stmt.SSend(ch, v) => [ch, v]
@@ -1586,7 +1602,7 @@ pub fn stmt_kids(s: Stmt) -> list[Stmt] {
 		Stmt.SBreak => stmt_kids_none()
 		Stmt.SContinue => stmt_kids_none()
 		Stmt.SNop => stmt_kids_none()
-		Stmt.SScope(ss) => ss
+		Stmt.SScope(ss, _) => ss
 		Stmt.SDefer(_) => stmt_kids_none()
 		Stmt.SSpawn(_) => stmt_kids_none()
 		Stmt.SSend(_, _) => stmt_kids_none()

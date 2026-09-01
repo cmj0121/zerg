@@ -795,6 +795,29 @@ fn main() {
 }
 EOF
 
+# AND THE THIRD SPELLING — a method. GRAMMAR#fn-decl puts the marker in one place and
+# GRAMMAR#impl-item takes a fn-decl, so an `unsafe fn` method carries what the other two carry;
+# what makes this a case and not a repetition is WHERE the rule is asked. A declared method is
+# lowered down a path of its own, and a rule enforced at one of a form's spellings is one
+# spelling away from meaning nothing — which is what E9109 was hiding: the form was refused, so
+# nobody could find out that the call site had no rule.
+reject unsafe-method-called-from-safe-code E3083 '`B.peek` is an unsafe fn' <<'EOF'
+struct B {
+	pub n: int
+}
+
+impl B {
+	unsafe fn peek() -> int {
+		return this.n
+	}
+}
+
+fn main() {
+	b := B(7)
+	print b.peek()
+}
+EOF
+
 # --- a top-level annotation is honoured --------------------------------------------
 #
 # `answer: bool = 42` used to compile: the top level inferred from the value and silently

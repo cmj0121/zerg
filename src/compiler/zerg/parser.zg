@@ -2033,7 +2033,14 @@ fn parse_spec(mut &p: Parser, is_pub: bool) -> ast.SpecDecl {
 			# (the sig_unsafe column), and a `spec` member sits in no group. The signature is
 			# discarded by the raise below in any case.
 			sig := parse_fn_head(p, false, "This", u_mut, false)
-			raise p_diag_at(p, u.line, u.col, rule.Rule.NotYetUnsafeSpecSignature, f"NotImplemented: the `unsafe` `spec` signature `{sig.name}` — GRAMMAR#fn-sig derives `'unsafe'? 'mut'? 'fn'`, so this IS a spec member; `unsafe` marks a trust boundary this compiler does not enforce yet (docs/runtime/ffi.md), so the signature is refused rather than read as a safe one and its `unsafe` dropped")
+
+			# THE REASON IS NOT THE BOUNDARY ANY MORE. It said "`unsafe` marks a trust
+			# boundary this compiler does not enforce yet", which was true until group 12
+			# built it — a declaration carries the marker and the caller rule reads it. What
+			# is missing is one step further in: a spec's signature is a REQUIREMENT, and
+			# what an implementer owes for an unsafe one — whether a safe `fn` satisfies it,
+			# or the other way round — is a rule this compiler has not got.
+			raise p_diag_at(p, u.line, u.col, rule.Rule.NotYetUnsafeSpecSignature, f"NotImplemented: the `unsafe` `spec` signature `{sig.name}` — GRAMMAR#fn-sig derives `'unsafe'? 'mut'? 'fn'`, so this IS a spec member; what an implementer owes for an unsafe REQUIREMENT is a rule this compiler has not got (docs/core/specs.md), so the signature is refused rather than read as a safe one and its `unsafe` dropped")
 		}
 
 		# `mut fn` is part of a fn-sig (GRAMMAR#fn-sig), and it is INTERFACE: a `mut fn` method
@@ -2704,6 +2711,21 @@ fn parse_impl(mut &p: Parser, mut &fns: list[ast.FnDecl], mut &impls: list[ast.I
 			p_advance(p)
 			is_pub = true
 		}
+
+		# `unsafe fn m()` IS A METHOD, and the marker sits where GRAMMAR#fn-decl puts it —
+		# `'pub'? 'unsafe'? 'mut'? 'fn'` — so it is read HERE, between the two, rather than in
+		# an arm of its own below. It records `in_unsafe` on the declaration exactly as the
+		# module-level group's marker does, which is the third spelling of one rule: the
+		# standalone `unsafe fn`, the group, and a method.
+		#
+		# THE PEEK IS WHAT KEEPS THE WORD UNCONSUMED otherwise. `unsafe` before anything that
+		# is not a `fn` derives no impl-item, and the arm that says so must still see the word
+		# it is reporting.
+		mut fn_unsafe := in_unsafe
+		if p_at(p, token.Kind.Unsafe) and (peek_kind(p, 1) == token.Kind.Fn or (peek_kind(p, 1) == token.Kind.Mut and peek_kind(p, 2) == token.Kind.Fn)) {
+			p_advance(p)
+			fn_unsafe = true
+		}
 		mut recv_mut := false
 		if p_at(p, token.Kind.Mut) {
 			mt := cur(p)
@@ -2719,7 +2741,7 @@ fn parse_impl(mut &p: Parser, mut &fns: list[ast.FnDecl], mut &impls: list[ast.I
 			recv_mut = true
 		}
 		if p_at(p, token.Kind.Fn) {
-			fns.append(parse_fn(p, is_pub, target, recv_mut, in_unsafe, false, false))
+			fns.append(parse_fn(p, is_pub, target, recv_mut, fn_unsafe, false, false))
 		} else if p_at(p, token.Kind.Ident) and peek_kind(p, 1) == token.Kind.Walrus {
 			# `LIMIT := 5` — an associated VALUE (GRAMMAR#val-bind). It is a module constant that
 			# belongs to a TYPE: the same declaration in every way but its name, so it is read by
@@ -2728,17 +2750,6 @@ fn parse_impl(mut &p: Parser, mut &fns: list[ast.FnDecl], mut &impls: list[ast.I
 			consts.append(p_top_binding(p, target, false, false, is_pub, in_unsafe, vt.line, vt.col))
 		} else if p_at(p, token.Kind.Type) {
 			raise p_diag(p, rule.Rule.NotYetImplAssocType, "NotImplemented: an associated type binding `type … = …` in an `impl`")
-		} else if p_at(p, token.Kind.Unsafe) {
-			# `unsafe fn m()` IS A METHOD. GRAMMAR#fn-decl spells the marker (`'pub'? 'unsafe'?
-			# 'mut'? 'fn'`) and GRAMMAR#impl-item takes a fn-decl, so this is a form the language
-			# has — and the arm below told its writer that this compiler "reads methods and
-			# nothing else", which is a sentence about a form they did write. It is refused for
-			# the reason the standalone one is (E9027) and the `unsafe fn` TYPE is (E9073): the
-			# marker is a trust boundary this compiler does not enforce, so honouring it would be
-			# a promise about calls it never checks, and dropping the word would make the method
-			# callable from safe code, which is the one thing the marker exists to prevent (#87).
-			ut := cur(p)
-			raise p_diag_at(p, ut.line, ut.col, rule.Rule.NotYetUnsafeMethod, "NotImplemented: an `unsafe fn` METHOD in an `impl` — `unsafe` marks a trust boundary this compiler does not enforce yet (docs/runtime/ffi.md), so the method is refused rather than read as a safe `fn`")
 		} else {
 			# WHAT IS LEFT IS NOT AN ITEM AT ALL. GRAMMAR#impl-item derives a `fn-decl`, a
 			# `val-bind` and a `type` binding, and the three arms above take all of them, so a

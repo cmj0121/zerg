@@ -343,11 +343,14 @@ impl per argument (`Indexable[K, V]`, above) where an associated type was one ou
 > **[not yet]** Both halves are refused by name and neither is a form waiting to be built: writing one
 > in an `impl` is _E9015 NotImplemented: an associated type binding `type … = …` in an `impl`_, and
 > projecting one is _E9028 NotImplemented: an associated type projection `T.Item` — GRAMMAR lets a spec
-> name a type its implementer supplies_. An `unsafe fn` METHOD is a third — _E9109 NotImplemented: an
-> `unsafe fn` METHOD in an `impl`_ — because GRAMMAR#fn-decl spells the marker and this compiler does not
-> enforce the trust boundary it stands for. What is left in an `impl` is not an item at all and says so
+> name a type its implementer supplies_. What is left in an `impl` is not an item at all and says so
 > without promising anything: _E2077 `…` is not an `impl` item — GRAMMAR#impl-item derives a method, an
 > associated value and an associated type_.
+
+An **`unsafe fn` method** is not among them. [`GRAMMAR#fn-decl`](../../GRAMMAR) spells the marker
+(`'pub'? 'unsafe'? 'mut'? 'fn'`) and [`GRAMMAR#impl-item`](../../GRAMMAR) takes a `fn-decl`, so a method
+carries it exactly as a free function does — and the caller rule reads it in the same place: calling one
+from safe code is _E3083_, whichever of the three spellings declared it.
 
 The cost lands on a **single-output protocol**. `Iterable[T]` can be implemented at several `T` where a
 fixed `Item` could not, so what pins the element type is **coherence** — at most one such impl per type,

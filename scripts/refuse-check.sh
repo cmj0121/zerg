@@ -1457,23 +1457,6 @@ impl B {
 fn main() { print 1 }
 EOF
 
-# THE OTHER HALF OF THAT NUMBER (#87). GRAMMAR#fn-decl spells `'pub'? 'unsafe'? 'mut'? 'fn'`
-# and GRAMMAR#impl-item takes a fn-decl, so an `unsafe fn` method IS a form — and its writer
-# was told this compiler "reads methods and nothing else", about a method they did write.
-expect "$ZERG" an-unsafe-method-in-an-impl E9109 <<'EOF'
-struct B {
-	pub n: int
-}
-
-impl B {
-	unsafe fn m() {
-		nop
-	}
-}
-
-fn main() { print 1 }
-EOF
-
 # A method that MUTATES its receiver cannot be served from a materialised temp: the edit
 # lands on the copy and is lost. `m["a"].append(3)` compiled and silently did nothing.
 expect "$ZERG" mutating-method-on-a-map-index E9049 <<'EOF'

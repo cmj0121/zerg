@@ -257,11 +257,14 @@ spec 把同一件事往前講:associated type 是每個 impl 一個輸出,參數
 
 > **[not yet]** 兩半都是**按名字拒絕**，都不是等著被建的形式：在 `impl` 裡寫一個是 _E9015 NotImplemented: an
 > associated type binding `type … = …` in an `impl`_，投影一個是 _E9028 NotImplemented: an associated type
-> projection `T.Item` — GRAMMAR lets a spec name a type its implementer supplies_。`unsafe fn` **方法**是
-> 第三個——_E9109 NotImplemented: an `unsafe fn` METHOD in an `impl`_——因為 GRAMMAR#fn-decl 拼得出這個標記，
-> 而這個編譯器不強制它所代表的信任邊界。`impl` 裡剩下的東西根本不是項目，而且它說出這件事、不承諾任何東西：
+> projection `T.Item` — GRAMMAR lets a spec name a type its implementer supplies_。`impl` 裡剩下的東西根本
+> 不是項目，而且它說出這件事、不承諾任何東西：
 > _E2077 `…` is not an `impl` item — GRAMMAR#impl-item derives a method, an associated value and an
 > associated type_。
+
+**`unsafe fn` 方法**不在其中。[`GRAMMAR#fn-decl`](../../GRAMMAR) 拼得出這個標記（`'pub'? 'unsafe'? 'mut'?
+'fn'`），而 [`GRAMMAR#impl-item`](../../GRAMMAR) 取一個 `fn-decl`，所以方法帶著它的方式和自由函式完全一樣——
+呼叫者規則也在同一處讀它:從安全程式碼呼叫一個,就是 _E3083_,不管三種拼法裡的哪一種宣告了它。
 
 代價落在**單一輸出的協定**上。`Iterable[T]` 可以在不同 `T` 上有多個 impl,固定的 `Item` 不行,所以釘死元素型別
 的是 **coherence**——每個型別至多一個這種 impl,而 compiler 對其他每一組 (型別, spec) 本來就在檢查它。

@@ -502,7 +502,6 @@ shipping compiler rather than a part of it (the line
 | `E9106` | module `…` declares the function `…`, and a module's function is not a value here                     |
 | `E9107` | the method `…` on a … — `display`, `debug`, `format`; `next` on a channel; `iter` on what `for` walks |
 | `E9108` | `del …` on an owning struct, list or map — the early free, where the release is a scope-exit unwind   |
-| `E9109` | an `unsafe fn` method in an `impl`                                                                    |
 | `E9110` | a NAMED rest in a list pattern                                                                        |
 | `E9111` | an array length that names a constant                                                                 |
 | `E9112` | the array method `…`                                                                                  |
@@ -660,6 +659,7 @@ name now is the prelude rule (`E2061`), which is about the name rather than abou
 | `E9033` | —       | inline assembly is built; it lowers to C's `__asm__ volatile`      |
 | `E9045` | —       | the raw-pointer built-ins are built                                |
 | `E9073` | —       | the `unsafe fn` TYPE is built; the marker is part of the type      |
+| `E9109` | —       | the `unsafe fn` method is built; the marker is on the declaration  |
 | `E3047` | —       | a strong typedef takes its underlying type's prefix operators      |
 
 **One of them moved nowhere**, and it is the only row whose second column is empty. `E3047`

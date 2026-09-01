@@ -478,7 +478,6 @@ seed 全程維持句子比對:代碼是語言的契約,而 seed 是建置正式�
 | `E9106` | module `…` 宣告了函式 `…`,而模組的函式在這裡不是一個值                                                |
 | `E9107` | … 上的方法 `…` —— `display`、`debug`、`format`;channel 上的 `next`;`for` 走得到的東西上的 `iter`      |
 | `E9108` | `del …` 用在擁有值（struct/list/map）上 —— 提早釋放,而 release 是 scope 退出時的 unwind               |
-| `E9109` | `impl` 裡的 `unsafe fn` 方法                                                                          |
 | `E9110` | list pattern 裡具名的 rest                                                                            |
 | `E9111` | 指名常數的陣列長度                                                                                    |
 | `E9112` | 陣列的方法 `…`                                                                                        |
@@ -618,6 +617,7 @@ arm、同樣的形狀、同樣的兩個問題——而只有 map 那邊被問了
 | `E9033` | —       | 內聯組語建好了,它降成 C 的 `__asm__ volatile`          |
 | `E9045` | —       | raw-pointer 的 built-in 建好了                         |
 | `E9073` | —       | `unsafe fn` 型別建好了,標記是型別的一部分              |
+| `E9109` | —       | `impl` 裡的 `unsafe fn` 方法建好了;標記在宣告上        |
 | `E3047` | —       | 強 typedef 承接底層型別的前綴運算子                    |
 
 **其中一個哪裡都沒去**,而它是唯一第二欄是空的那一列。`E3047` 回報的是「一個 `type X = Y` 上的前綴運算子」——

@@ -904,6 +904,64 @@ fn main() {
 }
 EOF
 
+# --- associated fns (GRAMMAR#impl-decl) ---------------------------------------------
+#
+# An INHERENT `impl` holds both — *a named constructor `User.from_json(…)` (an associated fn, no
+# `this`) or a private method `u.recompute()` (uses `this`)* — and the body is what tells them
+# apart, because the language gives no other spelling. They share one namespace, so the two
+# refusals below are one rule from its two sides: each names what the declaration IS and how the
+# other spelling would read.
+
+reject a-method-reached-through-its-type E3151 'is a METHOD of `P`' <<'EOF'
+struct P {
+	pub x: int
+}
+
+impl P {
+	fn twice() -> int {
+		return this.x * 2
+	}
+}
+
+fn main() {
+	print P.twice()
+}
+EOF
+
+reject an-associated-fn-reached-through-an-instance E3152 'is an ASSOCIATED FN of `P`' seed-gap <<'EOF'
+struct P {
+	pub x: int
+}
+
+impl P {
+	fn make(v: int) -> P {
+		return P(v)
+	}
+}
+
+fn main() {
+	p := P(1)
+	q := p.make(2)
+	print q.x
+}
+EOF
+
+reject a-type-that-declares-no-such-name E3150 'declares no `nope`' <<'EOF'
+struct P {
+	pub x: int
+}
+
+impl P {
+	fn make(v: int) -> P {
+		return P(v)
+	}
+}
+
+fn main() {
+	print P.nope(1).x
+}
+EOF
+
 # --- a top-level annotation is honoured --------------------------------------------
 #
 # `answer: bool = 42` used to compile: the top level inferred from the value and silently

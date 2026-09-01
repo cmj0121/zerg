@@ -522,6 +522,18 @@ byte(N)` and `byte(N * 3)` are compile errors. The seed folds the literal alone:
   `scripts/reject-check.sh`'s `a-struct-target-naming-the-wrong-type` and
   `a-struct-target-missing-a-field-and-a-rest` carry the `seed-gap` marker each.
 
+- **AN ASSOCIATED FN IS A METHOD TO THE SEED.** `zerg` reads GRAMMAR#impl-decl's own distinction —
+  _a named constructor `User.from_json(…)` (an associated fn, no `this`) or a private method
+  `u.recompute()` (uses `this`)_ — so a `fn` in an inherent `impl` whose body does not use `this`
+  takes no receiver and is reached through the TYPE. The seed gives every `fn` in an `impl` a
+  receiver, so `p.make(2)` passes the instance as the first written argument and the program
+  builds.
+
+  It costs the bootstrap nothing: the compiler's own sources declare no associated fn, and a
+  program the seed accepts and `zerg` rejects is never compared by `make oracle`.
+  `scripts/reject-check.sh`'s `an-associated-fn-reached-through-an-instance` carries the
+  `seed-gap` marker.
+
 ## Changing the seed
 
 The invariant that makes a change safe to make: **the C emitted for the self-host source

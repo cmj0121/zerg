@@ -403,6 +403,15 @@ chan[int]() }`——或任何不是字面值、模組常數，或它們之間算
   不會被 `make oracle` 拿去比對。`scripts/reject-check.sh` 的 `a-struct-target-naming-the-wrong-type` 和
   `a-struct-target-missing-a-field-and-a-rest` 各自帶著 `seed-gap` 標記。
 
+- **associated fn 在種子眼裡就是一個方法。** `zerg` 讀的是 GRAMMAR#impl-decl 自己畫的那條線——_a named
+  constructor `User.from_json(…)` (an associated fn, no `this`) or a private method `u.recompute()` (uses
+  `this`)_——所以 inherent `impl` 裡 body 不用 `this` 的 `fn` 不帶 receiver、要透過**型別**去叫。種子給
+  `impl` 裡每一個 `fn` 都配一個 receiver,所以 `p.make(2)` 會把實例當成第一個寫下的引數傳進去,而且建得起來。
+
+  這對 bootstrap 不花任何代價:編譯器自己的原始碼一個 associated fn 都沒宣告,而「種子接受、`zerg` 拒絕」的程式
+  永遠不會被 `make oracle` 拿去比對。`scripts/reject-check.sh` 的
+  `an-associated-fn-reached-through-an-instance` 帶著 `seed-gap` 標記。
+
 ## 修改種子時
 
 讓一項改動可以放心進行的不變量：**自舉原始碼所產生的 C 不得變動**。若那是真正的死碼移除，前後產生的 C 會逐位元組

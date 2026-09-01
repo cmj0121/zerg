@@ -8014,7 +8014,7 @@ fn c_method(mut &em: Emitter, target: ast.Expr, meth: str, args: list[ast.Expr],
 		MethKind.MMap => c_map_method(em, target, meth, args, tty, sb)
 		MethKind.MErr => c_err_method(em, target, meth, args, sb)
 		MethKind.MCarrier => c_carrier_method(em, target, meth, args, tty, sb)
-		MethKind.MRecv => f"{c_fn_cname(recv, meth)}({c_recv_args(em, c_sig_key(recv, meth), target, args, sb)})"
+		MethKind.MRecv => c_recv_call(em, recv, meth, target, args, sb)
 		MethKind.MFnField => c_fnfield_call(em, recv, meth, target, args, sb)
 		_ => c_free_method(em, target, meth, args, sb)
 	}
@@ -9595,6 +9595,16 @@ fn c_asm_operand(mut &em: Emitter, o: ast.AsmOp, sb: Subst) -> str {
 	return c_expr(em, o.expr, sb) if o.kind == 0
 
 	return c_lvalue(em, o.expr, sb)
+}
+
+# c_recv_call lowers a call to a DECLARED method. It is a function rather than the one-line
+# arm it was because the caller rule owes an answer here too: `unsafe` on a method is the same
+# marker a free function carries, so a method declared `unsafe fn` is callable only from
+# unsafe — and an arm that only spelled the C name had nowhere to ask.
+fn c_recv_call(mut &em: Emitter, recv: str, meth: str, target: ast.Expr, args: list[ast.Expr], sb: Subst) -> str {
+	key := c_sig_key(recv, meth)
+	c_chk_unsafe_fn(em, f"{recv}.{meth}", "this call is in safe code", c_sig_row(em, key))
+	return f"{c_fn_cname(recv, meth)}({c_recv_args(em, key, target, args, sb)})"
 }
 
 fn c_args(mut &em: Emitter, args: list[ast.Expr], sb: Subst) -> str {

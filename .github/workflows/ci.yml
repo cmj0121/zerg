@@ -82,6 +82,12 @@ jobs:
       - name: Check every production a reader writes is named by a chapter
         run: make grammar-cited
 
+      # The third direction, and the only one that reads the COMPILER: a refusal has to
+      # say where the form it turns away is specified. It needs neither the corpus nor a
+      # build — the sentence is text in the source.
+      - name: Check every refusal names where its form is specified
+        run: make refusal-cites
+
       # And the productions the prose companion copies out of GRAMMAR, in both
       # languages — a second copy of a language fact, with nothing else reading it.
       - name: Check the grammar's prose companion against GRAMMAR

@@ -180,7 +180,7 @@ struct TySubst {
 
 pub fn subst_fn(tpl: ast.FnDecl, args: list[ast.Ty], at: str) -> ast.FnDecl {
 	su := TySubst(tpl.tparams, args, at)
-	return ast.FnDecl(gen_mangle(tpl.name, args), tpl.recv, subst_params(su, tpl.params), tpl.has_ret, subst_ty(su, tpl.ret), subst_block(su, tpl.body), tpl.is_pub, tpl.path, tpl.line, tpl.col, [], [], tpl.in_unsafe, tpl.is_test, tpl.is_fixture, tpl.has_body)
+	return ast.FnDecl(gen_mangle(tpl.name, args), tpl.recv, subst_params(su, tpl.params), tpl.has_ret, subst_ty(su, tpl.ret), subst_block(su, tpl.body), tpl.is_pub, tpl.path, tpl.line, tpl.col, [], [], tpl.in_unsafe, tpl.is_test, tpl.is_fixture, tpl.has_body, false)
 }
 
 # subst_ty replaces a type parameter wherever a type is written, at any depth.

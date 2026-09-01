@@ -493,6 +493,12 @@ pub struct Emitter {
 	# call is resolved, and the CONTEXT a declaration was written in is exactly what is lost.
 	pub sig_unsafe: list[bool]
 
+	# sig_assoc is the fourth: whether the declaration was an ASSOCIATED FN rather than a
+	# method (GRAMMAR#impl-decl). It shares its type's namespace, so the KEY cannot tell the two
+	# apart — and what differs is how a call reaches it, which is the question every call site
+	# asks and none of them could answer.
+	pub sig_assoc: list[bool]
+
 	# in_unsafe_fn is whether the function being emitted RIGHT NOW is one of them, which is
 	# the other half of the rule: the check is a comparison between the callee's context and
 	# the caller's, and nothing else on this struct says which function the walk is inside.
@@ -2681,6 +2687,7 @@ fn c_add_sig(mut &em: Emitter, fn_i: ast.FnDecl) {
 	em.sig_pub.append(fn_i.is_pub)
 	em.sig_path.append(fn_i.path)
 	em.sig_unsafe.append(fn_i.in_unsafe)
+	em.sig_assoc.append(fn_i.is_assoc)
 	em.sig_rets.append(fn_i.ret)
 	em.sig_hasret.append(fn_i.has_ret)
 	em.sig_nparams.append(fn_i.params.len())
@@ -8288,16 +8295,35 @@ fn c_enum_of(mut &em: Emitter, en: str, meth: str, args: list[ast.Expr], sb: Sub
 # emitted `zg_meth(…)` for a function nobody declared, and the diagnostic came from the C
 # compiler pointing at generated code. `s.len()` is the common way in: a str has no
 # methods here, and the message now says so at the Zerg level.
+# c_assoc_call lowers `Type.f(…)`. An associated fn shares its type's NAMESPACE — GRAMMAR says
+# every method and associated fn on a type does — so the row it looks up is keyed exactly as a
+# method's is; what tells the two apart is `sig_assoc`, which is the parser's answer to "does
+# this body use `this`" and not a second derivation of it.
+#
+# THE TWO REFUSALS ARE ONE RULE FROM ITS TWO SIDES. A method reached through its type has no
+# receiver to be called on, and an associated fn reached through an instance has nowhere to put
+# one — so each names what the declaration is and what the other spelling would be.
+fn c_assoc_call(mut &em: Emitter, tn: str, meth: str, args: list[ast.Expr], sb: Subst) -> str {
+	key := c_sig_key(tn, meth)
+	r := c_sig_row(em, key)
+
+	raise c_diag(em, rule.Rule.NoSuchAssociatedFn, f"`{tn}` declares no `{meth}` — an `impl` of it declares the methods and associated fns it has, and they share one namespace (GRAMMAR#impl-decl)") if r < 0
+	raise c_diag(em, rule.Rule.MethodThroughItsType, f"`{meth}` is a METHOD of `{tn}` — its body uses `this`, so it is reached through an instance (`x.{meth}(…)`) and not through the type (GRAMMAR#impl-decl)") if not em.sig_assoc[r]
+
+	c_chk_unsafe_fn(em, f"{tn}.{meth}", "this call is in safe code", r)
+
+	# base 0, and `lead` false: an associated fn has no receiver, so its first written argument
+	# is parameter 0 and there is no operand standing in front of the run.
+	return f"{c_fn_cname(tn, meth)}({c_args_from(em, key, 0, args, false, sb)})"
+}
+
 fn c_free_method(mut &em: Emitter, target: ast.Expr, meth: str, args: list[ast.Expr], sb: Subst) -> str {
 	# `Type.f(…)` is an ASSOCIATED FUNCTION (GRAMMAR#impl-decl) — the named-constructor form,
-	# `User.from_json(…)`. A TYPE NAME on the left is how a reader spells one, and the
-	# answer used to be "the method `make` on a ?": the target is a type rather than a
-	# value, so inference had nothing to name and the message pointed at the hole rather
-	# than at the form. The parser gives every `fn` in an `impl` a receiver, so there is no
-	# such function to call yet — which is a thing to say, not a `?`.
+	# `User.from_json(…)`. A TYPE NAME on the left is how a reader spells one, and the answer
+	# used to be "the method `make` on a ?": the target is a type rather than a value, so
+	# inference had nothing to name and the message pointed at the hole rather than at the form.
 	tn := c_ident_name(target)
-
-	raise c_diag(em, rule.Rule.NotYetAssociatedFn, f"NotImplemented: `{tn}.{meth}(…)` is an associated function — this compiler gives every `fn` in an `impl` a receiver, so a method is reached through an instance (`x.{meth}(…)`) and never through its type (GRAMMAR#impl-item)") if tn != "" and c_is_struct_name(em, tn)
+	return c_assoc_call(em, tn, meth, args, sb) if tn != "" and c_is_struct_name(em, tn)
 
 	# WHAT THE PREFIX NAMES, asked once (c_ns_kind) and answered here for both halves of a
 	# qualified call. It used to be asked by NOBODY on this path: whatever stood to the left
@@ -9613,7 +9639,15 @@ fn c_asm_operand(mut &em: Emitter, o: ast.AsmOp, sb: Subst) -> str {
 # unsafe — and an arm that only spelled the C name had nowhere to ask.
 fn c_recv_call(mut &em: Emitter, recv: str, meth: str, target: ast.Expr, args: list[ast.Expr], sb: Subst) -> str {
 	key := c_sig_key(recv, meth)
-	c_chk_unsafe_fn(em, f"{recv}.{meth}", "this call is in safe code", c_sig_row(em, key))
+	r := c_sig_row(em, key)
+
+	# THE OTHER SIDE OF ONE RULE. An associated fn takes no receiver, so an instance in front of
+	# the dot has nowhere to go — it used to be passed as the first written argument, which is
+	# how `p.make(2)` came out as `argument 0 of `P.make` is int, and this gives P`: a sentence
+	# about the argument the caller did not write.
+	raise c_diag(em, rule.Rule.AssocFnThroughAnInstance, f"`{meth}` is an ASSOCIATED FN of `{recv}` — its body does not use `this`, so it takes no receiver and is reached through the type (`{recv}.{meth}(…)`) (GRAMMAR#impl-decl)") if r >= 0 and em.sig_assoc[r]
+
+	c_chk_unsafe_fn(em, f"{recv}.{meth}", "this call is in safe code", r)
 	return f"{c_fn_cname(recv, meth)}({c_recv_args(em, key, target, args, sb)})"
 }
 
@@ -10647,6 +10681,13 @@ fn c_infer_methcall(mut &em: Emitter, target: ast.Expr, meth: str, args: list[as
 		# variant is named rather than looked up, so there is nothing to fail.
 		return ast.Ty.TNamed(en) if c_is_variant_in(em, en, meth)
 	}
+
+	# `P.make(…)` — an ASSOCIATED FN (GRAMMAR#impl-decl). Its target is a TYPE, so the walk
+	# below has nothing to infer from: `c_infer` of a type name answers `?`, and every arm past
+	# it reads that. The row is what carries the answer, and it is keyed the way a method's is —
+	# an associated fn shares its type's namespace.
+	sn := c_ident_name(target)
+	return c_lookup_sig_ret(em, c_sig_key(sn, meth)) if sn != "" and c_is_struct_name(em, sn)
 
 	tty := c_infer(em, target)
 	recv := c_named_of(tty)
@@ -12854,7 +12895,7 @@ fn c_lambda(mut &em: Emitter, ps: list[ast.Param], has_ret: bool, ret: ast.Ty, b
 	# the substitution still in force.
 	saved_sub := em.sub
 	em.sub = c_nosub()
-	em.lam_defs.append(c_fn(em, ast.FnDecl(name, "", allps, has_ret, ret, body, false, em.at_path, em.at_line, em.at_col, [], [], em.in_unsafe_fn, false, false, true)))
+	em.lam_defs.append(c_fn(em, ast.FnDecl(name, "", allps, has_ret, ret, body, false, em.at_path, em.at_line, em.at_col, [], [], em.in_unsafe_fn, false, false, true, false)))
 	em.sub = saved_sub
 	c_env_restore(em, saved_env)
 	em.open_scopes = saved_open
@@ -16552,7 +16593,7 @@ fn c_default_method(sp: ast.SpecDecl, ip: ast.ImplDecl, req: ast.FnDecl) -> ast.
 	for pm in req.params {
 		ps.append(ast.Param(pm.name, c_spec_subst(pm.ty, sp, ip), pm.is_ref, pm.has_def, pm.def))
 	}
-	return ast.FnDecl(req.name, ip.target, ps, req.has_ret, c_spec_subst(req.ret, sp, ip), req.body, req.is_pub, req.path, req.line, req.col, req.tparams, req.tbounds, req.in_unsafe, false, false, true)
+	return ast.FnDecl(req.name, ip.target, ps, req.has_ret, c_spec_subst(req.ret, sp, ip), req.body, req.is_pub, req.path, req.line, req.col, req.tparams, req.tbounds, req.in_unsafe, false, false, true, false)
 }
 
 # c_with_derived expands every `#[derive(…)]` into the impl it stands for.
@@ -17098,7 +17139,7 @@ fn c_emit_unit(prog0: ast.File, own0: ast.File, ms: Mods, whole: bool, want_lint
 	# is what makes that invariant hold for a multi-unit program, at the place it already lives,
 	# and it is what lets the declaration passes below go back to reading the WHOLE program.
 	seen := diags.len()
-	mut em := Emitter([], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], false, false, false, [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], 0, [], 0, [], [], false, "", "", [], [], ast.Ty.TVoid, 0, "", 0, 0, diags, 0, 0, [], [], [], [], [], false, 0, false, "", 0, false, false, [], want_lints, [], [], [], [], [], [], [], [], [], [], [], false, 0, [], [], "", c_nosub(), [], [], [], [], [], [], [], [], [])
+	mut em := Emitter([], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], false, false, false, [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], 0, [], 0, [], [], false, "", "", [], [], ast.Ty.TVoid, 0, "", 0, 0, diags, 0, 0, [], [], [], [], [], false, 0, false, "", 0, false, false, [], want_lints, [], [], [], [], [], [], [], [], [], [], [], [], false, 0, [], [], "", c_nosub(), [], [], [], [], [], [], [], [], [])
 
 	# ASSIGNED, NOT PASSED. Every argument above is a zero value, and `layering` asserts that
 	# — it lines the call up with the fields by KIND, which only works while nothing in it

@@ -510,6 +510,18 @@ byte(N)` and `byte(N * 3)` are compile errors. The seed folds the literal alone:
   rejects is never compared by `make oracle`. `scripts/reject-check.sh`'s
   `local-shadows-namespace` carries the `seed-gap` marker.
 
+- **A STRUCT SHAPE'S TYPE NAME IS NOT CHECKED IN A DESTRUCTURING TARGET.** `zerg` asks the same
+  three questions of a `Name{ … }` wherever GRAMMAR derives it — the name is an assertion, every
+  field it lists exists, and without a `..` it names them all — so `Q{x} := p` over a `P` is
+  `E4085` and `P{x} := p` over a two-field struct is `E4087`. The seed has the destructuring
+  target as a form and none of the three rules on it, so both programs build and bind out of the
+  wrong shape.
+
+  It costs the bootstrap nothing: no source the seed compiles writes either, and a program the
+  seed accepts and `zerg` rejects is never compared by `make oracle`.
+  `scripts/reject-check.sh`'s `a-struct-target-naming-the-wrong-type` and
+  `a-struct-target-missing-a-field-and-a-rest` carry the `seed-gap` marker each.
+
 ## Changing the seed
 
 The invariant that makes a change safe to make: **the C emitted for the self-host source

@@ -200,8 +200,10 @@ built there too**, and naming its fields is what makes it ask three questions th
 the type it names must be the value's — the name is an **assertion**, not a reference, so `Q{x}` over a `P`
 is _E4085_ — every field it names must exist (_E4086_), and without a `..` it names them **all** (_E4087_,
 which says which one is missing). That last one is the point of the opt-in: a struct gaining a field breaks
-the patterns written before it, by name. **At a `:=` binding** both are still **[not yet]** — `E9021` and
-`E9008` — so the arm and the binding are told apart in the message rather than sharing one.
+the patterns written before it, by name. **At a `:=` binding** the same shape means the same three things:
+[`GRAMMAR#struct-pat`](../../GRAMMAR) derives one production and puts it in both positions, so `Q{x} := p`
+over a `P` is the same _E4085_ the arm gets — see [Patterns](patterns.md) for what a **target** is and how it
+differs from a pattern.
 **Guard conditions** work — an
 arm may carry an **`if expr`** after its pattern (`Left(v) if v > 0`) that must also hold for the arm to
 fire; the guard sees the pattern's **bindings**, and on `A | B if c` (once or-patterns land — see above)

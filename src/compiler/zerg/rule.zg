@@ -118,6 +118,7 @@ pub enum Rule {
 	AsmTemplateNotStr = 2085
 	AsmConstraintNotStr = 2086
 	AsmOperandHead = 2087
+	TargetRestNotLast = 2088
 
 	# checking — a form whose meaning does not hold together — reported against the tree, all at once
 	NotPublicMember = 3001
@@ -438,11 +439,9 @@ pub enum Rule {
 	NotYetGenericEnum = 9003
 	NotYetGenericStruct = 9004
 	NotYetDecoratorLayout = 9005
-	NotYetStructPattern = 9008
 	NotYetCallee = 9009
 	NotYetNamedArgument = 9010
 	NotYetImplAssocType = 9015
-	NotYetDestructuringBinding = 9021
 	NotYetForMutBinding = 9025
 	NotYetAssocTypeProjection = 9028
 	NotYetValueGenericParam = 9029
@@ -479,7 +478,6 @@ pub enum Rule {
 	NotYetValueUnnameableType = 9069
 	NotYetRebindMatchBinding = 9070
 	NotYetDefaultReadsField = 9071
-	NotYetDestructuringAssign = 9072
 	NotYetImplDottedTarget = 9074
 	NotYetGenericTypedef = 9075
 	NotYetSubPatternInPayload = 9076

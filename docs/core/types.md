@@ -331,10 +331,9 @@ mechanism ([Pattern matching](../code/control-flow.md)).
 > is _E9057 NotImplemented: `==` on a `(int, int)` — structural equality over a container is unbuilt, and a
 > container has no declaration to derive it on_: the parts-inheritance rule above is specified and the
 > derivation over an unnamed form is what is missing.
-> **Destructuring** is refused a step earlier still, at the comma — `a, b := two()` reports _E2005 expected
-> a newline or `;` to separate statements, found `,`_, which names punctuation where it owes the form's
-> name (the parenthesized `(a, b) := two()` does say it, as `E9021`). Either way a tuple result is stored
-> and passed as specified, and read back only through `.0` / `.1`.
+> **Destructuring** is built and is the ordinary way to read one — `(a, b) := two()`. The unparenthesized
+> `a, b := two()` is not a form: GRAMMAR#bind-target derives the tuple shape with its brackets, so what the
+> comma reports is punctuation (_E2005 expected a newline or `;` to separate statements, found `,`_).
 
 **`type X = Y`** defines a **new, distinct type** — not a transparent alias. `X` takes on `Y`'s
 representation and implementation (its fields or variants, and its `spec` impls, now with `This` = `X`), yet

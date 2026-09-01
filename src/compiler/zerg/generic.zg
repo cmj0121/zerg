@@ -242,6 +242,7 @@ fn subst_block(su: TySubst, b: list[ast.Stmt]) -> list[ast.Stmt] {
 fn subst_stmt(su: TySubst, s: ast.Stmt) -> ast.Stmt {
 	return match s {
 		Stmt.SLet(nm, ty, ht, im, ic, v) => ast.Stmt.SLet(nm, subst_ty(su, ty), ht, im, ic, subst_expr(su, v))
+		Stmt.SDestructure(t, v, ib, im, ic) => ast.Stmt.SDestructure(subst_target(su, t), subst_expr(su, v), ib, im, ic)
 		Stmt.SAssign(l, r) => ast.Stmt.SAssign(subst_expr(su, l), subst_expr(su, r))
 		Stmt.SPrint(v) => ast.Stmt.SPrint(subst_expr(su, v))
 		Stmt.SReturn(hv, v) => ast.Stmt.SReturn(hv, subst_expr(su, v))
@@ -355,6 +356,25 @@ fn subst_asm_ops(su: TySubst, ops: list[ast.AsmOp]) -> list[ast.AsmOp] {
 # subst_params is a parameter list, and it is a function of its own because BOTH a template
 # and a closure inside one have one. The rebuild was written twice, so a Param that grew a
 # field would have been substituted in one and copied unchanged in the other.
+# subst_target carries a specialization through a destructuring target: only an ASSIGNMENT's
+# leaves are expressions that can mention a type parameter, and the shape itself holds none.
+fn subst_target(su: TySubst, t: ast.Target) -> ast.Target {
+	return match t {
+		Target.TgtWild => t
+		Target.TgtPlace(e) => ast.Target.TgtPlace(subst_expr(su, e))
+		Target.TgtTuple(ts) => ast.Target.TgtTuple(subst_targets(su, ts))
+		Target.TgtStruct(n, fs, ts, r) => ast.Target.TgtStruct(n, fs, subst_targets(su, ts), r)
+	}
+}
+
+fn subst_targets(su: TySubst, ts: list[ast.Target]) -> list[ast.Target] {
+	mut out: list[ast.Target] = []
+	for t in ts {
+		out.append(subst_target(su, t))
+	}
+	return out
+}
+
 fn subst_params(su: TySubst, ps: list[ast.Param]) -> list[ast.Param] {
 	mut out: list[ast.Param] = []
 	for pm in ps {

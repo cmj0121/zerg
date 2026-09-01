@@ -912,17 +912,6 @@ struct P {
 fn main() { print P().b }
 EOF
 
-expect "$ZERG" struct-pattern-binding E9008 <<'EOF'
-struct P {
-	pub x: int
-}
-
-fn main() {
-	P{x} := P(3)
-	print x
-}
-EOF
-
 # THE `is` FAMILY. The case above tests a primitive; docs name a STRUCT and the two error
 # kinds that are not in the taxonomy, and each is a different sentence out of the same rule.
 # A TUPLE PATTERN'S ARITY IS A FACT ABOUT THE TYPE, so it is checked rather than left to cc.
@@ -2138,34 +2127,6 @@ spec Show {
 fn main() { print 1 }
 EOF
 
-
-expect "$ZERG" destructuring-binding E9021 <<'EOF'
-fn main() {
-	(a, b) := (1, 2)
-	print a + b
-}
-EOF
-
-expect "$ZERG" destructuring-binding-mut E9021 <<'EOF'
-fn main() {
-	mut (a, b) := (1, 2)
-	print a + b
-}
-EOF
-
-# THE THIRD SPELLING IS A DIFFERENT FORM. It BUILT and did nothing — the tuple was
-# evaluated, assigned to no one, and the program printed the values it started with — and
-# once it was refused it borrowed the binding's sentence, which quotes a `:=` at a reader
-# who wrote `=`. GRAMMAR#assign-target derives the tuple form on its own, so it is an unbuilt
-# form of its own and owes its own sentence.
-expect "$ZERG" destructuring-assignment E9072 'a destructuring assignment' <<'EOF'
-fn main() {
-	mut a := 1
-	mut b := 2
-	(a, b) = (3, 4)
-	print a + b
-}
-EOF
 
 expect "$ZERG" open-range-with-no-lower-bound E2071 <<'EOF'
 fn main() {

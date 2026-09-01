@@ -197,6 +197,7 @@ shipping compiler rather than a part of it (the line
 | `E2085` | an `asm(…)` opens with its TEMPLATE, a string literal                                                 |
 | `E2086` | an `asm` operand's CONSTRAINT is a string literal                                                     |
 | `E2087` | an `asm` operand opens with `in`, `out`, `inout` or `clobber`                                         |
+| `E2088` | a `..` in a destructuring target comes last                                                           |
 | `E3001` | `…` is not a public member of module `…`                                                              |
 | `E3002` | `…` is not a place, and an assignment needs one                                                       |
 | `E3003` | cannot assign to `…`: it is a module `const`, and a constant is never written                         |
@@ -445,11 +446,9 @@ shipping compiler rather than a part of it (the line
 | `E9003` | a generic enum `…[…]`                                                                                 |
 | `E9004` | a generic struct `…[…]`                                                                               |
 | `E9005` | the decorator `#[…]`                                                                                  |
-| `E9008` | a struct pattern `…{…}`                                                                               |
 | `E9009` | calling …                                                                                             |
 | `E9010` | the named argument `…:`                                                                               |
 | `E9015` | an associated type binding `type … = …` in an `impl`                                                  |
-| `E9021` | a destructuring binding `(a, b) := …`                                                                 |
 | `E9025` | `for mut v in …`                                                                                      |
 | `E9028` | an associated type projection `….…`                                                                   |
 | `E9029` | a value generic parameter `…: …`                                                                      |
@@ -486,7 +485,6 @@ shipping compiler rather than a part of it (the line
 | `E9069` | … whose value has no type this compiler can name                                                      |
 | `E9070` | `…` re-binds a name a `match` arm's pattern already binds                                             |
 | `E9071` | the default on field `…` reads the field `…`                                                          |
-| `E9072` | a destructuring assignment `(a, b) = …`                                                               |
 | `E9074` | an `impl` on `….…` — a dotted target                                                                  |
 | `E9075` | a generic `type …[…] = …`                                                                             |
 | `E9076` | a sub-pattern inside a variant payload                                                                |
@@ -660,6 +658,9 @@ name now is the prelude rule (`E2061`), which is about the name rather than abou
 | `E9045` | —       | the raw-pointer built-ins are built                                |
 | `E9073` | —       | the `unsafe fn` TYPE is built; the marker is part of the type      |
 | `E9109` | —       | the `unsafe fn` method is built; the marker is on the declaration  |
+| `E9008` | —       | the struct shape is built in a target too, not only an arm         |
+| `E9021` | —       | the destructuring binding is built; a target is not a pattern      |
+| `E9072` | —       | the destructuring assignment is built; the value is read once      |
 | `E3047` | —       | a strong typedef takes its underlying type's prefix operators      |
 
 **One of them moved nowhere**, and it is the only row whose second column is empty. `E3047`

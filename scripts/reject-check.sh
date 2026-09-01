@@ -818,6 +818,92 @@ fn main() {
 }
 EOF
 
+# --- destructuring targets (GRAMMAR#bind-target, GRAMMAR#assign-target) --------------
+#
+# A target is not a pattern: `match` asks whether a value has a shape and a destructuring
+# binding is TOLD it. That is the whole of what these rules come to — a leaf that tests has no
+# meaning where nothing can fail, and a shape written against the wrong type is wrong at the
+# place it is written rather than at the arm it did not take.
+#
+# THE STRUCT SHAPE'S THREE RULES ARE THE MATCH ARM'S. GRAMMAR derives one `struct-pat` and puts
+# it in two positions, so `Q{x} := p` meets the same E4085 that `Q{x} => …` does — which it did
+# not, for as long as the rule lived inside the pattern walk.
+
+reject a-destructuring-leaf-that-is-not-a-name E2054 'a destructuring target needs a name' <<'EOF'
+fn main() {
+	t := (1, 2)
+	(1, b) := t
+	print b
+}
+EOF
+
+reject a-rest-that-is-not-last-in-a-target E2088 'so it comes last' <<'EOF'
+struct P {
+	pub x: int
+	pub y: int
+}
+
+fn main() {
+	p := P(1, 2)
+	P{.., x} := p
+	print x
+}
+EOF
+
+reject a-destructuring-assignment-leaf-that-is-not-a-place E3002 'is not a place' <<'EOF'
+fn main() {
+	mut b := 0
+	t := (1, 2)
+	(b + 1, b) = t
+	print b
+}
+EOF
+
+reject a-struct-target-naming-the-wrong-type E4085 'a struct pattern names `Q`' seed-gap <<'EOF'
+struct P {
+	pub x: int
+}
+
+fn main() {
+	p := P(1)
+	Q{x} := p
+	print x
+}
+EOF
+
+reject a-struct-target-that-names-no-such-field E4086 'has no field' <<'EOF'
+struct P {
+	pub x: int
+}
+
+fn main() {
+	p := P(1)
+	P{nope, ..} := p
+	print nope
+}
+EOF
+
+reject a-struct-target-missing-a-field-and-a-rest E4087 'does not name `y`' seed-gap <<'EOF'
+struct P {
+	pub x: int
+	pub y: int
+}
+
+fn main() {
+	p := P(1, 2)
+	P{x} := p
+	print x
+}
+EOF
+
+reject a-tuple-target-wider-than-its-value E3074 'has no `.2`' <<'EOF'
+fn main() {
+	t := (1, 2)
+	(a, b, c) := t
+	print a
+}
+EOF
+
 # --- a top-level annotation is honoured --------------------------------------------
 #
 # `answer: bool = 42` used to compile: the top level inferred from the value and silently

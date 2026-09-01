@@ -159,7 +159,9 @@ _E4083 a tuple pattern matches a tuple_。**struct pattern 在那裡也建好了
 形狀多問三個問題的原因:它指名的型別必須就是那個值的型別——那個名字是**斷言**而不是引用,所以在一個 `P` 上寫
 `Q{x}` 是 _E4085_——它指名的每個欄位都必須存在（_E4086_）,而沒有 `..` 時它要指名**全部**（_E4087_,並說出少了
 哪一個）。最後那一條正是 opt-in 的用意:struct 新增一個欄位時,先前寫下的 pattern 應該被指名破壞。**在 `:=`
-綁定位置**兩者仍是 **[not yet]**——`E9021` 與 `E9008`——所以 arm 與綁定在訊息裡分得開,而不是共用一句。**guard 條件**可用:一個 arm 可在 pattern 之後帶一個
+綁定位置**,同一個形狀就是同樣這三件事:[`GRAMMAR#struct-pat`](../../GRAMMAR) 只導出一條產生式、擺在兩個位置,
+所以在一個 `P` 上寫 `Q{x} := p` 拿到的就是 arm 拿到的那個 _E4085_——**target** 是什麼、它和 pattern 差在哪,見
+[Pattern](patterns.zh-TW.md)。**guard 條件**可用:一個 arm 可在 pattern 之後帶一個
 **`if expr`**（`Left(v) if v > 0`），它也必須成立該 arm 才觸發；guard 看得到 pattern 的**綁定**，而在 `A | B if c`
 上（待 or-pattern 落地——見上）涵蓋**整個 or-pattern**。帶 guard 的 arm **不**計入 exhaustiveness，所以帶 guard 的
 case 仍需要一個無 guard 的 arm 或 `_`。一個 **range arm**（`200..300 =>`、`400..=499 =>`、`500.. =>`）是 match 專屬的

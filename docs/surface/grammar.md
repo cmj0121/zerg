@@ -236,10 +236,8 @@ fields with [`GRAMMAR#field-target`](../../GRAMMAR).
 An expression alone — a call, or a `match` run for its effect — is a
 statement. A `:=` binding may **destructure** into new names (`(q, r) := divmod(x, y)`, group 6), and `=`
 **mirrors it into existing lvalues** — `(a, b) = swap(a, b)`, `Div{q, r} = divmod(x, y)` — each leaf being
-any lvalue (`(a, obj.f) = …`). **[not yet]** in both directions, and each direction is refused as itself:
-the compiler binds one name at a time (_E9021 a destructuring binding `(a, b) := …`_) and assigns to one
-target at a time (_E9072 a destructuring assignment `(a, b) = …`_), while the struct shape is a pattern it
-does not read (_E9008 a struct pattern `Div{…}`_).
+any lvalue (`(a, obj.f) = …`). The value is read **once**, into a temporary, before any leaf is written,
+which is what makes `(a, b) = (b, a)` a swap.
 
 Expressions are a precedence cascade, one production per level: [`GRAMMAR#or-expr`](../../GRAMMAR),
 [`GRAMMAR#and-expr`](../../GRAMMAR), the comparisons ([`GRAMMAR#cmp-op`](../../GRAMMAR)),

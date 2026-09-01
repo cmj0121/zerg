@@ -279,9 +279,9 @@ tuple 的結果是 **first-class**——可存、可傳、可解構——所以�
 > **[not yet]** 這段文字說 tuple 免費就有的那兩件事,一件都沒建。tuple 上的 `==` 是
 > _E9057 NotImplemented: `==` on a `(int, int)` — structural equality over a container is unbuilt, and a
 > container has no declaration to derive it on_:上面的組成繼承規則已是規格,而缺的是無名形式上的那個衍生。
-> **解構**被拒絕得更早一步、在逗號上——`a, b := two()` 報 _E2005 expected a newline or `;` to separate
-> statements, found `,`_,在該指名形式的地方指名了標點(加了括號的 `(a, b) := two()` 則說得出來,是 `E9021`)。
-> 無論哪一種,tuple 的結果如規範般可存、可傳,但只能用 `.0` / `.1` 讀回來。
+> **解構**已經建好,而且是讀回一個 tuple 的日常方式——`(a, b) := two()`。沒有括號的 `a, b := two()` 不是一個
+> 形式:GRAMMAR#bind-target 導出的 tuple 形狀是帶括號的,所以逗號上報的是標點(_E2005 expected a newline or
+> `;` to separate statements, found `,`_)。
 
 **`type X = Y`** 定義一個**全新、獨立的型別**——不是透明 alias。`X` 承接 `Y` 的表示與實作（它的欄位或 variant、
 以及它的 `spec` impl,現在 `This` = `X`),但是一個**獨立身分**:`X` 與 `Y` 是**不同型別、即使結構完全相同**,而且

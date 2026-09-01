@@ -100,8 +100,8 @@ sentence and — when the site had a place to hand — the trailer, with neither
 quoted line and caret under it:
 
 ```text
-E9011 NotImplemented: `unsafe { … }` as an EXPRESSION — GRAMMAR makes it a block whose value the
-expression takes, and this compiler builds only the module-level `unsafe { … }` GROUP
+E9036 NotImplemented: the `unsafe` `spec` signature `peek` — GRAMMAR#fn-sig opens a member with
+`'unsafe'? 'mut'? 'fn'`, and the trust boundary the keyword marks is not enforced on one
   --> demo.zg:2:7
 ```
 

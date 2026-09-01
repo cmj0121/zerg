@@ -111,11 +111,9 @@ addressable value), `ptr(p) -> ptr` / `ptr[T](p) -> ptr[T]` (a raw-address cast)
 (a pointer-to-integer cast); plus the pointer **methods** `p.load()`, `p.store(v)`, and `p.offset(n)`.
 These are the one door to bare-metal work. See [Values & Memory](../core/memory.md).
 
-> **[not yet]** None of it is built, and every position says so with one code — _E9045 NotImplemented: the
-> raw-pointer built-in `addr` — bare-metal memory access, which is `unsafe`-only and not built here_, the
-> same for `ptr`, and the same again in a TYPE position: `fn f(p: ptr)` and `p: ptr = 0` name the
-> raw-pointer built-in rather than reading as though `ptr` were an existing type the value did not suit.
-> The `unsafe` context they need is itself unbuilt.
+All of it is built. The **type** may be written anywhere — describing pointer-shaped data is safe — and
+every **operation** is `unsafe`-only: outside one, _E3145_ names it as a raw-pointer operation rather than
+letting it read as ordinary code.
 
 ## `sizeof` / `alignof` — deferred
 

@@ -194,6 +194,9 @@ shipping compiler rather than a part of it (the line
 | `E2082` | a command literal names the program to run, and this one is empty                                     |
 | `E2083` | a command literal is `os.command(…)`, and this file does not `import "os"`                            |
 | `E2084` | a command literal's hole is a single expression                                                       |
+| `E2085` | an `asm(…)` opens with its TEMPLATE, a string literal                                                 |
+| `E2086` | an `asm` operand's CONSTRAINT is a string literal                                                     |
+| `E2087` | an `asm` operand opens with `in`, `out`, `inout` or `clobber`                                         |
 | `E3001` | `…` is not a public member of module `…`                                                              |
 | `E3002` | `…` is not a place, and an assignment needs one                                                       |
 | `E3003` | cannot assign to `…`: it is a module `const`, and a constant is never written                         |
@@ -335,6 +338,13 @@ shipping compiler rather than a part of it (the line
 | `E3140` | `…` is outside `[T; N]` — a constant index is checked at compile time                                 |
 | `E3141` | an array answers `len`, and is read with `a[i]`                                                       |
 | `E3142` | an int renders as `b`, `o`, `x`, `X`, `c` or `d`, and a format spec asked for another                 |
+| `E3143` | `asm(…)` is legal only inside `unsafe`                                                                |
+| `E3144` | an `asm` operand list writes its `out` and `inout` before its `in`                                    |
+| `E3145` | `…` is a raw-pointer operation, and every one of them is `unsafe`-only                                |
+| `E3146` | `.…()` needs a pointee and `ptr` has none                                                             |
+| `E3147` | `…` takes … arguments and this gives …                                                                |
+| `E3148` | `ptr…(…)` casts a raw pointer or an address, and … is neither                                         |
+| `E3149` | this value is an `unsafe fn(…)`, callable only from unsafe                                            |
 | `E4001` | `…` outside of a loop: it belongs to a `for`, and a `select` arm is not one                           |
 | `E4002` | a `from` cause is an `Err`, and … is not one                                                          |
 | `E4004` | `…(…)` names one side of an `Either`, which holds exactly one value                                   |
@@ -438,16 +448,13 @@ shipping compiler rather than a part of it (the line
 | `E9008` | a struct pattern `…{…}`                                                                               |
 | `E9009` | calling …                                                                                             |
 | `E9010` | the named argument `…:`                                                                               |
-| `E9011` | `unsafe { … }` as an EXPRESSION                                                                       |
 | `E9015` | an associated type binding `type … = …` in an `impl`                                                  |
 | `E9021` | a destructuring binding `(a, b) := …`                                                                 |
 | `E9025` | `for mut v in …`                                                                                      |
-| `E9027` | a standalone `unsafe fn` declaration                                                                  |
 | `E9028` | an associated type projection `….…`                                                                   |
 | `E9029` | a value generic parameter `…: …`                                                                      |
 | `E9031` | an `if` EXPRESSION whose branch has more than one statement                                           |
 | `E9032` | a binding head in an `if` EXPRESSION                                                                  |
-| `E9033` | `asm(…)`                                                                                              |
 | `E9034` | a default on a closure parameter                                                                      |
 | `E9036` | an `unsafe` `spec` signature                                                                          |
 | `E9037` | an `impl` carrying its own type parameters `[…]`                                                      |
@@ -456,7 +463,6 @@ shipping compiler rather than a part of it (the line
 | `E9042` | `type … = …` over a non-scalar                                                                        |
 | `E9043` | `…` leaving a `guard` block                                                                           |
 | `E9044` | a generic METHOD `….…[…]`                                                                             |
-| `E9045` | the raw-pointer built-in `…`                                                                          |
 | `E9046` | the compile-time built-in `…[T]`                                                                      |
 | `E9047` | an `impl` on the built-in type `…`                                                                    |
 | `E9048` | the `spec` `…` used as a TYPE (…)                                                                     |
@@ -481,7 +487,6 @@ shipping compiler rather than a part of it (the line
 | `E9070` | `…` re-binds a name a `match` arm's pattern already binds                                             |
 | `E9071` | the default on field `…` reads the field `…`                                                          |
 | `E9072` | a destructuring assignment `(a, b) = …`                                                               |
-| `E9073` | an `unsafe fn(…)` TYPE                                                                                |
 | `E9074` | an `impl` on `….…` — a dotted target                                                                  |
 | `E9075` | a generic `type …[…] = …`                                                                             |
 | `E9076` | a sub-pattern inside a variant payload                                                                |
@@ -650,6 +655,11 @@ name now is the prelude rule (`E2061`), which is about the name rather than abou
 | `E9013` | —       | the three conversions are built                                    |
 | `E9014` | —       | the self-documenting form is built; its text is the parser's       |
 | `E9081` | —       | a public name takes the module tag a private one already had (#92) |
+| `E9011` | —       | `unsafe { … }` as an expression is built                           |
+| `E9027` | —       | the standalone `unsafe fn` is built; the marker is on the decl     |
+| `E9033` | —       | inline assembly is built; it lowers to C's `__asm__ volatile`      |
+| `E9045` | —       | the raw-pointer built-ins are built                                |
+| `E9073` | —       | the `unsafe fn` TYPE is built; the marker is part of the type      |
 | `E3047` | —       | a strong typedef takes its underlying type's prefix operators      |
 
 **One of them moved nowhere**, and it is the only row whose second column is empty. `E3047`

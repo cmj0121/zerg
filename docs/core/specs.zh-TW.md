@@ -226,9 +226,10 @@ _E3138 `Greet.hello` reads `this.n`, and a spec is field-blind_。錯在 spec �
 
 > **[not yet]** 一個簽章可以是 **`unsafe`** 的——`GRAMMAR` 推導出 `fn-sig ::= 'unsafe'? 'mut'? 'fn' …`，所以
 > `spec` 裡的 `unsafe fn peek() -> int` 就是一個成員——而這個編譯器沒有建出它。它會被讀到簽章結束、然後被指名
-> 拒絕：_E9036 NotImplemented: the `unsafe` `spec` signature `peek`_，並帶上位置。理由與獨立的 `unsafe fn`
-> （`E9027`）相同：這個關鍵字標出的信任邊界並未被強制（見 [FFI](../runtime/ffi.zh-TW.md)），而把簽章當成安全的
-> 來讀，等於抹掉 `unsafe` 唯一說的那件事。至於**完全不**開啟任何成員的東西——`spec` 內文裡的 `unsafe { … }` 也
+> 拒絕：_E9036 NotImplemented: the `unsafe` `spec` signature `peek`_，並帶上位置。獨立的 `unsafe fn` 與 `unsafe fn` 型別
+> 都已經建好——標記坐在宣告上、也坐在型別裡（見 [FFI](../runtime/ffi.zh-TW.md)）——而還沒定案的是一個 spec 的
+> **要求**該是什麼意思：實作者拿一個安全的 `fn` 去供給一個 unsafe 的要求（或反過來），是這個編譯器還沒有的
+> 規則。把簽章當成安全的來讀，等於抹掉 `unsafe` 唯一說的那件事。至於**完全不**開啟任何成員的東西——`spec` 內文裡的 `unsafe { … }` 也
 > 在其中——仍然拿到 `E2036`。
 
 於是一個只有 1 個 required method 的 spec，能免費給 implementer 一堆衍生 method——`Iterator` 由 `next` 衍生

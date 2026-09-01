@@ -100,10 +100,8 @@ _E4063 `StopIteration` is testable but not constructible_；`e is StopIteration`
 `ptr[T](p) -> ptr[T]`（raw-address cast）、`uint(p) -> uint`（指標轉整數）；以及指標**方法** `p.load()`、
 `p.store(v)`、`p.offset(n)`。這是通往 bare-metal 的唯一入口。見 [值與記憶體](../core/memory.zh-TW.md)。
 
-> **[not yet]** 全部都沒有建，而每一個位置都以同一個代碼說明——_E9045 NotImplemented: the raw-pointer built-in
-> `addr` — bare-metal memory access, which is `unsafe`-only and not built here_，`ptr` 相同，**型別**位置也相同：
-> `fn f(p: ptr)` 與 `p: ptr = 0` 都指名那個 raw-pointer 內建，而不再讀起來像是 `ptr` 是個既有型別、只是值不合。
-> 它們所需的 `unsafe` 情境本身也還沒建。
+全部都建好了。**型別**可以寫在任何地方——描述指標形狀的資料是安全的——而每一個**操作**都是 `unsafe`-only：
+在它之外，_E3145_ 會指名它是一個 raw-pointer 操作，而不是讓它讀起來像普通程式碼。
 
 ## `sizeof` / `alignof` —— 已延後
 

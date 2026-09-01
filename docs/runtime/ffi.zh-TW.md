@@ -5,23 +5,65 @@ Zerg package 如何與 **C ABI** 交界——這是唯一一處 Zerg 值變成 C
 錯誤與可見性模型，以及 [Module、Package 與 Program](package.zh-TW.md) 的 public surface 規則之上。
 亦有 [English](ffi.md) 版本。
 
-> **[not yet]** **兩條邊都沒有建，所以本章是一份設計、而不是一份描述。** 外部呼叫所處的 `unsafe` 情境就是它
-> 停下來的地方：**block-expression** 形式被指名拒絕、帶位置（`E9011`），獨立的 **`unsafe fn`** 也是（`E9027`），
-> 上面那些 binding 用來拼寫的 **`unsafe fn` 型別**同樣如此（`E9073`）——import 那條邊也就一起沒了。內聯組語也被
-> 一併拒絕：`asm(…)` 是 _E9033 NotImplemented: `asm(…)` — GRAMMAR has inline assembly with an operand list
-> (GRAMMAR#asm-operand)_。出貨的標準
-> 函式庫裡沒有 `ffi` 模組，所以 `import "ffi"` 就在 import 那一步失敗——_E5002 cannot resolve import `ffi` under
-> any source root_——而不是拖到該 binding 需要的那個 `unsafe` 上。module 層級的
-> **分組**是有建的那一種形式，為的是它的 `mut` binding；一個既沒開分組、也沒標記 `fn` 的頂層 `unsafe` 是一個
-> 畸形的分組，而且會這樣說——_E2075 a top-level `unsafe` opens a GROUP or marks a `fn`_，那是一個 parse 的拒絕、
-> 指名的不是任何未建形式，因為 `unsafe struct P { … }` 在這個文法的任何位置都推不出來。分組的 `fn` 在裡面能做
-> 什麼，仍是一項一項被拒絕。export
-> 那條邊，`--emit lib` 只寫出 object、**不產生 header**，也沒有任何東西回報哪些 `pub` 宣告會被排除在 header
-> 之外。
->
-> 本章已經沒有任何東西會漏到 `cc`。`handle` 是 `zerg` 程式裡沒有任何宣告帶有的名字，所以標註它的 binding
-> ——`mut h: handle = 0` 或 `mut h: handle? = nil`——會在寫下它的地方被拒絕，回報為
-> _E4056 no type named `handle` (the binding `h`)_。
+**Group 12 建好了。** 外部呼叫所處的 `unsafe` 情境就在這裡：**block-expression** 的 `unsafe { … }` 產出它 block
+的值、獨立的 **`unsafe fn`** 宣告一個，而 **`unsafe fn` 型別**帶著那個標記，所以它的值不是一個純 `fn` 的值。內聯
+組語也在這裡，raw pointer 的型別與它的操作亦然——本章其餘部分描述的是跑得起來的東西。
+
+> **[not yet]** **import 那條邊**還沒有。出貨的標準函式庫裡沒有 `ffi` 模組，所以 `import "ffi"` 就在 import 那一
+> 步失敗——_E5002 cannot resolve import `ffi` under any source root_——而標註 `handle` 的 binding 會在寫下它的地方
+> 被拒絕，回報為 _E4056 no type named `handle` (the binding `h`)_。**export** 那條邊，`--emit lib` 只寫出 object、
+> **不產生 header**，也沒有任何東西回報哪些 `pub` 宣告會被排除在 header 之外。一個既沒開分組、也沒標記 `fn` 的
+> 頂層 `unsafe` 是一個畸形的分組，而且會這樣說——_E2075 a top-level `unsafe` opens a GROUP or marks a `fn`_，那是
+> 一個 parse 的拒絕、指名的不是任何未建形式，因為 `unsafe struct P { … }` 在這個文法的任何位置都推不出來。
+
+## 內聯組語
+
+`asm(template, operand*)` 降低成 C 編譯器自己的內聯組語。這個參考實作發出 C、自己沒有組譯器，而且不需要：
+`GRAMMAR` 說 template 與 constraint 字串是**不透明的**、屬於目標 backend——那正是讓它們可以原封不動交給 `cc`
+的那個承諾。
+
+```zerg
+fn main() {
+ mut x := 0
+ y := 7
+ unsafe {
+  asm("mov %1, %0", out("=r") x, in("r") y)
+ }
+ print x
+}
+```
+
+文法留白的兩件事在這裡決定，而且它們是語言規則、不是 emitter 的細節：
+
+- **寫下的順序就是編號。** C 編譯器把 `%0`、`%1`、… 編成**先 output 再 input**，所以語言要求會寫入的那個
+  [`GRAMMAR#asm-operand`](../../GRAMMAR)——`out` 與 `inout`——寫在每一個 `in` **之前**——_E3144 an `asm`
+  operand list writes its `out` and `inout` operands BEFORE its `in` ones_。另一種做法是由編譯器重新編號，
+  那需要它去**解析** template——而 template 是不透明的，這正是它能被原樣傳過去的全部理由。**`clobber`**
+  可以放在任何位置，因為不管它寫在哪裡都降到第三個冒號。
+- **`volatile` 一律輸出。** Zerg 沒有拼寫它的方式。這裡的 `asm` 只在 `unsafe` 內到得了、而且罕見，而省略它正是
+  那種會靜默刪掉 memory-mapped 寫入的最佳化，所以永不省略是預設——一個決定，不是一個缺口。
+
+`unsafe` 之外的 `asm(…)` 是 _E3143_：它是這個語言唯一檢查不了的運算式，所以那個標記正是讓它說得出口的東西。
+
+## Raw pointer
+
+**型別**屬文法,**操作**不屬。`ptr` / `ptr[T]` 可以出現在簽章或欄位裡——描述指標形狀的資料是安全的——而取位址、
+從它讀、寫入、位移與轉換都是 `unsafe`-only 的 intrinsic（_E3145_）。
+
+| 寫法                   | 它是什麼                                      |
+| ---------------------- | --------------------------------------------- |
+| `addr(x)`              | 一個 place 的位址，型別是那裡的東西——`ptr[T]` |
+| `p.load()`             | 把 pointee 讀回來                             |
+| `p.store(v)`           | 透過指標寫入                                  |
+| `p.offset(n)`          | 往後 `n` 個 pointee 的位址                    |
+| `uint(p)` / `int(p)`   | 位址作為一個數字                              |
+| `ptr(p)` / `ptr[T](p)` | 兩種指標形式之間的轉換                        |
+
+`[T]` 正是替 load、store 與 offset 定型的東西，所以**裸 `ptr`** 沒有 pointee，這三者在它上面都被拒絕
+（_E3146_）。一個轉換是**從一個指標、或從一個以數字持有的位址**做出來的，別無其他——一個值不是一個位址
+（_E3148_）。
+
+一個 `ptr` **本就可空**（位址 0）、且與 `T?` **正交**：沒有 `ptr[T]?`，判空寫 `p == 0`。
 
 ## 兩條邊、一份契約
 
@@ -207,8 +249,8 @@ module 層級的分組是**一個有開頭也有結尾的情境**，兩端都會
 `}`，它底下每一個宣告都會被讀成在分組**裡面**——安全程式碼裡的一個 `mut` binding 就是這樣一聲不吭地變成可變
 global 的。
 
-> **[not yet]** 一個獨立的 `unsafe fn` 宣告會被**指名拒絕、帶位置**。把它蓋起來就等於把 `fn` 當安全的讀——
-> 關鍵字標示的邊界沒有任何東西強制——所以在那個檢查存在之前，這個形式被擋下，而不是被靜默解除武裝。
+一個**獨立的 `unsafe fn`** 就是同一個標記的單一函式形式：它把 `in_unsafe` 記在宣告上，而那正是 caller 規則所讀
+的東西，所以兩種拼法是同一條規則、不是兩條。
 
 分組自己的規則**有**被強制：宣告在 module 層級 `unsafe { … }` 分組裡的 `fn` 是一個 unsafe fn，從安全程式碼指名
 它——呼叫它，或把裸名字綁成 function value——會以 `E3083` 拒絕、帶位置。它的呼叫者是分組裡其他的宣告，而那正是分

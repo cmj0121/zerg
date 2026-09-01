@@ -4333,7 +4333,24 @@ fn parse_primary(mut &p: Parser) -> ast.Expr {
 		return ast.Expr.EUnsafe(parse_block(p))
 	}
 
-	raise p_diag_at(p, t.line, t.col, rule.Rule.NotYetAsm, "NotImplemented: `asm(…)` — GRAMMAR has inline assembly with an operand list (GRAMMAR#asm-operand), and this compiler emits C and has no assembler of its own") if k == token.Kind.Asm
+	# `ptr(x)` / `ptr[T](x)` — the CASTS GRAMMAR#ptr-type names, in expression position. `ptr`
+	# is a keyword, so it never reaches the callee path a conversion like `int(x)` takes; the
+	# type is read here and the argument becomes an ordinary conversion node.
+	if k == token.Kind.Ptr {
+		pt := parse_base_type(p)
+		expect(p, token.Kind.LParen)
+		inner := parse_expr(p)
+		expect(p, token.Kind.RParen)
+		return ast.Expr.EConv(pt, inner, "ptr")
+	}
+
+	# GRAMMAR#asm-expr — a template string and an operand list. Everything about the strings is
+	# OPAQUE here: the template's `%N` and the constraints are the target backend's, which is
+	# what lets them be handed to the C compiler unread.
+	if k == token.Kind.Asm {
+		p_advance(p)
+		return p_asm(p, t)
+	}
 
 	if k == token.Kind.Cmd {
 		p_advance(p)
@@ -5191,6 +5208,77 @@ fn fstr_place(mut &toks: list[token.Token], t: token.Token) {
 		toks[i] = token.Token(k.kind, k.lexeme, k.value, t.line, t.col)
 		i = i + 1
 	}
+}
+
+# p_asm reads `asm(template, operand*)`. The operand heads `out` / `inout` / `clobber` are
+# CONTEXTUAL — special only here, since `in` is already a keyword — so they are read as
+# identifiers and told apart by their text, which is what "contextual" means in a parser with
+# no symbol table.
+fn p_asm(mut &p: Parser, t: token.Token) -> ast.Expr {
+	expect(p, token.Kind.LParen)
+	tt := cur(p)
+	raise p_diag_at(p, tt.line, tt.col, rule.Rule.AsmTemplateNotStr, "an `asm(…)` opens with its TEMPLATE, a string literal (GRAMMAR#asm-expr) — the operands follow it") if not p_at(p, token.Kind.Str)
+
+	tpl := tt.value
+	p_advance(p)
+
+	mut ops: list[ast.AsmOp] = []
+	for p_at(p, token.Kind.Comma) {
+		p_advance(p)
+		break if p_at(p, token.Kind.RParen)
+
+		ops.append(p_asm_operand(p))
+	}
+	expect(p, token.Kind.RParen)
+	return ast.Expr.EAsm(tpl, ops)
+}
+
+fn p_asm_operand(mut &p: Parser) -> ast.AsmOp {
+	h := cur(p)
+	kind := p_asm_kind(p, h)
+	p_advance(p)
+	expect(p, token.Kind.LParen)
+
+	mut cons: list[str] = []
+	c := cur(p)
+	p_asm_constraint(p, c)
+
+	cons.append(c.value)
+	p_advance(p)
+
+	# A CLOBBER TAKES A LIST AND NO VALUE — `clobber("rax", "cc")` — which is the one operand
+	# shape that names registers rather than binding one.
+	if kind == 3 {
+		for p_at(p, token.Kind.Comma) {
+			p_advance(p)
+			c2 := cur(p)
+			p_asm_constraint(p, c2)
+
+			cons.append(c2.value)
+			p_advance(p)
+		}
+		expect(p, token.Kind.RParen)
+		return ast.AsmOp(kind, cons, ast.Expr.ENil, h.line, h.col)
+	}
+
+	expect(p, token.Kind.RParen)
+	return ast.AsmOp(kind, cons, parse_expr(p), h.line, h.col)
+}
+
+# p_asm_constraint is the ONE raise for a constraint that is not a string. It is asked in two
+# places — the first operand and a clobber's rest — and a code is an identity, so two raises
+# under it would be two rules wearing one number.
+fn p_asm_constraint(mut &p: Parser, c: token.Token) {
+	raise p_diag_at(p, c.line, c.col, rule.Rule.AsmConstraintNotStr, "an `asm` operand's CONSTRAINT is a string literal (GRAMMAR#asm-operand) — its meaning is the target backend's, so it is opaque here") if c.kind != token.Kind.Str
+}
+
+fn p_asm_kind(mut &p: Parser, h: token.Token) -> int {
+	return 0 if h.kind == token.Kind.In
+	return 1 if h.kind == token.Kind.Ident and h.lexeme == "out"
+	return 2 if h.kind == token.Kind.Ident and h.lexeme == "inout"
+	return 3 if h.kind == token.Kind.Ident and h.lexeme == "clobber"
+
+	raise p_diag_at(p, h.line, h.col, rule.Rule.AsmOperandHead, f"an `asm` operand opens with `in`, `out`, `inout` or `clobber` (GRAMMAR#asm-operand), and `{h.lexeme}` is none of them")
 }
 
 # fstr_tail finds where a hole's EXPRESSION ends and its tails begin — the index of the `!` of

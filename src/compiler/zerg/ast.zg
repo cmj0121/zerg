@@ -116,6 +116,20 @@ pub enum Ty {
 	TRef(Ty)
 }
 
+# AsmOp is one operand of an `asm(…)` (GRAMMAR#asm-operand): its KIND — 0 `in`, 1 `out`,
+# 2 `inout`, 3 `clobber` — the constraint string, and the value or place it binds.
+#
+# A CLOBBER CARRIES CONSTRAINTS AND NO VALUE, which is why the two lists are one type rather
+# than two: every operand has a kind and a set of constraint strings, and only the first three
+# have an expression. `expr` is ENil for a clobber, and its `cons` holds every name.
+pub struct AsmOp {
+	pub kind: int
+	pub cons: list[str]
+	pub expr: Expr
+	pub line: int
+	pub col: int
+}
+
 # Expr is an expression node.
 pub enum Expr {
 	EInt(str, int, int)
@@ -242,6 +256,11 @@ pub enum Expr {
 	# EBlock carrying a flag, because what it marks is a CONTEXT the emitter enters and leaves:
 	# a bare block nested inside one is still unsafe, and a function called from one is not.
 	EUnsafe(list[Stmt])
+
+	# EAsm is inline assembly (GRAMMAR#asm-expr): the template, then one AsmOp per operand.
+	# The template is OPAQUE — GRAMMAR says its meaning is the target backend's — which is
+	# exactly the promise that lets it be handed to the C compiler unread.
+	EAsm(str, list[AsmOp])
 
 	# EIs is the type test `x is Name` (GRAMMAR#cmp-expr, at the comparison level and equally
 	# non-associative). The right side is held as a NAME rather than a parsed Ty because
@@ -1215,6 +1234,7 @@ pub fn expr_kind(e: Expr) -> str {
 		Expr.EGuard(body) => "guard"
 		Expr.EBlock(body) => "block-expr"
 		Expr.EUnsafe(_) => "unsafe-block"
+		Expr.EAsm(_, _) => "asm"
 		Expr.EIs(x, name) => "is " + name
 		Expr.EIn(x, set) => "in"
 		_ => "?"
@@ -1270,6 +1290,7 @@ pub fn expr_parts(e: Expr) -> list[Expr] {
 		Expr.EGuard(_) => expr_parts_none()
 		Expr.EBlock(_) => expr_parts_none()
 		Expr.EUnsafe(_) => expr_parts_none()
+		Expr.EAsm(_, ops) => asm_op_exprs(ops)
 		Expr.EIs(x, _) => [x]
 		Expr.EIn(x, set) => [x, set]
 	}
@@ -1352,6 +1373,18 @@ fn expr_parts_defs(ps: list[Param]) -> list[Expr] {
 	for pm in ps {
 		if pm.has_def {
 			out.append(pm.def)
+		}
+	}
+	return out
+}
+
+# asm_op_exprs is the expressions an `asm(…)` mentions — every operand but a clobber, which
+# names registers rather than values.
+pub fn asm_op_exprs(ops: list[AsmOp]) -> list[Expr] {
+	mut out: list[Expr] = []
+	for o in ops {
+		if o.kind != 3 {
+			out.append(o.expr)
 		}
 	}
 	return out

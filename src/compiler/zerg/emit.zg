@@ -2836,7 +2836,6 @@ pub fn c_builtin_check(mut &em: Emitter, n: str) {
 	c_fixed_width_check(em, n)
 
 	raise c_diag(em, rule.Rule.NotYetRefBox, "NotImplemented: a refcounted box `Ref(x)` / `deref(r)` — this compiler has no `Ref[T]` type") if n == "Ref" or n == "deref"
-	raise c_diag(em, rule.Rule.NotYetRawPointerBuiltin, f"NotImplemented: the raw-pointer built-in `{n}` — bare-metal memory access, which is `unsafe`-only and not built here") if n == "addr" or n == "ptr"
 	raise c_diag(em, rule.Rule.NotYetCompileTimeBuiltin, f"NotImplemented: the compile-time built-in `{n}[T]` — this compiler does not compute a type's layout") if n == "sizeof" or n == "alignof"
 
 	# `set([1, 2])` read as "undefined function `set`", the message a misspelled call gets.
@@ -5679,6 +5678,7 @@ fn c_expr_node(mut &em: Emitter, e: ast.Expr, sb: Subst) -> str {
 		Expr.EGuard(body) => c_guard(em, body, sb)
 		Expr.EBlock(body) => c_block_expr(em, body, sb)
 		Expr.EUnsafe(body) => c_unsafe_expr(em, body, sb)
+		Expr.EAsm(tpl, ops) => c_asm(em, tpl, ops, sb)
 		Expr.EIs(x, name) => c_is_test(em, x, name, sb)
 		Expr.EIn(x, set) => c_in_test(em, x, set, sb)
 	}
@@ -7395,6 +7395,24 @@ fn c_conv_scalar(mut &em: Emitter, dc: int, db: int, xt: ast.Ty, ty: ast.Ty, inn
 	xr := c_repr_of(em, xt)
 	sc := c_scalar_class(xr)
 
+	# A RAW POINTER IS AN ADDRESS, and `uint(p)` is the cast GRAMMAR names for reading one as a
+	# number. It is a raw-pointer operation like any other, so it is `unsafe`-only — and it is
+	# the reason the refusal below does not fire on a `ptr`: an address IS a scalar, and the
+	# only thing that made it look otherwise was that nothing here had a case for it.
+	if c_is_ptr(xt) and (c_is_uint(ty) or c_is_int(ty)) {
+		check.chk_ptr_context(em, f"`{ast.ty_name(ty)}(…)` of a raw pointer")
+		return f"(({c_type(ty)})({inner}))"
+	}
+
+	# AND THE POINTER CASTS THEMSELVES — `ptr(p)`, `ptr[T](p)`, and back from an address.
+	# GRAMMAR names them beside the operations, and they are the same kind of thing: a
+	# reinterpretation nothing can check, legal where the author has said so.
+	if c_is_ptr(ty) {
+		check.chk_ptr_context(em, f"`{ast.ty_name(ty)}(…)`")
+		check.chk_ptr_source(em, ty, xt)
+		return f"(({c_type(ty)})({inner}))"
+	}
+
 	# NOT A SCALAR ON EITHER SIDE. Naming only the aggregates left `TChan`, `TErr` and an
 	# unresolved `TNamed` falling through to the cast below — the same class this whole
 	# function exists to close, one type-family over. TUnknown keeps the plain cast: a type
@@ -7782,6 +7800,7 @@ fn c_is_lvalue(e: ast.Expr) -> bool {
 # TYPED, so it is decided once, here, and both ask. Deciding it twice is how the two drift.
 enum MethKind {
 	MRender
+	MPtr
 	MList
 	MArr
 	MMap
@@ -7951,6 +7970,7 @@ fn c_meth_kind(mut &em: Emitter, tty: ast.Ty, meth: str) -> MethKind {
 
 	return MethKind.MList if c_is_list(tty)
 	return MethKind.MArr if c_is_arr(tty)
+	return MethKind.MPtr if c_is_ptr(tty)
 	return MethKind.MMap if c_is_map(tty)
 
 	# EVERY method on an `Err`, not only the three that exist. An `Err` has no declaration
@@ -7990,6 +8010,7 @@ fn c_method(mut &em: Emitter, target: ast.Expr, meth: str, args: list[ast.Expr],
 		MethKind.MRender => c_render_meth(em, target, meth, tty, sb)
 		MethKind.MList => c_list_method(em, target, meth, args, tty, sb)
 		MethKind.MArr => c_arr_method(em, meth, tty)
+		MethKind.MPtr => c_ptr_method(em, target, meth, args, tty, sb)
 		MethKind.MMap => c_map_method(em, target, meth, args, tty, sb)
 		MethKind.MErr => c_err_method(em, target, meth, args, sb)
 		MethKind.MCarrier => c_carrier_method(em, target, meth, args, tty, sb)
@@ -8530,6 +8551,12 @@ fn c_infer_call_written(mut &em: Emitter, name: str, args: list[ast.Expr], ts: l
 }
 
 fn c_call(mut &em: Emitter, name: str, args: list[ast.Expr], sb: Subst) -> str {
+	# `addr(x)` IS AN INTRINSIC AND NOT A FUNCTION (GRAMMAR#ptr-type). It takes the storage
+	# behind a name, which nothing written in Zerg can do, so it is answered here — above the
+	# name lookup, since a program that declares its own `addr` would otherwise shadow the one
+	# operation that has no other spelling.
+	return c_addr(em, args, sb) if name == "addr"
+
 	if c_is_intrinsic(em, name) {
 		check.chk_intrinsic_call(em, name, args)
 		em.used_rt = true
@@ -9422,6 +9449,80 @@ fn c_fnfield_call(mut &em: Emitter, recv: str, meth: str, target: ast.Expr, args
 	return f"({c_fnptr_cast(fty)}({tv}.zg_{meth}).fn)({tv}.zg_{meth}.env{c_args_after(em, fty, args, sb)})"
 }
 
+# --- raw pointers (GRAMMAR#ptr-type) -------------------------------------------------------
+#
+# The TYPE is grammar and the OPERATIONS are not: GRAMMAR says a `ptr` / `ptr[T]` may appear in
+# a signature or a field to DESCRIBE pointer-shaped data, and that taking an address,
+# dereferencing, storing, offsetting and casting are unsafe INTRINSICS. They are the compiler's
+# rather than the standard library's for the reason `print` is: none of them can be written in
+# Zerg — `addr(x)` needs the storage behind a name, and a load needs a type to read back.
+#
+# EVERY ONE OF THEM IS `unsafe`-ONLY, and that is the same rule an unsafe fn's caller meets:
+# the marker is what makes an operation the compiler cannot check sayable at all.
+
+# c_addr lowers `addr(x)` — the address of a place, typed to what is there.
+fn c_addr(mut &em: Emitter, args: list[ast.Expr], sb: Subst) -> str {
+	check.chk_ptr_context(em, "addr(…)")
+	check.chk_ptr_arity(em, "addr", 1, args.len())
+	return "0" if args.len() != 1
+
+	check.chk_ref_arg(em, "", 1, args[0])
+	return f"((void*)&({c_lvalue(em, args[0], sb)}))"
+}
+
+# c_ptr_method is `load` / `store` / `offset` on a raw pointer. A bare `ptr` has no pointee, so
+# each of the three is refused on one: what `[T]` types is exactly these operations.
+fn c_ptr_method(mut &em: Emitter, target: ast.Expr, meth: str, args: list[ast.Expr], tty: ast.Ty, sb: Subst) -> str {
+	check.chk_ptr_context(em, f"`.{meth}()` on a raw pointer")
+	el := c_ptr_elem(tty)
+	check.chk_ptr_typed(em, meth, tty, c_is_unknown(el))
+	ct := c_type(el)
+	tgt := c_expr(em, target, sb)
+
+	if meth == "load" {
+		check.chk_ptr_arity(em, "load", 0, args.len())
+		return f"(*({ct}*)({tgt}))"
+	}
+	if meth == "store" {
+		check.chk_ptr_arity(em, "store", 1, args.len())
+		return "0" if args.len() != 1
+
+		return f"((*({ct}*)({tgt})) = {c_fit_copied(em, "`store`", el, args[0], sb)})"
+	}
+
+	check.chk_ptr_arity(em, "offset", 1, args.len())
+	return "0" if args.len() != 1
+
+	return f"((void*)((({ct}*)({tgt})) + ({c_expr(em, args[0], sb)})))"
+}
+
+fn c_ptr_method_ret(mut &em: Emitter, meth: str, tty: ast.Ty) -> ast.Ty {
+	return c_ptr_elem(tty) if meth == "load"
+	return tty if meth == "offset"
+
+	return ast.Ty.TVoid
+}
+
+fn c_addr_elem(mut &em: Emitter, args: list[ast.Expr]) -> ast.Ty {
+	return ast.Ty.TUnknown if args.len() != 1
+
+	return c_infer(em, args[0])
+}
+
+pub fn c_is_ptr(t: ast.Ty) -> bool {
+	return match t {
+		Ty.TPtr(_) => true
+		_          => false
+	}
+}
+
+pub fn c_ptr_elem(t: ast.Ty) -> ast.Ty {
+	return match t {
+		Ty.TPtr(e) => e
+		_          => ast.Ty.TUnknown
+	}
+}
+
 # c_ptr_type is the C a `ptr` / `ptr[T]` lowers to: the untyped one is `void*` and a typed one
 # is a pointer to the pointee's C type. One width, two types, which is what `[T]` typing only
 # the load, the store and the offset means.
@@ -9429,6 +9530,71 @@ fn c_ptr_type(e: ast.Ty) -> str {
 	return "void*" if c_is_unknown(e)
 
 	return c_type(e) + "*"
+}
+
+# --- inline assembly (GRAMMAR#asm-expr) ---------------------------------------------------
+#
+# `asm("mov %0, %1", out("=r") x, in("r") y, clobber("cc"))` lowers to
+# `__asm__ volatile ("mov %0, %1" : "=r"(x) : "r"(y) : "cc");` — the reference implementation
+# emits C and needs no assembler of its own, because GRAMMAR already says the template and the
+# constraint strings are OPAQUE and belong to the target backend. That promise is exactly what
+# lets them be handed to `cc` unread.
+#
+# TWO DECISIONS THE GRAMMAR LEAVES OPEN, both settled here and written into the chapter:
+#
+#   THE WRITTEN ORDER IS THE NUMBERING. A C compiler numbers `%0`, `%1`, … outputs first and
+#   then inputs, and an operand list that may be written in any order has no defined answer for
+#   `%0`. The alternative — renumbering — needs the emitter to PARSE the template, which
+#   contradicts the opacity the whole lowering rests on. So the language requires `out` and
+#   `inout` before `in`, one refusal rule, and the order a reader wrote IS what they numbered.
+#   A `clobber` may sit anywhere, because it lowers to the third colon whatever its position.
+#
+#   `volatile` IS ALWAYS EMITTED. Zerg has no spelling for it, an `asm` here is reachable only
+#   inside `unsafe` and is rare, and eliding it is the optimisation that silently deletes a
+#   memory-mapped write. Never eliding it is a decision rather than a gap.
+fn c_asm(mut &em: Emitter, tpl: str, ops: list[ast.AsmOp], sb: Subst) -> str {
+	check.chk_asm_context(em)
+	check.chk_asm_order(em, ops)
+	em.used_rt = true
+
+	mut outs := ""
+	mut ins := ""
+	mut clob := ""
+	for o in ops {
+		if o.kind == 3 {
+			for c in o.cons {
+				if clob != "" {
+					clob = clob + ", "
+				}
+				clob = clob + c_str_lit(c)
+			}
+			continue
+		}
+
+		one := f"{c_str_lit(o.cons[0])}({c_asm_operand(em, o, sb)})"
+		if o.kind == 0 {
+			if ins != "" {
+				ins = ins + ", "
+			}
+			ins = ins + one
+		} else {
+			if outs != "" {
+				outs = outs + ", "
+			}
+			outs = outs + one
+		}
+	}
+
+	return f"__asm__ volatile ({c_str_lit(tpl)} : {outs} : {ins} : {clob})"
+}
+
+# c_asm_operand renders one operand's value. An `out` or an `inout` binds a PLACE — the callee
+# writes through it — so it is lowered as an assignment target, exactly as a `mut &` argument
+# is; an `in` is an ordinary read.
+fn c_asm_operand(mut &em: Emitter, o: ast.AsmOp, sb: Subst) -> str {
+	return c_expr(em, o.expr, sb) if o.kind == 0
+
+	return c_lvalue(em, o.expr, sb)
 }
 
 fn c_args(mut &em: Emitter, args: list[ast.Expr], sb: Subst) -> str {
@@ -10430,6 +10596,9 @@ fn c_infer_node(mut &em: Emitter, e: ast.Expr) -> ast.Ty {
 		Expr.EGuard(body) => ast.Ty.TEither(c_guard_elem(c_guard_val_ty(em, body)), ast.Ty.TErr)
 		Expr.EBlock(body) => c_block_val_ty(em, body)
 		Expr.EUnsafe(body) => c_block_val_ty(em, body)
+
+		# an `asm(…)` yields nothing: its effects are its operands and its clobbers
+		Expr.EAsm(_, _)   => ast.Ty.TVoid
 		Expr.EIs(x, name) => ast.Ty.TBool
 		Expr.EIn(x, set)  => ast.Ty.TBool
 	}
@@ -10465,6 +10634,7 @@ fn c_infer_methcall(mut &em: Emitter, target: ast.Expr, meth: str, args: list[as
 		MethKind.MRender  => ast.Ty.TStr
 		MethKind.MList    => c_list_method_ret(em, meth)
 		MethKind.MArr     => c_arr_method_ret(em, meth)
+		MethKind.MPtr     => c_ptr_method_ret(em, meth, tty)
 		MethKind.MMap     => c_map_method_ret(meth)
 		MethKind.MErr     => c_err_method_ret(em, meth)
 		MethKind.MCarrier => c_carrier_method_ret(em, tty, meth)
@@ -10522,6 +10692,11 @@ fn c_list_method_ret(mut &em: Emitter, meth: str) -> ast.Ty {
 }
 
 fn c_infer_call(mut &em: Emitter, name: str, args: list[ast.Expr]) -> ast.Ty {
+	# `addr(x)` answers a pointer TO WHAT IS THERE, which is the whole reason it is typed
+	# rather than a bare address: `p.load()` reads the pointee back, and something has to have
+	# said what a pointee is.
+	return ast.Ty.TPtr(c_addr_elem(em, args)) if name == "addr"
+
 	# A GENERIC CALL answers the SPECIALIZATION's result, never the template's. The template
 	# says `T`, which is not a type — so the answer used to fall through to the signature
 	# table, find nothing, and come back unknown: `print id("hi")` then took the integer path

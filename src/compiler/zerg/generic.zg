@@ -320,6 +320,7 @@ fn subst_expr(su: TySubst, e: ast.Expr) -> ast.Expr {
 		Expr.EGuard(b) => ast.Expr.EGuard(subst_block(su, b))
 		Expr.EBlock(b) => ast.Expr.EBlock(subst_block(su, b))
 		Expr.EUnsafe(b) => ast.Expr.EUnsafe(subst_block(su, b))
+		Expr.EAsm(tpl, ops) => ast.Expr.EAsm(tpl, subst_asm_ops(su, ops))
 		Expr.EIs(x, nm) => ast.Expr.EIs(subst_expr(su, x), nm)
 		Expr.EIn(x, s) => ast.Expr.EIn(subst_expr(su, x), subst_expr(su, s))
 
@@ -339,6 +340,16 @@ fn subst_expr(su: TySubst, e: ast.Expr) -> ast.Expr {
 		Expr.ENil          => e
 		Expr.EIdent(_)     => e
 	}
+}
+
+# subst_asm_ops carries a specialization through an `asm(…)`: the template and the constraints
+# are text, and only an operand's EXPRESSION can mention a type parameter.
+fn subst_asm_ops(su: TySubst, ops: list[ast.AsmOp]) -> list[ast.AsmOp] {
+	mut out: list[ast.AsmOp] = []
+	for o in ops {
+		out.append(ast.AsmOp(o.kind, o.cons, subst_expr(su, o.expr), o.line, o.col))
+	}
+	return out
 }
 
 # subst_params is a parameter list, and it is a function of its own because BOTH a template

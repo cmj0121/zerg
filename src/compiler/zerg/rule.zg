@@ -115,6 +115,9 @@ pub enum Rule {
 	CommandEmpty = 2082
 	CommandNeedsOs = 2083
 	CommandHoleManyExprs = 2084
+	AsmTemplateNotStr = 2085
+	AsmConstraintNotStr = 2086
+	AsmOperandHead = 2087
 
 	# checking — a form whose meaning does not hold together — reported against the tree, all at once
 	NotPublicMember = 3001
@@ -291,6 +294,12 @@ pub enum Rule {
 	ArrayIndexConst = 3140
 	ArrayMethodUnknown = 3141
 	FStringSpecType = 3142
+	AsmOutsideUnsafe = 3143
+	AsmOrder = 3144
+	PtrOpOutsideUnsafe = 3145
+	PtrUntypedOp = 3146
+	PtrOpArity = 3147
+	PtrCastSource = 3148
 	UnsafeValueInSafeCode = 3149
 	SpecDefaultReadsField = 3138
 
@@ -439,7 +448,6 @@ pub enum Rule {
 	NotYetValueGenericParam = 9029
 	NotYetIfExprManyStatements = 9031
 	NotYetIfExprBindingHead = 9032
-	NotYetAsm = 9033
 	NotYetClosureParamDefault = 9034
 	NotYetUnsafeSpecSignature = 9036
 	NotYetImplTypeParams = 9037
@@ -448,7 +456,6 @@ pub enum Rule {
 	NotYetTypedefNonScalar = 9042
 	NotYetJumpOutOfGuard = 9043
 	NotYetGenericMethod = 9044
-	NotYetRawPointerBuiltin = 9045
 	NotYetCompileTimeBuiltin = 9046
 	NotYetImplOnBuiltin = 9047
 	NotYetSpecAsType = 9048

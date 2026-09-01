@@ -513,6 +513,54 @@ pub fn chk_unsafe_reachable(mut &em: emit.Emitter, name: str, callee_unsafe: boo
 	chk_at(em, rule.Rule.UnsafeNameInSafeCode, f"`{name}` is an unsafe fn — declared `unsafe fn`, or inside a module-level `unsafe {{ … }}` group — and GRAMMAR group 12 makes it callable only from unsafe, and {what}")
 }
 
+# chk_asm_context holds inline assembly to `unsafe`. It is the same rule an unsafe fn's caller
+# meets, asked of a form rather than of a name: `asm` is the one expression that can do anything
+# at all, so the trust boundary is what makes it sayable.
+pub fn chk_asm_context(mut &em: emit.Emitter) {
+	return if em.in_unsafe_fn
+
+	chk_at(em, rule.Rule.AsmOutsideUnsafe, "`asm(…)` is legal only inside `unsafe` (GRAMMAR group 12) — it is the one expression this language cannot check, so the marker is what makes it sayable: put it in an `unsafe { … }` block, or in an `unsafe fn`")
+}
+
+# chk_asm_order holds an operand list to OUT-THEN-IN, which is what makes `%0` mean something.
+# A C compiler numbers the outputs first and then the inputs, so a list written the other way
+# round would have the reader counting one order and the template numbering another. The
+# alternative is for the emitter to renumber, which needs it to PARSE the template — and the
+# template is opaque, which is the whole reason it can be handed to `cc` unread.
+#
+# A `clobber` MAY SIT ANYWHERE, because it lowers to the third colon whatever its position.
+pub fn chk_asm_order(mut &em: emit.Emitter, ops: list[ast.AsmOp]) {
+	mut seen_in := false
+	for o in ops {
+		continue if o.kind == 3
+
+		if o.kind == 0 {
+			seen_in = true
+			continue
+		}
+		if seen_in {
+			chk_at_place(em, em.at_path, o.line, o.col, rule.Rule.AsmOrder, "an `asm` operand list writes its `out` and `inout` operands BEFORE its `in` ones — a C compiler numbers `%0`, `%1`, … outputs first, so the order written is the numbering, and a template is opaque here rather than renumbered")
+		}
+	}
+}
+
+# chk_ptr_context holds every raw-pointer OPERATION to `unsafe`. GRAMMAR draws the line there
+# and not at the type: a `ptr` in a signature describes pointer-shaped data and is checkable
+# like any other type, while a load through one is exactly what the compiler cannot check.
+pub fn chk_ptr_context(mut &em: emit.Emitter, what: str) {
+	return if em.in_unsafe_fn
+
+	chk_at(em, rule.Rule.PtrOpOutsideUnsafe, f"{what} is a raw-pointer operation, and GRAMMAR group 12 makes every one of them `unsafe`-only — the TYPE may be written anywhere, because describing pointer-shaped data is safe; reading through one is not")
+}
+
+# chk_ptr_typed refuses a load, a store or an offset on a BARE `ptr`. What `[T]` types is
+# exactly these three: without a pointee there is no width to step by and no type to read back.
+pub fn chk_ptr_typed(mut &em: emit.Emitter, meth: str, tty: ast.Ty, untyped: bool) {
+	return if not untyped
+
+	chk_at(em, rule.Rule.PtrUntypedOp, f"`.{meth}()` needs a pointee and `{ast.ty_name(tty)}` has none — `[T]` is what types the load, the store and the offset, so write `ptr[T]` or cast to one")
+}
+
 # chk_unsafe_call_value is the caller rule asked of a VALUE rather than a name.
 pub fn chk_unsafe_call_value(mut &em: emit.Emitter, fty: ast.Ty) {
 	return if not emit.c_is_unsafe_ty(fty)
@@ -522,6 +570,24 @@ pub fn chk_unsafe_call_value(mut &em: emit.Emitter, fty: ast.Ty) {
 	# reader wrote and this one about a value whose type carries the marker — and a code is an
 	# identity rather than a topic.
 	chk_at(em, rule.Rule.UnsafeValueInSafeCode, f"this value is an `{ast.ty_name(fty)}`, and GRAMMAR group 12 makes an unsafe function callable only from unsafe — call it inside an `unsafe {{ … }}` block, or from an `unsafe fn`")
+}
+
+# chk_ptr_source is what a pointer cast may be made FROM: another pointer, or an address held
+# as a number. Everything else is a value rather than an address, and reinterpreting one as a
+# pointer is not a cast this language has — it is how a program reads memory that was never
+# there.
+pub fn chk_ptr_source(mut &em: emit.Emitter, ty: ast.Ty, xt: ast.Ty) {
+	return if emit.c_is_ptr(xt) or emit.c_is_uint(xt) or emit.c_is_int(xt) or emit.c_is_unknown(xt)
+
+	chk_at(em, rule.Rule.PtrCastSource, f"`{ast.ty_name(ty)}(…)` casts a raw pointer or an address held as a number, and {ast.ty_name(xt)} is neither — a value is not an address")
+}
+
+# chk_ptr_arity is the arity rule for the three, which take a fixed count each rather than
+# reaching the parameter table an ordinary call is checked against.
+pub fn chk_ptr_arity(mut &em: emit.Emitter, meth: str, want: int, got: int) {
+	return if want == got
+
+	chk_at(em, rule.Rule.PtrOpArity, f"`{meth}` takes {chk_args(want)} and this gives {strconv.to_string(got, 10)}")
 }
 
 # chk_note is chk_at for something that is NOT an error. `L5xx` is the family that needs it:

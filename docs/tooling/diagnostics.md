@@ -188,6 +188,15 @@ shipping compiler rather than a part of it (the line
 | `E2076` | the decorator `#[…]` — the set is closed, so an unknown name is not a directive                       |
 | `E2077` | `…` is not an `impl` item                                                                             |
 | `E2078` | a list pattern takes ONE `..`                                                                         |
+| `E2079` | an array length is a compile-time constant, and `…` is not one                                        |
+| `E2080` | a format spec is made of `fmt-char`s and a brace is not one                                           |
+| `E2081` | a `{…}` in a command literal is ONE argument                                                          |
+| `E2082` | a command literal names the program to run, and this one is empty                                     |
+| `E2083` | a command literal is `os.command(…)`, and this file does not `import "os"`                            |
+| `E2084` | a command literal's hole is a single expression                                                       |
+| `E2085` | an `asm(…)` opens with its TEMPLATE, a string literal                                                 |
+| `E2086` | an `asm` operand's CONSTRAINT is a string literal                                                     |
+| `E2087` | an `asm` operand opens with `in`, `out`, `inout` or `clobber`                                         |
 | `E3001` | `…` is not a public member of module `…`                                                              |
 | `E3002` | `…` is not a place, and an assignment needs one                                                       |
 | `E3003` | cannot assign to `…`: it is a module `const`, and a constant is never written                         |
@@ -324,6 +333,18 @@ shipping compiler rather than a part of it (the line
 | `E3135` | the field `…` on an Err — it has `msg` and `kind`                                                     |
 | `E3136` | `..=` with no upper bound is not a range                                                              |
 | `E3137` | the list method `…` — a list answers `len` and `append`, and is read with `xs[i]`                     |
+| `E3138` | `….…` reads `this.…`, and a spec is field-blind                                                       |
+| `E3139` | a `[T; N]` slot takes `…` element(s) and this literal has `…`                                         |
+| `E3140` | `…` is outside `[T; N]` — a constant index is checked at compile time                                 |
+| `E3141` | an array answers `len`, and is read with `a[i]`                                                       |
+| `E3142` | an int renders as `b`, `o`, `x`, `X`, `c` or `d`, and a format spec asked for another                 |
+| `E3143` | `asm(…)` is legal only inside `unsafe`                                                                |
+| `E3144` | an `asm` operand list writes its `out` and `inout` before its `in`                                    |
+| `E3145` | `…` is a raw-pointer operation, and every one of them is `unsafe`-only                                |
+| `E3146` | `.…()` needs a pointee and `ptr` has none                                                             |
+| `E3147` | `…` takes … arguments and this gives …                                                                |
+| `E3148` | `ptr…(…)` casts a raw pointer or an address, and … is neither                                         |
+| `E3149` | this value is an `unsafe fn(…)`, callable only from unsafe                                            |
 | `E4001` | `…` outside of a loop: it belongs to a `for`, and a `select` arm is not one                           |
 | `E4002` | a `from` cause is an `Err`, and … is not one                                                          |
 | `E4004` | `…(…)` names one side of an `Either`, which holds exactly one value                                   |
@@ -403,6 +424,10 @@ shipping compiler rather than a part of it (the line
 | `E4086` | `…` has no field `…`                                                                                  |
 | `E4087` | a struct pattern names every field or ends in `..`                                                    |
 | `E4088` | the sides of an or-pattern bind the same names                                                        |
+| `E4089` | `…` has no associated value `…`                                                                       |
+| `E4090` | cannot derive `From` for `…`: it is not an enum                                                       |
+| `E4091` | cannot derive `From` for `…`: two variants carry one payload type                                     |
+| `E4092` | cannot derive `From` for `…`: no variant carries exactly one payload                                  |
 | `E5001` | this entry file declares no `fn main`                                                                 |
 | `E5002` | cannot resolve import `…`, and where it was looked for                                                |
 | `E5007` | `…` is a module this build compiles and this module did not import                                    |
@@ -417,32 +442,20 @@ shipping compiler rather than a part of it (the line
 | `E5016` | this unit emits more than `…` bytes of C — `$ZERG_EMIT_MAX`                                           |
 | `E5017` | an import reaches past a folder that declares a surface                                               |
 | `E9001` | a parameterized `…[…]` as …                                                                           |
-| `E9002` | a `spec` member with a BODY                                                                           |
 | `E9003` | a generic enum `…[…]`                                                                                 |
 | `E9004` | a generic struct `…[…]`                                                                               |
 | `E9005` | the decorator `#[…]`                                                                                  |
-| `E9006` | an associated value binding `… := …` in an `impl`                                                     |
 | `E9008` | a struct pattern `…{…}`                                                                               |
 | `E9009` | calling …                                                                                             |
 | `E9010` | the named argument `…:`                                                                               |
-| `E9011` | `unsafe { … }` as an EXPRESSION                                                                       |
-| `E9012` | an f-string ':spec' format spec                                                                       |
-| `E9013` | an f-string '!r' / '!s' / '!a' conversion                                                             |
-| `E9014` | the f-string '{expr=}' self-documenting form                                                          |
 | `E9015` | an associated type binding `type … = …` in an `impl`                                                  |
-| `E9017` | an array type `[T; N]`                                                                                |
-| `E9019` | an interpolating command literal                                                                      |
-| `E9020` | a command literal                                                                                     |
 | `E9021` | a destructuring binding `(a, b) := …`                                                                 |
 | `E9025` | `for mut v in …`                                                                                      |
-| `E9027` | a standalone `unsafe fn` declaration                                                                  |
 | `E9028` | an associated type projection `….…`                                                                   |
 | `E9029` | a value generic parameter `…: …`                                                                      |
 | `E9031` | an `if` EXPRESSION whose branch has more than one statement                                           |
 | `E9032` | a binding head in an `if` EXPRESSION                                                                  |
-| `E9033` | `asm(…)`                                                                                              |
 | `E9034` | a default on a closure parameter                                                                      |
-| `E9035` | a `mut &` parameter in a function type                                                                |
 | `E9036` | an `unsafe` `spec` signature                                                                          |
 | `E9037` | an `impl` carrying its own type parameters `[…]`                                                      |
 | `E9038` | an `impl` on `…[…]` — a type ARGUMENT on the target                                                   |
@@ -450,7 +463,6 @@ shipping compiler rather than a part of it (the line
 | `E9042` | `type … = …` over a non-scalar                                                                        |
 | `E9043` | `…` leaving a `guard` block                                                                           |
 | `E9044` | a generic METHOD `….…[…]`                                                                             |
-| `E9045` | the raw-pointer built-in `…`                                                                          |
 | `E9046` | the compile-time built-in `…[T]`                                                                      |
 | `E9047` | an `impl` on the built-in type `…`                                                                    |
 | `E9048` | the `spec` `…` used as a TYPE (…)                                                                     |
@@ -463,13 +475,11 @@ shipping compiler rather than a part of it (the line
 | `E9056` | the list method `…`                                                                                   |
 | `E9057` | structural equality over a container                                                                  |
 | `E9058` | a refcounted box `Ref(x)` / `deref(r)`                                                                |
-| `E9059` | rendering a … as text                                                                                 |
 | `E9060` | a second `impl Into[…] for …`                                                                         |
 | `E9061` | `in` over … — its elements are compared with `==`, and this compiler does not write that comparison   |
 | `E9062` | `in` over … — a range's members are found by comparing its bounds                                     |
 | `E9063` | `…` is part of the fixed-width ladder                                                                 |
 | `E9064` | the built-in `set`                                                                                    |
-| `E9065` | … is a `mut &`, and a function VALUE cannot carry one                                                 |
 | `E9066` | `del …` on a CHANNEL                                                                                  |
 | `E9067` | `…[…](…)` as a constructor                                                                            |
 | `E9068` | `nil` as a `match` pattern                                                                            |
@@ -477,14 +487,12 @@ shipping compiler rather than a part of it (the line
 | `E9070` | `…` re-binds a name a `match` arm's pattern already binds                                             |
 | `E9071` | the default on field `…` reads the field `…`                                                          |
 | `E9072` | a destructuring assignment `(a, b) = …`                                                               |
-| `E9073` | an `unsafe fn(…)` TYPE                                                                                |
 | `E9074` | an `impl` on `….…` — a dotted target                                                                  |
 | `E9075` | a generic `type …[…] = …`                                                                             |
 | `E9076` | a sub-pattern inside a variant payload                                                                |
 | `E9077` | a range used as a value                                                                               |
 | `E9078` | `is …` names one of the built-in error kinds                                                          |
 | `E9079` | the decorator `#[sealed]` — reserved                                                                  |
-| `E9085` | rendering a … as text — an enum has no name for its variant                                           |
 | `E9097` | main(args) in a program that uses concurrency                                                         |
 | `E9099` | … of the method `…` on a built-in receiver, which a thunk does not reach                              |
 | `E9100` | the map method `…`                                                                                    |
@@ -496,6 +504,8 @@ shipping compiler rather than a part of it (the line
 | `E9108` | `del …` on an owning struct, list or map — the early free, where the release is a scope-exit unwind   |
 | `E9109` | an `unsafe fn` method in an `impl`                                                                    |
 | `E9110` | a NAMED rest in a list pattern                                                                        |
+| `E9111` | an array length that names a constant                                                                 |
+| `E9112` | the array method `…`                                                                                  |
 
 They are reported the moment a file is **read**, before its imports are scanned — scanning
 them parses, and a parser handed unreadable text can only say something untrue about it.
@@ -628,11 +638,28 @@ name now is the prelude rule (`E2061`), which is about the name rather than abou
 | `E9098` | `E4078` | everything call-shaped left earlier                                |
 | `E9007` | `E2077` | the three item forms all have arms; a statement is none            |
 | `E9016` | —       | the tuple pattern is built                                         |
+| `E9006` | —       | the associated value is built                                      |
 | `E9023` | —       | the list pattern is built; a NAMED rest is E9110                   |
 | `E9026` | —       | the struct pattern is built                                        |
 | `E9024` | —       | the or-pattern is built                                            |
 | `E9018` | —       | the `as` binding is built                                          |
+| `E9002` | —       | a `spec` member with a body is built; it is a provided default     |
+| `E9035` | —       | `mut &` is part of a function type, and the type is built          |
+| `E9065` | —       | as above, on the value side: the marker rides in the type          |
+| `E9017` | —       | the fixed-size array is built; its length is part of its type      |
+| `E9019` | —       | the interpolating command literal is built; it splices into argv   |
+| `E9020` | —       | the command literal is built: a child process and three streams    |
+| `E9059` | —       | a composite renders structurally; the generator is the compiler's  |
+| `E9085` | —       | as above, for an enum: it renders by tag then payload              |
+| `E9012` | —       | the format spec is built, read by the value's own type             |
+| `E9013` | —       | the three conversions are built                                    |
+| `E9014` | —       | the self-documenting form is built; its text is the parser's       |
 | `E9081` | —       | a public name takes the module tag a private one already had (#92) |
+| `E9011` | —       | `unsafe { … }` as an expression is built                           |
+| `E9027` | —       | the standalone `unsafe fn` is built; the marker is on the decl     |
+| `E9033` | —       | inline assembly is built; it lowers to C's `__asm__ volatile`      |
+| `E9045` | —       | the raw-pointer built-ins are built                                |
+| `E9073` | —       | the `unsafe fn` TYPE is built; the marker is part of the type      |
 | `E3047` | —       | a strong typedef takes its underlying type's prefix operators      |
 
 **One of them moved nowhere**, and it is the only row whose second column is empty. `E3047`

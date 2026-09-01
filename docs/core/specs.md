@@ -45,6 +45,22 @@ concrete type is to have kept it, never to un-erase one). Its **identity** is a 
 T`** asks whether the boxed value's concrete type is `T` and yields a plain **`bool`**, read off the
 dispatch identity the box already carries (Type tests, below).
 
+**There is no `dyn`, and there will not be.** Both encodings of an existential are already here: the **open**
+one is a closure — a struct of function values over a captured implementer, which is what
+[`#[obj]`](#obj--a-specs-methods-held-as-values) generates — and the **closed** one is an `enum`, whose
+`match` gives back the concrete type. A `dyn` keyword would be a third spelling of the first, with a vtable
+where the closure already is. Two things stay out whatever else changes: a **per-instance header**, which
+would make every value pay for a use site most programs do not have and would still not solve heterogeneous
+size; and an **object-safety gate**, since the matrix `#[obj]` already refuses by is the same one.
+
+**There is no `dyn`, and there will not be.** Both encodings of an existential are already here: the **open**
+one is a closure — a struct of function values over a captured implementer, which is what
+[`#[obj]`](#obj--a-specs-methods-held-as-values) generates — and the **closed** one is an `enum`, whose
+`match` gives back the concrete type. A `dyn` keyword would be a third spelling of the first, with a vtable
+where the closure already is. Two things stay out whatever else changes: a **per-instance header**, which
+would make every value pay for a use site most programs do not have and would still not solve heterogeneous
+size; and an **object-safety gate**, since the matrix `#[obj]` already refuses by is the same one.
+
 On a boxed value, **unary** operations dispatch to the real type and work: its spec methods, plus `copy`
 (producing an independent box — a contained `Ref` refcount-bumps) and `debug`, and the structural memory
 ops (`del`, pass, store, send). The **binary same-type** operations — `Eq`'s `==` / `!=`, `Ord`
@@ -280,20 +296,19 @@ A spec's methods come in two kinds:
   version (a faster `contains`, say); an override must still mean the conventional thing, and the
   `(type, spec)` implementation stays canonical either way.
 
-> **[not yet]** A `spec` member with a **body** is refused at the **declaration**, not merely at a call:
-> _E9002 NotImplemented: a `spec` member with a BODY — a provided method's body is read and dropped here, so
-> nothing in it is checked and it is not the method that runs; declare the signature and write the body in
-> each `impl`_. So a `spec` in this compiler has required methods only, an implementer inherits nothing, and
-> the free-derived-methods economy below — `Iterator` handing out `map` / `filter` / `count` from `next` — has
-> no mechanism under it. The refusal names the form at the point it is written, so no program reaches the
-> dispatch question at all.
->
+A provided body is held to field-blindness at the **spec**, where it is written: reading `this.n` there is
+_E3138 `Greet.hello` reads `this.n`, and a spec is field-blind_. The mistake is in the spec and not in any one
+implementer — the body is wrong for every type, including one that happens to carry an `n` — so it is reported
+once, and reported even when nothing implements the spec yet.
+
 > **[not yet]** A signature may be **`unsafe`** — `GRAMMAR` derives `fn-sig ::= 'unsafe'? 'mut'? 'fn' …`, so
 > `unsafe fn peek() -> int` inside a `spec` is a member — and this compiler does not build it. It is read to
 > the end of the signature and refused as itself: _E9036 NotImplemented: the `unsafe` `spec` signature `peek`_,
-> with the place. The reason is the one a standalone `unsafe fn` gets (`E9027`): the trust boundary the keyword
-> marks is not enforced ([FFI](../runtime/ffi.md)), and reading the signature as a safe one would erase the
-> only thing `unsafe` says. Everything that starts **no** member at all — `unsafe { … }` in a spec body among
+> with the place. A standalone `unsafe fn` and an `unsafe fn` TYPE are both built — the marker rides on the
+> declaration and in the type ([FFI](../runtime/ffi.md)) — and what a spec's REQUIREMENT would mean is the
+> part that is not settled: an implementer supplying a safe `fn` for an unsafe requirement, or the other way
+> round, is a rule this compiler has not got. Reading the signature as a safe one would erase the only thing
+> `unsafe` says. Everything that starts **no** member at all — `unsafe { … }` in a spec body among
 > them — still gets `E2036`.
 
 So a spec with one required method can hand implementers many derived ones for free — `Iterator` derives
@@ -311,9 +326,9 @@ element type (`T` → `U`).
 implementation** — its override if it has one, else the default. So a default body that calls another spec
 method reaches the type's override (a defaulted `count` built on `next` uses an overridden `next`) — there is
 **no static-dispatch exception for defaults**, and the mechanism is the one already defined above. This holds
-for a **direct call on a concrete value** as well (**[not yet]** — a provided method is refused at its
-declaration, above, as _E9002_): `c.provided()` runs the type's **override** if it has one, else the spec's **default
-body** — with no boxing needed, so a provided method is not confined to the dynamic-dispatch path.
+for a **direct call on a concrete value** as well: `c.provided()` runs the type's **override** if it has
+one, else the spec's **default body** — with no boxing needed, so a provided method is not confined to the
+dynamic-dispatch path.
 
 ## Associated types and values
 
@@ -359,9 +374,11 @@ which no spec demanded and **none can require** — a spec that wanted one would
 the impl chooses. Use the constant form for a value that must **fold**, and an associated fn
 (`fn max() -> This`) for one that must **run**.
 
-> **[not yet]** `NAME := 32` inside an `impl` reports _E9006 NotImplemented: an associated value binding
-> `BITS := …` in an `impl`_, so `Type.NAME` names nothing and `Point.ORIGIN` cannot be declared. A
-> fixed-array size that a type constant was to supply is written as a module-level constant instead.
+It is **built**. `NAME := 32` inside an `impl` declares a constant reached as `Type.NAME` and never as a
+bare `NAME` — which is what lets two types each have a `LIMIT`, and a module constant sit beside both.
+Reading one a type does not have is _E4089 `P` has no associated value `NOPE`_, and that message replaces
+an escape: before it, a type name lowered as a **value**, so `P.NOPE` became a member access on a type and
+`cc` reported it against generated code.
 
 ## Built-in specs
 
@@ -384,8 +401,8 @@ else is a spec a type **opts into**, a generic bound gating on it:
   > `list[int]` — structural equality over a container is unbuilt, and a container has no declaration to
   > derive it on_. What the unnamed forms are owed is under Types' parts-inheritance rule — a tuple has
   > `Eq` exactly when every part has it — and that derivation is the unbuilt half. Compare the elements
-  > you mean to compare meanwhile. It is the same hole [Format](../runtime/format.md) reports as `E9059`,
-  > one operator over.
+  > you mean to compare meanwhile. [Format](../runtime/format.md) asked the same question of a different
+  > verb and answered it: a composite RENDERS structurally, and comparing one is what is still owed.
 
 Zerg has **no instance-identity test** between two values: under copy-by-value distinct values are
 distinct instances and there's no aliasing, so "same instance?" would be meaningful only for a channel —
@@ -427,8 +444,8 @@ generic bound gates on it:
   it; a conversion is always **written**, never applied by a position. It ships **no built-in impls** —
   between numbers the conversion is `T(x)`, and to text it is `str(x)`, which needs no bound because
   `display` is a **rendering** the language gives rather than a spec a type implements. That is not the
-  same claim as "every type answers it": a composite and an `enum` are **[not yet]** — _E9059_ — and a **channel**, a
-  **function value** and **nil** have no rendering at all ([Format](../runtime/format.md)). See
+  same claim as "every type answers it": a **channel**, a **function value** and **nil** have no rendering
+  at all, while a composite and an `enum` render structurally ([Format](../runtime/format.md)). See
   [Type Conversion](types.md#into--an-ordinary-conversion-spec).
 
 **`Ref` — copy-by-ref (sealed).** Unlike every spec above, implementing it adds no behavior — it changes

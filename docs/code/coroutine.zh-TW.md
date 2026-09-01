@@ -498,7 +498,11 @@ channel。讓一個死亡變得*致命*是觀察者的職責（對那個被 rais
 **一條從不 park 的 coroutine 會佔住一條 worker,直到它跑完為止**,而這是規則本身、不是對規則的虧欠。這個失敗的形狀
 是「數量」而不是「開關」:一個空轉者吃掉一顆核心,`M` 個空轉者就沒有東西能跑其他任何事——包含 `main`——而在單 CPU
 主機(`M` = 1)上,第一個空轉者就已經等於整個程式。所以一個無界的計算迴圈裡需要一個 channel 操作,這正是每一個合作
-式 runtime 都要求的紀律。搶佔會取消這項要求;那是一扇[門](../../FUTURE.zh-TW.md#搶佔式排程),不是本頁作出的承諾。
+式 runtime 都要求的紀律。
+
+> **[implementation-defined]** 一個排程器**是不是**搶佔式的,是這個實作的事。搶佔會取消上面那項要求——spinner 會
+> 被中斷,而不必自己停泊——而它的代價是每個 back edge 上一個 safepoint,規範對此兩邊都沒有要求。被釘住的是「一個
+> coroutine 在哪裡讓出」;有沒有別的東西能把 worker 從它手上拿走,則沒有被釘住。
 
 `M` 是 worker 的數量——每顆 CPU 一條 OS thread,上限 16——它們抽同一條共享的 FIFO run queue,coroutine 在 worker 之
 間自由遷移,因此可能在一條它從未啟動於其上的 thread 恢復。**`main` 是 coroutine 0**:它在任何 worker 存在之前就已經

@@ -28,25 +28,22 @@ full treatment is in the [Language Reference](../language.md). Also in [繁體�
 | `del ch`                           | revoke the name **and** drop this holder (to end a stream: `close(ch)`) |
 | `assert c`                         | operand temporaries, then `raise AssertionError(<message>) if not (c)`  |
 
-**Status.** Every row above works except inside an f-string hole, plus `del ch` and the operator rows on a
-user-defined type. In a hole only the plain `{x}` form does: a **conversion** (`!r` / `!s` / `!a`) is
-`E9013`, a **format spec** (`{x:.2f}`) is `E9012`, and the self-documenting `f"{x=}"` is `E9014`. A
-**composite** hole is rejected too, so structural rendering is **[not yet]** — a `struct` by name
-(_E9059 NotImplemented:
-rendering a P as text_) and a `list` or `map` by an ordinary checked rule that blames a bridge the program
-never wrote (_E4011 `str(…)` over a list bridges bytes or code points_) — see
-[Formatting & Text](../runtime/format.md). The **desugared spelling is the same gap**: `x.format(spec)`
-written out is _E9107 NotImplemented: the method `format` on a int — a spec is unread here (`E9012` is the
-same gap spelled in an f-string hole), and `f"{x}"` renders without one_, because the `Format` protocol
-this row names is not a declaration any type carries yet.
+**Status.** Every row above works, `del ch` and the operator rows on a user-defined type apart. An
+f-string hole reads all three of its tails — a **conversion** (`!r` / `!s` / `!a`), a **format spec**
+(`{x:.2f}`) and the self-documenting `f"{x=}"` — and a **composite** hole renders structurally, `f"{p}"`
+being `P(x: 1)`, through the same generator `print` and `str(x)` reach; see
+[Formatting & Text](../runtime/format.md). What the DESUGARED spelling of a spec would be is still a gap:
+`x.format(spec)` written out is _E9107 NotImplemented: the method `format` on a int_, because the `Format`
+protocol this row names is not a declaration any type carries yet — so `zerg desugar` writes out every
+hole but that one ([Desugar](../tooling/desugar.md)).
 
 **`del ch`** is **[not yet]**: _E9066 NotImplemented: `del ch` on a CHANNEL_, which points at `close(ch)`
 and at the release the binding's scope already performs. And the **operator** row desugars only where the
 operator is compiler-owned: no operator `spec` is declared, so `impl Add for P` is _E3013 no spec named
 `Add`_ and `P(1) + P(2)` is _E3043_ — see [Specs & Generics](../core/specs.md). `==` is the exception, via
-`#[derive(Eq)]` or a hand-written `impl Eq`. Both command literals are **[not yet]**, and they are told
-apart: the plain `` `…` `` is _E9020 NotImplemented: a command literal_, the interpolating `` f`…` ``
-(grammar, not listed here) _E9019_. Each desugaring above is otherwise exactly as written.
+`#[derive(Eq)]` or a hand-written `impl Eq`. Both command literals desugar to `os.command(argv)` — a child
+process and its three streams, with the interpolating `` f`…` `` splicing each hole in as ONE argument
+([Process & I/O](../runtime/io.md)). Each desugaring above is otherwise exactly as written.
 
 **Sugar the grammar has and this table does not.** Two rewrites the grammar derives are **[not yet]**, and
 so are absent above rather than listed as landed: a **destructuring binding** — `(a, b) := e` (`E9021`) and

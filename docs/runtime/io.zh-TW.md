@@ -22,17 +22,25 @@ text）——把一個值寫到 stdout 的免 import 捷徑。三個想法承載
 
 ## 串流——`Reader` 與 `Writer`
 
-**[not yet]**——下方的串流面雖有規格但尚未建置；今日輸入用 `io.read_file`、輸出用 `io.write` / `io.println`。
+兩個 spec 都建好了，這個階段唯一的具體串流 **`io.Fd`**（一個裸 file descriptor，也就是子行程那三個端點）也是。
+還沒建的是**模組層級的串流物件**——`io.stdin`／`io.stdout`／`io.stderr`——它們仍是 **[not yet]**，
+_E3084 module `io` has no `stdout`_；今日輸入用 `io.read_file`、輸出用 `io.write` / `io.println`。
 
 各只有**一個 required method**；其餘是 provided default（Spec 與 Generics），所以新串流只要供給 primitive 就繼承
 所有便利方法。
 
-**`Reader`**——`read_bytes(n: uint) -> Result[list[byte]]`，至多 `n` bytes（空 = 輸入結束，絕非阻塞式的等）。其上：
-**`read() -> Iterator[str]`**，預設逐行讀取——`for line in f.read()` 乾淨抽乾，在 EOF（`StopIteration`）結束、對
-中途的解碼或裝置錯誤 re-raise（迭代）；可能非 valid UTF-8 就用 `read_bytes` 取、在 `guard` 下解碼。另有
-`bytes() -> Iterator[byte]` 與 `chunks(n) -> Iterator[list[byte]]`。
+**`Reader`**——`read_bytes(n: uint) -> Result[list[byte]]`，至多 `n` bytes（空 = 輸入結束，絕非阻塞式的等）。其上
+是整份輸入的兩個 default：**`read_all() -> Result[list[byte]]`** 與 **`read_text() -> Result[str]`**，後者是前者
+解碼後的樣子。
 
-**`Writer`**——`write(bytes: list[byte]) -> Result[uint]`（寫入數量）；provided `write_str(s: str)` 與 `flush()`。
+> **[not yet]** ITERATOR 那幾個 default——**`read() -> Iterator[str]`**，也就是 `for line in f.read()` 走訪的
+> 逐行讀取，以及 `bytes()` / `chunks(n)`——是建立在一個 `for … in` 還走不動的協定之上（[Spec 與 Generics](../core/specs.zh-TW.md)），
+> 所以它們沒有被宣告：一個叫不到的 default 是承諾、不是 method，呼叫它會得到 _E3131 the method `read` on a Fd_。可能非 valid UTF-8 就用 `read_bytes` 取、在
+> `guard` 下解碼。
+
+**`Writer`**——`write(bytes: list[byte]) -> Result[uint]`（寫入數量）；provided `write_str(s: str)`。
+**`flush()`** 這個 default 是 **[not yet]**：這個階段沒有任何東西有緩衝，所以它會是一個什麼都不做的 method——
+_E3131 the method `flush` on a Fd_ 指出那是這個型別沒有宣告的名字。
 寫入失敗——磁碟滿、broken pipe——是值、以 `?` 傳播；絕不靜默丟棄（那個便利只屬於 `print`）。
 
 ```text
@@ -99,25 +107,42 @@ thread，因為 Zerg 不擁有那個 frame（[FFI](ffi.zh-TW.md)）。
 
 ## Process 與命令執行
 
-**[not yet]**——命令字面量被 lex 之後由 **parser 拒絕**，兩種形式各以自己的名字、各帶位置:靜態的
-`` `git status` `` 是 `E9020`，會內插的 `` f`git checkout {b}` `` 是 `E9019`。下方的預期模型不變，待 runtime 落地。
-真正有出貨的是 `os.run(argv: list[str]) -> int`（[標準函式庫](stdlib.zh-TW.md)）——argv 直接交給 OS，沒有 shell 也
-沒有 pipe，所以它只涵蓋「跑一個子行程、讀它的 exit status」，本節其餘的一概沒有。
+子行程用**反引號命令字面量**啟動，並透過它的三個串流觀察——`stdin` 是 `Writer`，`stdout` 與 `stderr` 是
+`Reader`——而 `wait()` 回答的狀態與 shell 報的一樣（exit code，被訊號殺掉時是 128+signal）。字面量**就是**那個
+handle，`os.command(argv)` 則是同一件事手寫出來的樣子（[標準函式庫](stdlib.zh-TW.md)）。
 
-子行程用**反引號命令字面量**啟動，並透過同一套串流觀察——它的 pipe 是 `Reader` 與 `Writer`、它的 handle 是一個
-`Ref[proc]`，其 `drop` 會 wait（或 kill）它、恰好回收一次。**`f` 標出危險：**
+**兩種形式都沒有 shell。** 命令字面量建的是**引數向量**，然後直接執行它：
 
-- **`` `git status` ``**——**靜態**字面量，以空白切成 argv（引號會被尊重）、**直接執行、不經 shell**：沒有內插，
-  所以沒有 injection、glob、pipe——安全的預設（Go / Rust / Elixir）。
-- **`` f`git checkout {branch}` ``**——**內插**、**經 shell** 執行（pipe 與 redirect 可用）；每個 `{x}` 預設
-  **被 shell-quote 成單一參數**（擊敗 command-injection、但擋不了惡意 `-flag`），**raw** 拼接是顯式的 `{x:raw}`。
-  `f` 讀來與 `f`-string 一致。
+- **`` `git status` ``**——**靜態**字面量，以空白切成 argv（引號會被尊重）。
+- **`` f`git checkout {branch}` ``**——**內插**，而每個 `{x}` 就是**一個引數**，不管裡面是什麼。帶空白的路徑仍是
+  一條路徑；讀起來像命令的值就只是資料。沒有任何字串留給 shell 再切一次，這就是全部的安全性質——沒有 shell 就
+  沒有可以注入的地方。一個洞是**一整個引數**，不能跟旁邊的文字接起來（_E2081_）：用文字拼出引數正是 shell 在做
+  的事。
 
-```text
-p := `ls -l`
-for line in p.stdout.read() { print line }    # p.stdin: Writer；p.stdout/stderr: Reader
-code := p.wait()!                             # 停泊這條 coroutine 等退出碼
+所以 pipe、redirect 與 glob 不屬於這個形式。需要它們的程式自己去跑那個 shell——`` f`sh -c {script}` ``——讓 shell
+出現在 argv 裡，而不是被語法隱含。
+
+```zerg
+import "os"
+
+fn main() {
+ p := `echo hello`
+ print p.out()
+ print p.wait()
+
+ dir := "my docs"
+ q := f`echo {dir}`
+ print q.out()
+
+ c := `cat`
+ c.stdin.write_str("in\n")!
+ c.stdin.release()
+ print c.stdout.read_text()!
+}
 ```
+
+命令字面量就是 `os.command(…)`，所以檔案得寫 `import "os"`——沒寫的檔案裡出現字面量會拿到 _E2083_，它指名的是
+那個字面量、而不是它降下去的那個模組呼叫。
 
 要**同時**等好幾個——stdout、stderr、timeout——就把每個 `Reader` 橋接成 channel 再 `select`（fan-in，
 [Coroutine 與 Channel](../code/coroutine.zh-TW.md)）；模型不新增任何等待 primitive。子行程是 foreign resource，其

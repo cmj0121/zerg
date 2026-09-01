@@ -82,8 +82,8 @@ error: E3033 cannot bind str to a int binding: `x`
 既沒有 `error:` 前綴，底下也沒有引出的原始碼行與 caret：
 
 ```text
-E9011 NotImplemented: `unsafe { … }` as an EXPRESSION — GRAMMAR makes it a block whose value the
-expression takes, and this compiler builds only the module-level `unsafe { … }` GROUP
+E9036 NotImplemented: the `unsafe` `spec` signature `peek` — GRAMMAR#fn-sig opens a member with
+`'unsafe'? 'mut'? 'fn'`, and the trust boundary the keyword marks is not enforced on one
   --> demo.zg:2:7
 ```
 
@@ -177,9 +177,11 @@ linker 對著沒人寫過的產生碼所報的錯。
 > immutable binding 也一樣，而那是 `E3006`、一條在其他每個地方都被強制的規則。seed 兩個都會診斷，因為它的語意
 > pass 走的是**宣告**而不是下降。這是欠一次的一個缺口，不是任何單一規則的性質。要補上它，body 必須對型別參數的
 > **bound** 檢查、而不是對具體型別——`T: Show` 上的 `x.show()` 在 `T` 還不是某個具體型別以前沒有 method 可解析，
-> 而下降只定義在具體型別上——那是這個編譯器還沒有的檢查器,是一扇在
-> [FUTURE.md](../FUTURE.zh-TW.md#檢查一個沒有人實例化的-template) 裡帶著門檻的門,因為它補上的缺口是一個
-> 沒有讀者的 template。
+> 而下降只定義在具體型別上——那是這個編譯器還沒有的檢查器。
+>
+> **[implementation-defined]** 一個 template **什麼時候**被檢查,是這個實作的事。在任何呼叫要求它之前就拿它的
+> bound 去檢查,那是另一個編譯器,而它會找到的是一個出貨了卻沒人呼叫的 template——一份規範並不要求任何人去付的
+> 成本。
 
 有一個推論值得寫在這裡，因為沒有任何單一章節擁有它：沒有 `fn main` 的程式在文法上是合法的——
 `program ::= stmt-list`，也就是 grammar 開場的那個 `nop` 程式——所以拒絕它的是**建置**。`--emit bin` 會在任何
@@ -241,7 +243,8 @@ handler 不認得的 fault 會交還給 runtime 之前持有該 signal 的那個
 成溢位。
 
 這是語言的規則,而不是對規則的虧欠。一個擁有並自行成長 stack 的 runtime,可以在 fault 之前就檢查呼叫深度、乾淨地
-展開;那是一扇[門](../FUTURE.zh-TW.md#一次深度檢查的-stack-溢位),不是本頁作出的承諾。
+展開。**[implementation-defined]**:一個擁有並自行成長 stack 的 runtime,可以在 fault 之前檢查呼叫深度、乾淨地
+unwind。被釘住的是「深度是有界的」以及「碰到界限會指名結束程式」。
 
 ## 參考實作 emit 出來的 C
 

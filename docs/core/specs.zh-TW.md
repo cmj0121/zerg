@@ -32,6 +32,12 @@ boxed，具體值就被隱藏、**永遠無法還原**（不能 downcast、不�
 反抹除）。它的**身分**是另一回事：**`x is T`** 問「這個 boxed 值的具體型別是不是 `T`」、產出一個純 **`bool`**，
 答案是從 box 本就帶著的 dispatch 身分讀出來的（見下方「型別測試」）。
 
+**沒有 `dyn`，將來也不會有。** existential 的兩種編碼這裡都已經有了：**開放**的那個是 closure——一個持有被捕獲
+實作者的函式值結構，也就是 [`#[obj]`](#obj把一個-spec-的方法當成值持有) 生成的東西——而**封閉**的那個是 `enum`，
+它的 `match` 會把具體型別交還。`dyn` 這個關鍵字會是前者的第三種拼法，只是把 vtable 放在 closure 已經在的位置。
+無論其他怎麼變，有兩件事都留在門外：**每個 instance 一個 header**，那會讓每個值為多數程式沒有的使用點付費、而且
+仍然解決不了異質大小；以及 **object-safety 閘**，因為 `#[obj]` 已經據以拒絕的那張表就是同一張。
+
 在一個 boxed 值上，**unary** 操作會 dispatch 到真實型別、可用：它的 spec method，加上 `copy`（產生一個獨立的新
 box——內含 `Ref` 值 refcount-bump）與 `debug`，以及結構性記憶體操作（`del`、傳參、存欄位、送 channel）。但
 **binary same-type** 操作——`Eq` 的 `==` / `!=`、`Ord` 比較、以及因此的 `Hash` keying——**不可用**：它們的 `other: This`
@@ -214,18 +220,16 @@ spec 的 method 分兩種：
   implementer **沿用**它、或以特化版**覆寫**（例如更快的 `contains`）；覆寫仍須維持慣常語意，且 `(型別, spec)` 的
   實作無論如何都保持 canonical。
 
-> **[not yet]** 一個帶 **body** 的 `spec` 成員會在**宣告處**被拒絕,而不只是在呼叫處:
-> _E9002 NotImplemented: a `spec` member with a BODY — a provided method's body is read and dropped here, so nothing in
-> it is checked and it is not the method that runs; declare the signature and write the body in each `impl`_。
-> 所以在這個編譯器裡,一個 `spec` 只有 required method,implementer 什麼都沒沿用到,而下面那套「免費得到一堆衍生
-> method」的經濟——`Iterator` 由 `next` 發放 `map` / `filter` / `count`——底下沒有任何機制。這道拒絕在形式被寫出來
-> 的那一點就指名了它,所以沒有任何程式走到 dispatch 這個問題。
->
+provided body 的 field-blind 是在**寫下它的 spec 上**被檢查的：在那裡讀 `this.n` 會拿到
+_E3138 `Greet.hello` reads `this.n`, and a spec is field-blind_。錯在 spec 而不在任何一個 implementer——這個 body
+對每個型別都是錯的，包含剛好帶著 `n` 的那個——所以它只被報一次，而且就算還沒有任何型別實作這個 spec 也會被報。
+
 > **[not yet]** 一個簽章可以是 **`unsafe`** 的——`GRAMMAR` 推導出 `fn-sig ::= 'unsafe'? 'mut'? 'fn' …`，所以
 > `spec` 裡的 `unsafe fn peek() -> int` 就是一個成員——而這個編譯器沒有建出它。它會被讀到簽章結束、然後被指名
-> 拒絕：_E9036 NotImplemented: the `unsafe` `spec` signature `peek`_，並帶上位置。理由與獨立的 `unsafe fn`
-> （`E9027`）相同：這個關鍵字標出的信任邊界並未被強制（見 [FFI](../runtime/ffi.zh-TW.md)），而把簽章當成安全的
-> 來讀，等於抹掉 `unsafe` 唯一說的那件事。至於**完全不**開啟任何成員的東西——`spec` 內文裡的 `unsafe { … }` 也
+> 拒絕：_E9036 NotImplemented: the `unsafe` `spec` signature `peek`_，並帶上位置。獨立的 `unsafe fn` 與 `unsafe fn` 型別
+> 都已經建好——標記坐在宣告上、也坐在型別裡（見 [FFI](../runtime/ffi.zh-TW.md)）——而還沒定案的是一個 spec 的
+> **要求**該是什麼意思：實作者拿一個安全的 `fn` 去供給一個 unsafe 的要求（或反過來），是這個編譯器還沒有的
+> 規則。把簽章當成安全的來讀，等於抹掉 `unsafe` 唯一說的那件事。至於**完全不**開啟任何成員的東西——`spec` 內文裡的 `unsafe { … }` 也
 > 在其中——仍然拿到 `E2036`。
 
 於是一個只有 1 個 required method 的 spec，能免費給 implementer 一堆衍生 method——`Iterator` 由 `next` 衍生
@@ -240,7 +244,7 @@ spec 的 method 分兩種：
 **dispatch 一致。** 每個 spec method，不論 required 或 provided，都解析到該型別的 **canonical impl**——有覆寫用
 覆寫、否則用 default。所以一個 default body 呼叫另一個 spec method 時，會叫到型別的覆寫（用 `next` 定義的 default
 `count`，會用被覆寫的 `next`）；**default 沒有靜態分派的例外**，而機制就是上面已經定義過的那一套。這對**直接在
-具體值上呼叫**也成立（**[not yet]**——provided method 在其宣告處就被拒絕,見上）:`c.provided()` 有覆寫就跑該型別
+具體值上呼叫**也成立:`c.provided()` 有覆寫就跑該型別
 的**覆寫**、否則跑 spec 的 **default body**——不需要裝箱,所以 provided method 並不侷限於動態分派那條路徑。
 
 ## Associated type 與 associated value
@@ -277,9 +281,10 @@ shadow-proof 綁定）。因為建構就是一次普通的**呼叫**,一個型�
 spec**。它是一個型別給自己的值,沒有 spec 要求它,**也沒有 spec 能要求它**——一個想要求它的 spec 就又回到「由
 impl 選定的輸出」。必須**摺疊**的值用常數形式,必須**執行**的用 associated fn（`fn max() -> This`）。
 
-> **[not yet]** `impl` 內的 `NAME := 32` 會報 _E9006 NotImplemented: an associated value binding `BITS := …` in
-> an `impl`_,所以 `Type.NAME` 什麼都沒指名、`Point.ORIGIN` 宣告不出來。原本要由型別常數供給的固定陣列長度,
-> 改寫成 module 層的常數。
+它**已經建好了**。`impl` 內的 `NAME := 32` 宣告一個以 `Type.NAME` 讀取、而永遠不以裸 `NAME` 讀取的常數——正是
+這一點讓兩個型別可以各有一個 `LIMIT`,而一個 module 常數同時坐在旁邊。讀一個型別沒有的關聯值是
+_E4089 `P` has no associated value `NOPE`_,而那句話取代的是一次外漏:在它之前,型別名字會被降階成一個**值**,
+所以 `P.NOPE` 變成對一個型別取成員,由 `cc` 對著產生出來的程式碼抱怨。
 
 ## 內建 spec（Built-in specs）
 
@@ -298,8 +303,8 @@ impl 選定的輸出」。必須**摺疊**的值用常數形式,必須**執行**
   > `map` 或兩個 tuple 的 `xs == ys` 是 _E9057 NotImplemented: `==` on a `list[int]` — structural equality over
   > a container is unbuilt, and a container has no declaration to derive it on_。無名形式該有的東西在
   > 〈型別〉的「由組成部分繼承」規則底下——一個 tuple 恰在它每個部分都有 `Eq` 時有 `Eq`——而沒建出來的正是那個
-  > 推導。在那之前,請比較你真正想比較的那些元素。這與 [格式化](../runtime/format.zh-TW.md) 回報成 `E9059` 的是
-  > 同一個洞,只差一個運算子。
+  > 推導。在那之前,請比較你真正想比較的那些元素。[格式化](../runtime/format.zh-TW.md) 把同一個問題換一個動詞
+  > 問過並且答了:複合值會**結構化渲染**,而比較一個複合值才是還欠著的那件事。
 
 Zerg **不設兩值之間的 instance-identity 測試**：copy-by-value 下值的副本本就是不同 instance、且無 aliasing，
 「同一個 instance？」只對 channel 有意義——太 narrow、不值得一個運算子。相等在型別 opt-in 之處是**結構性**的 `Eq`。
@@ -333,8 +338,8 @@ Zerg **不設兩值之間的 instance-identity 測試**：copy-by-value 下值�
   **串接**成新字串（見 [Collection](../code/collections.zh-TW.md)）。
 - **`Into[T]`**——轉換 spec:型別宣告它能轉成什麼,泛型程式碼以它為 bound;轉換永遠**寫出來**、絕不由
   position 套用。它**不出貨任何內建 impl**——數字之間的轉換是 `T(x)`,轉成文字是 `str(x)`,而後者不需要 bound,
-  因為 `display` 是語言給的**渲染**、不是型別去實作的 spec。那跟「每個型別都有答案」不是同一句話:複合值與
-  `enum` 是 **[not yet]**,而 **channel**、**函式值**與 **nil** 根本沒有渲染（見
+  因為 `display` 是語言給的**渲染**、不是型別去實作的 spec。那跟「每個型別都有答案」不是同一句話:**channel**、**函式值**
+  與 **nil** 根本沒有渲染,而複合值與 `enum` 會結構化渲染（見
   [Format](../runtime/format.zh-TW.md)）。另見 [型別轉換](types.zh-TW.md#into--一個普通的轉換-spec)。
 
 **`Ref`——copy-by-ref（sealed）。** 與上面每個 spec 不同，實作它不加行為——它改變值的**表徵（representation）**。`Ref`

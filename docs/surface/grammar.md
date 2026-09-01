@@ -89,10 +89,12 @@ for {
 ```
 
 Every later group extends `statement` with another form (a binding, an expression statement, a
-declaration, …); `nop` remains the one statement that is always available and always inert.
+declaration, …); [`GRAMMAR#nop`](../../GRAMMAR) remains the one statement that is always available and
+always inert.
 
-Comments are not statements — a `#` runs to the end of the line. A `##` begins a **doc comment** (attached
-to the declaration that follows), and `#[` begins a decorator (group 7); Zerg has **no block comments**:
+Comments are not statements — a `#` runs to the end of the line ([`GRAMMAR#COMMENT`](../../GRAMMAR)). A `##`
+begins a **doc comment** ([`GRAMMAR#DOC-COMMENT`](../../GRAMMAR)), attached to the declaration that follows,
+and `#[` begins a decorator (group 7); Zerg has **no block comments**:
 
 ```zerg
 # a full-line comment
@@ -103,8 +105,9 @@ fn answer() -> int { return 42 }
 
 ## Group 2 — Lexical
 
-Source is UTF-8. Horizontal whitespace (space, tab) separates tokens; a line break is significant only as a
-statement separator (group 1). A line break is an LF or a CRLF — the `\r` belongs to the break that follows it,
+Source is UTF-8. Horizontal whitespace ([`GRAMMAR#WS`](../../GRAMMAR) — space, tab) separates tokens; a
+line break is significant only as a statement separator (group 1). A line break is an LF or a CRLF — the
+`\r` belongs to the break that follows it,
 not to the whitespace class, so a `\r` anywhere else is part of no token and is refused where it stands (inside
 a string or rune literal it is ordinary content). The lexical group fixes what a token is:
 
@@ -119,8 +122,9 @@ DOC-COMMENT ::= '##' [^\n]*                       # doc comment; attaches to the
 block      ::= '{' stmt-list '}'
 ```
 
-An **identifier** starts with a letter or `_` and continues with letters, digits, or `_`. A **reserved
-keyword** is never an identifier; the full reserved set is:
+An **identifier** ([`GRAMMAR#identifier`](../../GRAMMAR)) starts with a letter or `_` and continues with
+letters, digits, or `_`. A **reserved keyword** ([`GRAMMAR#keyword`](../../GRAMMAR)) is never an identifier;
+the full reserved set is:
 
 ```text
 nop   fn     mut     pub      return   import
@@ -135,7 +139,8 @@ unsafe ptr   asm     assert
 
 (`derive` is not a keyword — it is the decorator name in `#[derive(…)]`.)
 
-A **block** groups a statement list in braces — the body a later group hangs on a function, loop, or
+A **block** ([`GRAMMAR#block`](../../GRAMMAR)) groups a statement list in braces — the body a
+later group hangs on a function, loop, or
 conditional, and **also a value**: a block is an **expression** (a `primary`, group 4) whose value is its
 **last statement's** — an expression statement yields its expression, and any other statement, or an empty
 block, yields `nil`. The ASI `;` only **separates** statements; it does not discard a value the way a
@@ -154,7 +159,8 @@ generics, a variant payload, the fields of a struct pattern (`Div{q, r}`), and t
 
 ## Group 3 — Literals
 
-A literal denotes a constant value:
+A literal denotes a constant value. **`true`** and **`false`** are
+[`GRAMMAR#bool-lit`](../../GRAMMAR) and **`nil`** is [`GRAMMAR#nil-lit`](../../GRAMMAR); the rest are below.
 
 ```text
 literal     ::= bool-lit | nil-lit | float-lit | int-lit
@@ -171,32 +177,39 @@ raw-str-lit ::= 'r' '"' raw-char* '"'
 cmd-lit     ::= '`' cmd-char* '`'                        # COMMAND literal — run directly, no shell (f-form: group 5)
 ```
 
-- **Numbers.** An integer is decimal or based — `0x1F`, `0o17`, `0b1010`. A float has a fractional part,
-  an exponent, or both — `1.0`, `1e3`, `6.022e23`. A numeric literal is **untyped**: it adopts the type
-  its position demands (an integer defaults to `int`, a fractional/exponent literal to `float`). A `_` may
-  **group digits** between digits only — `1_000_000`, `0xDE_AD_BE_EF`. A sign is not part of the literal;
-  `-5` is unary minus (an operator) applied to `5`.
-- **`rune` and `byte`.** A **`rune`** is one Unicode code point in single quotes — `'a'`, `'\n'`,
-  `'\u{1F600}'`. A **`byte`** is one octet, `b`-prefixed — `b'a'`, `b'\x41'` — or written `byte(0x41)` by
-  cast. Single quotes are for these two; strings use double quotes.
-- **`str`, multiline, and raw strings.** A **`str`** is double-quoted and processes escapes (`\n \t \r \0 \\
+- **Numbers.** An integer ([`GRAMMAR#int-lit`](../../GRAMMAR)) is decimal
+  ([`GRAMMAR#dec-int`](../../GRAMMAR)) or based — `0x1F` ([`GRAMMAR#hex-int`](../../GRAMMAR)), `0o17`
+  ([`GRAMMAR#oct-int`](../../GRAMMAR)), `0b1010` ([`GRAMMAR#bin-int`](../../GRAMMAR)). A float has a
+  fractional part, an exponent ([`GRAMMAR#exponent`](../../GRAMMAR)), or both — `1.0`, `1e3`, `6.022e23`. A
+  numeric literal is **untyped**: it adopts the type its position demands (an integer defaults to `int`, a
+  fractional/exponent literal to `float`). A `_` may **group digits** between digits only — `1_000_000`,
+  `0xDE_AD_BE_EF`. A sign is not part of the literal; `-5` is unary minus (an operator) applied to `5`.
+- **`rune` and `byte`.** A **`rune`** ([`GRAMMAR#rune-lit`](../../GRAMMAR)) is one Unicode code point in
+  single quotes — `'a'`, `'\n'` ([`GRAMMAR#escape`](../../GRAMMAR)), `'\u{1F600}'`. A **`byte`**
+  ([`GRAMMAR#byte-lit`](../../GRAMMAR)) is one octet, `b`-prefixed — `b'a'`, `b'\x41'`
+  ([`GRAMMAR#byte-escape`](../../GRAMMAR), the `\xNN` family) — or written `byte(0x41)` by cast. Single
+  quotes are for these two; strings use double quotes.
+- **`str`, multiline, and raw strings.** A **`str`** ([`GRAMMAR#str-lit`](../../GRAMMAR)) is double-quoted
+  and processes escapes (`\n \t \r \0 \\
 \" \'` and `\u{…}`). A **triple-quoted** `"""…"""` `str` is the same but **spans lines** — line breaks are
   literal, and a lone `"` or `""` inside needs no escape (only `"""` ends it), so it fits SQL/JSON/prose. A
-  **raw string** is `r`-prefixed and processes **none** — `r"C:\tmp\new"` is ten literal characters. A `str`
+  **raw string** ([`GRAMMAR#raw-str-lit`](../../GRAMMAR)) is `r`-prefixed and processes **none** —
+  `r"C:\tmp\new"` is ten literal characters. A `str`
   cannot hold a NUL, so `\0` and `\u{0}` are invalid inside `"…"` (they are fine in a `rune` or `byte`).
-- **Command literal.** A backtick `` `git status` `` is a **command** — a child process run **directly** (no
+- **Command literal.** A backtick `` `git status` `` ([`GRAMMAR#cmd-lit`](../../GRAMMAR), whose body is a run
+  of [`GRAMMAR#cmd-char`](../../GRAMMAR)) is a **command** — a child process run **directly** (no
   shell), its argv split on whitespace (quotes respected), so no interpolation and no injection/glob/pipe. The
-  interpolating `` f`…` `` form (group 5) instead runs through a **shell** and **shell-quotes** each hole
-  (`{x:raw}` opts out). Execution — pipes as `Reader`/`Writer`, the process `Ref[proc]` — is **stdlib**
-  ([Process & I/O](../runtime/io.md)), not grammar. Both forms are **[not yet]**, and the parser tells them
-  apart rather than passing either on: `E9020` for the plain literal, `E9019` for the interpolating one.
+  interpolating `` f`…` `` form (group 5) splices into the ARGV: each hole is one argument whatever is inside
+  it, and there is still no shell. Execution — the child's three streams — is **stdlib**
+  ([Process & I/O](../runtime/io.md)), not grammar: both forms desugar to `os.command(argv)`.
 
 `f"…"` string interpolation is **not** here — it is an expression, deferred to a later group and its own
 commit.
 
 ## Group 4 — Bindings & Expressions
 
-A **binding** introduces a name; a reassignment updates one. `pub` on a **module-level**
+A **binding** ([`GRAMMAR#binding`](../../GRAMMAR)) introduces a name; a **reassignment**
+([`GRAMMAR#reassign`](../../GRAMMAR)) updates one. `pub` on a **module-level**
 binding exposes it to the rest of the package, the way it does on any other declaration;
 inside a block there is nothing to expose and it is an error:
 
@@ -211,11 +224,15 @@ assign-target ::= lvalue | '(' assign-target ( ',' assign-target )* ')'
 field-target  ::= identifier ( ':' assign-target )?
 ```
 
-`:=` binds a **new, immutable** name **inferring** its type; `mut x := …` makes it rebindable; `const x := …`
+`:=` binds a **new, immutable** name ([`GRAMMAR#bind-target`](../../GRAMMAR)) **inferring** its type;
+`mut x := …` makes it rebindable; `const x := …`
 is immutable **and shadow-proof** (nothing may shadow it, and it may not shadow a visible name — either
 direction is an error). A **type-annotated** binding spells `name: T = expr` — it fixes the type and
 **context-types** the RHS (a bare `[…]` becomes a `list`, or an array against a `[T; N]` target); the leading
-`:` is what tells it apart from a `=` **reassign**, which updates an existing `mut` binding (or field/element).
+`:` is what tells it apart from a `=` **reassign**, which updates an existing `mut` binding — an
+[`GRAMMAR#lvalue`](../../GRAMMAR): a name, a field, a tuple element, or an index. An
+[`GRAMMAR#assign-target`](../../GRAMMAR) is one of those or a shape of them, whose struct form names its
+fields with [`GRAMMAR#field-target`](../../GRAMMAR).
 An expression alone — a call, or a `match` run for its effect — is a
 statement. A `:=` binding may **destructure** into new names (`(q, r) := divmod(x, y)`, group 6), and `=`
 **mirrors it into existing lvalues** — `(a, b) = swap(a, b)`, `Div{q, r} = divmod(x, y)` — each leaf being
@@ -224,7 +241,12 @@ the compiler binds one name at a time (_E9021 a destructuring binding `(a, b) :=
 target at a time (_E9072 a destructuring assignment `(a, b) = …`_), while the struct shape is a pattern it
 does not read (_E9008 a struct pattern `Div{…}`_).
 
-Expressions are a precedence cascade. Every binary level is **left-associative**; **comparison is
+Expressions are a precedence cascade, one production per level: [`GRAMMAR#or-expr`](../../GRAMMAR),
+[`GRAMMAR#and-expr`](../../GRAMMAR), the comparisons ([`GRAMMAR#cmp-op`](../../GRAMMAR)),
+[`GRAMMAR#add-expr`](../../GRAMMAR) with [`GRAMMAR#add-op`](../../GRAMMAR),
+[`GRAMMAR#mul-expr`](../../GRAMMAR) with [`GRAMMAR#mul-op`](../../GRAMMAR), the prefixes
+([`GRAMMAR#unary-op`](../../GRAMMAR)), and [`GRAMMAR#postfix`](../../GRAMMAR) over a
+[`GRAMMAR#primary`](../../GRAMMAR). Every binary level is **left-associative**; **comparison is
 non-associative** — `a < b < c` does not parse, by design.
 
 > A token that opens no production this compiler reads is refused where it stands rather than carried into
@@ -256,7 +278,8 @@ open range, and `v in r` for `r.contains(v)` — the `Range` / `contains` machin
 group 8 remains the single loosest binary, looser than `or`.)
 
 The null-safety and error operators (`?` `??` `?.` `!`) live in group 8; the postfix ones (`?` `!` `?.`)
-join `postfix` above, and `??` sits at the loosest level.
+join `postfix` above, and `??` ([`GRAMMAR#coalesce-expr`](../../GRAMMAR), whose right arm is a
+[`GRAMMAR#coalesce-rhs`](../../GRAMMAR)) sits at the loosest level.
 
 A postfix `[…]` is **always an index**. Type arguments are written only in **type position** (group 7), so
 the two surfaces no longer share a bracket and nothing here has to be resolved to be parsed — no turbofish,
@@ -282,12 +305,14 @@ map-lit   ::= '{' map-entry ( ',' map-entry )* '}'   # {k: v, …}
 map-entry ::= expr ':' expr
 ```
 
-- **Tuple `(a, b)`** — a parenthesized 2+ list; a single `(expr)` is just grouping, so there is no 1-tuple
+- **Tuple `(a, b)`** ([`GRAMMAR#tuple-lit`](../../GRAMMAR)) — a parenthesized 2+ list; a single `(expr)`
+  is just grouping, so there is no 1-tuple
   and no empty `()`. This is what lets `divmod` write `return (q, r)`. Read an element back by **static
   index** — `t.0`, `t.1` — not `t[i]`: a tuple is heterogeneous, so the index must be a compile-time constant
   for the element's type to be known (`a.0.1` is `(a.0).1`, never a float). There is **no tuple struct** —
   `type P = (A, B)` is the named positional type, `struct` the named-field one.
-- **List `[1, 2, 3]`** (empty `[]`), ordered. In a position typed `[T; N]`, a list literal of the right
+- **List `[1, 2, 3]`** ([`GRAMMAR#list-lit`](../../GRAMMAR), empty `[]`), ordered. In a position typed `[T; N]`, a
+  list literal of the right
   length **adopts** that array type. The **fill form `[v; N]`** is `N` copies of `v` (`N` a const-expr,
   mirroring the `[T; N]` array type's `;`) — the way to build a large array without spelling every element.
 - **Map `{k: v}`** (empty `{:}`). The `:` is what tells a `{…}` **map** from a **block** — `k: v` is not a
@@ -301,7 +326,9 @@ map-entry ::= expr ':' expr
 
 ### String interpolation & `print`
 
-An **f-string** is a primary expression — a string with `{ expr }` holes:
+An **f-string** ([`GRAMMAR#fstr-lit`](../../GRAMMAR)) is a primary expression — a string with `{ expr }`
+holes ([`GRAMMAR#interp`](../../GRAMMAR)), and [`GRAMMAR#print`](../../GRAMMAR) is the statement that shows
+one:
 
 ```text
 fstr-lit    ::= 'f' '"' ( fstr-char | escape | '{{' | '}}' | interp )* '"'
@@ -315,20 +342,22 @@ print       ::= 'print' expr
 A hole is **Python-style**: `expr`, then an optional `=`, `!` conversion, and `:` format spec. `f"sum={x + y}"`
 renders each hole through `display()` and joins the pieces — it **desugars at compile time** to `str`
 concatenation, with no runtime format engine. The same `{ … }` holes power the interpolating **command
-literal** `` f`…` `` (the group-3 command literal, **[not yet]**): it runs through a shell and
-**shell-quotes** each hole (`{x:raw}` opts out), so a value splices in as one safe argument.
+literal** `` f`…` `` ([`GRAMMAR#fcmd-lit`](../../GRAMMAR)): each hole splices in as **one argument** of the
+child's argv, with no shell to re-split it ([Process & I/O](../runtime/io.md)).
 
-- **`{x}`** renders through `display`. **`{x!r}`** / **`{x!s}`** / **`{x!a}`** convert first — `debug` /
-  `display` / ascii. All three are **[not yet]** — a conversion in a hole is `E9013`
-  ([Format](../runtime/format.md)). **`{x=}`** is self-documenting: it emits the expression's source text
-  and `=`, then the value (`f"{n=}"` → `n=42`) — **[not yet]** as well (`E9014`).
-- **`{x:spec}`** hands `spec` to the type's **`Format`** protocol — `f"{pi:.2f}"`, `f"{n:04d}"`,
+- **`{x}`** renders through `display`. **`{x!r}`** / **`{x!s}`** / **`{x!a}`**
+  ([`GRAMMAR#conversion`](../../GRAMMAR)) convert first — `debug` / `display` / ascii
+  ([Format](../runtime/format.md)). **`{x=}`** is self-documenting: it emits the
+  expression's source text and `=`, then the value (`f"{n=}"` → `n=42`).
+- **`{x:spec}`** ([`GRAMMAR#format-spec`](../../GRAMMAR)) hands `spec` to the type's **`Format`** protocol —
+  `f"{pi:.2f}"`, `f"{n:04d}"`,
   `f"{p:>10}"`. The spec **string's meaning is the type's** (stdlib numbers/`str` read the usual
   fill/align/sign/`#`/`0`/width/`.precision`/type); the grammar treats it as opaque up to `}`.
 - A plain `"…"` is a literal (its braces are ordinary); only an f-string reads `{…}`, and `{{` / `}}` write
   literal braces.
 
-**`print`** writes a value's `display()` and a newline to stdout — a reserved keyword, always in scope,
+**`print`** ([`GRAMMAR#print`](../../GRAMMAR)) writes a value's `display()` and a newline to stdout — a reserved
+keyword, always in scope,
 best-effort (it never raises), so `print f"hello {name}"` is the smallest program.
 
 ## Group 5 — Functions
@@ -347,7 +376,11 @@ closure-param ::= ( 'mut' '&' )? identifier ( ':' type )? ( '=' expr )?   # ': t
 ```
 
 - **Declaration vs expression.** `fn name(…) -> R { … }` binds a name; an **anonymous** `fn(…) -> R { … }`
-  is an expression (a closure). `pub` exports a declaration's name and is not part of the type.
+  is an expression ([`GRAMMAR#fn-expr`](../../GRAMMAR), a closure), whose parameters are a
+  [`GRAMMAR#closure-param-list`](../../GRAMMAR). A function's TYPE is
+  [`GRAMMAR#fn-type`](../../GRAMMAR) over a [`GRAMMAR#param-type-list`](../../GRAMMAR) of
+  [`GRAMMAR#param-type`](../../GRAMMAR), and a bodiless signature — a spec's requirement — is
+  [`GRAMMAR#fn-sig`](../../GRAMMAR). `pub` exports a declaration's name and is not part of the type.
 - **Inferred closure params.** A **closure** may omit a parameter's `: type` — `xs.map(fn(x) { x *% 2 })` —
   and the compiler infers it from the function type the closure is checked against (an argument's declared
   parameter type, or a typed binding's RHS). A named `fn` declaration cannot: its signature is its contract.
@@ -357,14 +390,17 @@ closure-param ::= ( 'mut' '&' )? identifier ( ':' type )? ( '=' expr )?   # ': t
   `spawn`-ed closure **data-race free**. The three things a mutating closure would do have direct idioms
   instead: **accumulate** with a `for` loop (`for x in xs { sum = sum + x }`), keep **state** in a `struct`
   with a `mut fn`, and share **concurrent** state through a `chan`.
-- **Return.** `return expr` exits with a value, `return` alone with none. An **absent `-> type`** means the
-  function returns `nil`. A **trailing `if`** makes it conditional — `return MAX if v > MAX` is sugar for
+- **Return.** [`GRAMMAR#return`](../../GRAMMAR) exits with a value, `return` alone with none. An **absent
+  [`GRAMMAR#ret-type`](../../GRAMMAR)** means the function returns `nil`. A **trailing `if`** makes it conditional —
+  `return MAX if v > MAX` is sugar for
   `if v > MAX { return MAX }` (and bare `return if done`), the same postfix `if` as `break if` / `continue
 if` / `raise e if`; on a false condition control falls through. A leading `if` _with a block_ is instead
   an if-expression
   being returned (`return if c { a } else { b }`); the conditional-return `if` takes a bare condition, no block.
-- **Parameters.** A parameter passes **by value** (a copy) and may carry a **default** `= expr`. A **named
-  argument** at the call is `name: value` (the `arg` form from group 4): positional arguments come first,
+- **Parameters.** A [`GRAMMAR#param`](../../GRAMMAR) — one of a
+  [`GRAMMAR#param-list`](../../GRAMMAR) — passes **by value** (a copy) and may carry a **default** `= expr`.
+  A **named argument** at the call is `name: value` (a [`GRAMMAR#arg`](../../GRAMMAR) of an
+  [`GRAMMAR#arg-list`](../../GRAMMAR)): positional arguments come first,
   then any may be named, and once one is named the rest must be too — which is what lets a defaulted
   parameter be skipped.
 - **`mut &` — mutable reference.** `mut &x` passes a **mutable reference**: the callee may change `x` and the
@@ -417,47 +453,63 @@ list-pat      ::= '[' ( list-pat-elem ( ',' list-pat-elem )* )? ']'   # at most 
 list-pat-elem ::= pattern | '..' identifier?
 ```
 
-- **Block & `with`.** A bare `{ … }` opens a **nested scope** — its bindings and scope-owned values are
+- **Block & `with`.** A bare `{ … }` ([`GRAMMAR#block`](../../GRAMMAR)) opens a **nested scope** — its bindings and
+  scope-owned values are
   freed at the `}`. A block is also an **expression** (`primary`, group 4): its **value is its last
   statement's value** — an expr-statement yields its expr; any other statement, or an empty block, yields
   `nil`. The ASI `;` only **separates** statements, it does not discard a value, so `guard { … }` and a
-  multi-statement `match` arm (`P => { …; v }`) both yield. **`with expr as y { … }`** is **purely syntactic**
-  sugar over that bare block — `with acquire() as y { … }` → `{ y := acquire(); … }`. `as y` is optional
+  multi-statement `match` arm (`P => { …; v }`) both yield. **`with expr as y { … }`**
+  ([`GRAMMAR#with-stmt`](../../GRAMMAR)) is
+  **purely syntactic** sugar over that bare block — `with acquire() as y { … }` → `{ y := acquire(); … }`. `as y` is
+  optional
   when the resource is held only for its scope (a lock), and the nameless form **still binds**: `e; …`
   would end the value's life at that statement rather than at the `}`. The form introduces **no teardown
   of its own** — what frees a value is the resource-cleanup group, unchanged.
-- **`if`.** The condition is a `bool` — no truthiness. The **binding head** `if x := expr { … }` runs the
-  block only when `expr` is present (the one-arm-`match` sugar). `else if` / `else` chain as usual. An `if`
+- **`if`.** The condition is a `bool` — no truthiness. An [`GRAMMAR#if-head`](../../GRAMMAR) is that
+  condition or a **binding head** `if x := expr { … }`, which runs the block only when `expr` is present (the
+  one-arm-`match` sugar). The statement form is [`GRAMMAR#if-stmt`](../../GRAMMAR) and the value form
+  [`GRAMMAR#if-expr`](../../GRAMMAR). `else if` / `else` chain as usual. An `if`
   with a **mandatory `else`** is also an **expression** (`x := if c { a } else { b }`) — it yields the taken
   branch's block value, and every branch must yield the same type; at statement position the statement form
   wins (value discarded).
-- **`for`.** The one loop, in three forms: **`for { … }`** infinite (leave via `break` / `return`),
+- **`for`.** [`GRAMMAR#for-stmt`](../../GRAMMAR) is the one loop, in three forms: **`for { … }`** infinite (leave via
+  `break` / `return`),
   **`for cond { … }`** while `cond` (a `bool`) holds, and **`for x in it { … }`** over an `Iterable`, binding
   `x` by copy (**`for mut x`** binds in place). The iterate form is taken when `mut` or an `identifier in`
-  follows `for`; a bare `for expr` is the while condition. There is no C-style three-clause `for`. **`break` /
-  `continue`** act on the nearest loop; **`break if c`** and **`continue if c`** are sugar for
+  follows `for`; a bare `for expr` is the while condition. There is no C-style three-clause `for`.
+  **[`GRAMMAR#break`](../../GRAMMAR) /
+  [`GRAMMAR#continue`](../../GRAMMAR)** act on the nearest loop; **`break if c`** and **`continue if c`** are
+  sugar for
   `if c { break }` / `if c { continue }`. There are **no loop labels** — to exit an outer loop from a
   nested one, extract a function and `return` (or use a flag with `break if`).
-- **`match`.** An expression: it tries the value against arms in order, yields the first fit, and every arm
+- **`match`.** [`GRAMMAR#match-expr`](../../GRAMMAR) is an expression: it tries the value against arms in
+  order, yields the first fit, and every arm
   yields the same type — so a `match` is usable at a `:=`, a `return`, or an argument. A trailing **`_`**
   covers the rest. An arm separates pattern from body with **`=>`** — distinct from the **`->`** of a
   function's return type, so the two never blur.
-- **Patterns** destructure by copy: a **variant** with a payload binding (`Left(v)`, nested `Left(Some(v))`),
-  a **struct** (`Div{q, r}`), a **tuple** (`(a, b)`), a **literal**, optionally signed (`-1`), matched by
-  `equal`; a plain
-  **binding** name, an **or-pattern** (`A | B`, its sides binding the same names), or the wildcard **`_`**.
+- **Patterns** ([`GRAMMAR#pattern`](../../GRAMMAR) — a comma-separated
+  [`GRAMMAR#pattern-list`](../../GRAMMAR) is what a variant's payload and a tuple take — a `|`-run of
+  [`GRAMMAR#sub-pattern`](../../GRAMMAR) over a [`GRAMMAR#pattern-core`](../../GRAMMAR)) destructure by copy:
+  a **variant** ([`GRAMMAR#variant-pat`](../../GRAMMAR)) with a payload binding (`Left(v)`, nested
+  `Left(Some(v))`), a **struct** ([`GRAMMAR#struct-pat`](../../GRAMMAR), whose members are
+  [`GRAMMAR#field-pat`](../../GRAMMAR)), a **tuple** ([`GRAMMAR#tuple-pat`](../../GRAMMAR)), a **literal**
+  ([`GRAMMAR#literal-pat`](../../GRAMMAR)), optionally signed (`-1`), matched by `equal`; a plain **binding**
+  name ([`GRAMMAR#binding-pat`](../../GRAMMAR)), an **or-pattern** (`A | B`, its sides binding the same
+  names), or the wildcard **`_`**.
   A tuple or struct pattern also destructures at a `:=` binding — `(q, r) := divmod(x, y)`.
 - **Guards.** An arm may add `if expr` after the pattern (`Some(v) if v > 0 => …`) — a condition, seeing the
   pattern's bindings, that must also hold; on `A | B if c` it covers the whole or-pattern. A guarded arm
   **does not count toward exhaustiveness** (the compiler can't prove the guard holds), so the case still
   needs an unguarded arm (or `_`).
-- **Range arm.** A **match-only** `200..300 =>` / `400..=499 =>` / `500.. =>` is **sugar** for a guard —
+- **Range arm.** A **match-only** [`GRAMMAR#range-arm`](../../GRAMMAR) — `200..300 =>` / `400..=499 =>` /
+  `500.. =>` — is **sugar** for a guard —
   `_ if _ in <range>` — so it matches by **containment** (the `..` operators), not `equal`, and inherits a
   guard's exhaustiveness (it does not count as covering). It does **not bind**; to use the value, write the
   explicit `x if x in <range>`. Bounds are compile-time constants; a range arm is recognized by its `..`.
 - **Rest & partial.** A **struct pattern must list every field** or end with `..` — `Div{q, r}` (all),
   `Div{q, ..}` (rest ignored), `Div{..}` (any). Listing all by default means adding a field **breaks** old
-  patterns, forcing you to look. A **list pattern** matches a list — `[a, b]`, `[head, ..tail]`,
+  patterns, forcing you to look. A **list pattern** ([`GRAMMAR#list-pat`](../../GRAMMAR)) matches a list — `[a, b]`,
+  `[head, ..tail]`,
   `[..init, last]`, `[]` — with **at most one `..`**; `..name` binds the skipped run as a list, a bare `..`
   drops it (a struct's `..` only ignores, never binds). In pattern position `..` is **rest**, distinct from
   the value-level range `..`.
@@ -515,15 +567,21 @@ deco-item   ::= identifier ( '(' deco-arg ( ',' deco-arg )* ')' )?
 deco-arg    ::= type-name | const-expr        # derive(Encode, Decode), align(16), align(SIZE*2)
 ```
 
-- **Type expressions.** A **name** with optional **type arguments** (`int`, `User`, `list[int]`,
-  `Either[A, B]`); a **tuple type** `(A, B)`; an **array** `[T; N]` (the other use of `;`); a **channel**
+- **Type expressions.** A [`GRAMMAR#type`](../../GRAMMAR) is a [`GRAMMAR#base-type`](../../GRAMMAR) with an
+  optional trailing `?`. A base type is a **name** with optional **type arguments**
+  ([`GRAMMAR#type-args`](../../GRAMMAR) of [`GRAMMAR#generic-arg`](../../GRAMMAR)) — `int`, `User`,
+  `list[int]`, `Either[A, B]`; a **tuple type** ([`GRAMMAR#tuple-type`](../../GRAMMAR)) `(A, B)`; an
+  **array** ([`GRAMMAR#array-type`](../../GRAMMAR)) `[T; N]` (the other use of `;`); a **channel**
   `chan[T]`, with Go-style direction — `<-chan[T]` is receive-only (a receiver) and `chan[T]<-` is
   send-only (a sender); or a **function type** `fn(P…) -> R` (group 5). A trailing **`?`** makes any type an
   **optional** — `str?`. A type name is just an identifier, so the set of built-in **numeric** types
   (`int`, `uint`, `float`, and any fixed-width `i32`/`u8`/`f64`/…) is a **stdlib** decision, not grammar.
-- **`struct` / `enum`.** A **product** with named, typed fields or a **sum** with variants that each carry
-  an optional payload — `Circle(float)`, `Rect(float, float)`. Fields and variants are separated **exactly
-  like statements** (a line break, or `;` inline) — there is **no `,`** between them; the `,` inside a
+- **`struct` / `enum`.** [`GRAMMAR#struct-decl`](../../GRAMMAR) is a **product** with named, typed fields
+  (a [`GRAMMAR#field-list`](../../GRAMMAR) of [`GRAMMAR#field`](../../GRAMMAR)) and
+  [`GRAMMAR#enum-decl`](../../GRAMMAR) a **sum** (a [`GRAMMAR#variant-list`](../../GRAMMAR) of
+  [`GRAMMAR#variant`](../../GRAMMAR)) whose variants each carry an optional payload — `Circle(float)`,
+  `Rect(float, float)`. Fields and variants are separated **exactly like statements** (a line break, or `;` inline) —
+  there is **no `,`** between them; the `,` inside a
   payload `(A, B)` is an ordinary list. Both may be generic — `enum Either[X, Y] { … }`.
 - **Enum discriminants.** When **every** variant is fieldless, a variant may take an explicit integer
   **discriminant** — `enum Status { Ok = 200; NotFound = 404 }` — a C-style enum whose value is observable
@@ -548,8 +606,9 @@ deco-arg    ::= type-name | const-expr        # derive(Encode, Decode), align(16
   `T(...)` to module-private (external code must then use a public custom constructor, the module still
   building with `T(...)` internally), but is **recognized-and-rejected, not yet implemented** this phase (see
   [Decorators](../core/decorators.md)).
-- **`type X = Y`.** A **strong typedef** — a new, distinct type, not a transparent alias, lowering to `Y` at
-  runtime. The `generics?` slot is **parsed** but a **generic** alias `type X[T] = …` is **not yet
+- **`type X = Y`.** [`GRAMMAR#type-decl`](../../GRAMMAR) is a **strong typedef** — a new, distinct type, not
+  a transparent alias, lowering to `Y` at runtime. The `generics?` slot is **parsed** but a **generic** alias `type
+X[T] = …` is **not yet
   implemented** this phase (rejected in semantic analysis).
 - **Compile-time constants (implicit).** Compile-time folding is **implicit** and independent of the `const`
   keyword (which only marks a shadow-proof binding — Group 4). Any binding — `:=` or `const` — whose
@@ -559,8 +618,9 @@ deco-arg    ::= type-name | const-expr        # derive(Encode, Decode), align(16
   `const-expr` is an `expr` the compiler folds with **no evaluation engine** — literals, other const-foldable
   names, discriminants, and operators; **no function calls** (so `sizeof`/`len` are not const-exprs). A spec
   names, discriminants, and operators are what a const-expr is made of.
-- **Generics & bounds.** A parameter list `[T, …]` may bound each parameter to specs — `[T: Ord]`, a `+`
-  conjunction `[K: Hash + Eq, V]`. The same `bound` is a spec's **super-spec** (`spec Ord: Eq` — an
+- **Generics & bounds.** A [`GRAMMAR#generics`](../../GRAMMAR) list `[T, …]` may bound each
+  [`GRAMMAR#type-param`](../../GRAMMAR) to specs — `[T: Ord]`, a `+` conjunction `[K: Hash + Eq, V]`. The
+  same [`GRAMMAR#bound`](../../GRAMMAR) is a spec's **super-spec** (`spec Ord: Eq` — an
   `impl Ord` then also needs `impl Eq`, and `Ord`'s body may call `Eq` on `This`). An `impl`'s own type
   params sit **after `impl`** — `impl[T] Summable for list[T]` — so `T` is usable in the target. Generics
   **monomorphize**: each distinct type argument yields its own specialized C function, so a bound is
@@ -583,15 +643,18 @@ deco-arg    ::= type-name | const-expr        # derive(Encode, Decode), align(16
   types, **parameterize a spec** and write one impl per type: `spec Indexable[K, V]` with
   `impl Indexable[int, T]` (element) and `impl Indexable[Range, list[T]]` (slice) is how `xs[k]` dispatches
   statically on `k`'s type — or use an `enum` for a runtime choice.
-- **`spec`.** A behavioral interface: members are **required** (a signature with no body) or **provided** (a
-  full method). That is the whole of it — a spec carries **behaviour and nothing else**, which is the next
+- **`spec`.** [`GRAMMAR#spec-decl`](../../GRAMMAR) is a behavioral interface, whose
+  [`GRAMMAR#spec-member`](../../GRAMMAR)s are **required** (a signature with no body) or **provided** (a full
+  method). That is the whole of it — a spec carries **behaviour and nothing else**, which is the next
   bullet's subject. A
   method takes **no explicit receiver** — `this` is implicit inside a method, reached through the instance it
   is called on; a `fn` that uses `this` with no instance bound is a compile error. The self type is
   **`This`**. `impl … for …` supplies a spec's methods for a type by hand.
 - **Inherent `impl`.** A `for`-less `impl User { … }` adds methods **not tied to any spec** — a named
   constructor `User.from_json(…)` (an associated fn, no `this`, called `Type.f(…)`) or a private method
-  `u.recompute()` (uses `this`, called `x.f(…)`). Every method and associated fn on a type shares one
+  `u.recompute()` (uses `this`, called `x.f(…)`). An impl also holds a
+  [`GRAMMAR#val-bind`](../../GRAMMAR) — `SIZE := 4096`, a per-type compile-time value. Every method and associated fn
+  on a type shares one
   namespace, inherent or from a spec alike; a duplicate is an error.
 - **No associated types or values.** A spec declares neither a type the `impl` fills in (`type Item`,
   projected `I.Item`) nor a compile-time value it supplies (`BITS: int`, bound as `BITS := 32`); both are
@@ -600,9 +663,10 @@ deco-arg    ::= type-name | const-expr        # derive(Encode, Decode), align(16
   most one impl per type, so `for x in it` still has one element type — and a per-impl constant is an
   associated fn. The `.` chain in a type is left to **module qualification** (`text.Splitter`, group 10),
   which is the other thing it was carrying.
-- **Decorators & `#[derive(…)]`.** A **decorator** `#[…]` is a compiler directive; its `decorator?` prefix
-  leads **any statement**, declarations included (`statement` and `decorated-decl`, group 1), and binds to
-  it. Which decorators are valid in which position is a **semantic** rule — `#[derive(Encode, Decode)]` on a
+- **Decorators & `#[derive(…)]`.** A **decorator** `#[…]` is a compiler directive whose arguments are
+  [`GRAMMAR#deco-arg`](../../GRAMMAR); its prefix leads **any statement**, declarations included
+  ([`GRAMMAR#decorated-decl`](../../GRAMMAR), group 1), and binds to it. Which decorators are valid in which position
+  is a **semantic** rule — `#[derive(Encode, Decode)]` on a
   `struct`/`enum` asks the compiler to **generate** the canonical impls of the named specs by reading the
   type's structure (see [Derive & Default Behavior](../core/derive.md)); `#[allow(L103)]` on a plain
   statement suppresses a lint finding over it, and a `#[derive]` there is a compile error. **One decorator
@@ -622,8 +686,11 @@ deco-arg    ::= type-name | const-expr        # derive(Encode, Decode), align(16
 
 Failure comes in **two tiers**. A **recoverable** failure is an ordinary value of a sum type —
 `Either[X, Y]`, `Result[T]` = `Either[T, Err]`, and `T?` = `Either[T, nil]` with the placeholder `nil`. A
-**bug** is an **abort** that unwinds the stack (running `defer`s). Six operators bridge the tiers,
-and one statement states a claim across them:
+**bug** is an **abort** that unwinds the stack (running `defer`s) — [`GRAMMAR#raise`](../../GRAMMAR) as an
+expression, [`GRAMMAR#raise-stmt`](../../GRAMMAR) as a statement. Six operators bridge the tiers, and one
+statement states a claim across them. A [`GRAMMAR#diverge`](../../GRAMMAR) is what may stand on the right of
+`??` instead of a value: a `break`, a `continue`, a `return` or a `raise` — an arm that does not produce
+one. [`GRAMMAR#guard-expr`](../../GRAMMAR) is the block that demotes an abort to a `Result`.
 
 ```text
 coalesce-expr ::= or-expr ( '??' coalesce-rhs )?
@@ -674,22 +741,29 @@ recv-arm    ::= ( ( identifier | '_' ) ':=' )? '<-' expr '=>' stmt
 send-arm    ::= expr '<-' expr '=>' stmt
 ```
 
-- **`spawn f(args)`** starts a **fire-and-forget** coroutine (Go's `go`) — no handle, no join; you observe
+- **`spawn f(args)`** ([`GRAMMAR#spawn-stmt`](../../GRAMMAR)) starts a **fire-and-forget** coroutine
+  (Go's `go`) — no handle, no join; you observe
   it only through channels. Captures are restricted to immutable values and channels.
-- **`chan[T](cap?)`** builds a channel — capacity `0` (the default) is an unbuffered **rendezvous**. A bare
+- **`chan[T](cap?)`** ([`GRAMMAR#chan-new`](../../GRAMMAR)) builds a channel — capacity `0` (the default) is
+  an unbuffered **rendezvous**. A bare
   `chan[T]` is bidirectional and narrows to `<-chan[T]` / `chan[T]<-` via a type annotation.
-- **`ch <- v`** sends (no value; blocks or aborts on a closed channel). **`<-ch`** receives, yielding
+- **`ch <- v`** ([`GRAMMAR#send-stmt`](../../GRAMMAR)) sends (no value; blocks or aborts on a closed
+  channel). **`<-ch`** receives, yielding
   **`T?`** — `nil` once the stream has ended, and `nil` every time after. A **crash** close is a failure
   rather than an absence and is **raised**, carrying the producer's own `Err`. So `<-ch ?? d`, `<-ch!`,
   `<-ch?` and `if v := <-ch { … }` are the receive's operators, and **`chan[T?]` is refused** — `nil` would
   otherwise mean both the value and the end.
-- **`select { … }`** is the only multi-way wait: it PICKS one ready arm (fair ties) and runs it; a receive
-  arm binds a plain **`T`**, because a cleanly ended channel drops out of the wait instead of firing.
-  **`for select { … }`** is the same wait as a loop — one ready arm per round — and it ENDS when every
+- **`select { … }`** ([`GRAMMAR#select-stmt`](../../GRAMMAR)) is the only multi-way wait: it PICKS one ready
+  arm (fair ties) and runs it; a receive arm ([`GRAMMAR#recv-arm`](../../GRAMMAR)) binds a plain **`T`**,
+  because a cleanly ended channel drops out of the wait instead of firing, and a send arm
+  ([`GRAMMAR#send-arm`](../../GRAMMAR)) fires when the send can proceed.
+  **`for select { … }`** ([`GRAMMAR#for-select`](../../GRAMMAR)) is the same wait as a loop — one ready arm per round
+  — and it ENDS when every
   watched receive channel has. There is no terminal arm. **`_`** fires when nothing is ready **now**
   (non-blocking) and is not an answer to an exhausted select; it is **contextual**, special only as an arm
   head, and the only bare identifier an arm may open with. There is **no `yield`**.
-- **`close(ch)`** ends a stream **early**. A channel normally closes **by itself** when its last sender
+- **`close(ch)`** ([`GRAMMAR#close-stmt`](../../GRAMMAR)) ends a stream **early**. A channel normally closes **by
+  itself** when its last sender
   leaves — the everyday form, and the only one a crashing producer can take. `close` is a **statement and
   not a call**: it is a keyword, names no function and yields no value, so it cannot be passed, bound or
   spawned, and `defer` spells it out as its one non-expression form (**`defer close(ch)`**). It marks the
@@ -710,8 +784,10 @@ init-decl   ::= 'init' '(' ')' block
 - **`pub`** (already a prefix on every declaration) is the one visibility marker: a plain declaration is
   **module-private**, `pub` exposes it to the **rest of the package**, and a package's public API is the
   `pub` surface of its **root module**.
-- **`import "path"`** binds a **namespace** — the path is a **string** and its **last segment** names the
-  binding (`import "util/text"` binds `text`), reached with `.`: `text.split(…)`. **`as`** renames it
+- **`import "path"`** ([`GRAMMAR#import-stmt`](../../GRAMMAR), one or more
+  [`GRAMMAR#import-spec`](../../GRAMMAR)) binds a **namespace** — the path is a **string** and its **last
+  segment** names the binding (`import "util/text"` binds `text`), reached with `.`: `text.split(…)`. **`as`** renames
+  it
   (`import "a/text" as at`), which is how two imports that share a last segment coexist; a collision with a
   local name is an error, resolved by `as`. A leading **`pub`** on the spec **re-exports** the namespace onto
   this module's surface — `import pub "util/text"` — the single mechanism by which a root module builds a
@@ -728,7 +804,8 @@ init-decl   ::= 'init' '(' ')' block
   inside the `( … )` are insignificant. There is **no selective (`from … import`) or glob import** — to use a
   member unqualified, bind it locally (`split := text.split`), since a function is a value.
 
-- **`init()`** is a module's **lazy** setup, run on first use. A module may declare **several** `init()`
+- **`init()`** ([`GRAMMAR#init-decl`](../../GRAMMAR)) is a module's **lazy** setup, run on first use. A module may
+  declare **several** `init()`
   blocks; they run in **declaration (FIFO) order**, each **exactly once**. There are **no mutable globals in
   safe code**: a top-level binding may not be `mut` — a top-level `:=` is an **immutable module constant**
   evaluated at init. The one exception is a `mut` binding inside a module-level **`unsafe { … }`** group
@@ -748,11 +825,13 @@ defer-stmt ::= 'defer' ( expr | close-stmt )   # an expression, or the one state
 del-stmt   ::= 'del' identifier
 ```
 
-- **`defer expr`** runs `expr` at the **enclosing block's exit**, on **every path out** — normal, `return`,
+- **`defer expr`** ([`GRAMMAR#defer-stmt`](../../GRAMMAR)) runs `expr` at the **enclosing block's exit**, on **every
+  path out** — normal, `return`,
   or an abort unwind — in last-scheduled-first order. It is the procedural tool for a scope-bound effect
   (release a lock, flush a buffer, close a scope-local resource). It also takes **`close(ch)`** (group 9),
   spelled out because `close` is a keyword rather than a callee, so `defer expr` alone could never reach it.
-- **`del name`** revokes that name's access to its storage **now**; the storage is freed only if the revoked
+- **`del name`** ([`GRAMMAR#del-stmt`](../../GRAMMAR)) revokes that name's access to its storage **now**; the storage
+  is freed only if the revoked
   access was the **owning** one and no other holder remains. For a `Ref[T]` / `chan` it drops a refcount
   **and** revokes the name, so the name is unusable afterwards — `del ch` is not how a stream is ended
   (that is `close(ch)`, or the binding's scope exit).
@@ -776,10 +855,12 @@ asm-operand ::= 'in' '(' str-lit ')' expr | 'out' '(' str-lit ')' lvalue
               | 'inout' '(' str-lit ')' lvalue | 'clobber' '(' str-lit ( ',' str-lit )* ')'
 ```
 
-- **`unsafe { … }`.** Two shapes, told apart by **position**. In a **function** body it is a
-  **block-expression** (it yields the block's value) inside which raw operations are legal; anywhere else
-  they are a compile error. At **module** level the same `unsafe { … }` is a **declaration group**: every
-  item inside is unsafe — a `fn` is an unsafe fn, and a `mut` binding is a module-private mutable **global**
+- **`unsafe { … }`.** Two shapes, told apart by **position**. In a **function** body it is
+  [`GRAMMAR#unsafe-expr`](../../GRAMMAR), a **block-expression** (it yields the block's value) inside which
+  raw operations are legal; anywhere else they are a compile error. At **module** level the same
+  `unsafe { … }` is [`GRAMMAR#unsafe-group`](../../GRAMMAR), a **declaration group**: every
+  [`GRAMMAR#unsafe-item`](../../GRAMMAR) inside it is unsafe — a `fn` is an unsafe fn, and a `mut` binding is a
+  module-private mutable **global**
   (persistent; the group scopes names to the module, it is not a fresh value scope). `unsafe` is a **trust
   boundary** — the compiler makes no memory-safety guarantee about its contents; the author vouches for
   them. **`unsafe fn`** is the single-function form; an unsafe fn may only be **called** from another
@@ -797,7 +878,8 @@ asm-operand ::= 'in' '(' str-lit ')' expr | 'out' '(' str-lit ')' lvalue
   a program is the general `E9004`). Neither `Atomic[int]`,
   the **memory-ordering argument**, nor a generic `Atomic[T]` is reachable, and `Ref[T]` — which the
   intended `Atomic[int]` with sequential consistency rests on — is `E9058`.
-- **Raw pointers (`ptr` / `ptr[T]`).** `ptr` is a platform-width raw **address** (C's `void*` / `uintptr`);
+- **Raw pointers ([`GRAMMAR#ptr-type`](../../GRAMMAR), `ptr` / `ptr[T]`).** `ptr` is a platform-width raw
+  **address** (C's `void*` / `uintptr`);
   `ptr[T]` types that address to a pointee `T` (same width — `[T]` only types the load/store/offset). Because
   `T` is any type, **function pointers** fall out for free — `ptr[fn(int) -> nil]` (an interrupt vector) — as
   do `ptr[ptr[T]]` and the bare `ptr`. A `ptr` is **inherently nullable** (address `0`) and is **orthogonal
@@ -806,8 +888,9 @@ asm-operand ::= 'in' '(' str-lit ')' expr | 'out' '(' str-lit ')' lvalue
   `p.offset(n)`, casts, volatile/atomic — is an **unsafe stdlib intrinsic** (not grammar), legal only inside
   `unsafe`. There is **no `*`/`&` operator**; the bracket type keeps pointers consistent with `list[T]` /
   `Ref[T]` / `chan[T]`.
-- **Inline assembly (`asm`).** A template string (triple-quoted for multi-line) with operands binding Zerg
-  values to registers/constraints. `out` / `inout` / `clobber` are **contextual** (special only in an asm
+- **Inline assembly ([`GRAMMAR#asm-expr`](../../GRAMMAR)).** A template string (triple-quoted for
+  multi-line) with operands binding Zerg values to registers/constraints. `out` / `inout` / `clobber` are
+  **contextual** (special only in an asm
   operand list; `in` is already a keyword). The constraint string (`"rax"`, `"r"`, `"m"`, …) is opaque here —
   its meaning is the target backend's. `asm` is `unsafe`-only; a **syscall** is issued this way.
 

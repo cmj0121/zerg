@@ -155,8 +155,8 @@ compiler 能依型別的**結構**幫你**寫出實作**,以型別上的 **decor
 Zerg 的並行**只有 coroutine 與 channel**：`spawn`（Go 的 `go`）,fire-and-forget、無 join/handle,只捕獲
 **immutable 值與 channel**。scheduler 是 **M:N**——數條 worker OS thread 抽同一條共享 run queue——但是**合作式、
 非搶佔式**：coroutine 只在 channel 操作、`select` 或 sleep 讓出，所以一個從不 park 的 CPU-bound coroutine 會佔住
-一條 worker 直到它結束，數量到達 worker 數就讓整個程式停擺。這是規則而不是對規則的虧欠——搶佔是一道
-[door](../FUTURE.md#preemptive-scheduling)，不是這一頁的承諾。見 [Coroutines 與 Channels](code/coroutine.zh-TW.md)。
+一條 worker 直到它結束，數量到達 worker 數就讓整個程式停擺。這是規則而不是對規則的虧欠;一個排程器是不是
+搶佔式的屬 **[implementation-defined]**,而這一個不是。見 [Coroutines 與 Channels](code/coroutine.zh-TW.md)。
 channel 是 reference-counted 的 by-ref **管道**（一個為通訊而生的
 `Ref` 型別;`Ref[T]` 是它持有資源的手足——見 [值與記憶體](core/memory.zh-TW.md)）——payload 複製、在最後一個 sender 離場時
 **自動 close**——或由 channel 專屬的敘述 **`close(ch)`** 提早結束——並用 **`select`** 多路等待。receive 得到的是

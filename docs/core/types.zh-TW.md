@@ -406,10 +406,9 @@ spec Into[T] {
   在同一句話裡禁止的。而轉成文字則根本沒有東西可加入:`display` 是內建的值**渲染**、不是 spec
   (見 [Format](../runtime/format.zh-TW.md)),所以想要文字的泛型完全**不需要 bound**。那是關於 `display` 不是
   spec 的事實,不是「每個值都渲染得出來」的保證。
-  (對**複合值**是 **[not yet]**:`struct` 上的 `str(P(7))` 是 _E9059 NotImplemented: rendering a P as text — a
-  composite needs the structural `Display` this compiler does not generate_,而泛型在 monomorphize 之後撞到的
-  是同一個拒絕。**channel**、**函式值**與 **nil** 不在等那個東西,而且永遠不會渲染——見
-  [Format](../runtime/format.zh-TW.md)。成立的是「不需要 bound」這條規則;撐在它後面的那個渲染並不是普世的。)
+  (**複合值**會結構化渲染——`str(P(7))` 就是 `P(x: 7)`——泛型在 monomorphize 之後也一樣。**channel**、**函式值**
+  與 **nil** 則永遠不會渲染——見 [Format](../runtime/format.zh-TW.md)。成立的是「不需要 bound」這條規則;撐在它
+  後面的那個渲染並不是普世的。)
 - **剩下的是語言沒有的那種轉換**:`impl Into[Meters] for Feet`,以寫出來的 `x.into()` 呼叫。內建型別上的 `into`
   會被指名拒絕,並說出該改寫什麼。
 - **泛型程式碼以它為 bound**——`fn f[T: Into[Meters]](x: T)` 可以呼叫 `x.into()`,目標由 bound 定死。**引數

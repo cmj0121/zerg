@@ -59,8 +59,8 @@ for src in "$@"; do
 	}
 
 	# One program that prints every example expression in order. `print` is what renders the
-	# value, which is why an example of a function answering a `list[T]` has to reduce it —
-	# E9059, a composite has no structural `Display` in this compiler.
+	# value, and it renders a composite structurally now — so an example answering a `list[T]`
+	# may show it whole, though reducing it is usually the clearer example.
 	{
 		printf 'import "%s"\n\nfn main() {\n' "$module"
 		sed 's/^/\tprint /' "$tmp/code"

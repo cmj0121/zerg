@@ -75,6 +75,59 @@ pub enum Ty {
 	# nothing, so forcing an absent one raises a message of its own.
 	TOpt(Ty)
 	TErr
+
+	# TArr is `[T; N]`, the fixed-size array (GRAMMAR#array-type). The LENGTH IS PART OF THE
+	# TYPE, which is the whole of what separates it from `list[T]`: `[int; 3]` and `[int; 4]`
+	# are two types, and neither grows.
+	#
+	# The length rides as a KEY rather than as the expression that was written: the digits it
+	# folds to, or the name of the constant it is. A `Ty` cannot hold an `Expr` — an `Expr`
+	# already holds a `Ty`, and the two together have no size — and a key is what the length is
+	# for anyway. Two arrays are the same type when their keys agree, so `[int; 2 + 1]` and
+	# `[int; 3]` are one type; a name is its own key, and the emitter, which has the constant
+	# table, is what turns it into a number.
+	TArr(Ty, str)
+
+	# TUnsafe is the `unsafe` marker ON A FUNCTION TYPE (GRAMMAR#fn-type is `'unsafe'? 'fn' …`).
+	# It wraps the `TFn` rather than being a field of it, for the reason `mut &` is a type and
+	# not a flag: `unsafe fn() -> int` and `fn() -> int` are two types, and a value of one is
+	# not a value of the other — which is the whole of what the marker says.
+	#
+	# THE C IS THE SAME. Both are one function pointer at runtime; what differs is who may call
+	# it, and that is a compile-time question.
+	TUnsafe(Ty)
+
+	# TPtr is `ptr` / `ptr[T]` (GRAMMAR#ptr-type) — a platform-width raw ADDRESS, and the same
+	# address TYPED to a pointee. The bare form carries TUnknown: `[T]` only types the
+	# load/store/offset, so the two are one width and one variant.
+	#
+	# IT IS ORTHOGONAL TO `T?`. A `ptr` is nullable by construction — address 0 — so there is
+	# no `ptr[T]?` and a null test is `p == 0`, which is why nothing here wraps it in a carrier.
+	TPtr(Ty)
+
+	# TRef is `mut &T`, and it is a TYPE rather than a marker on a declaration:
+	# GRAMMAR#param-type derives `( 'mut' '&' )? type`, so `fn(mut &int)` and `fn(int)` are
+	# two different function types and a value of one is not a value of the other.
+	#
+	# IT IS ONLY EVER A PARAMETER'S TYPE. A `mut &` is the caller's own storage lent for the
+	# duration of one call, so there is nothing for it to be the type OF anywhere else — not
+	# a binding, not a field, not a return. The parser builds it in the one position that
+	# derives it, which is what keeps that true without a rule saying so.
+	TRef(Ty)
+}
+
+# AsmOp is one operand of an `asm(…)` (GRAMMAR#asm-operand): its KIND — 0 `in`, 1 `out`,
+# 2 `inout`, 3 `clobber` — the constraint string, and the value or place it binds.
+#
+# A CLOBBER CARRIES CONSTRAINTS AND NO VALUE, which is why the two lists are one type rather
+# than two: every operand has a kind and a set of constraint strings, and only the first three
+# have an expression. `expr` is ENil for a clobber, and its `cons` holds every name.
+pub struct AsmOp {
+	pub kind: int
+	pub cons: list[str]
+	pub expr: Expr
+	pub line: int
+	pub col: int
 }
 
 # Expr is an expression node.
@@ -128,6 +181,16 @@ pub enum Expr {
 	# as "byte" and an f-string hole as "str", because neither was spelled by the reader
 	# and those are the nearest true names for what the node does.
 	EConv(Ty, Expr, str)
+
+	# EFmt is ONE f-string HOLE with a tail: the value, the `!conv` letter ("" for none), and
+	# the `:spec` text ("" for none). GRAMMAR#interp derives `'{' expr '='? conversion?
+	# format-spec? '}'`, so the two tails belong to one hole — and they are held rather than
+	# resolved because both need the value's TYPE, which the parser that reads the hole has
+	# not got. A hole with no tail stays the plain `str(x)` it always was.
+	#
+	# `=` IS NOT IN HERE. It renders the expression's SOURCE TEXT, which is a fact the parser
+	# alone has, so it is spliced as an ordinary literal at the hole rather than carried.
+	EFmt(Expr, str, str)
 	EIf(Expr, Expr, Expr)
 	EMatch(Expr, list[Arm])
 
@@ -187,6 +250,17 @@ pub enum Expr {
 	# is discarded. Position decides which, not shape, which is why the parser reads this one
 	# only from parse_primary.
 	EBlock(list[Stmt])
+
+	# EUnsafe is `unsafe { … }` WHERE AN EXPRESSION IS WANTED (GRAMMAR#unsafe-expr) — the same
+	# block, inside which the raw operations are legal. It is a node of its own and not an
+	# EBlock carrying a flag, because what it marks is a CONTEXT the emitter enters and leaves:
+	# a bare block nested inside one is still unsafe, and a function called from one is not.
+	EUnsafe(list[Stmt])
+
+	# EAsm is inline assembly (GRAMMAR#asm-expr): the template, then one AsmOp per operand.
+	# The template is OPAQUE — GRAMMAR says its meaning is the target backend's — which is
+	# exactly the promise that lets it be handed to the C compiler unread.
+	EAsm(str, list[AsmOp])
 
 	# EIs is the type test `x is Name` (GRAMMAR#cmp-expr, at the comparison level and equally
 	# non-associative). The right side is held as a NAME rather than a parsed Ty because
@@ -462,6 +536,12 @@ pub struct FnDecl {
 	# can ever be both — a single field would encode that fact a second time, where it could
 	# drift from the rule that enforces it.
 	pub is_fixture: bool
+
+	# has_body separates a spec's REQUIRED member from its PROVIDED one, which an empty `body`
+	# cannot: `fn f() { }` is a provided method that does nothing, and a signature with no body
+	# is a requirement — two different things with the same empty statement list. Everywhere
+	# else a FnDecl has a body by construction, so this is true for all of them but a spec's.
+	pub has_body: bool
 }
 
 # Diag is one finding about an ill-formed program: what is wrong, and where. It is a
@@ -725,6 +805,13 @@ pub struct ImplDecl {
 # the way a private function's call is.
 pub struct ConstDecl {
 	pub name: str
+
+	# recv is the TYPE this constant belongs to — the `P` of `impl P { LIMIT := 5 }` — and ""
+	# for a module constant. It is one field rather than a second list because the two are the
+	# same declaration in every way but their name: `GRAMMAR#val-bind` is `identifier ':='
+	# const-expr` wherever it is written, and the initialisation order, the const-expr rule and
+	# the C storage are the module constant's already.
+	pub recv: str
 	pub ty: Ty
 	pub has_ty: bool
 	pub is_mut: bool
@@ -1133,6 +1220,7 @@ pub fn expr_kind(e: Expr) -> str {
 		Expr.EListLit(elems) => "list-literal"
 		Expr.EFill(v, n) => "fill"
 		Expr.EConv(ty, x, nm) => "convert " + nm
+		Expr.EFmt(x, _, _) => "format hole"
 		Expr.EIf(cond, then_e, else_e) => "if-expr"
 		Expr.EMatch(scrut, arms) => "match"
 		Expr.ERange(lo, hi, inclusive) => "range"
@@ -1145,6 +1233,8 @@ pub fn expr_kind(e: Expr) -> str {
 		Expr.ECoalesce(a, b, jump) => "coalesce"
 		Expr.EGuard(body) => "guard"
 		Expr.EBlock(body) => "block-expr"
+		Expr.EUnsafe(_) => "unsafe-block"
+		Expr.EAsm(_, _) => "asm"
 		Expr.EIs(x, name) => "is " + name
 		Expr.EIn(x, set) => "in"
 		_ => "?"
@@ -1186,6 +1276,7 @@ pub fn expr_parts(e: Expr) -> list[Expr] {
 		Expr.EListLit(elems) => elems
 		Expr.EFill(v, n) => [v, n]
 		Expr.EConv(_, x, _) => [x]
+		Expr.EFmt(x, _, _) => [x]
 		Expr.EIf(c, a, b) => [c, a, b]
 		Expr.EMatch(scrut, arms) => expr_parts_arms(scrut, arms)
 		Expr.ERange(lo, hi, _) => [lo, hi]
@@ -1198,6 +1289,8 @@ pub fn expr_parts(e: Expr) -> list[Expr] {
 		Expr.ECoalesce(a, b, _) => [a, b]
 		Expr.EGuard(_) => expr_parts_none()
 		Expr.EBlock(_) => expr_parts_none()
+		Expr.EUnsafe(_) => expr_parts_none()
+		Expr.EAsm(_, ops) => asm_op_exprs(ops)
 		Expr.EIs(x, _) => [x]
 		Expr.EIn(x, set) => [x, set]
 	}
@@ -1280,6 +1373,18 @@ fn expr_parts_defs(ps: list[Param]) -> list[Expr] {
 	for pm in ps {
 		if pm.has_def {
 			out.append(pm.def)
+		}
+	}
+	return out
+}
+
+# asm_op_exprs is the expressions an `asm(…)` mentions — every operand but a clobber, which
+# names registers rather than values.
+pub fn asm_op_exprs(ops: list[AsmOp]) -> list[Expr] {
+	mut out: list[Expr] = []
+	for o in ops {
+		if o.kind != 3 {
+			out.append(o.expr)
 		}
 	}
 	return out
@@ -1439,12 +1544,88 @@ pub fn ty_eq(a: Ty, b: Ty) -> bool {
 		Ty.TChan(ae, ad)   => ty_eq_chan(ae, ad, b)
 		Ty.TEither(al, ar) => ty_eq_either(al, ar, b)
 		Ty.TFn(aps, ar)    => ty_eq_fn(aps, ar, b)
+		Ty.TRef(ae)        => ty_eq_ref(ae, b)
+		Ty.TPtr(ae)        => ty_eq_ptr(ae, b)
+		Ty.TUnsafe(ae)     => ty_eq_unsafe(ae, b)
+		Ty.TArr(ae, an)    => ty_eq_arr(ae, an, b)
 		Ty.TTuple(aes)     => ty_eq_tuple(aes, b)
 		Ty.TUnknown        => false
 
 		# every remaining variant is a scalar with a spelling of its own, so the name IS
 		# the identity there — the one place the shortcut this function replaces was right
 		_ => ty_name(a) == ty_name(b)
+	}
+}
+
+# TWO ARRAYS ARE THE SAME TYPE WHEN THEIR ELEMENTS AND THEIR LENGTH KEYS ARE. The key is what
+# the parser reduced the const-expr to — the digits it folds to, or the constant it names — so
+# `[int; 2 + 1]` and `[int; 3]` are one type and `[byte; WIDTH]` meets itself. The one pair a
+# comparison with no constant table cannot settle, `[byte; WIDTH]` against `[byte; 4]`, is the
+# emitter's (c_arr_len).
+fn ty_eq_arr(ae: Ty, an: str, b: Ty) -> bool {
+	return match b {
+		Ty.TArr(be, bn) => ty_eq(ae, be) and an == bn
+		_ => false
+	}
+}
+
+# ty_arr_len is an array length as a NUMBER when the key already is one, and -1 when it names a
+# constant instead. The emitter resolves that half, where the table is.
+pub fn ty_arr_len(key: str) -> int {
+	bs := bytearray(key)
+	return -1 if bs.len() == 0
+
+	mut v := 0
+	for c in bs {
+		return -1 if c < b'0' or c > b'9'
+
+		v = v * 10 + int(c - b'0')
+	}
+	return v
+}
+
+# ty_ptr_name spells a raw pointer the way the reader wrote it: `ptr` when it is untyped, and
+# `ptr[T]` when the pointee is known.
+fn ty_ptr_name(e: Ty) -> str {
+	return "ptr" if ty_is_unknown_ty(e)
+
+	return f"ptr[{ty_name(e)}]"
+}
+
+fn ty_is_unknown_ty(t: Ty) -> bool {
+	return match t {
+		Ty.TUnknown => true
+		_           => false
+	}
+}
+
+# AN UNSAFE FUNCTION TYPE IS EQUAL TO NOTHING BUT ANOTHER UNSAFE ONE. That is what keeps the
+# marker load-bearing: a plain `fn` type is callable from safe code, so letting the two meet
+# would be a way to launder an unsafe function into one.
+fn ty_eq_unsafe(ae: Ty, b: Ty) -> bool {
+	return match b {
+		Ty.TUnsafe(be) => ty_eq(ae, be)
+		_ => false
+	}
+}
+
+# TWO POINTERS ARE THE SAME TYPE WHEN THEIR POINTEES ARE, and a bare `ptr` is its own type
+# rather than a wildcard: `ptr` and `ptr[int]` are one width and two types, so a conversion
+# between them is written (GRAMMAR#ptr-type names the casts) rather than implied.
+fn ty_eq_ptr(ae: Ty, b: Ty) -> bool {
+	return match b {
+		Ty.TPtr(be) => ty_name(ae) == ty_name(be)
+		_           => false
+	}
+}
+
+# A `mut &T` IS EQUAL TO NOTHING BUT A `mut &` OF THE SAME TYPE, which is the whole reason
+# it is a type: `fn(mut &int)` and `fn(int)` differ in what the caller hands over, so a value
+# of one standing in for the other would be a pointer read as an integer.
+fn ty_eq_ref(ae: Ty, b: Ty) -> bool {
+	return match b {
+		Ty.TRef(be) => ty_eq(ae, be)
+		_           => false
 	}
 }
 
@@ -1539,6 +1720,10 @@ pub fn ty_name(t: Ty) -> str {
 		Ty.TChan(e, dir) => chan_ty_name(e, dir)
 		Ty.TEither(l, r) => either_name(l, r)
 		Ty.TOpt(e)       => f"{ty_name(e)}?"
+		Ty.TRef(e)       => f"mut &{ty_name(e)}"
+		Ty.TPtr(e)       => ty_ptr_name(e)
+		Ty.TUnsafe(e)    => f"unsafe {ty_name(e)}"
+		Ty.TArr(e, n)    => f"[{ty_name(e)}; {n}]"
 		Ty.TErr          => "Err"
 		Ty.TMap(k, v)    => f"map[{ty_name(k)}, {ty_name(v)}]"
 

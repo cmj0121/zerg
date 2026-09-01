@@ -474,6 +474,18 @@ zrt_err zrt_taken_err(void);
 #define ZRT_MSG_SHIFT_WIDTH  "shift distance outside the type width"
 #define ZRT_MSG_DIV_ZERO     "division by zero"
 #define ZRT_MSG_MOD_ZERO     "remainder by zero"
+#define ZRT_MSG_INDEX        "index out of range"
+
+/* zrt_arr_index is the bound check of a FIXED-SIZE ARRAY, and it answers the INDEX rather
+ * than the slot: `a.v[zrt_arr_index(i, N)]` stays an lvalue, so one helper serves the read
+ * and the write. A list's check lives in zrt_list_at, which has the header to read the
+ * length from; an array's length is in its C type, so it is passed in. */
+static inline int64_t zrt_arr_index(int64_t i, int64_t n) {
+	if (i < 0 || i >= n) {
+		zrt_abort_kind(ZRT_ERR_INDEX, ZRT_MSG_INDEX);
+	}
+	return i;
+}
 
 static inline int64_t zrt_add_i64(int64_t a, int64_t b) {
 	int64_t r;
@@ -811,6 +823,11 @@ int64_t zrt_exec(zrt_list argv);
 int64_t zrt_proc_spawn(zrt_list argv);
 int64_t zrt_proc_wait(int64_t pid);
 
+/* zrt_proc_open3 starts a child with its three standard streams on pipes and answers
+ * `[pid, stdin, stdout, stderr]` — the parent's ends. A negative pid (a one-element list) is
+ * the failure. */
+zrt_list zrt_proc_open3(zrt_list argv);
+
 /* zrt_mkdir creates a directory and any missing parents (`mkdir -p`), reporting whether
  * it exists afterwards. Creating one that is already there is success. */
 bool zrt_mkdir(const char *path);
@@ -965,6 +982,14 @@ const char *zrt_display_int(int64_t v);
 const char *zrt_display_uint(uint64_t v);
 const char *zrt_display_float(double v);
 const char *zrt_display_bool(bool v);
+
+/* zrt_debug_str is a `str` as it reads INSIDE a composite: quoted and escaped, so that two
+ * lists whose elements differ only by a separator do not render the same way. */
+const char *zrt_debug_str(const char *s);
+
+/* zrt_ascii_escape is the f-string `!a` conversion: the debug text with every byte outside
+ * printable ASCII written as a hex escape, for a terminal that cannot show the bytes. */
+const char *zrt_ascii_escape(const char *s);
 
 /* zrt_fmt_* render a value under a `:spec` (the f-string `{x:spec}` hole). Numbers
  * read sign / base (d/b/o/x/X/c) / '#' prefix / zero-pad / width / (float) precision;

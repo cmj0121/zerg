@@ -109,6 +109,15 @@ pub enum Rule {
 	UnsafeOpensNeither = 2075
 	ListPatternTwoRests = 2078
 	ImplItemUnknown = 2077
+	ArrayLenNotConst = 2079
+	FStringSpecBrace = 2080
+	CommandHoleInWord = 2081
+	CommandEmpty = 2082
+	CommandNeedsOs = 2083
+	CommandHoleManyExprs = 2084
+	AsmTemplateNotStr = 2085
+	AsmConstraintNotStr = 2086
+	AsmOperandHead = 2087
 
 	# checking — a form whose meaning does not hold together — reported against the tree, all at once
 	NotPublicMember = 3001
@@ -281,6 +290,18 @@ pub enum Rule {
 	# and scripts/method-gaps-check.sh is what holds it to the chapters. A per-chapter
 	# attribution here is a third copy, and both times it has been one it has drifted.
 	ListMethodUnknown = 3137
+	ArrayLitLen = 3139
+	ArrayIndexConst = 3140
+	ArrayMethodUnknown = 3141
+	FStringSpecType = 3142
+	AsmOutsideUnsafe = 3143
+	AsmOrder = 3144
+	PtrOpOutsideUnsafe = 3145
+	PtrUntypedOp = 3146
+	PtrOpArity = 3147
+	PtrCastSource = 3148
+	UnsafeValueInSafeCode = 3149
+	SpecDefaultReadsField = 3138
 
 	# emitting — a form this compiler will not lower
 	LoopKeywordOutsideLoop = 4001
@@ -360,6 +381,10 @@ pub enum Rule {
 	StructPatternNoSuchField = 4086
 	OrPatternBindsDiffer = 4088
 	StructPatternIncomplete = 4087
+	NoAssociatedValue = 4089
+	DeriveFromNotEnum = 4090
+	DeriveFromTwice = 4091
+	DeriveFromNoPayload = 4092
 	ListPatternNotAList = 4084
 	MutateAValueNotAPlace = 4081
 
@@ -410,32 +435,20 @@ pub enum Rule {
 	# range because it is its own class: each of these retires when the form is built, and
 	# keeping that churn out of the five stage ranges is what keeps them dense
 	NotYetParameterizedSpec = 9001
-	NotYetSpecMemberBody = 9002
 	NotYetGenericEnum = 9003
 	NotYetGenericStruct = 9004
 	NotYetDecoratorLayout = 9005
-	NotYetImplAssocValue = 9006
 	NotYetStructPattern = 9008
 	NotYetCallee = 9009
 	NotYetNamedArgument = 9010
-	NotYetUnsafeExpr = 9011
-	NotYetFStringFormatSpec = 9012
-	NotYetFStringConversion = 9013
-	NotYetFStringSelfDoc = 9014
 	NotYetImplAssocType = 9015
-	NotYetArrayType = 9017
-	NotYetCommandInterpolating = 9019
-	NotYetCommandLiteral = 9020
 	NotYetDestructuringBinding = 9021
 	NotYetForMutBinding = 9025
-	NotYetUnsafeFn = 9027
 	NotYetAssocTypeProjection = 9028
 	NotYetValueGenericParam = 9029
 	NotYetIfExprManyStatements = 9031
 	NotYetIfExprBindingHead = 9032
-	NotYetAsm = 9033
 	NotYetClosureParamDefault = 9034
-	NotYetFnTypeMutRefParam = 9035
 	NotYetUnsafeSpecSignature = 9036
 	NotYetImplTypeParams = 9037
 	NotYetImplTypeArgument = 9038
@@ -443,7 +456,6 @@ pub enum Rule {
 	NotYetTypedefNonScalar = 9042
 	NotYetJumpOutOfGuard = 9043
 	NotYetGenericMethod = 9044
-	NotYetRawPointerBuiltin = 9045
 	NotYetCompileTimeBuiltin = 9046
 	NotYetImplOnBuiltin = 9047
 	NotYetSpecAsType = 9048
@@ -456,13 +468,11 @@ pub enum Rule {
 	NotYetListMethod = 9056
 	NotYetContainerEquality = 9057
 	NotYetRefBox = 9058
-	NotYetRenderAsText = 9059
 	NotYetSecondIntoImpl = 9060
 	NotYetInOverNoEq = 9061
 	NotYetInOverType = 9062
 	NotYetFixedWidthLadder = 9063
 	NotYetSetBuiltin = 9064
-	NotYetFnValueMutRef = 9065
 	NotYetDelChannel = 9066
 	NotYetGenericConstructor = 9067
 	NotYetNilPattern = 9068
@@ -470,14 +480,12 @@ pub enum Rule {
 	NotYetRebindMatchBinding = 9070
 	NotYetDefaultReadsField = 9071
 	NotYetDestructuringAssign = 9072
-	NotYetUnsafeFnType = 9073
 	NotYetImplDottedTarget = 9074
 	NotYetGenericTypedef = 9075
 	NotYetSubPatternInPayload = 9076
 	NotYetRangeAsValue = 9077
 	NotYetIsErrorKind = 9078
 	NotYetSealed = 9079
-	NotYetRenderEnumAsText = 9085
 	NotYetMainArgsWithConcurrency = 9097
 	NotYetSpawnOfUnknownName = 9099
 	NotYetMapMethod = 9100
@@ -519,6 +527,8 @@ pub enum Rule {
 	NotYetDelOwning = 9108
 	NotYetListPatternRestBinding = 9110
 	NotYetUnsafeMethod = 9109
+	NotYetArrayLenNamed = 9111
+	NotYetArrayMethod = 9112
 }
 
 # rule_code is the text a rule is reported under — the `E2004` a gate pins and a reader looks

@@ -22,7 +22,7 @@
 .PHONY: suites test-runner stdlib-test install-check examples corpus fixpoint sanitize-conc \
 	mem-check refuse reject oracle lsp editor-align treesitter desugar gates reject-fuzz \
 	check-equal fmt-corpus fmt-self fmt-tokens fmt-roundtrip docs-links docs-mirror docs-zerg \
-	grammar-cites grammar-keywords grammar-mirror sha256 layering conformance productions \
+	grammar-cites grammar-cited grammar-keywords grammar-mirror sha256 layering conformance productions \
 	counterexamples behaviour version-check cache-key-check error-codes-check seed-gaps lint-check \
 	deviation-check marker-codes \
 	chapter-codes method-gaps \
@@ -476,7 +476,7 @@ gates:                          # every gate is on the board, and the board is r
 	./scripts/gates-check.sh
 
 # `version-check` sits straight after `build` because it reads bin/ rather than filling it.
-LINUX_GATES ?= build version-check suites test-runner stdlib-test examples corpus desugar lsp editor-align treesitter install-check refuse reject oracle reject-fuzz check-equal fmt-corpus fmt-tokens fmt-roundtrip fmt-self lint lint-check doc-check fixpoint docs-links docs-mirror docs-zerg grammar-cites grammar-keywords grammar-mirror layering stmt-walk entry-path examples-index conformance productions counterexamples behaviour error-codes-check seed-gaps deviation-check marker-codes chapter-codes method-gaps build-deps-check cache-key-check sha256 gates mem-check mem-peak release-notes sanitize-conc
+LINUX_GATES ?= build version-check suites test-runner stdlib-test examples corpus desugar lsp editor-align treesitter install-check refuse reject oracle reject-fuzz check-equal fmt-corpus fmt-tokens fmt-roundtrip fmt-self lint lint-check doc-check fixpoint docs-links docs-mirror docs-zerg grammar-cites grammar-cited grammar-keywords grammar-mirror layering stmt-walk entry-path examples-index conformance productions counterexamples behaviour error-codes-check seed-gaps deviation-check marker-codes chapter-codes method-gaps build-deps-check cache-key-check sha256 gates mem-check mem-peak release-notes sanitize-conc
 
 # `reject` holds the mistakes somebody thought of; this holds the ones nobody did. It takes
 # the corpus's WELL-FORMED programs, breaks each in a way the language has a rule about,
@@ -516,6 +516,17 @@ docs-zerg:                      # every ```zerg block in the docs is a program t
 # no binary: a citation is text, and whether it resolves is a fact about the tree.
 grammar-cites:                  # every GRAMMAR citation the repo makes must resolve
 	./scripts/grammar-cites.sh
+
+# AND THE OTHER DIRECTION, which nothing asked until #116: `grammar-cites` can be green over a
+# handful of citations, so it says every anchor resolves and nothing about whether a form has
+# one. A reader who meets a production should be able to find the chapter that explains it —
+# the same shape `chapter-codes` gives an error code.
+#
+# ITS NUMBER IS A FLOOR AND THE SCRIPT SAYS SO. It reads the anchor, not the paragraph, and a
+# pass that scattered anchors into the nearest paragraph would turn it green while saying
+# nothing. What keeps it honest is the rule the pass follows, which is written in the script.
+grammar-cited:                  # every production a reader writes is named by a chapter
+	./scripts/grammar-cited-check.sh
 
 # The one thing in this tree with an OUTSIDE authority. `make oracle` is no use for a hash:
 # both compilers would run the same Zerg source, so a wrong rotation is wrong identically on

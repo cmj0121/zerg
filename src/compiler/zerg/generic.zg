@@ -180,7 +180,7 @@ struct TySubst {
 
 pub fn subst_fn(tpl: ast.FnDecl, args: list[ast.Ty], at: str) -> ast.FnDecl {
 	su := TySubst(tpl.tparams, args, at)
-	return ast.FnDecl(gen_mangle(tpl.name, args), tpl.recv, subst_params(su, tpl.params), tpl.has_ret, subst_ty(su, tpl.ret), subst_block(su, tpl.body), tpl.is_pub, tpl.path, tpl.line, tpl.col, [], [], tpl.in_unsafe, tpl.is_test, tpl.is_fixture)
+	return ast.FnDecl(gen_mangle(tpl.name, args), tpl.recv, subst_params(su, tpl.params), tpl.has_ret, subst_ty(su, tpl.ret), subst_block(su, tpl.body), tpl.is_pub, tpl.path, tpl.line, tpl.col, [], [], tpl.in_unsafe, tpl.is_test, tpl.is_fixture, tpl.has_body)
 }
 
 # subst_ty replaces a type parameter wherever a type is written, at any depth.
@@ -306,6 +306,7 @@ fn subst_expr(su: TySubst, e: ast.Expr) -> ast.Expr {
 		Expr.EMethod(x, m, xs) => ast.Expr.EMethod(subst_expr(su, x), m, subst_exprs(su, xs))
 		Expr.EListLit(xs) => ast.Expr.EListLit(subst_exprs(su, xs))
 		Expr.EConv(ty, x, as_) => ast.Expr.EConv(subst_ty(su, ty), subst_expr(su, x), as_)
+		Expr.EFmt(x, cv, sp) => ast.Expr.EFmt(subst_expr(su, x), cv, sp)
 		Expr.EIf(c, a, b) => ast.Expr.EIf(subst_expr(su, c), subst_expr(su, a), subst_expr(su, b))
 		Expr.EMatch(x, arms) => ast.Expr.EMatch(subst_expr(su, x), subst_arms(su, arms))
 		Expr.ERange(a, b, inc) => ast.Expr.ERange(subst_expr(su, a), subst_expr(su, b), inc)
@@ -318,6 +319,8 @@ fn subst_expr(su: TySubst, e: ast.Expr) -> ast.Expr {
 		Expr.ECoalesce(a, b, jump) => ast.Expr.ECoalesce(subst_expr(su, a), subst_expr(su, b), subst_block(su, jump))
 		Expr.EGuard(b) => ast.Expr.EGuard(subst_block(su, b))
 		Expr.EBlock(b) => ast.Expr.EBlock(subst_block(su, b))
+		Expr.EUnsafe(b) => ast.Expr.EUnsafe(subst_block(su, b))
+		Expr.EAsm(tpl, ops) => ast.Expr.EAsm(tpl, subst_asm_ops(su, ops))
 		Expr.EIs(x, nm) => ast.Expr.EIs(subst_expr(su, x), nm)
 		Expr.EIn(x, s) => ast.Expr.EIn(subst_expr(su, x), subst_expr(su, s))
 
@@ -337,6 +340,16 @@ fn subst_expr(su: TySubst, e: ast.Expr) -> ast.Expr {
 		Expr.ENil          => e
 		Expr.EIdent(_)     => e
 	}
+}
+
+# subst_asm_ops carries a specialization through an `asm(…)`: the template and the constraints
+# are text, and only an operand's EXPRESSION can mention a type parameter.
+fn subst_asm_ops(su: TySubst, ops: list[ast.AsmOp]) -> list[ast.AsmOp] {
+	mut out: list[ast.AsmOp] = []
+	for o in ops {
+		out.append(ast.AsmOp(o.kind, o.cons, subst_expr(su, o.expr), o.line, o.col))
+	}
+	return out
 }
 
 # subst_params is a parameter list, and it is a function of its own because BOTH a template

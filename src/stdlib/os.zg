@@ -10,6 +10,8 @@
 # and `del_env` mutate a C-library structure with no lock on it, so they belong before the
 # first `spawn` and nowhere else. Each says so at length.
 
+import "io"
+
 # env returns the value of environment variable key, or nil when it is unset. (An unset
 # variable and one set to the empty string are told apart here — both a plain lookup and
 # `os.env(k) ?? default` do the right thing.)
@@ -127,4 +129,56 @@ pub fn arch() -> str {
 # ```
 pub fn isatty(fd: int) -> bool {
 	return __zrt_isatty(fd)
+}
+
+# --- a child process and its three streams (docs/runtime/io.md) ---------------------------
+#
+# A COMMAND LITERAL IS A `Proc`. `` `ls -l` `` starts the child and answers this, whose three
+# streams are the parent's ends of its pipes: `stdin` is written to, `stdout` and `stderr` are
+# read from. The literal is the syntax; this is the value it means, and a program may build
+# the same thing by hand with `os.command`.
+
+# Proc is a running child and its three streams — what a command literal answers.
+pub struct Proc {
+	pub pid: int
+	pub stdin: io.Fd
+	pub stdout: io.Fd
+	pub stderr: io.Fd
+}
+
+# command starts argv[0] (PATH-searched) with its three standard streams on pipes and answers
+# the handle. It does NOT wait — that is `wait`, and between the two is where a caller writes
+# to the child and reads what it wrote.
+#
+# ARGV STRAIGHT TO THE OS, no shell: an element is one argument whatever is inside it, which
+# is what keeps a path with a space in it one path rather than two.
+pub fn command(argv: list[str]) -> Proc {
+	h := __zrt_proc_open3(argv)
+	raise IOError("os.command: could not start " + argv[0]) if h.len() < 4 or h[0] < 0
+
+	return Proc(h[0], io.Fd(h[1]), io.Fd(h[2]), io.Fd(h[3]))
+}
+
+impl Proc {
+	# wait blocks for the child and answers its status the way a shell reports one: the exit
+	# code, or 128+signal when it was killed.
+	#
+	# THE CHILD'S INPUT IS CLOSED FIRST. A child reading to end of input waits for the write
+	# end to go away, and the parent is holding it — so a `wait` that did not close it would
+	# hang on exactly the programs that read their input, which is most filters.
+	pub fn wait() -> int {
+		this.stdin.release()
+		return __zrt_proc_wait(this.pid)
+	}
+
+	# out is the whole of what the child wrote to its standard output, decoded as text. It is
+	# the common case spelled once: start, read to end of input, wait.
+	pub fn out() -> str {
+		return str(this.stdout.read_all()!)
+	}
+
+	# err is `out` for the other stream.
+	pub fn err() -> str {
+		return str(this.stderr.read_all()!)
+	}
 }

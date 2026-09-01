@@ -99,8 +99,8 @@ Zero-dependency 分兩層。**runtime**——透過平台 C 函式庫碰 OS、�
 **[`docs/README.zh-TW.md`](docs/README.zh-TW.md)** 是入口：先讀哪一章、每個目錄裝什麼、規格該怎麼讀。
 語法的權威在 [`GRAMMAR`](GRAMMAR)，語意的權威在 [`docs/`](docs) 底下的各章。
 
-**[`FUTURE.zh-TW.md`](FUTURE.zh-TW.md)** 是另外一半：語言決定**不要**的東西，以及每個案子要重新打開的門檻。
-裡面沒有一項屬於規格。
+**語言決定不要的東西**也在規格裡，寫在擁有那個問題的那一章——沒有一份獨立的「延後特性」檔案。規格刻意不釘住的
+要求，會在讀者遇到它的地方帶著 **[implementation-defined]**。
 
 ## 狀態
 

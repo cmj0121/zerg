@@ -44,14 +44,16 @@ _E3081 the closure parameter `x` has no type, and this position gives it none_�
 > **[not yet]** 共用 indexed-callee 形狀的兩個形式仍未建置:透過容器裡的函式**值**呼叫 `fs[0](x)`,以及 optional
 > method call `p?.m(…)`。第三個已經離開這個語言:使用點的顯式型別引數——`id[int](7)`——不再是一個形式,因為
 > postfix 的中括號一律是索引（見[文法](../surface/grammar.zh-TW.md)）,而且它會被指名拒絕——_E2035 `id[int](…)`
-> writes a call's type arguments, and a postfix `[ … ]` is an index_。型別引數從引數型別推論,是今天實例化一個
+> writes a call's type arguments, and a postfix `[ … ]` is an index_。
+>
+> **它也不會換個拼法回來。** 一個 generic 的型別是從它的**引數**取得的,而推論不夠時由**帶型別的 binding** 導引
+> ——`xs: list[int] = empty()`。要重開這個問題,得先有一個「帶型別的位置也修不了的推論失敗」,而看起來像那樣的
+> 唯一一個——型別參數只出現在回傳位置——正好就是 binding 的型別回答掉的。型別引數從引數型別推論,是今天實例化一個
 > generic 的唯一途徑。
 >
-> **[not yet]** `mut &` 的區分在語言裡是真的，卻寫不出來。帶著它的函式**型別**會被讀完、然後被指名拒絕：
-> `f: fn(mut &int) = bump` 報 _E9035 NotImplemented: a `mut &` parameter in a function type_，並帶上那個前綴
-> 所在的位置。拒絕的理由就是值那一側早已說過的同一條：在這個編譯器裡，被持有的函式是一個裸指標，而呼叫端是從
-> 被呼叫者的**名字**讀出 `mut &` 的，值沒有名字（`E9065`）——所以 `fn(mut &int) -> bool` 沒有寫法，兩個型別的
-> 相異只留在紙上。
+> `mut &` 的區分是**由型別帶著的**：`fn(mut &int)` 與 `fn(int)` 是兩個型別，其中一個的值不是另一個的值——
+> _E3033 cannot bind fn(mut &int) -> void to a fn(int) -> void binding_。透過值的呼叫是從它所呼叫的那個型別讀出
+> 慣例的——它沒有被呼叫者的名字可讀——所以借用規則在那裡成立的方式，和指名呼叫完全一樣。
 
 **一個函式的型別就是它的輸入／輸出契約，僅此而已。** 它揭露參數——`mut &` 標出唯一的「引數層 effect」:寫回呼叫端的
 可變參考——以及結果，可回復的失敗會以 `Result` / `Either` 顯示在那裡。它**不追蹤任何其他 effect**：一個函式有沒有做

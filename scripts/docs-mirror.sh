@@ -72,6 +72,11 @@ shape() {
 # markers <file> — how many of each status marker the page carries, counted by OCCURRENCE.
 # The three kinds are docs/conformance.md's; a fourth would have to be added here, and a
 # marker that is not one of the three is not a marker.
+# cites — the GRAMMAR productions one document names, sorted and deduplicated.
+cites() {
+	grep -ohE 'GRAMMAR#[A-Za-z][A-Za-z0-9-]*' "$1" | sed 's/^GRAMMAR#//' | LC_ALL=C sort -u
+}
+
 markers() {
 	awk '
 		{
@@ -124,6 +129,21 @@ for zh in $(git ls-files '*.zh-TW.md'); do
 		fail=$((fail + 1))
 	fi
 
+	# AND THE GRAMMAR CITATIONS, which are a set and not a count. A citation is an anchor
+	# naming one production, and it is what a reader follows from a form to the chapter that
+	# explains it (#116) — so a
+	# translation missing one is a reader who cannot follow it — and unlike a marker, WHICH
+	# citations differ is the useful half of the report, since the names are the same in both
+	# documents. It is a set rather than a sequence because a paragraph may be reordered in
+	# translation and still name every form its twin does.
+	cites "$en" >"$tmp/enc"
+	cites "$zh" >"$tmp/zhc"
+	if ! diff -u "$tmp/enc" "$tmp/zhc" >"$tmp/cdiff"; then
+		echo "CITES     $en and $zh name different productions (- $en, + $zh)"
+		sed '1,2d;s/^/          /' "$tmp/cdiff"
+		fail=$((fail + 1))
+	fi
+
 	markers "$en" >"$tmp/enm"
 	markers "$zh" >"$tmp/zhm"
 	paste "$tmp/enm" "$tmp/zhm" | while IFS="$(printf '\t')" read -r a b; do
@@ -146,4 +166,4 @@ if [ "$fail" -ne 0 ]; then
 	exit 1
 fi
 
-echo "docs-mirror: $pairs en/zh-TW pairs — same outline, same blocks, same rows, same markers"
+echo "docs-mirror: $pairs en/zh-TW pairs — same outline, same blocks, same rows, same markers, same citations"

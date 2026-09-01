@@ -45,12 +45,10 @@ operator is compiler-owned: no operator `spec` is declared, so `impl Add for P` 
 process and its three streams, with the interpolating `` f`…` `` splicing each hole in as ONE argument
 ([Process & I/O](../runtime/io.md)). Each desugaring above is otherwise exactly as written.
 
-**Sugar the grammar has and this table does not.** Two rewrites the grammar derives are **[not yet]**, and
-so are absent above rather than listed as landed: a **destructuring binding** — `(a, b) := e` (`E9021`) and
-its struct form `P{x, y} := e` (`E9008`), which this compiler asks you to write as one name and a field
-access — and a **named argument** `f(x: 1)` (`E9010`), arguments binding by position only. A default
-parameter is the half of that row that did land, and is above. The whole list of forms in this state, with
-the gate that holds it, is
+**Sugar the grammar has and this table does not.** One rewrite the grammar derives is **[not yet]**, and so
+is absent above rather than listed as landed: a **named argument** `f(x: 1)` (`E9010`), arguments binding by
+position only. A default parameter is the half of that row that did land, and is above. The whole list of
+forms in this state, with the gate that holds it, is
 [What is specified and not built](grammar.md#what-is-specified-and-not-built).
 
 ## Undoing it

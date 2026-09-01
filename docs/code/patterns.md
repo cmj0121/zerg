@@ -107,14 +107,20 @@ To mutate the builder in place instead, use a `mut fn` method on a `mut` binding
 ## Destructuring & pattern support
 
 Destructuring binds directly at a `:=`: a tuple `(a, b) := e` and a struct `P{x, y} := e` both unpack in one
-step — the everyday way a multiple return or a small record is consumed, and both **[not yet]** — _E9021_ — as are the
-struct, tuple and `as` patterns in a `match`. The catalogue of what a pattern may be, and the code each
-unbuilt shape is refused by, is [Control Flow](control-flow.md); what matters here is the idiom left
-standing while they wait.
+step — the everyday way a multiple return or a small record is consumed. The catalogue of what a pattern may
+be is [Control Flow](control-flow.md); what matters here is that a **target is not a pattern**. A `match`
+asks whether a value has a shape and a destructuring binding is **told** it, so nothing in a target tests:
+every leaf either **mints** a name (`:=`) or names storage that already exists (`=`), and a leaf that would
+test — a literal — is refused where it is written.
 
-Every kind that fires works **one level deep**. So a tuple is read back by static index (`.0` / `.1`) and a
-struct by field rather than destructured, and where a language with nested patterns would write `L(Yes(v))`,
-match one level, bind the payload, and `match` the binding in turn.
+The two shapes **nest**, and they nest into each other: `((a, b), c) := e` and
+`Pair{a: P{x, y}, n} := e`. A `_` reads a position and drops it. `mut` and `const` sit before the **whole**
+target, since that is where [`GRAMMAR#binding`](../../GRAMMAR) puts them, so they apply to every name it
+mints.
+
+A struct target asks the same three questions a struct **pattern** does, because it is the same production
+([`GRAMMAR#struct-pat`](../../GRAMMAR)) in another position: the type it names must be the value's, every
+field it names must exist, and without a `..` it names them **all**.
 
 > **[not yet]** `L(Yes(v))` and `L(0)` are both _E9076 NotImplemented: a sub-pattern inside a variant payload,
 > beginning at `…`_. A RESERVED WORD in a payload position is a different rule and keeps its own: `L(this)`

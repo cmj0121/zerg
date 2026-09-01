@@ -1985,7 +1985,7 @@ fn c_env_restore(mut &em: Emitter, saved: EnvCols) {
 fn c_no_shadow_sub(mut &em: Emitter, name: str) {
 	mut i := 0
 	for i < em.sub.names.len() {
-		raise c_diag(em, rule.Rule.NotYetRebindMatchBinding, f"NotImplemented: `{name}` re-binds a name a `match` arm's pattern already binds in this block — the arm's binding is spliced in as text, so the new one would never be read. Pick another name") if em.sub.names[i] == name
+		raise c_diag(em, rule.Rule.NotYetRebindMatchBinding, f"NotImplemented: `{name}` re-binds a name a `match` arm's pattern already binds in this block — the arm's binding is spliced in as text, so the new one would never be read. Pick another name (GRAMMAR#binding)") if em.sub.names[i] == name
 		i = i + 1
 	}
 }
@@ -2331,7 +2331,7 @@ fn c_sig_seen(mut &em: Emitter, key: str) -> bool {
 fn c_build_generics(mut &em: Emitter, f: ast.File) {
 	for fn_i in f.fns {
 		if c_is_template(fn_i) {
-			raise c_diag_at(fn_i.path, fn_i.line, fn_i.col, rule.Rule.NotYetGenericMethod, f"NotImplemented: a generic METHOD `{fn_i.recv}.{fn_i.name}[…]` — this compiler instantiates a free function, and a method's specializations would each need a name in its type's namespace") if fn_i.recv != ""
+			raise c_diag_at(fn_i.path, fn_i.line, fn_i.col, rule.Rule.NotYetGenericMethod, f"NotImplemented: a generic METHOD `{fn_i.recv}.{fn_i.name}[…]` — this compiler instantiates a free function, and a method's specializations would each need a name in its type's namespace (GRAMMAR#fn-decl)") if fn_i.recv != ""
 			c_check_gen_dup(em, f, fn_i)
 			em.gen_names.append(fn_i.name)
 			em.gen_tpls.append(fn_i)
@@ -2835,13 +2835,13 @@ fn c_is_free_fn(mut &em: Emitter, n: str) -> bool {
 pub fn c_builtin_check(mut &em: Emitter, n: str) {
 	c_fixed_width_check(em, n)
 
-	raise c_diag(em, rule.Rule.NotYetRefBox, "NotImplemented: a refcounted box `Ref(x)` / `deref(r)` — this compiler has no `Ref[T]` type") if n == "Ref" or n == "deref"
-	raise c_diag(em, rule.Rule.NotYetCompileTimeBuiltin, f"NotImplemented: the compile-time built-in `{n}[T]` — this compiler does not compute a type's layout") if n == "sizeof" or n == "alignof"
+	raise c_diag(em, rule.Rule.NotYetRefBox, "NotImplemented: a refcounted box `Ref(x)` / `deref(r)` — this compiler has no `Ref[T]` type (docs/runtime/builtins.md)") if n == "Ref" or n == "deref"
+	raise c_diag(em, rule.Rule.NotYetCompileTimeBuiltin, f"NotImplemented: the compile-time built-in `{n}[T]` — this compiler does not compute a type's layout (docs/runtime/builtins.md)") if n == "sizeof" or n == "alignof"
 
 	# `set([1, 2])` read as "undefined function `set`", the message a misspelled call gets.
 	# Why a set is spelled as a CONSTRUCTOR and not as a brace literal is GRAMMAR#map-lit's
 	# note: `{1}` cannot be told from a one-statement block.
-	raise c_diag(em, rule.Rule.NotYetSetBuiltin, "NotImplemented: the built-in `set` — a set is built through its constructor (`set([1, 2])`, `set()` for the empty one) because `{1}` cannot be told from a block, and this compiler has `list[T]` and `map[K, V]` only") if n == "set"
+	raise c_diag(em, rule.Rule.NotYetSetBuiltin, "NotImplemented: the built-in `set` — a set is built through its constructor (`set([1, 2])`, `set()` for the empty one) because `{1}` cannot be told from a block, and this compiler has `list[T]` and `map[K, V]` only (docs/code/collections.md)") if n == "set"
 }
 
 # c_fixed_width_check names the fixed-width ladder rather than letting it read as a typo.
@@ -2862,7 +2862,7 @@ fn c_fixed_width_check(mut &em: Emitter, n: str) {
 	ladder := ["i8", "i16", "i32", "i64", "u8", "u16", "u32", "u64", "f32", "f64"]
 	return if not c_name_in(ladder, n)
 
-	raise c_diag(em, rule.Rule.NotYetFixedWidthLadder, f"NotImplemented: `{n}` is part of the fixed-width ladder — `i8`…`i64`, `u8`…`u64`, `f32` and `f64` are specified as stdlib types and none is declared yet; the built-in widths are `int`, `uint`, `byte`, `rune` and `float`")
+	raise c_diag(em, rule.Rule.NotYetFixedWidthLadder, f"NotImplemented: `{n}` is part of the fixed-width ladder — `i8`…`i64`, `u8`…`u64`, `f32` and `f64` are specified as stdlib types and none is declared yet; the built-in widths are `int`, `uint`, `byte`, `rune` and `float` (docs/runtime/stdlib.md)")
 }
 
 # c_type_decls writes every type declaration a unit needs, IN DEPENDENCY ORDER: the enums,
@@ -3347,7 +3347,7 @@ fn c_check_named_types(mut &em: Emitter, f: ast.File, sites: list[Site]) {
 	# it was given — `… `int` (parameter `this` of `tag`)`. It is a question about the
 	# DECLARATION rather than about a type it spells, which is why it is not a site.
 	for fn_i in f.fns {
-		raise c_diag_at(fn_i.path, fn_i.line, fn_i.col, rule.Rule.NotYetImplOnBuiltin, f"NotImplemented: an `impl` on the built-in type `{fn_i.recv}` — this compiler gives a method a declared struct or enum receiver") if fn_i.recv != "" and parser.is_conv(fn_i.recv)
+		raise c_diag_at(fn_i.path, fn_i.line, fn_i.col, rule.Rule.NotYetImplOnBuiltin, f"NotImplemented: an `impl` on the built-in type `{fn_i.recv}` — this compiler gives a method a declared struct or enum receiver (GRAMMAR#impl-decl)") if fn_i.recv != "" and parser.is_conv(fn_i.recv)
 	}
 
 	for s in sites {
@@ -3430,7 +3430,7 @@ fn c_check_type_name(mut &em: Emitter, nm: str, s: Site) {
 	# gives it, beside the bound and the interface — and this compiler has not built that
 	# one. Saying "no type named `Tag`" about a spec the reader declared three lines above
 	# invites them to go and declare it again.
-	raise c_diag(em, rule.Rule.NotYetSpecAsType, f"NotImplemented: the `spec` `{nm}` used as a TYPE ({site}) — a spec is a bound and an interface here, not yet a value's type; take the concrete type, or a generic parameter bounded by it") if c_is_spec_name(em, nm)
+	raise c_diag(em, rule.Rule.NotYetSpecAsType, f"NotImplemented: the `spec` `{nm}` used as a TYPE ({site}) — a spec is a bound and an interface here, not yet a value's type; take the concrete type, or a generic parameter bounded by it (GRAMMAR#type-name)") if c_is_spec_name(em, nm)
 
 	# EVERY BUILT-IN NAME THE LANGUAGE HAS AND THIS COMPILER DOES NOT, not only the ladder. A
 	# type position reached `c_fixed_width_check` alone, so `p: ptr` reported "no type named
@@ -3831,7 +3831,7 @@ fn c_check_field_default(sd: ast.StructDecl, fnames: list[str], earlier: list[st
 	# with a place, which a refusal usually has none of: this one runs over a DECLARATION and
 	# the field carries its own line and column, so there is a position to give and no reason
 	# to make the reader find the struct themselves
-	raise c_diag_at(sd.path, fd.line, fd.col, rule.Rule.NotYetDefaultReadsField, f"NotImplemented: the default on field `{fd.name}` of `{sd.name}` reads the field `{nm}` — a default is materialised at the construction, where a field is not a name in scope, so `{nm}` would resolve to whatever else carries that name (or to nothing at all)") if nm != ""
+	raise c_diag_at(sd.path, fd.line, fd.col, rule.Rule.NotYetDefaultReadsField, f"NotImplemented: the default on field `{fd.name}` of `{sd.name}` reads the field `{nm}` — a default is materialised at the construction, where a field is not a name in scope, so `{nm}` would resolve to whatever else carries that name (or to nothing at all) (GRAMMAR#field)") if nm != ""
 }
 
 # c_default_names_field is the first of `fnames` a default expression mentions, or "". The
@@ -4692,7 +4692,7 @@ fn c_pat_env(mut &em: Emitter, pt: ast.Pat, st: ast.Ty) {
 		# one and release none. A `match` lowers to a conditional expression, which has no place
 		# to declare the temporary that would own it. The anonymous `..` needs none, and is
 		# built.
-		raise c_diag(em, rule.Rule.NotYetListPatternRestBinding, "NotImplemented: a NAMED rest in a list pattern — `..rest` binds a fresh list and a `match` arm is an expression with nowhere to keep it; write `..` and index what you need") if c_pat_list_rest_name(pt) != ""
+		raise c_diag(em, rule.Rule.NotYetListPatternRestBinding, "NotImplemented: a NAMED rest in a list pattern — `..rest` binds a fresh list and a `match` arm is an expression with nowhere to keep it; write `..` and index what you need (GRAMMAR#list-pat-elem)") if c_pat_list_rest_name(pt) != ""
 
 		et := c_list_elem(st)
 		mut i := 0
@@ -5547,7 +5547,7 @@ fn c_list_method_unknown(mut &em: Emitter, meth: str) -> str {
 	collection := meth == "insert" or meth == "remove" or meth == "get" or meth == "slice" or meth == "retain"
 	adapters := meth == "map" or meth == "filter" or meth == "fold"
 	unbuilt := collection or adapters
-	return c_diag(em, rule.Rule.NotYetListMethod, f"NotImplemented: the list method `{meth}` — this compiler has `len` and `append`") if unbuilt
+	return c_diag(em, rule.Rule.NotYetListMethod, f"NotImplemented: the list method `{meth}` — this compiler has `len` and `append` (docs/code/collections.md)") if unbuilt
 
 	return c_diag(em, rule.Rule.ListMethodUnknown, f"the list method `{meth}` — a list answers `len` and `append`, and is read with `xs[i]`")
 }
@@ -5925,7 +5925,7 @@ fn c_last_val_ty(mut &em: Emitter, body: list[ast.Stmt], what: str) -> ast.Ty {
 		}
 	}
 
-	raise c_diag(em, rule.Rule.NotYetValueUnnameableType, f"NotImplemented: {what} whose value has no type this compiler can name — give the block's last expression a call, a literal or a typed binding") if c_is_unknown(t) and not named
+	raise c_diag(em, rule.Rule.NotYetValueUnnameableType, f"NotImplemented: {what} whose value has no type this compiler can name — give the block's last expression a call, a literal or a typed binding (docs/core/types.md)") if c_is_unknown(t) and not named
 	return ast.Ty.TNil if c_is_nil_ty(t)
 
 	return t
@@ -6148,7 +6148,7 @@ fn c_guard_loop_jump(mut &em: Emitter, kw: str, in_loop: bool) {
 }
 
 fn c_guard_jump_err(mut &em: Emitter, kw: str) {
-	raise c_diag(em, rule.Rule.NotYetJumpOutOfGuard, f"NotImplemented: `{kw}` leaving a `guard` block — the guard's handler would stay installed on a frame that has returned")
+	raise c_diag(em, rule.Rule.NotYetJumpOutOfGuard, f"NotImplemented: `{kw}` leaving a `guard` block — the guard's handler would stay installed on a frame that has returned (GRAMMAR#guard-expr)")
 }
 
 # c_str_concat joins two strings and gives back whichever operand it OWNS.
@@ -6523,7 +6523,7 @@ fn c_eq_refuse(mut &em: Emitter, oper: str, t: ast.Ty) {
 		return
 	}
 	if not c_is_struct_name(em, c_named_of(t)) and not c_is_enum_ty(em, t) {
-		check.chk_at(em, rule.Rule.NotYetContainerEquality, f"NotImplemented: `{oper}` on a {ast.ty_name(t)} — structural equality over a container is unbuilt, and a container has no declaration to derive it on; compare the elements you mean to compare")
+		check.chk_at(em, rule.Rule.NotYetContainerEquality, f"NotImplemented: `{oper}` on a {ast.ty_name(t)} — structural equality over a container is unbuilt, and a container has no declaration to derive it on; compare the elements you mean to compare (docs/core/types.md)")
 		return
 	}
 
@@ -6796,7 +6796,7 @@ fn c_in_container(mut &em: Emitter, x: ast.Expr, set: ast.Expr, st: ast.Ty, sb: 
 	if c_is_aggregate(em, elem) {
 		raise c_diag(em, rule.Rule.InElemNoEq, f"`in` over {ast.ty_name(st)} — its elements are compared with `==`, and {ast.ty_name(elem)} has none: add `#[derive(Eq)]` to it or write `impl Eq for {ast.ty_name(elem)}`") if c_in_elem_owes_eq(em, elem)
 
-		raise c_diag(em, rule.Rule.NotYetInOverNoEq, f"NotImplemented: `in` over {ast.ty_name(st)} — its elements are compared with `==`, and this compiler does not write that comparison for {ast.ty_name(elem)}")
+		raise c_diag(em, rule.Rule.NotYetInOverNoEq, f"NotImplemented: `in` over {ast.ty_name(st)} — its elements are compared with `==`, and this compiler does not write that comparison for {ast.ty_name(elem)} (GRAMMAR#cmp-expr)")
 	}
 
 	# WHAT IS LEFT IS NOT AN AGGREGATE, AND `in` STILL CANNOT COMPARE ALL OF IT. `in` compares
@@ -6980,7 +6980,7 @@ fn c_in_range_offender(mut &em: Emitter, run: list[ast.Expr]) -> str {
 # which this had not got. `reject-fuzz` is what found it: retype one binding to `str` and the
 # guard `x if x in 1..=3` two lines down is refused with nowhere to go and look.
 fn c_in_range_unbuilt(mut &em: Emitter, set: ast.Expr, off: str) -> str {
-	raise c_diag(em, rule.Rule.NotYetInOverType, f"NotImplemented: `in` over {c_set_says(em, set)} — a range's members are found by comparing its bounds, and {off} is not a type this compiler compares that way")
+	raise c_diag(em, rule.Rule.NotYetInOverType, f"NotImplemented: `in` over {c_set_says(em, set)} — a range's members are found by comparing its bounds, and {off} is not a type this compiler compares that way (GRAMMAR#cmp-expr)")
 }
 
 fn c_in_not_a_set(mut &em: Emitter, set: ast.Expr) -> str {
@@ -7933,7 +7933,7 @@ fn c_specified_meth_says(mut &em: Emitter, tty: ast.Ty, meth: str) -> str {
 # the value turned out to be is not part of it.
 fn c_specified_method(mut &em: Emitter, tty: ast.Ty, meth: str) {
 	says := c_specified_meth_says(em, tty, meth)
-	raise c_diag(em, rule.Rule.NotYetSpecifiedMethod, f"NotImplemented: the method `{meth}` on a {ast.ty_name(tty)} — {says}") if says != ""
+	raise c_diag(em, rule.Rule.NotYetSpecifiedMethod, f"NotImplemented: the method `{meth}` on a {ast.ty_name(tty)} — {says} (docs/runtime/builtins.md)") if says != ""
 }
 
 # MRender is `x.display()` and `x.debug()` WRITTEN OUT, on a value whose type declares
@@ -8189,7 +8189,7 @@ fn c_list_method(mut &em: Emitter, target: ast.Expr, meth: str, args: list[ast.E
 		# `NotImplemented:` on any of the three would have retired.
 		raise c_diag(em, rule.Rule.MutateAValueNotAPlace, f"`{meth}` MUTATES its list, and `{c_place_why(em, target)}` is a value rather than a place — bind it to a name first") if c_meth_mutates(meth) and not (c_is_index(target) and c_is_map(c_infer(em, c_index_target(target))))
 
-		raise c_diag(em, rule.Rule.NotYetMutateListRvalue, f"NotImplemented: `{meth}` MUTATES its list, and `{c_place_why(em, target)}` is a value rather than a place — bind it to a name first") if c_meth_mutates(meth)
+		raise c_diag(em, rule.Rule.NotYetMutateListRvalue, f"NotImplemented: `{meth}` MUTATES its list, and `{c_place_why(em, target)}` is a value rather than a place — bind it to a name first (docs/core/memory.md)") if c_meth_mutates(meth)
 
 		return c_list_method_rv(em, target, meth, args, tty, sb)
 	}
@@ -8297,7 +8297,7 @@ fn c_free_method(mut &em: Emitter, target: ast.Expr, meth: str, args: list[ast.E
 	# such function to call yet — which is a thing to say, not a `?`.
 	tn := c_ident_name(target)
 
-	raise c_diag(em, rule.Rule.NotYetAssociatedFn, f"NotImplemented: `{tn}.{meth}(…)` is an associated function — this compiler gives every `fn` in an `impl` a receiver, so a method is reached through an instance (`x.{meth}(…)`) and never through its type") if tn != "" and c_is_struct_name(em, tn)
+	raise c_diag(em, rule.Rule.NotYetAssociatedFn, f"NotImplemented: `{tn}.{meth}(…)` is an associated function — this compiler gives every `fn` in an `impl` a receiver, so a method is reached through an instance (`x.{meth}(…)`) and never through its type (GRAMMAR#impl-item)") if tn != "" and c_is_struct_name(em, tn)
 
 	# WHAT THE PREFIX NAMES, asked once (c_ns_kind) and answered here for both halves of a
 	# qualified call. It used to be asked by NOBODY on this path: whatever stood to the left
@@ -8544,7 +8544,7 @@ fn c_call_written(mut &em: Emitter, name: str, args: list[ast.Expr], ts: list[as
 	# got: `set[str]()` would otherwise be told how to write an empty one, and there is no
 	# `set` here to write.
 	c_builtin_check(em, name)
-	raise c_diag(em, rule.Rule.NotYetGenericConstructor, f"NotImplemented: `{name}[…](…)` as a constructor — this compiler builds an empty map with the literal `{{:}}` and an empty list with `[]`, so a built-in container's type arguments come from what it is bound to") if name == "map"
+	raise c_diag(em, rule.Rule.NotYetGenericConstructor, f"NotImplemented: `{name}[…](…)` as a constructor — this compiler builds an empty map with the literal `{{:}}` and an empty list with `[]`, so a built-in container's type arguments come from what it is bound to (GRAMMAR#type-args)") if name == "map"
 
 	return c_call(em, c_instantiate_at(em, name, ts), args, sb)
 }
@@ -10187,7 +10187,7 @@ fn c_pat_cond(mut &em: Emitter, pt: ast.Pat, s: str, st: ast.Ty, sb: Subst) -> s
 		# GRAMMAR#literal-pat makes a literal a pattern, so `match o { nil => … }` is the
 		# natural way to ask about absence — and the arm beside it is what is not built: a
 		# binding pattern over an optional binds the CARRIER rather than what it holds.
-		raise c_diag(em, rule.Rule.NotYetNilPattern, "NotImplemented: `nil` as a `match` pattern — GRAMMAR makes it a literal pattern and this compiler compares it as one; write `if v := o { … }` for the presence test, or `o ?? d` for a default") if c_is_nil_lit(lit)
+		raise c_diag(em, rule.Rule.NotYetNilPattern, "NotImplemented: `nil` as a `match` pattern — GRAMMAR makes it a literal pattern and this compiler compares it as one; write `if v := o { … }` for the presence test, or `o ?? d` for a default (GRAMMAR#literal-pat)") if c_is_nil_lit(lit)
 
 		# the PATTERN is handed as both operands: this comparison is a scrutinee against a
 		# literal, and a literal pattern is always the one adopting the scrutinee's type, so
@@ -10443,7 +10443,7 @@ fn c_pat_tuple_elems(pt: ast.Pat) -> list[ast.Pat] {
 # or the slice silently ran zero times — the shape the arm path now handles deliberately, and
 # these two do not handle at all.
 fn c_range_needs_hi(mut &em: Emitter, e: ast.Expr, what: str) {
-	raise c_diag(em, rule.Rule.NotYetOpenRangeHere, "NotImplemented: an open-ended range has no upper bound here — " + what) if c_is_range(e) and c_is_nil_lit(c_range_hi(e))
+	raise c_diag(em, rule.Rule.NotYetOpenRangeHere, "NotImplemented: an open-ended range has no upper bound here —  (GRAMMAR#range-expr)" + what) if c_is_range(e) and c_is_nil_lit(c_range_hi(e))
 }
 
 # c_arm_eq is the scrutinee against a literal pattern. A `str` is not a native C operand, so the
@@ -11974,7 +11974,7 @@ fn c_main_entry(mut &em: Emitter, own: ast.File, inits: str) -> str {
 		# running main(args) as coroutine 0 needs a scheduler shim that does not exist.
 		# entry.c's zrt_run_args shows the SHAPE is fine; it is the scheduler's version
 		# of it that is missing.
-		raise c_diag(em, rule.Rule.NotYetMainArgsWithConcurrency, "NotImplemented: main(args) in a program that uses concurrency")
+		raise c_diag(em, rule.Rule.NotYetMainArgsWithConcurrency, "NotImplemented: main(args) in a program that uses concurrency (docs/code/coroutine.md)")
 	}
 	if ret_res {
 		# The Result travels as an int64 exit code so the two shims `-> int` already has
@@ -12495,7 +12495,7 @@ fn c_del(mut &em: Emitter, name: str, ind: str) -> str {
 	# The header above is why the drop cannot simply be added here: the release is registered
 	# on the runtime's cleanup stack at the declaration and every exit unwinds to a mark, so
 	# there is no taking one entry out of the middle early.
-	raise c_diag(em, rule.Rule.NotYetDelChannel, f"NotImplemented: `del {name}` on a CHANNEL — GRAMMAR makes this drop a sender reference and close the stream when it was the last one, and this compiler releases a channel where its binding's scope ends. Write `close({name})` to end it now") if ast.ty_is_chan(c_lookup_var(em, name))
+	raise c_diag(em, rule.Rule.NotYetDelChannel, f"NotImplemented: `del {name}` on a CHANNEL — GRAMMAR makes this drop a sender reference and close the stream when it was the last one, and this compiler releases a channel where its binding's scope ends. Write `close({name})` to end it now (GRAMMAR#del-stmt)") if ast.ty_is_chan(c_lookup_var(em, name))
 
 	# `del` OF AN OWNING VALUE — a local `struct`, `list` or `map` — is the other half of the
 	# same absence (#94). GRAMMAR and docs/core/memory.md give it a job the revocation is only
@@ -13250,7 +13250,7 @@ fn c_callee_free(mut &em: Emitter, name: str, args: list[ast.Expr], what: str) -
 fn c_chk_callable(mut &em: Emitter, name: str, what: str) {
 	bt := c_lookup_var(em, name)
 
-	raise c_diag(em, rule.Rule.NotYetSpawnOfBinding, f"NotImplemented: a `{what}` of `{name}`, a binding that HOLDS a function — a `{what}` lowers to a C thunk that names a symbol, and a function value has none. Name the function itself, or call it inside a `{what}`ed one") if c_is_fn(bt)
+	raise c_diag(em, rule.Rule.NotYetSpawnOfBinding, f"NotImplemented: a `{what}` of `{name}`, a binding that HOLDS a function — a `{what}` lowers to a C thunk that names a symbol, and a function value has none. Name the function itself, or call it inside a `{what}`ed one (GRAMMAR#spawn-stmt)") if c_is_fn(bt)
 
 	if not c_is_unknown(bt) {
 		c_not_callable(em, name, bt)
@@ -13326,7 +13326,7 @@ fn c_callee_raw(mut &em: Emitter, x: ast.Expr, what: str) -> Callee {
 		# what is actually missing rather than denying the call is a method.
 		raise c_no_method_says(em, m, recv) if recv != ""
 
-		raise c_diag(em, rule.Rule.NotYetSpawnOfUnknownName, f"NotImplemented: {what} of the method `{m}` on a {ast.ty_name(c_infer(em, tgt))} — this compiler thunks a free function and a method on a NAMED type, and a built-in receiver answers through a dispatch a thunk does not reach")
+		raise c_diag(em, rule.Rule.NotYetSpawnOfUnknownName, f"NotImplemented: {what} of the method `{m}` on a {ast.ty_name(c_infer(em, tgt))} — this compiler thunks a free function and a method on a NAMED type, and a built-in receiver answers through a dispatch a thunk does not reach (GRAMMAR#spawn-stmt)")
 	}
 
 	# a method's receiver is parameter 0 — the parser put `this` there when it flattened the
@@ -13472,7 +13472,7 @@ fn c_map_vt(mut &em: Emitter, kt: ast.Ty, vt: ast.Ty) -> str {
 	# they keep the number (#87).
 	raise c_diag(em, rule.Rule.MapKeyHasNoHash, f"a map key of type {ast.ty_name(kt)} — a key needs `Hash`, and a `float` has no equality a hash can agree with (docs/core/derive.md), so it can never be one") if c_is_float(kt)
 
-	raise c_diag(em, rule.Rule.NotYetMapKeyType, f"NotImplemented: a map key of type {ast.ty_name(kt)} — a key needs `Hash`, and this compiler has one for `int` and for `str`") if not c_is_int(kt) and not c_is_str(kt) and not c_is_unknown(kt)
+	raise c_diag(em, rule.Rule.NotYetMapKeyType, f"NotImplemented: a map key of type {ast.ty_name(kt)} — a key needs `Hash`, and this compiler has one for `int` and for `str` (docs/code/collections.md)") if not c_is_int(kt) and not c_is_str(kt) and not c_is_unknown(kt)
 
 	mut hash := "zrt_hash_int"
 	mut eq := "zrt_eq_int"
@@ -13684,7 +13684,7 @@ fn c_map_method(mut &em: Emitter, target: ast.Expr, meth: str, args: list[ast.Ex
 	# day it is built. Any other name is a method the LANGUAGE does not give a map, and there
 	# is no day on which it does.
 	unbuilt := meth == "insert" or meth == "remove" or meth == "get"
-	raise c_diag(em, rule.Rule.NotYetMapMethod, f"NotImplemented: the map method `{meth}`") if unbuilt
+	raise c_diag(em, rule.Rule.NotYetMapMethod, f"NotImplemented: the map method `{meth}` (docs/code/collections.md)") if unbuilt
 
 	raise c_diag(em, rule.Rule.MapMethodUnknown, f"the map method `{meth}` — a map answers `len` and `has`, and is read with `m[k]`")
 }
@@ -13820,7 +13820,7 @@ fn c_arr_method_ret(mut &em: Emitter, meth: str) -> ast.Ty {
 	# chapter marks `[not yet]` is a form that is coming, and every other name is a permanent
 	# rejection. `get` and `slice` are the two docs/code/collections.md gives an array.
 	unbuilt := meth == "get" or meth == "slice"
-	raise c_diag(em, rule.Rule.NotYetArrayMethod, f"NotImplemented: the array method `{meth}` — this compiler has `len`, and reads an element with `a[i]`") if unbuilt
+	raise c_diag(em, rule.Rule.NotYetArrayMethod, f"NotImplemented: the array method `{meth}` — this compiler has `len`, and reads an element with `a[i]` (docs/code/collections.md)") if unbuilt
 
 	raise c_diag(em, rule.Rule.ArrayMethodUnknown, f"an array answers `len`, and is read with `a[i]` — `{meth}` is not one of its methods, and its size is part of its type, so nothing may grow or shrink it")
 }
@@ -14682,7 +14682,7 @@ fn c_tuple_tys(t: ast.Ty) -> list[ast.Ty] {
 # gate could not pin it and a reader was told what a range is NOT good for without being
 # told where they had written one.
 fn c_range_unsupported(mut &em: Emitter) -> str {
-	raise c_diag(em, rule.Rule.NotYetRangeAsValue, "NotImplemented: a range used as a value — `x..y` is a `for … in` iterable and a membership test (`v in x..y`) so far, and there is no Range value to bind, pass or return")
+	raise c_diag(em, rule.Rule.NotYetRangeAsValue, "NotImplemented: a range used as a value — `x..y` is a `for … in` iterable and a membership test (`v in x..y`) so far, and there is no Range value to bind, pass or return (GRAMMAR#range-expr)")
 }
 
 fn c_is_range(e: ast.Expr) -> bool {
@@ -16588,7 +16588,7 @@ pub fn c_with_derived(prog: ast.File) -> ast.File {
 fn c_derive_src(prog: ast.File, target: str, nm: str) -> str {
 	return c_obj_src(prog, target) if nm == "#obj"
 
-	raise c_derive_diag(prog, target, rule.Rule.NotYetDerive, f"NotImplemented: `#[derive({nm})]` — this compiler derives `Eq`; `Ord`, `Hash`, `Encode` and `Decode` are specified and unbuilt") if nm == "Ord" or nm == "Hash" or nm == "Encode" or nm == "Decode"
+	raise c_derive_diag(prog, target, rule.Rule.NotYetDerive, f"NotImplemented: `#[derive({nm})]` — this compiler derives `Eq`; `Ord`, `Hash`, `Encode` and `Decode` are specified and unbuilt (docs/core/derive.md)") if nm == "Ord" or nm == "Hash" or nm == "Encode" or nm == "Decode"
 	return c_derive_eq(prog, target) if nm == "Eq"
 	return c_derive_from(prog, target) if nm == "From"
 
@@ -16894,7 +16894,7 @@ fn c_derive_fields(fields: list[ast.FieldDef]) -> str {
 # replace, and half of it is worse than none.
 fn c_derive_variants(ed: ast.EnumDecl, target: str) -> str {
 	for v in ed.variants {
-		raise c_diag_at(ed.path, ed.line, ed.col, rule.Rule.NotYetDeriveEq, f"NotImplemented: `#[derive(Eq)]` on `{target}` — it carries a payload (`{v.name}`), and this compiler derives equality for a fieldless enum, whose variants differ exactly as their discriminants do; write `impl Eq for {target}` with a `match`") if v.fields.len() > 0
+		raise c_diag_at(ed.path, ed.line, ed.col, rule.Rule.NotYetDeriveEq, f"NotImplemented: `#[derive(Eq)]` on `{target}` — it carries a payload (`{v.name}`), and this compiler derives equality for a fieldless enum, whose variants differ exactly as their discriminants do; write `impl Eq for {target}` with a `match` (docs/core/derive.md)") if v.fields.len() > 0
 	}
 	return "int(this) == int(o)"
 }
@@ -16948,7 +16948,7 @@ fn c_build_intos(mut &em: Emitter, f: ast.File) {
 			# than by name, which is also what would let `x.into()` written by hand say which
 			# one is meant. Named here, where the pair is in hand, rather than reported later
 			# as two methods with one name.
-			raise c_diag_at(ip.path, ip.line, ip.col, rule.Rule.NotYetSecondIntoImpl, f"NotImplemented: a second `impl Into[…] for {ip.target}` — this compiler keys a method by its NAME, so one type carries one `into`; the language allows several, and reaching that needs the method keyed by the spec and its arguments") if c_into_user_from(em, ip.target)
+			raise c_diag_at(ip.path, ip.line, ip.col, rule.Rule.NotYetSecondIntoImpl, f"NotImplemented: a second `impl Into[…] for {ip.target}` — this compiler keys a method by its NAME, so one type carries one `into`; the language allows several, and reaching that needs the method keyed by the spec and its arguments (GRAMMAR#impl-decl)") if c_into_user_from(em, ip.target)
 			em.into_src.append(ip.target)
 		}
 	}

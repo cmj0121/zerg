@@ -452,7 +452,7 @@ pub fn chk_assoc_projections(mut &em: emit.Emitter, f: ast.File) {
 			# finding here would be gathered, discarded, and the reader would meet the
 			# misspelling message anyway. A refusal that spells its code into the sentence is
 			# what a raise is for, and the gates hold the code either way.
-			raise emit.c_diag_at(q.path, q.line, q.col, rule.Rule.NotYetAssocTypeProjection, f"NotImplemented: an associated type projection `{q.ns}.{q.member}` — GRAMMAR lets a spec name a type its implementer supplies and a signature project it, and this compiler has no associated types at all")
+			raise emit.c_diag_at(q.path, q.line, q.col, rule.Rule.NotYetAssocTypeProjection, f"NotImplemented: an associated type projection `{q.ns}.{q.member}` — GRAMMAR lets a spec name a type its implementer supplies and a signature project it, and this compiler has no associated types at all (GRAMMAR#base-type)")
 		}
 	}
 }
@@ -2919,7 +2919,7 @@ pub fn chk_typedef(mut &em: emit.Emitter, td: ast.TypeDecl, f: ast.File) -> ast.
 	# `str(l)` printed the pointer as a number. A form that answers wrongly is worse than one
 	# that says it is not built.
 	if emit.c_scalar_class(td.under) == emit.SC_NONE {
-		chk_at_place(em, td.path, td.line, td.col, rule.Rule.NotYetTypedefNonScalar, f"NotImplemented: `type {td.name} = {ast.ty_name(td.under)}` over a non-scalar — this compiler builds a strong typedef over a scalar, where the new name costs nothing at runtime; a `str`, a container or a struct underneath needs the copy and drop rules to follow the name")
+		chk_at_place(em, td.path, td.line, td.col, rule.Rule.NotYetTypedefNonScalar, f"NotImplemented: `type {td.name} = {ast.ty_name(td.under)}` over a non-scalar — this compiler builds a strong typedef over a scalar, where the new name costs nothing at runtime; a `str`, a container or a struct underneath needs the copy and drop rules to follow the name (GRAMMAR#type-decl)")
 		return ast.Ty.TUnknown
 	}
 	return td.under

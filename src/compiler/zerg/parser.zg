@@ -1111,7 +1111,7 @@ fn parse_bound(mut &p: Parser, whose: str, allow_args: bool) -> list[str] {
 		# refuse every correct `impl Ord` with "parameter `o` is int, and the spec declares T"
 		# — a valid program turned away for a reason about the compiler.
 		if p_at(p, token.Kind.LBrack) {
-			raise p_diag(p, rule.Rule.NotYetParameterizedSpec, f"NotImplemented: a parameterized `{name}[…]` as {whose} — this compiler carries a spec's type arguments only on an `impl` and on a type parameter's bound, so it has nothing to substitute the parameters with here") if not allow_args
+			raise p_diag(p, rule.Rule.NotYetParameterizedSpec, f"NotImplemented: a parameterized `{name}[…]` as {whose} — this compiler carries a spec's type arguments only on an `impl` and on a type parameter's bound, so it has nothing to substitute the parameters with here (GRAMMAR#type-args)") if not allow_args
 
 			out.append(ast.spec_key(name, parse_ty_args(p)))
 		} else {
@@ -2115,7 +2115,7 @@ fn parse_typedecl(mut &p: Parser, is_pub: bool) -> ast.TypeDecl {
 	# refused for one reason, and the alias was the one a gate could not pin.
 	if p_at(p, token.Kind.LBrack) {
 		b := cur(p)
-		raise p_diag_at(p, b.line, b.col, rule.Rule.NotYetGenericTypedef, f"NotImplemented: a generic `type {name}[…] = …` — a parameterized alias is one instantiation per argument, and this compiler erases type parameters (the reason a generic `enum` is E9003 and a generic `struct` E9004)")
+		raise p_diag_at(p, b.line, b.col, rule.Rule.NotYetGenericTypedef, f"NotImplemented: a generic `type {name}[…] = …` — a parameterized alias is one instantiation per argument, and this compiler erases type parameters (the reason a generic `enum` is E9003 and a generic `struct` E9004) (GRAMMAR#type-decl)")
 	}
 
 	expect(p, token.Kind.Assign)
@@ -2324,7 +2324,7 @@ fn parse_enum(mut &p: Parser, is_pub: bool) -> ast.EnumDecl {
 	# `enum E[T] { A(T) }` — the parameter list was read and dropped the way a struct's is,
 	# but an enum's payload NAMES it, so `T` reached cc as a type nothing declares. A struct's
 	# field types go through c_check_named_ty; a variant's did not.
-	raise p_diag(p, rule.Rule.NotYetGenericEnum, f"NotImplemented: a generic enum `{name}[…]` — this compiler erases type parameters, and a variant's payload names one") if p_at(p, token.Kind.LBrack)
+	raise p_diag(p, rule.Rule.NotYetGenericEnum, f"NotImplemented: a generic enum `{name}[…]` — this compiler erases type parameters, and a variant's payload names one (GRAMMAR#enum-decl)") if p_at(p, token.Kind.LBrack)
 	expect(p, token.Kind.LBrace)
 	skip_semis(p)
 
@@ -2401,7 +2401,7 @@ fn parse_struct(mut &p: Parser, is_pub: bool) -> ast.StructDecl {
 	# `no type named T`: a message about the consequence, from two steps away, for a form
 	# the compiler had already decided not to support. A generic ENUM has been refused by
 	# name since it was written; this is the same refusal for the other declaration.
-	raise p_diag(p, rule.Rule.NotYetGenericStruct, f"NotImplemented: a generic struct `{name}[…]` — this compiler erases type parameters, and a field names one") if p_at(p, token.Kind.LBrack)
+	raise p_diag(p, rule.Rule.NotYetGenericStruct, f"NotImplemented: a generic struct `{name}[…]` — this compiler erases type parameters, and a field names one (GRAMMAR#struct-decl)") if p_at(p, token.Kind.LBrack)
 	expect(p, token.Kind.LBrace)
 	skip_semis(p)
 	mut fields: list[ast.FieldDef] = []
@@ -2567,7 +2567,7 @@ fn parse_deco_item(mut &p: Parser, mut &pending: list[str]) {
 	# compiler "reads `#[derive(…)]` and `#[obj]`, and no other" answers a question they did
 	# not ask. What they need to know is that the word is the right one and the behaviour is
 	# not built, so nothing is protecting the constructor they thought they had sealed.
-	raise p_diag_at(p, nt.line, nt.col, rule.Rule.NotYetSealed, f"NotImplemented: the decorator `#[sealed]` — it is a reserved decorator (GRAMMAR group 7 gives it a meaning: the field-wise `T(…)` constructor becomes module-private) and this compiler does not build it, so the constructor stays public rather than being sealed in silence") if name == "sealed"
+	raise p_diag_at(p, nt.line, nt.col, rule.Rule.NotYetSealed, f"NotImplemented: the decorator `#[sealed]` — it is a reserved decorator (GRAMMAR group 7 gives it a meaning: the field-wise `T(…)` constructor becomes module-private) and this compiler does not build it, so the constructor stays public rather than being sealed in silence (GRAMMAR#deco-item)") if name == "sealed"
 
 	# THE LAYOUT THREE ARE RESERVED, and that is a different sentence from a typo.
 	# `docs/core/decorators.md` gives `#[repr]`, `#[packed]` and `#[align]` a meaning — in-memory
@@ -2577,7 +2577,7 @@ fn parse_deco_item(mut &p: Parser, mut &pending: list[str]) {
 	# there is no day its code retires on. Both got the unknown-decorator sentence, and the page
 	# said in as many words that the distinction was lost — which is exactly what `#[sealed]`'s
 	# own code had already bought back one bullet above (#87).
-	raise p_diag_at(p, nt.line, nt.col, rule.Rule.NotYetDecoratorLayout, f"NotImplemented: the decorator `#[{name}]` — it is a reserved LAYOUT decorator (in-memory width, padding and alignment against an external ABI) and this compiler does not build it, so the type is laid out as it would be without it") if name == "repr" or name == "packed" or name == "align"
+	raise p_diag_at(p, nt.line, nt.col, rule.Rule.NotYetDecoratorLayout, f"NotImplemented: the decorator `#[{name}]` — it is a reserved LAYOUT decorator (in-memory width, padding and alignment against an external ABI) and this compiler does not build it, so the type is laid out as it would be without it (GRAMMAR#deco-item)") if name == "repr" or name == "packed" or name == "align"
 
 	raise p_diag_at(p, nt.line, nt.col, rule.Rule.DecoratorUnknown, f"the decorator `#[{name}]` — the set is closed and compiler-owned, so an unknown name is not a directive this compiler has yet to build; it reads `#[derive(…)]`, `#[obj]`, `#[test]`, `#[fixture]` and `#[allow(…)]`, and no other") if name != "derive"
 
@@ -2693,7 +2693,7 @@ fn parse_impl(mut &p: Parser, mut &fns: list[ast.FnDecl], mut &impls: list[ast.I
 	# is FALSE about a language whose grammar spells `list[T]` and whose every program uses
 	# one. Reading the arguments is what lets the refusal be about the form that was
 	# written, at the place it was written.
-	raise p_diag_at(p, ttok.line, ttok.col, rule.Rule.NotYetImplTypeArgument, f"NotImplemented: an `impl` on `{target}[{ast.ty_names(targs)}]` — a type ARGUMENT on the target: this compiler keys an implementation by the target's bare name, so every instantiation of `{target}` would share one, and telling them apart is the same monomorphization a generic target needs. Write the `impl` for a `struct` or an `enum` this program declares") if targs.len() > 0
+	raise p_diag_at(p, ttok.line, ttok.col, rule.Rule.NotYetImplTypeArgument, f"NotImplemented: an `impl` on `{target}[{ast.ty_names(targs)}]` — a type ARGUMENT on the target: this compiler keys an implementation by the target's bare name, so every instantiation of `{target}` would share one, and telling them apart is the same monomorphization a generic target needs. Write the `impl` for a `struct` or an `enum` this program declares (GRAMMAR#impl-decl)") if targs.len() > 0
 
 	if sp != "" {
 		impls.append(ast.ImplDecl(sp, args, target, p.path, kw.line, kw.col))
@@ -2749,7 +2749,7 @@ fn parse_impl(mut &p: Parser, mut &fns: list[ast.FnDecl], mut &impls: list[ast.I
 			vt := cur(p)
 			consts.append(p_top_binding(p, target, false, false, is_pub, in_unsafe, vt.line, vt.col))
 		} else if p_at(p, token.Kind.Type) {
-			raise p_diag(p, rule.Rule.NotYetImplAssocType, "NotImplemented: an associated type binding `type … = …` in an `impl`")
+			raise p_diag(p, rule.Rule.NotYetImplAssocType, "NotImplemented: an associated type binding `type … = …` in an `impl` (GRAMMAR#impl-item)")
 		} else {
 			# WHAT IS LEFT IS NOT AN ITEM AT ALL. GRAMMAR#impl-item derives a `fn-decl`, a
 			# `val-bind` and a `type` binding, and the three arms above take all of them, so a
@@ -2814,7 +2814,7 @@ fn p_type_params(mut &p: Parser, mut &names: list[str], mut &bounds: list[str]) 
 			# A bound naming anything else is a SPEC bound, exactly as before: a user type in
 			# that slot was read as a spec of that name then and is now, and the checker
 			# answers it the same way — _E3013 no spec named `MyStruct`_.
-			raise p_diag(p, rule.Rule.NotYetValueGenericParam, f"NotImplemented: a value generic parameter `{nm}: {bound}` — GRAMMAR lets a concrete-type bound make a parameter a compile-time value (`fn f[N: int]`, applied as `f[3]()`), and this compiler has type parameters only") if p_bound_is_concrete(bound)
+			raise p_diag(p, rule.Rule.NotYetValueGenericParam, f"NotImplemented: a value generic parameter `{nm}: {bound}` — GRAMMAR lets a concrete-type bound make a parameter a compile-time value (`fn f[N: int]`, applied as `f[3]()`), and this compiler has type parameters only (GRAMMAR#type-param)") if p_bound_is_concrete(bound)
 		}
 		names.append(nm)
 		bounds.append(bound)
@@ -3766,7 +3766,7 @@ fn parse_for(mut &p: Parser) -> ast.Stmt {
 	# `for mut v in xs` binds the element MUTABLY and writes the edit back to its slot
 	# (GRAMMAR#for-stmt). The `mut` was not read here, so it fell into the condition expression
 	# and was reported as whatever that made of it.
-	raise p_diag(p, rule.Rule.NotYetForMutBinding, "NotImplemented: `for mut v in …` — the mutable loop binding writes each edited element back to its slot, which this compiler does not do") if p_at(p, token.Kind.Mut)
+	raise p_diag(p, rule.Rule.NotYetForMutBinding, "NotImplemented: `for mut v in …` — the mutable loop binding writes each edited element back to its slot, which this compiler does not do (GRAMMAR#for-stmt)") if p_at(p, token.Kind.Mut)
 
 	# for-in: `for name in iterable { ... }`
 	if p_names_here(p, p.pos) and peek_kind(p, 1) == token.Kind.In {
@@ -4217,7 +4217,7 @@ fn parse_postfix(mut &p: Parser) -> ast.Expr {
 					p_written_type_args(p, base, tn)
 				}
 			}
-			raise p_diag(p, rule.Rule.NotYetCallee, f"NotImplemented: calling {ast.expr_kind(e)} — a callee is a plain name in this compiler, so `fs[0](…)` (a function value in a container) and `p?.m(…)` (an optional method call) are unbuilt") if name == ""
+			raise p_diag(p, rule.Rule.NotYetCallee, f"NotImplemented: calling {ast.expr_kind(e)} — a callee is a plain name in this compiler, so `fs[0](…)` (a function value in a container) and `p?.m(…)` (an optional method call) are unbuilt (GRAMMAR#postfix)") if name == ""
 
 			args := parse_call_args(p)
 			if is_conv(name) {
@@ -4293,7 +4293,7 @@ fn parse_call_args(mut &p: Parser) -> list[ast.Expr] {
 		# positional-only, and the `:` reached parse_primary, which answered "`:` is not an
 		# expression this compiler reads" — a token, about a form the language specifies and
 		# the seed builds. An argument list is where the form is recognizable.
-		raise p_diag(p, rule.Rule.NotYetNamedArgument, f"NotImplemented: the named argument `{token.says(cur(p))}:` — this compiler binds arguments by position only") if p_at(p, token.Kind.Ident) and peek_kind(p, 1) == token.Kind.Colon
+		raise p_diag(p, rule.Rule.NotYetNamedArgument, f"NotImplemented: the named argument `{token.says(cur(p))}:` — this compiler binds arguments by position only (GRAMMAR#arg)") if p_at(p, token.Kind.Ident) and peek_kind(p, 1) == token.Kind.Colon
 
 		args.append(parse_expr(p))
 		p_list_sep(p, token.Kind.RParen, ")", "an argument list")
@@ -4596,7 +4596,7 @@ fn parse_if_expr(mut &p: Parser) -> ast.Expr {
 	# `e` is present. It is grammatical in expression position and this compiler unwraps an
 	# optional in the STATEMENT form only, so the `:=` reached the condition's expression
 	# parser and reported itself.
-	raise p_diag_at(p, t.line, t.col, rule.Rule.NotYetIfExprBindingHead, f"NotImplemented: a binding head in an `if` EXPRESSION — `if {token.says(t)} := …` unwraps an optional, and this compiler does that in the statement form only; bind it before the expression, or use `??`") if p_at(p, token.Kind.Ident) and peek_kind(p, 1) == token.Kind.Walrus
+	raise p_diag_at(p, t.line, t.col, rule.Rule.NotYetIfExprBindingHead, f"NotImplemented: a binding head in an `if` EXPRESSION — `if {token.says(t)} := …` unwraps an optional, and this compiler does that in the statement form only; bind it before the expression, or use `??` (GRAMMAR#if-head)") if p_at(p, token.Kind.Ident) and peek_kind(p, 1) == token.Kind.Walrus
 
 	cond := parse_expr(p)
 	then_e := parse_if_branch(p)
@@ -4619,7 +4619,7 @@ fn parse_if_branch(mut &p: Parser) -> ast.Expr {
 	skip_semis(p)
 
 	t := cur(p)
-	raise p_diag_at(p, t.line, t.col, rule.Rule.NotYetIfExprManyStatements, "NotImplemented: an `if` EXPRESSION whose branch has more than one statement — a block's value is its last statement's, and this compiler lowers the expression form to a conditional, which holds no statements. Use the `if` STATEMENT and assign in each branch") if not p_at(p, token.Kind.RBrace)
+	raise p_diag_at(p, t.line, t.col, rule.Rule.NotYetIfExprManyStatements, "NotImplemented: an `if` EXPRESSION whose branch has more than one statement — a block's value is its last statement's, and this compiler lowers the expression form to a conditional, which holds no statements. Use the `if` STATEMENT and assign in each branch (GRAMMAR#if-expr)") if not p_at(p, token.Kind.RBrace)
 
 	expect(p, token.Kind.RBrace)
 	return e
@@ -4686,7 +4686,7 @@ fn at_range_arm(mut &p: Parser) -> bool {
 # `what` names the shape, because one code covers both and the reader has to be told which
 # statement was left behind.
 fn p_arm_body_stmt(mut &p: Parser, what: str) -> str {
-	return p_diag(p, rule.Rule.NotYetMatchArmStatement, f"NotImplemented: a match arm's body is an expression — {what} in an arm needs a block body, which this emitter cannot yet lower")
+	return p_diag(p, rule.Rule.NotYetMatchArmStatement, f"NotImplemented: a match arm's body is an expression — {what} in an arm needs a block body, which this emitter cannot yet lower (GRAMMAR#match-arm)")
 }
 
 # --- patterns (GRAMMAR#pattern) -----------------------------------------------------------

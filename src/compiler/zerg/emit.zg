@@ -677,6 +677,14 @@ fn c_type(t: ast.Ty) -> str {
 		# a `mut &T` is the caller's own storage lent for one call, which is a POINTER to it —
 		# the same C parameter a `mut &` on a declaration has always lowered to
 		Ty.TRef(e) => c_type(e) + "*"
+
+		# a raw pointer is a raw address: the untyped one is C's `void*`, and a typed one is a
+		# pointer to the pointee's C type — the same width, which is what `[T]` only typing the
+		# load/store/offset means
+		Ty.TPtr(e) => c_ptr_type(e)
+
+		# the marker is a compile-time fact: both are one function pointer
+		Ty.TUnsafe(e) => c_type(e)
 		Ty.TTuple(ts) => c_tuple_cname(ts)
 		Ty.TArr(e, n) => c_arr_cname(e, n)
 		Ty.TMap(_, _) => "zrt_map"
@@ -1634,7 +1642,7 @@ fn c_fnptr_helpers() -> str {
 # thing behind it does with the pointer. c_fnval_thunk is what gives a plain function that
 # shape.
 fn c_fnptr_cast(t: ast.Ty) -> str {
-	return match t {
+	return match c_unmark(t) {
 		Ty.TFn(ps, r) => f"({c_type(r)} (*)(const void *{c_ptypes_after(ps)}))"
 		_             => ""
 	}
@@ -1649,9 +1657,29 @@ fn c_ptypes_after(ps: list[ast.Ty]) -> str {
 }
 
 pub fn c_is_fn(t: ast.Ty) -> bool {
-	return match t {
+	return match c_unmark(t) {
 		Ty.TFn(_, _) => true
 		_            => false
+	}
+}
+
+# c_unmark strips the `unsafe` MARKER off a function type. The marker says who may call the
+# value and nothing about its shape, so every reader that asks about the shape — the arity, the
+# parameters, the result, the C cast — asks through here rather than each learning about it.
+# That is the same reason `mut &` rides inside the parameter list rather than beside it.
+pub fn c_unmark(t: ast.Ty) -> ast.Ty {
+	return match t {
+		Ty.TUnsafe(e) => e
+		_             => t
+	}
+}
+
+# c_is_unsafe_ty is the other half: the question the CALL asks, which is the only one the
+# marker answers.
+pub fn c_is_unsafe_ty(t: ast.Ty) -> bool {
+	return match t {
+		Ty.TUnsafe(_) => true
+		_             => false
 	}
 }
 
@@ -1666,7 +1694,7 @@ pub fn c_is_identity(t: ast.Ty) -> bool {
 }
 
 fn c_fn_ret(t: ast.Ty) -> ast.Ty {
-	return match t {
+	return match c_unmark(t) {
 		Ty.TFn(_, r) => r
 		_            => ast.Ty.TUnknown
 	}
@@ -1679,6 +1707,12 @@ fn c_fn_ret(t: ast.Ty) -> ast.Ty {
 # two-argument cast and cc reported it.
 fn c_args_after(mut &em: Emitter, fty: ast.Ty, args: list[ast.Expr], sb: Subst) -> str {
 	check.chk_fnval_arity(em, fty, args.len())
+
+	# A CALL THROUGH AN UNSAFE FUNCTION VALUE IS AN UNSAFE CALL. The marker rides in the type
+	# so that this question has an answer at all: a value has no name for the caller rule to
+	# look up, and without it an unsafe function bound to a plain `fn` would be callable from
+	# anywhere — which is the one thing the keyword exists to prevent.
+	check.chk_unsafe_call_value(em, fty)
 
 	# A CALL THROUGH A FUNCTION VALUE SEQUENCES ITS ARGUMENTS, exactly as a direct call
 	# does. This was the last combining form in either compiler still handing its operands
@@ -1699,7 +1733,7 @@ fn c_args_after(mut &em: Emitter, fty: ast.Ty, args: list[ast.Expr], sb: Subst) 
 # from anything else. It lives here rather than beside its caller so the two halves of one
 # destructuring are read together.
 pub fn c_fn_params(t: ast.Ty) -> list[ast.Ty] {
-	return match t {
+	return match c_unmark(t) {
 		Ty.TFn(ps, _) => ps
 		_             => []
 	}
@@ -9176,7 +9210,12 @@ fn c_ident_val(mut &em: Emitter, n: str, sb: Subst) -> str {
 	# only reached when nothing has bound the name, so a binding always wins — which is the
 	# ordinary scoping rule, and it means a local can shadow a function without surprise.
 	if c_is_free_fn(em, n) and not c_is_bound(em, n) {
-		c_chk_unsafe_fn(em, n, "naming it here would hand safe code the same call", c_sig_row_of(em, n))
+		# NAMING ONE IS SAFE NOW, AND CALLING IT IS STILL CHECKED. This used to be refused —
+		# "naming it here would hand safe code the same call" — and it was true while a
+		# function TYPE could not carry the marker: the value became a plain `fn` and the
+		# caller rule had nothing left to read. The type carries it (`unsafe fn(…)`), so the
+		# call through the value is the checked thing and the binding is ordinary code, which
+		# is what makes an unsafe function storable in a table at all.
 		em.used_fnptr = true
 		return f"((zg_fnptr){{(void (*)(void))zg_{c_fnval_thunk(em, n, c_fn_ty_of(em, n))}, NULL}})"
 	}
@@ -9304,7 +9343,15 @@ fn c_fn_ty_of(mut &em: Emitter, n: str) -> ast.Ty {
 		}
 		i = i + 1
 	}
-	return ast.Ty.TFn(ptys, c_lookup_sig_ret(em, n))
+
+	# AND THE MARKER, if the declaration carried one. `unsafe fn` is part of the TYPE, so a
+	# value of an unsafe function is an `unsafe fn(…)` and not a plain one — which is what
+	# stops it being bound to a plain `fn` type and called from safe code.
+	ft := ast.Ty.TFn(ptys, c_lookup_sig_ret(em, n))
+	r := c_sig_row_of(em, n)
+	return ast.Ty.TUnsafe(ft) if r >= 0 and em.sig_unsafe[r]
+
+	return ft
 }
 
 # c_args renders the arguments of a call this emitter has no PARAMETER TABLE for: a call
@@ -9373,6 +9420,15 @@ fn c_fnfield_call(mut &em: Emitter, recv: str, meth: str, target: ast.Expr, args
 	fty := c_field_ty(em, recv, meth)
 	tv := c_expr(em, target, sb)
 	return f"({c_fnptr_cast(fty)}({tv}.zg_{meth}).fn)({tv}.zg_{meth}.env{c_args_after(em, fty, args, sb)})"
+}
+
+# c_ptr_type is the C a `ptr` / `ptr[T]` lowers to: the untyped one is `void*` and a typed one
+# is a pointer to the pointee's C type. One width, two types, which is what `[T]` typing only
+# the load, the store and the offset means.
+fn c_ptr_type(e: ast.Ty) -> str {
+	return "void*" if c_is_unknown(e)
+
+	return c_type(e) + "*"
 }
 
 fn c_args(mut &em: Emitter, args: list[ast.Expr], sb: Subst) -> str {

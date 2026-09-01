@@ -513,6 +513,17 @@ pub fn chk_unsafe_reachable(mut &em: emit.Emitter, name: str, callee_unsafe: boo
 	chk_at(em, rule.Rule.UnsafeNameInSafeCode, f"`{name}` is an unsafe fn — declared `unsafe fn`, or inside a module-level `unsafe {{ … }}` group — and GRAMMAR group 12 makes it callable only from unsafe, and {what}")
 }
 
+# chk_unsafe_call_value is the caller rule asked of a VALUE rather than a name.
+pub fn chk_unsafe_call_value(mut &em: emit.Emitter, fty: ast.Ty) {
+	return if not emit.c_is_unsafe_ty(fty)
+	return if em.in_unsafe_fn
+
+	# A CODE OF ITS OWN, because it is a different rule: the one above is about a NAME the
+	# reader wrote and this one about a value whose type carries the marker — and a code is an
+	# identity rather than a topic.
+	chk_at(em, rule.Rule.UnsafeValueInSafeCode, f"this value is an `{ast.ty_name(fty)}`, and GRAMMAR group 12 makes an unsafe function callable only from unsafe — call it inside an `unsafe {{ … }}` block, or from an `unsafe fn`")
+}
+
 # chk_note is chk_at for something that is NOT an error. `L5xx` is the family that needs it:
 # every implicit conversion is a lint finding, and every one of them is also a legal program,
 # so it goes on a list that does not fail the build.

@@ -291,6 +291,7 @@ pub enum Rule {
 	ArrayIndexConst = 3140
 	ArrayMethodUnknown = 3141
 	FStringSpecType = 3142
+	UnsafeValueInSafeCode = 3149
 	SpecDefaultReadsField = 3138
 
 	# emitting — a form this compiler will not lower
@@ -472,7 +473,6 @@ pub enum Rule {
 	NotYetRebindMatchBinding = 9070
 	NotYetDefaultReadsField = 9071
 	NotYetDestructuringAssign = 9072
-	NotYetUnsafeFnType = 9073
 	NotYetImplDottedTarget = 9074
 	NotYetGenericTypedef = 9075
 	NotYetSubPatternInPayload = 9076

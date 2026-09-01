@@ -785,6 +785,20 @@ fn p_name_of(e: ast.Expr) -> str {
 }
 
 fn parse_base_type(mut &p: Parser) -> ast.Ty {
+	# `ptr` / `ptr[T]` — a RAW POINTER (GRAMMAR#ptr-type). `ptr` is a keyword, so it never
+	# reaches the name below; the bare form is the untyped address and `[T]` types what it
+	# points at. The TYPE is legal anywhere a type is — it describes pointer-shaped data — and
+	# every OPERATION on one is `unsafe`-only, which is a rule about the operation.
+	if p_at(p, token.Kind.Ptr) {
+		p_advance(p)
+		return ast.Ty.TPtr(ast.Ty.TUnknown) if not p_at(p, token.Kind.LBrack)
+
+		p_advance(p)
+		inner := parse_type(p)
+		expect(p, token.Kind.RBrack)
+		return ast.Ty.TPtr(inner)
+	}
+
 	# `[T; N]` — an ARRAY TYPE (GRAMMAR#array-type): the element type, and a length that is part
 	# of the type. The `[` is the only thing that opens one in type position, so it is read here
 	# rather than falling through to the name below, which is what used to report `expected `=`,
@@ -804,13 +818,13 @@ fn parse_base_type(mut &p: Parser) -> ast.Ty {
 	# binding said ``expected `=`, found `fn` ``, a parameter said ``expected `,`, found `fn` ``
 	# — two tokens, neither of them the form, for a production GRAMMAR derives in full.
 	#
-	# It is refused for the reason a standalone `unsafe fn` is (E9027): the marker is a TRUST
-	# BOUNDARY this compiler does not enforce, so honouring it in a type would be a promise
-	# about calls it never checks. Dropping the word instead would be worse — a plain `fn`
-	# type is callable from safe code, which is the one thing the marker exists to prevent.
+	# `unsafe fn(…)` — a function TYPE carrying the marker (GRAMMAR#fn-type). The marker is
+	# part of the TYPE, so `unsafe fn() -> int` and `fn() -> int` are two types and a value of
+	# one is not a value of the other: that is what keeps a plain `fn` type from being a way to
+	# launder an unsafe function into safe code.
 	if p_at(p, token.Kind.Unsafe) {
-		u := cur(p)
-		raise p_diag_at(p, u.line, u.col, rule.Rule.NotYetUnsafeFnType, "NotImplemented: an `unsafe fn(…)` TYPE — GRAMMAR#fn-type carries the marker, and `unsafe` is a trust boundary this compiler does not enforce (the reason a standalone `unsafe fn` is E9027), so the type is refused rather than spelled and never honoured")
+		p_advance(p)
+		return ast.Ty.TUnsafe(parse_base_type(p))
 	}
 
 	if p_at(p, token.Kind.LArrow) {

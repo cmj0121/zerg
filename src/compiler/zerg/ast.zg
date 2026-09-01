@@ -88,6 +88,23 @@ pub enum Ty {
 	# table, is what turns it into a number.
 	TArr(Ty, str)
 
+	# TUnsafe is the `unsafe` marker ON A FUNCTION TYPE (GRAMMAR#fn-type is `'unsafe'? 'fn' …`).
+	# It wraps the `TFn` rather than being a field of it, for the reason `mut &` is a type and
+	# not a flag: `unsafe fn() -> int` and `fn() -> int` are two types, and a value of one is
+	# not a value of the other — which is the whole of what the marker says.
+	#
+	# THE C IS THE SAME. Both are one function pointer at runtime; what differs is who may call
+	# it, and that is a compile-time question.
+	TUnsafe(Ty)
+
+	# TPtr is `ptr` / `ptr[T]` (GRAMMAR#ptr-type) — a platform-width raw ADDRESS, and the same
+	# address TYPED to a pointee. The bare form carries TUnknown: `[T]` only types the
+	# load/store/offset, so the two are one width and one variant.
+	#
+	# IT IS ORTHOGONAL TO `T?`. A `ptr` is nullable by construction — address 0 — so there is
+	# no `ptr[T]?` and a null test is `p == 0`, which is why nothing here wraps it in a carrier.
+	TPtr(Ty)
+
 	# TRef is `mut &T`, and it is a TYPE rather than a marker on a declaration:
 	# GRAMMAR#param-type derives `( 'mut' '&' )? type`, so `fn(mut &int)` and `fn(int)` are
 	# two different function types and a value of one is not a value of the other.
@@ -1495,6 +1512,8 @@ pub fn ty_eq(a: Ty, b: Ty) -> bool {
 		Ty.TEither(al, ar) => ty_eq_either(al, ar, b)
 		Ty.TFn(aps, ar)    => ty_eq_fn(aps, ar, b)
 		Ty.TRef(ae)        => ty_eq_ref(ae, b)
+		Ty.TPtr(ae)        => ty_eq_ptr(ae, b)
+		Ty.TUnsafe(ae)     => ty_eq_unsafe(ae, b)
 		Ty.TArr(ae, an)    => ty_eq_arr(ae, an, b)
 		Ty.TTuple(aes)     => ty_eq_tuple(aes, b)
 		Ty.TUnknown        => false
@@ -1530,6 +1549,41 @@ pub fn ty_arr_len(key: str) -> int {
 		v = v * 10 + int(c - b'0')
 	}
 	return v
+}
+
+# ty_ptr_name spells a raw pointer the way the reader wrote it: `ptr` when it is untyped, and
+# `ptr[T]` when the pointee is known.
+fn ty_ptr_name(e: Ty) -> str {
+	return "ptr" if ty_is_unknown_ty(e)
+
+	return f"ptr[{ty_name(e)}]"
+}
+
+fn ty_is_unknown_ty(t: Ty) -> bool {
+	return match t {
+		Ty.TUnknown => true
+		_           => false
+	}
+}
+
+# AN UNSAFE FUNCTION TYPE IS EQUAL TO NOTHING BUT ANOTHER UNSAFE ONE. That is what keeps the
+# marker load-bearing: a plain `fn` type is callable from safe code, so letting the two meet
+# would be a way to launder an unsafe function into one.
+fn ty_eq_unsafe(ae: Ty, b: Ty) -> bool {
+	return match b {
+		Ty.TUnsafe(be) => ty_eq(ae, be)
+		_ => false
+	}
+}
+
+# TWO POINTERS ARE THE SAME TYPE WHEN THEIR POINTEES ARE, and a bare `ptr` is its own type
+# rather than a wildcard: `ptr` and `ptr[int]` are one width and two types, so a conversion
+# between them is written (GRAMMAR#ptr-type names the casts) rather than implied.
+fn ty_eq_ptr(ae: Ty, b: Ty) -> bool {
+	return match b {
+		Ty.TPtr(be) => ty_name(ae) == ty_name(be)
+		_           => false
+	}
 }
 
 # A `mut &T` IS EQUAL TO NOTHING BUT A `mut &` OF THE SAME TYPE, which is the whole reason
@@ -1634,6 +1688,8 @@ pub fn ty_name(t: Ty) -> str {
 		Ty.TEither(l, r) => either_name(l, r)
 		Ty.TOpt(e)       => f"{ty_name(e)}?"
 		Ty.TRef(e)       => f"mut &{ty_name(e)}"
+		Ty.TPtr(e)       => ty_ptr_name(e)
+		Ty.TUnsafe(e)    => f"unsafe {ty_name(e)}"
 		Ty.TArr(e, n)    => f"[{ty_name(e)}; {n}]"
 		Ty.TErr          => "Err"
 		Ty.TMap(k, v)    => f"map[{ty_name(k)}, {ty_name(v)}]"

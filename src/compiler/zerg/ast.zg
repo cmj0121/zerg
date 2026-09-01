@@ -576,6 +576,18 @@ pub struct FnDecl {
 	# is a requirement — two different things with the same empty statement list. Everywhere
 	# else a FnDecl has a body by construction, so this is true for all of them but a spec's.
 	pub has_body: bool
+
+	# is_assoc is whether this is an ASSOCIATED FN rather than a method — a `fn` in an INHERENT
+	# `impl` whose body does not use `this` (GRAMMAR#impl-decl: *a named constructor
+	# `User.from_json(…)` (an associated fn, no `this`) or a private method `u.recompute()`
+	# (uses `this`)*). It shares its type's namespace and takes no receiver, so it is reached
+	# through the TYPE and never through an instance.
+	#
+	# IT IS RECORDED RATHER THAN RE-DERIVED. `params` no longer answers it: a method's first
+	# parameter is `this` and an associated fn has none, which is the same shape a nullary
+	# function has — and a walk over the body would be the parser's decision made a second time,
+	# somewhere it could disagree.
+	pub is_assoc: bool
 }
 
 # Diag is one finding about an ill-formed program: what is wrong, and where. It is a
@@ -1156,6 +1168,18 @@ pub fn dump_ast(f: File) -> str {
 			out = out + "\t\tvariant " + v.name + "\n"
 		}
 	}
+
+	# A `spec` IS A DECLARATION, and this view left it out — so `--emit ast` answered "did the
+	# parser see what I wrote" with a file that had one fewer declaration than the source. It
+	# was invisible because the one gate that compares this dump to another reading of the same
+	# file — `lsp`, against the server's outline — takes the first forty corpus cases, and not
+	# one of them declared a spec.
+	for sp in f.specs {
+		out = out + "\t" + spec_kind(sp) + " " + sp.name + "\n"
+		for m in sp.reqs {
+			out = out + "\t\tmember " + m.name + spec_member_kind(m) + "\n"
+		}
+	}
 	for fn_d in f.fns {
 		out = out + "\t" + fn_kind(fn_d) + " " + qual_name(fn_d) + "(" + params_of(fn_d) + ")"
 		if fn_d.has_ret {
@@ -1165,6 +1189,21 @@ pub fn dump_ast(f: File) -> str {
 		out = out + dump_block(fn_d.body, "\t\t")
 	}
 	return out
+}
+
+# spec_kind and spec_member_kind are `fn_kind`'s counterparts for a spec: its visibility, and
+# whether a member is the REQUIREMENT or the provided default — which an empty body cannot say
+# and `has_body` is what does.
+fn spec_kind(s: SpecDecl) -> str {
+	return "pub spec" if s.is_pub
+
+	return "spec"
+}
+
+fn spec_member_kind(m: FnDecl) -> str {
+	return " (provided)" if m.has_body
+
+	return " (required)"
 }
 
 fn fn_kind(f: FnDecl) -> str {

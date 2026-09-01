@@ -27,6 +27,18 @@ pub struct Parser {
 	# path is the file being read, stamped onto every FnDecl so a diagnostic can name it
 	pub path: str
 
+	# saw_this is whether a `this` has been READ since the flag was last cleared. It is the one
+	# thing an inherent `impl`'s member needs that its head cannot supply: GRAMMAR#impl-decl
+	# tells a method from an associated fn by whether the body uses `this`, and the body is read
+	# after the head.
+	#
+	# IT IS TOKEN-DERIVED, like `depth` and `edepth` beside it, and it is set in the ONE place
+	# the keyword becomes an expression — which is what makes it right where a scan of the
+	# body's token range is not: an f-string's holes are RE-LEXED into a parser of their own, so
+	# `f"{this.n}"` reads a `this` that never appears in the outer range. Every hole goes through
+	# the same `parse_primary`, so every hole is counted here.
+	pub saw_this: bool
+
 	# depth counts how many recursion levels of nesting the parser is inside — one per
 	# nested expression, block, type, unary/receive prefix, `??` right arm, and `else if`.
 	# It exists so ZG_MAX_NESTING can be enforced: this parser recurses once per level on
@@ -1192,7 +1204,7 @@ fn conv_ty(name: str) -> ast.Ty {
 # than a second door that says it by default.
 pub fn parse_at(src: str, path: str) -> ast.File {
 	toks := lexer.tokenize(src)
-	mut p := Parser(toks, 0, "", path, 0, 0, [])
+	mut p := Parser(toks, 0, "", path, false, 0, 0, [])
 	mut imports: list[ast.ImportDecl] = []
 	mut structs: list[ast.StructDecl] = []
 	mut enums: list[ast.EnumDecl] = []
@@ -2066,7 +2078,7 @@ fn parse_spec(mut &p: Parser, is_pub: bool) -> ast.SpecDecl {
 			# method that does nothing and a signature is a requirement — two different things
 			# with the same body.
 			if p_at(p, token.Kind.LBrace) {
-				reqs.append(ast.FnDecl(sig.name, sig.recv, sig.params, sig.has_ret, sig.ret, parse_block(p), sig.is_pub, sig.path, sig.line, sig.col, sig.tparams, sig.tbounds, sig.in_unsafe, false, false, true))
+				reqs.append(ast.FnDecl(sig.name, sig.recv, sig.params, sig.has_ret, sig.ret, parse_block(p), sig.is_pub, sig.path, sig.line, sig.col, sig.tparams, sig.tbounds, sig.in_unsafe, false, false, true, false))
 			} else {
 				reqs.append(sig)
 			}
@@ -2137,7 +2149,7 @@ fn parse_init(mut &p: Parser, at: int) -> ast.FnDecl {
 	expect(p, token.Kind.RParen)
 	mut params: list[ast.Param] = []
 	body := parse_block(p)
-	return ast.FnDecl(init_name(at), "", params, false, ast.Ty.TVoid, body, false, p.path, kw.line, kw.col, [], [], false, false, false, true)
+	return ast.FnDecl(init_name(at), "", params, false, ast.Ty.TVoid, body, false, p.path, kw.line, kw.col, [], [], false, false, false, true, false)
 }
 
 # with_name is the binding a NAMELESS `with` gets, and is_with_name is how a rule that reads
@@ -2741,7 +2753,7 @@ fn parse_impl(mut &p: Parser, mut &fns: list[ast.FnDecl], mut &impls: list[ast.I
 			recv_mut = true
 		}
 		if p_at(p, token.Kind.Fn) {
-			fns.append(parse_fn(p, is_pub, target, recv_mut, fn_unsafe, false, false))
+			fns.append(parse_fn_at(p, is_pub, target, recv_mut, fn_unsafe, false, false, sp == ""))
 		} else if p_at(p, token.Kind.Ident) and peek_kind(p, 1) == token.Kind.Walrus {
 			# `LIMIT := 5` — an associated VALUE (GRAMMAR#val-bind). It is a module constant that
 			# belongs to a TYPE: the same declaration in every way but its name, so it is read by
@@ -2768,10 +2780,62 @@ fn parse_impl(mut &p: Parser, mut &fns: list[ast.FnDecl], mut &impls: list[ast.I
 # its own top-level item — it is read before the `fn` under it exists — and only the arm that
 # dispatched to this one has the list in hand.
 fn parse_fn(mut &p: Parser, is_pub: bool, recv: str, recv_mut: bool, in_unsafe: bool, is_test: bool, is_fixture: bool) -> ast.FnDecl {
-	head := parse_fn_head(p, is_pub, recv, recv_mut, in_unsafe)
-	body := parse_block(p)
+	return parse_fn_at(p, is_pub, recv, recv_mut, in_unsafe, is_test, is_fixture, false)
+}
 
-	return ast.FnDecl(head.name, head.recv, head.params, head.has_ret, head.ret, body, head.is_pub, head.path, head.line, head.col, head.tparams, head.tbounds, head.in_unsafe, is_test, is_fixture, true)
+# parse_fn_at is parse_fn with the one question an INHERENT `impl` adds: is this a method or an
+# ASSOCIATED FN? GRAMMAR#impl-decl answers it by the body — *a named constructor
+# `User.from_json(…)` (an associated fn, no `this`) or a private method `u.recompute()` (uses
+# `this`)* — and there is no other spelling, so the body is what decides.
+#
+# THAT IS WHY THE RECEIVER IS HELD BACK. `this` is synthesized into the parameter list, and it
+# used to be synthesized before the body existed; the decision needs the body, so the head is
+# read without it and the parameter is prepended afterwards to the ones that turn out to be
+# methods.
+#
+# A SPEC IMPL NEVER ASKS. `impl Show for P` implements members the spec DECLARED as methods, so
+# what the body happens to read decides nothing there — which is also why `assoc_ok` is a
+# parameter rather than a test on `recv`.
+fn parse_fn_at(mut &p: Parser, is_pub: bool, recv: str, recv_mut: bool, in_unsafe: bool, is_test: bool, is_fixture: bool, assoc_ok: bool) -> ast.FnDecl {
+	head := parse_fn_head_at(p, is_pub, recv, recv_mut, in_unsafe, not assoc_ok)
+
+	# SAVED AND RESTORED around the body, the discipline every parser flag here follows: a `fn`
+	# is read inside another declaration often enough — a closure in a default, a nested block —
+	# that leaving it set would make the next member a method for a `this` it never wrote.
+	outer_this := p.saw_this
+	p.saw_this = false
+	body := parse_block(p)
+	is_assoc := assoc_ok and not p.saw_this and not p_is_rendering(head.name)
+	p.saw_this = outer_this or p.saw_this
+
+	mut params := head.params
+	if assoc_ok and not is_assoc {
+		params = p_with_receiver(recv, recv_mut, head.params)
+	}
+	return ast.FnDecl(head.name, head.recv, params, head.has_ret, head.ret, body, head.is_pub, head.path, head.line, head.col, head.tparams, head.tbounds, head.in_unsafe, is_test, is_fixture, true, is_assoc)
+}
+
+# p_is_rendering names the two methods the LANGUAGE declares rather than the author:
+# `display` and `debug` are what `print`, an f-string hole and `str(…)` consult
+# (docs/runtime/format.md), so an `impl` writing one is implementing a requirement.
+#
+# THAT IS THE SPEC IMPL'S CARVE-OUT UNDER ANOTHER NAME. `impl Show for P` never asks what the
+# body reads, because the spec declared the member a method; these two are a spec the language
+# supplies without writing, and `fn display() -> str { return "P" }` — an override that needs
+# nothing from the value — is exactly the shape the body-derived rule would take away.
+fn p_is_rendering(name: str) -> bool {
+	return name == "display" or name == "debug"
+}
+
+# p_with_receiver puts `this` back at the FRONT of the parameter list, where the head would have
+# put it. A method is an ordinary function whose first argument happens to be called `this`, and
+# everything below the parser depends on that being the first one.
+fn p_with_receiver(recv: str, recv_mut: bool, ps: list[ast.Param]) -> list[ast.Param] {
+	mut out: list[ast.Param] = [ast.Param("this", ast.Ty.TNamed(recv), recv_mut, false, ast.Expr.ENil)]
+	for pm in ps {
+		out.append(pm)
+	}
+	return out
 }
 
 # p_type_params reads `[T, U: Eq]` — a type parameter list — into two parallel lists, the
@@ -2828,6 +2892,14 @@ fn p_type_params(mut &p: Parser, mut &names: list[str], mut &bounds: list[str]) 
 # spec's requirement and an impl's supply are read by one piece of code, and a comparison
 # between them is a comparison of like with like rather than of two parsers' opinions.
 fn parse_fn_head(mut &p: Parser, is_pub: bool, recv: str, recv_mut: bool, in_unsafe: bool) -> ast.FnDecl {
+	return parse_fn_head_at(p, is_pub, recv, recv_mut, in_unsafe, true)
+}
+
+# parse_fn_head_at is the head with the receiver's synthesis made a QUESTION. An inherent
+# `impl`'s member cannot know whether it has one until its body has been read, so that caller
+# asks for the head without it and puts it back itself; everything else — a free function, a
+# spec's member, a spec impl's method — knows at the head and takes it here.
+fn parse_fn_head_at(mut &p: Parser, is_pub: bool, recv: str, recv_mut: bool, in_unsafe: bool, want_recv: bool) -> ast.FnDecl {
 	# where the declaration BEGINS, read before anything is consumed: a diagnostic about the
 	# signature is made before any statement is emitted, so no SAt marker has spoken yet
 	kw := cur(p)
@@ -2844,7 +2916,7 @@ fn parse_fn_head(mut &p: Parser, is_pub: bool, recv: str, recv_mut: bool, in_uns
 	p_type_params(p, tparams, tbounds)
 	expect(p, token.Kind.LParen)
 	mut params: list[ast.Param] = []
-	if recv != "" {
+	if recv != "" and want_recv {
 		# The receiver is not written in the parameter list — `this` is implicit — so it is
 		# added here. From this point on a method is an ordinary function whose first
 		# argument happens to be called `this`, which is why nothing below the parser needs
@@ -2890,7 +2962,7 @@ fn parse_fn_head(mut &p: Parser, is_pub: bool, recv: str, recv_mut: bool, in_uns
 		has_ret = true
 	}
 	mut none: list[ast.Stmt] = []
-	return ast.FnDecl(name, recv, params, has_ret, ret, none, is_pub, p.path, kw.line, kw.col, tparams, tbounds, in_unsafe, false, false, false)
+	return ast.FnDecl(name, recv, params, has_ret, ret, none, is_pub, p.path, kw.line, kw.col, tparams, tbounds, in_unsafe, false, false, false, false)
 }
 
 # parse_block counts a nesting level per block, since statements nest through blocks and
@@ -3428,7 +3500,7 @@ fn parse_assert(mut &p: Parser) -> ast.Stmt {
 # token list: `p` and `p.toks` cannot both be `mut &` in one call — they alias — and a list is
 # copy-on-write, so the value here is a refcount and not the file.
 fn p_scratch(mut &p: Parser, toks: list[token.Token], pos: int) -> Parser {
-	return Parser(toks, pos, p.impl_ty, p.path, p.depth, p.edepth, [])
+	return Parser(toks, pos, p.impl_ty, p.path, p.saw_this, p.depth, p.edepth, [])
 }
 
 # p_assert_claims is the split: one claim per conjunct of a top-level `and` chain, and ONE
@@ -3616,7 +3688,9 @@ fn p_assert_span(mut &p: Parser, lo: int, hi: int) -> list[token.Token] {
 fn p_assert_parse(mut &p: Parser, mut &toks: list[token.Token]) -> ast.Expr {
 	toks.append(token.Token(token.Kind.Eof, "", "", 0, 0))
 	mut sp := p_scratch(p, toks, 0)
-	return parse_expr(sp)
+	e := parse_expr(sp)
+	p.saw_this = p.saw_this or sp.saw_this
+	return e
 }
 
 # p_if_has_block reports whether the `if` beginning at `at` has a BLOCK after its
@@ -4361,6 +4435,7 @@ fn parse_primary(mut &p: Parser) -> ast.Expr {
 	if k == token.Kind.KwThis {
 		# the receiver reads as an ordinary binding, because the parser made it one
 		p_advance(p)
+		p.saw_this = true
 		return ast.Expr.EIdent("this")
 	}
 
@@ -5046,6 +5121,7 @@ fn cmd_argv(mut &p: Parser, t: token.Token, body: str) -> list[ast.Expr] {
 			fstr_place(toks, t)
 			mut hp := p_scratch(p, toks, 0)
 			e := parse_expr(hp)
+			p.saw_this = p.saw_this or hp.saw_this
 			cmd_one_expr(p, t, src, hp)
 
 			out.append(e)
@@ -5296,6 +5372,11 @@ fn fstr_hole(mut &p: Parser, t: token.Token, hole: str, mut &lead: str) -> ast.E
 	# enclosing tree, which is measured as one whole, so the hole is not a root.
 	mut hp := p_scratch(p, toks, 0)
 	e := parse_expr(hp)
+
+	# A HOLE'S `this` IS THE ENCLOSING BODY'S. The hole is re-lexed into a parser of its own, so
+	# what it read has to be carried back — `f"{this.n}"` is a body that uses `this`, and the
+	# rule that tells a method from an associated fn (GRAMMAR#impl-decl) reads exactly that.
+	p.saw_this = p.saw_this or hp.saw_this
 
 	# a hole is ONE expression; emitting just the prefix of something longer is exactly the
 	# silent wrong answer this path exists to avoid

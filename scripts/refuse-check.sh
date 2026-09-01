@@ -1896,27 +1896,6 @@ fn main() {
 }
 EOF
 
-# GRAMMAR#impl-decl — `Type.f(…)` is an ASSOCIATED FUNCTION, the named-constructor form
-# (`User.from_json(…)`). The parser gives every `fn` in an `impl` a receiver, so there is
-# no such function to call; the answer used to be "the method `make` on a ?", which points
-# at inference having nothing to say rather than at the form.
-expect "$ZERG" associated-function E9051 <<'EOF'
-struct P {
-	pub x: int
-}
-
-impl P {
-	fn make(n: int) -> P {
-		return P(n)
-	}
-}
-
-fn main() {
-	p := P.make(7)
-	print(f"{p.x}")
-}
-EOF
-
 # EIGHT FORMS whose refusal named a TOKEN and not the form. A reader could not tell "this
 # is not built" from "you made a typo", which is the whole of the implemented-or-named
 # contract — every one of these is in GRAMMAR and none of them was being turned away by

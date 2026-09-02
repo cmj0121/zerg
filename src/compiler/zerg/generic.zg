@@ -520,7 +520,7 @@ fn subst_expr(su: TySubst, e: ast.Expr) -> ast.Expr {
 		Expr.EBlock(b) => ast.Expr.EBlock(subst_block(su, b))
 		Expr.EUnsafe(b) => ast.Expr.EUnsafe(subst_block(su, b))
 		Expr.EAsm(tpl, ops) => ast.Expr.EAsm(tpl, subst_asm_ops(su, ops))
-		Expr.EIs(x, nm) => ast.Expr.EIs(subst_expr(su, x), nm)
+		Expr.EIs(x, nm) => ast.Expr.EIs(subst_expr(su, x), gen_is_name(su, nm))
 		Expr.EIn(x, s) => ast.Expr.EIn(subst_expr(su, x), subst_expr(su, s))
 
 		# THE FILL FORM CARRIES TWO EXPRESSIONS and the fallback left both. `[T(0); 3]` in a
@@ -539,6 +539,19 @@ fn subst_expr(su: TySubst, e: ast.Expr) -> ast.Expr {
 		Expr.ENil          => e
 		Expr.EIdent(_)     => e
 	}
+}
+
+# gen_is_name carries a specialization through the RIGHT side of an `is` test. That side is a
+# type written as a bare name, so it is a type a type parameter can be — and it was the one
+# type in an expression this walk copied through unchanged, because it is a `str` and not a
+# `Ty`. Nothing could see it while every non-error `is` was refused; the moment `is T` folds,
+# a template testing `x is T` would have compared against a type literally named `T`.
+#
+# It goes through `subst_ty` rather than a second lookup in the same table, so a name that is
+# not a parameter comes back as itself, and one bound to a type with no bare spelling comes
+# back as that spelling — which the `is` test then refuses, as a `type-name` it does not name.
+fn gen_is_name(su: TySubst, nm: str) -> str {
+	return ast.ty_name(subst_ty(su, ast.Ty.TNamed(nm)))
 }
 
 # subst_asm_ops carries a specialization through an `asm(…)`: the template and the constraints

@@ -72,6 +72,7 @@ entry 檔，加上它所 import 的模組。
 | [`1g/stdlibwins/`](1g/stdlibwins)   | 裸名字永遠是標準函式庫,即使旁邊就有一個同名的專案模組            |
 | [`1g/reexport/`](1g/reexport)       | `import pub`——一個模組把另一個模組的名字放到自己的表面上         |
 | [`1g/spec/`](1g/spec)               | 在一個模組宣告、在另一個模組實作的 `spec`                        |
+| [`1g/implfor/`](1g/implfor)         | 本模組的 spec，供給一個透過 import 取得的型別                    |
 | [`1g/strings/`](1g/strings)         | 標準函式庫的 `strings`，從頭到尾走一遍                           |
 | [`1g/outputorder/`](1g/outputorder) | `print` 與 `io.println` 依寫下的順序抵達 stdout                  |
 | [`1g/evalorder/`](1g/evalorder)     | 兩個都會跑程式碼的運算元,依寫下的順序執行                        |
@@ -84,10 +85,11 @@ entry 檔，加上它所 import 的模組。
 了的：它只能回報建置失敗，而打錯字也是那樣。所以這兩支被釘在它們必須被拒收的那句話上，就像
 `make reject` 對待它自己的案例：
 
-| 範例                            | 被什麼拒收                             |
-| ------------------------------- | -------------------------------------- |
-| [`1g/private/`](1g/private)     | `… is not a public member of module …` |
-| [`1g/privconst/`](1g/privconst) | 同一條規則，用在模組**常數**上         |
+| 範例                            | 被什麼拒收                                      |
+| ------------------------------- | ----------------------------------------------- |
+| [`1g/private/`](1g/private)     | `… is not a public member of module …`          |
+| [`1g/orphan/`](1g/orphan)       | `… is in no module that declared what it names` |
+| [`1g/privconst/`](1g/privconst) | 同一條規則，用在模組**常數**上                  |
 
 如果你編了這兩支之一而得到一個錯誤，那個錯誤**就是**這個範例。
 

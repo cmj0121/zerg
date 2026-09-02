@@ -75,6 +75,7 @@ specification. Each of these is a **directory**: an entry file and the modules i
 | [`1g/stdlibwins/`](1g/stdlibwins)   | a bare name is the standard library, beside a project module of that name    |
 | [`1g/reexport/`](1g/reexport)       | `import pub` — a module putting another module's name on its surface         |
 | [`1g/spec/`](1g/spec)               | a `spec` declared in one module and implemented in another                   |
+| [`1g/implfor/`](1g/implfor)         | a spec of THIS module, supplied for a type reached through an import         |
 | [`1g/strings/`](1g/strings)         | the standard library's `strings`, exercised end to end                       |
 | [`1g/outputorder/`](1g/outputorder) | `print` and `io.println` reach stdout in the order they were written         |
 | [`1g/evalorder/`](1g/evalorder)     | two operands that can both run code run in the order they were written       |
@@ -88,10 +89,11 @@ a claim a build-and-run loop cannot check: it can only report that the build fai
 a typo does too. So these two are held to the sentence they must be refused with, the way
 `make reject` holds its own cases:
 
-| Example                         | Refused with                             |
-| ------------------------------- | ---------------------------------------- |
-| [`1g/private/`](1g/private)     | `… is not a public member of module …`   |
-| [`1g/privconst/`](1g/privconst) | the same rule, for a module **constant** |
+| Example                         | Refused with                                    |
+| ------------------------------- | ----------------------------------------------- |
+| [`1g/private/`](1g/private)     | `… is not a public member of module …`          |
+| [`1g/orphan/`](1g/orphan)       | `… is in no module that declared what it names` |
+| [`1g/privconst/`](1g/privconst) | the same rule, for a module **constant**        |
 
 If you compile one of these and get an error, that **is** the example.
 

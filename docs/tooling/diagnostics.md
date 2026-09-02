@@ -488,7 +488,6 @@ shipping compiler rather than a part of it (the line
 | `E9069` | … whose value has no type this compiler can name                                                      |
 | `E9070` | `…` re-binds a name a `match` arm's pattern already binds                                             |
 | `E9071` | the default on field `…` reads the field `…`                                                          |
-| `E9074` | an `impl` on `….…` — a dotted target                                                                  |
 | `E9075` | a generic `type …[…] = …`                                                                             |
 | `E9076` | a sub-pattern inside a variant payload                                                                |
 | `E9077` | a range used as a value                                                                               |
@@ -665,6 +664,7 @@ name now is the prelude rule (`E2061`), which is about the name rather than abou
 | `E9021` | —       | the destructuring binding is built; a target is not a pattern      |
 | `E9072` | —       | the destructuring assignment is built; the value is read once      |
 | `E9051` | —       | the associated fn is built; the body decides which it is           |
+| `E9074` | —       | an `impl` on a dotted target is built; the name resolves bare      |
 | `E3047` | —       | a strong typedef takes its underlying type's prefix operators      |
 
 **One of them moved nowhere**, and it is the only row whose second column is empty. `E3047`

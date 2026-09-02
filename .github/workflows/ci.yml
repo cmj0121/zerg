@@ -82,6 +82,11 @@ jobs:
       - name: Check every production a reader writes is named by a chapter
         run: make grammar-cited
 
+      # The solver and the substituter, held to each other rather than to a list. Reads the
+      # compiler's source and needs no build.
+      - name: Check the generic walks answer the same shapes
+        run: make generic-walks
+
       # A paragraph is the unit the mirror above cannot see: repeated inside a section it
       # changes none of the counts that gate compares. Needs no build and no corpus.
       - name: Check no paragraph is written twice in one document

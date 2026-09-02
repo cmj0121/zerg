@@ -534,10 +534,13 @@ byte(N)` and `byte(N * 3)` are compile errors. The seed folds the literal alone:
   `scripts/reject-check.sh`'s `an-associated-fn-reached-through-an-instance` carries the
   `seed-gap` marker.
 
-- **A GENERIC OVER AN ARRAY OR A BORROW MISCOMPILES.** `zerg` solves and substitutes a type
-  parameter through every shape a type is built out of; the seed reaches cc with C it cannot
-  compile — _field has incomplete type 'void'_ — for `fn first[T](xs: [T; 2])` and for
-  `fn put[T](mut &slot: T, v: T)`.
+- **A GENERIC OVER AN ARRAY, A BORROW OR A FUNCTION TYPE IS NOT SPECIALIZED.** `zerg` solves and
+  substitutes a type parameter through every shape a type is built out of. The seed does neither
+  for three of them: it reaches cc with C it cannot compile — _field has incomplete type 'void'_
+  — for `fn first[T](xs: [T; 2])` and `fn put[T](mut &slot: T, v: T)`, and it refuses
+  `fn apply[T](f: fn(T) -> T, …)` in its own words, _cannot use `fn(int) -> int` as
+  `fn(T) -> T`_, which is the same defect `zerg` carried until the two walks were held to each
+  other.
 
   It costs the bootstrap nothing: the compiler's own sources write no generic over either shape,
   and a program the seed cannot build is a SKIP rather than a comparison.

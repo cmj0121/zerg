@@ -82,6 +82,11 @@ jobs:
       - name: Check every production a reader writes is named by a chapter
         run: make grammar-cited
 
+      # A paragraph is the unit the mirror above cannot see: repeated inside a section it
+      # changes none of the counts that gate compares. Needs no build and no corpus.
+      - name: Check no paragraph is written twice in one document
+        run: make docs-repeat
+
       # The third direction, and the only one that reads the COMPILER: a refusal has to
       # say where the form it turns away is specified. It needs neither the corpus nor a
       # build — the sentence is text in the source.

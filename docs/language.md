@@ -177,7 +177,7 @@ no join/handle, capturing **only immutable values and channels**. The scheduler 
 threads over one shared run queue — but **cooperative, not preemptive**: a coroutine yields at a channel
 operation, a `select` or a sleep, so a CPU-bound one that never parks occupies a worker for as long as it
 runs, and as many of them as there are workers stop the program. That is the rule rather than a shortfall
-against one — preemption is a [door](../FUTURE.md#preemptive-scheduling), not a promise this page makes.
+against one; whether a scheduler is preemptive is **[implementation-defined]** and this one is not.
 See [Coroutines & Channels](code/coroutine.md).
 Channels are the reference-counted, by-ref **conduit** (a `Ref` type built for communication;
 `Ref[T]` is its resource-holding sibling — see [Values & Memory](core/memory.md)) — payloads copied,

@@ -278,6 +278,13 @@ fn doc_entry(mut &out: list[str], d: zerg.DocDecl, indent: int, brief: bool, col
 
 	if brief {
 		doc_summary(out, d, indent + 4, col)
+
+		# AND ITS MEMBERS, which brief used to drop. `--brief` is the shape the module list
+		# uses, so a declaration missing from it is missing from the first page a reader ever
+		# sees — and a `spec`'s members are declarations: they are what an implementer owes
+		# and what a caller may write. A struct's FIELDS are members too and are shown for the
+		# same reason: the brief view is shorter, not narrower.
+		doc_members_brief(out, d, indent + 4)
 		return
 	}
 
@@ -287,6 +294,20 @@ fn doc_entry(mut &out: list[str], d: zerg.DocDecl, indent: int, brief: bool, col
 		doc_body(out, d.doc, indent + 4)
 	}
 	doc_members(out, d, indent + 4, col)
+}
+
+# doc_members_brief is doc_members with the comments left out — one line per member, which is
+# what brief means everywhere else in this file.
+fn doc_members_brief(mut &out: list[str], d: zerg.DocDecl, indent: int) {
+	return if d.members.len() == 0 and d.hidden == 0
+
+	for mb in d.members {
+		out.append(doc_at(indent, mb.sig))
+	}
+
+	if d.hidden > 0 {
+		out.append(doc_at(indent, "(private fields not shown)"))
+	}
 }
 
 # doc_summary is the brief view of one comment: its first sentence, filled — the mark when

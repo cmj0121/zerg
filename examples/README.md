@@ -37,18 +37,24 @@ each adds one idea to the one before it.
 
 ## The parts that make it a language rather than a calculator
 
-| Example                                  | What it shows                                                        |
-| ---------------------------------------- | -------------------------------------------------------------------- |
-| [`11_coroutines.zg`](11_coroutines.zg)   | `spawn`, and a channel as the way to watch what you spawned          |
-| [`12_actor.zg`](12_actor.zg)             | mutable state owned by one coroutine, reached only by messages       |
-| [`13_cancel.zg`](13_cancel.zg)           | a timeout and a cancellation are both channels, and `select` waits   |
-| [`14_optional.zg`](14_optional.zg)       | `T?`, and the four ways to ask whether the value is there            |
-| [`15_conversions.zg`](15_conversions.zg) | `T(x)` — there is no implicit conversion, so every one is written    |
-| [`16_text.zg`](16_text.zg)               | a `str` is UTF-8, and what that makes a "character"                  |
-| [`17_arithmetic.zg`](17_arithmetic.zg)   | integer arithmetic is **checked**: overflow raises, it does not wrap |
-| [`18_scoped.zg`](18_scoped.zg)           | what frees a value, and who decides when                             |
-| [`19_environment.zg`](19_environment.zg) | the environment: read anywhere, written only at startup              |
-| [`20_typedefs.zg`](20_typedefs.zg)       | `type X = Y`: an identity that meets nothing else, and Y's operators |
+| Example                                  | What it shows                                                           |
+| ---------------------------------------- | ----------------------------------------------------------------------- |
+| [`11_coroutines.zg`](11_coroutines.zg)   | `spawn`, and a channel as the way to watch what you spawned             |
+| [`12_actor.zg`](12_actor.zg)             | mutable state owned by one coroutine, reached only by messages          |
+| [`13_cancel.zg`](13_cancel.zg)           | a timeout and a cancellation are both channels, and `select` waits      |
+| [`14_optional.zg`](14_optional.zg)       | `T?`, and the four ways to ask whether the value is there               |
+| [`15_conversions.zg`](15_conversions.zg) | `T(x)` — there is no implicit conversion, so every one is written       |
+| [`16_text.zg`](16_text.zg)               | a `str` is UTF-8, and what that makes a "character"                     |
+| [`17_arithmetic.zg`](17_arithmetic.zg)   | integer arithmetic is **checked**: overflow raises, it does not wrap    |
+| [`18_scoped.zg`](18_scoped.zg)           | what frees a value, and who decides when                                |
+| [`19_environment.zg`](19_environment.zg) | the environment: read anywhere, written only at startup                 |
+| [`20_typedefs.zg`](20_typedefs.zg)       | `type X = Y`: an identity that meets nothing else, and Y's operators    |
+| [`21_structs.zg`](21_structs.zg)         | a `struct`, and an associated fn reached through the type               |
+| [`22_enums.zg`](22_enums.zg)             | an `enum`, and a `match` that has to name every variant                 |
+| [`23_collections.zg`](23_collections.zg) | `list`, `map`, and `[T; N]` — three shapes, three jobs                  |
+| [`24_closures.zg`](24_closures.zg)       | a function as a value, and a closure that captures by copy              |
+| [`25_errors.zg`](25_errors.zg)           | `Result[T]`, `?` / `??`, and `guard` turning an abort back into a value |
+| [`26_derive.zg`](26_derive.zg)           | `#[derive(Eq)]` — equality is opt-in, and the compiler writes it        |
 
 ## The module layer
 
@@ -60,6 +66,7 @@ specification. Each of these is a **directory**: an entry file and the modules i
 | [`modules/`](modules)               | a two-module program — an entry file and a sibling directory module          |
 | [`1g/visible/`](1g/visible)         | what a `pub` surface **does** reach across a module boundary                 |
 | [`1g/pubconst/`](1g/pubconst)       | `pub COUNT := 3` is a real member; a module binding needs no `const`         |
+| [`1g/pubname/`](1g/pubname)         | two modules may declare the same public name; the qualified call chooses     |
 | [`1g/modconst/`](1g/modconst)       | a module constant is ONE object, read the same wherever it is read           |
 | [`1g/shapedconst/`](1g/shapedconst) | a module constant of a spelled type — a tuple, an optional                   |
 | [`1g/modtype/`](1g/modtype)         | a type reached through an import is also its constructor                     |
@@ -81,11 +88,10 @@ a claim a build-and-run loop cannot check: it can only report that the build fai
 a typo does too. So these two are held to the sentence they must be refused with, the way
 `make reject` holds its own cases:
 
-| Example                         | Refused with                               |
-| ------------------------------- | ------------------------------------------ |
-| [`1g/private/`](1g/private)     | `… is not a public member of module …`     |
-| [`1g/pubname/`](1g/pubname)     | two modules declaring the same public name |
-| [`1g/privconst/`](1g/privconst) | the same rule, for a module **constant**   |
+| Example                         | Refused with                             |
+| ------------------------------- | ---------------------------------------- |
+| [`1g/private/`](1g/private)     | `… is not a public member of module …`   |
+| [`1g/privconst/`](1g/privconst) | the same rule, for a module **constant** |
 
 If you compile one of these and get an error, that **is** the example.
 

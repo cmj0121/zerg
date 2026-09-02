@@ -25,20 +25,28 @@ each reusing an existing model:
 
 ## Streams — `Reader` & `Writer`
 
-**[not yet]** — the streaming surface below is specified but unbuilt; reaching one of its names is _E3084
-module `io` has no `stdout`_, and today use `io.read_file` for input and `io.write` / `io.println` for output.
+The two specs are built, and so is the one concrete stream this phase has: **`io.Fd`**, a raw file
+descriptor, which is what a child process's three ends are. The **module-level stream objects** —
+`io.stdin` · `io.stdout` · `io.stderr` — are still **[not yet]**, _E3084 module `io` has no `stdout`_; use
+`io.read_file` for input and `io.write` / `io.println` for output.
 
 Each has **one required method**; the rest are provided defaults (Specs & Generics), so a new stream
 supplies the primitive and inherits the conveniences.
 
 **`Reader`** — `read_bytes(n: uint) -> Result[list[byte]]`, up to `n` bytes (empty = end of input, never a
-blocking wait). Over it: **`read() -> Iterator[str]`**, the default line reader — `for line in f.read()`
-drains cleanly, ending at EOF (`StopIteration`) and re-raising a decode or device error mid-stream
-(Iteration); for possibly-invalid UTF-8, take `read_bytes` and decode under `guard`. Also
-`bytes() -> Iterator[byte]` and `chunks(n) -> Iterator[list[byte]]`.
+blocking wait). Over it are the whole-input defaults **`read_all() -> Result[list[byte]]`** and
+**`read_text() -> Result[str]`**, the second being the first decoded.
 
-**`Writer`** — `write(bytes: list[byte]) -> Result[uint]` (count written); provided `write_str(s: str)`
-and `flush()`. A write failure — full disk, broken pipe — is a value, `?`-propagated; it never silently
+> **[not yet]** The ITERATOR defaults — **`read() -> Iterator[str]`**, the line reader `for line in f.read()`
+> walks, and `bytes()` / `chunks(n)` — are defaults over a protocol `for … in` does not walk yet
+> ([Specs & Generics](../core/specs.md)), so they are not declared: a default that cannot be called is a
+> promise rather than a method, and calling one is _E3131 the method `read` on a Fd_. For
+> possibly-invalid UTF-8, take `read_bytes` and decode under `guard`.
+
+**`Writer`** — `write(bytes: list[byte]) -> Result[uint]` (count written); provided `write_str(s: str)`.
+A **`flush()`** default is **[not yet]**: nothing this phase buffers, so it would be a method that does
+nothing — _E3131 the method `flush` on a Fd_ names it as one the type does not declare. A write failure — full
+disk, broken pipe — is a value, `?`-propagated; it never silently
 drops (that is `print`'s alone).
 
 ```text
@@ -116,28 +124,46 @@ own that frame ([FFI](ffi.md)).
 
 ## Process & command execution
 
-**[not yet]** — a command literal is lexed and then **refused by the parser**, each form by its own name and
-each with a place: the static `` `git status` `` is `E9020`, the interpolating `` f`git checkout {b}` `` is
-`E9019`. The intended model below stands unchanged for when the runtime lands. What does ship is
-`os.run(argv: list[str]) -> int` ([Standard Library](stdlib.md)) — argv straight to the OS, no shell and no
-pipes, so it covers running a child and reading its exit status and nothing else about this section.
+A child process is spawned with a **backtick command literal** and observed through its three streams —
+`stdin` is a `Writer`, `stdout` and `stderr` are `Reader`s — and `wait()` answers its status the way a
+shell reports one (the exit code, or 128+signal when it was killed). The literal IS the handle, and
+`os.command(argv)` is the same thing written by hand ([Standard Library](stdlib.md)).
 
-A child process is spawned with a **backtick command literal** and observed through the same streams — its
-pipes are `Reader`s and a `Writer`, its handle a `Ref[proc]` whose `drop` waits for (or kills) it, reaping
-it exactly once. **The `f` marks the danger:**
+**There is no shell, in either form.** A command literal builds an **argument vector** and runs it
+directly:
 
-- **`` `git status` ``** — a **static** literal, split to argv on whitespace (quotes respected) and run
-  **directly, no shell**: no interpolation, so no injection, glob, or pipe — the safe default (Go / Rust /
-  Elixir).
-- **`` f`git checkout {branch}` ``** — **interpolated**, run **through a shell** (so pipes and redirection
-  work); each `{x}` is **shell-quoted to one argument** by default (defeating command-injection, not a
-  hostile `-flag`), a **raw** splice being the explicit `{x:raw}`. The `f` reads as on an `f`-string.
+- **`` `git status` ``** — a **static** literal, split to argv on whitespace with quotes respected.
+- **`` f`git checkout {branch}` ``** — **interpolated**, and each `{x}` is **one argument** whatever is
+  inside it. A path with a space in it is one path; a value that reads like a command is data. There is no
+  string for a shell to re-split, which is the whole safety property — with no shell there is nothing to
+  inject into. A hole is a **whole argument** and cannot be joined to the text beside it (_E2081_): building
+  an argument out of text is what a shell does.
 
-```text
-p := `ls -l`
-for line in p.stdout.read() { print line }    # p.stdin: Writer; p.stdout/stderr: Reader
-code := p.wait()!                             # blocks this coroutine for the exit status
+So pipes, redirection and globbing are not part of the form. A program that wants them runs the shell
+itself — `` f`sh -c {script}` `` — where the shell is visible in the argv rather than implied by the
+syntax.
+
+```zerg
+import "os"
+
+fn main() {
+ p := `echo hello`
+ print p.out()
+ print p.wait()
+
+ dir := "my docs"
+ q := f`echo {dir}`
+ print q.out()
+
+ c := `cat`
+ c.stdin.write_str("in\n")!
+ c.stdin.release()
+ print c.stdout.read_text()!
+}
 ```
+
+A command literal is `os.command(…)`, so the file has to `import "os"` — a literal in a file that does not
+is _E2083_, which names the literal rather than the module call it lowers to.
 
 To wait on several at once — stdout, stderr, a timeout — bridge each `Reader` into a channel and `select`
 (fan-in, [Coroutines & Channels](../code/coroutine.md)); the model adds no new waiting primitive. A child is a

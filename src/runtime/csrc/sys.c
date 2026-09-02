@@ -712,6 +712,17 @@ int64_t zrt_exec(zrt_list argv) {
  * with the child's pid, or -1. It is the half of exec that lets a caller have SEVERAL
  * children running at once — a build compiling its units in parallel is the reason it
  * exists — and it pairs with zrt_wait, which collects one. */
+/* proc_close_pair closes both ends of a pipe that was opened, and is a no-op on one that was
+ * not — the unwinding above has three of them to give back and only some may exist. */
+static void proc_close_pair(int fd[2]) {
+	if (fd[0] >= 0) {
+		close(fd[0]);
+	}
+	if (fd[1] >= 0) {
+		close(fd[1]);
+	}
+}
+
 int64_t zrt_proc_spawn(zrt_list argv) {
 	size_t n  = zrt_list_len(&argv);
 	char **av = (char **)malloc((n + 1) * sizeof(char *));
@@ -733,6 +744,85 @@ int64_t zrt_proc_spawn(zrt_list argv) {
 	}
 	free(av);
 	return (int64_t)pid;
+}
+
+/* zrt_proc_open3 starts argv[0] with its three standard streams on PIPES and answers
+ * `[pid, stdin, stdout, stderr]` — the child's write end of its input, and the read ends of
+ * its output and its errors, from the PARENT'S side.
+ *
+ * A LIST OF FOUR AND NOT A STRUCT, because that is what crosses the intrinsic boundary
+ * without a new C type on either side of it: the compiler already lowers `list[int]`, and a
+ * handle whose shape is a struct would need one spelling in the runtime and another in the
+ * stdlib that declares it.
+ *
+ * EVERY UNUSED END IS CLOSED IN BOTH PROCESSES, which is what makes end-of-input mean
+ * anything: a reader whose write end is still open in its own process waits forever for a
+ * writer that is itself. That is the classic pipe deadlock and it is silent — the program
+ * simply stops — so it is worth the six explicit closes below.
+ *
+ * On any failure everything opened so far is closed and the list comes back holding a
+ * negative pid, which is what the stdlib reports as an IOError. */
+zrt_list zrt_proc_open3(zrt_list argv) {
+	zrt_list out;
+	zrt_list_init(&out, sizeof(int64_t), NULL);
+
+	int in_p[2] = {-1, -1}, out_p[2] = {-1, -1}, err_p[2] = {-1, -1};
+	int64_t fail = -1;
+	if (pipe(in_p) < 0 || pipe(out_p) < 0 || pipe(err_p) < 0) {
+		proc_close_pair(in_p);
+		proc_close_pair(out_p);
+		proc_close_pair(err_p);
+		zrt_list_push(&out, &fail);
+		return out;
+	}
+
+	size_t n  = zrt_list_len(&argv);
+	char **av = (char **)malloc((n + 1) * sizeof(char *));
+	if (av == NULL) {
+		proc_close_pair(in_p);
+		proc_close_pair(out_p);
+		proc_close_pair(err_p);
+		zrt_list_push(&out, &fail);
+		return out;
+	}
+	for (size_t i = 0; i < n; i++) {
+		av[i] = *(char **)zrt_list_at_ref(&argv, i);
+	}
+	av[n] = NULL;
+
+	pid_t pid = fork();
+	if (pid < 0) {
+		free(av);
+		proc_close_pair(in_p);
+		proc_close_pair(out_p);
+		proc_close_pair(err_p);
+		zrt_list_push(&out, &fail);
+		return out;
+	}
+	if (pid == 0) {
+		dup2(in_p[0], 0);
+		dup2(out_p[1], 1);
+		dup2(err_p[1], 2);
+		close(in_p[0]);
+		close(in_p[1]);
+		close(out_p[0]);
+		close(out_p[1]);
+		close(err_p[0]);
+		close(err_p[1]);
+		execvp(av[0], av);
+		_exit(127); /* exec failed */
+	}
+
+	free(av);
+	close(in_p[0]);
+	close(out_p[1]);
+	close(err_p[1]);
+
+	int64_t row[4] = {(int64_t)pid, (int64_t)in_p[1], (int64_t)out_p[0], (int64_t)err_p[0]};
+	for (int i = 0; i < 4; i++) {
+		zrt_list_push(&out, &row[i]);
+	}
+	return out;
 }
 
 /* zrt_proc_wait blocks until the given child exits and returns its status the way a shell

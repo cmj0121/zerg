@@ -1,0 +1,16 @@
+# 26 — `#[derive(Eq)]` asks the compiler to write `==` from the structure.
+#
+# There is no implicit equality on a `struct`. `#[derive(Eq)]` is the opt-in:
+# field by field, using each field's own `Eq`. A payload `enum` is not yet
+# derived (E9055); a fieldless one is, but this example stays on a struct.
+#[derive(Eq)]
+struct Point {
+	pub x: int
+	pub y: int
+}
+
+fn main() {
+	print Point(1, 2) == Point(1, 2)
+	print Point(1, 2) == Point(1, 3)
+	print Point(1, 2) != Point(9, 2)
+}

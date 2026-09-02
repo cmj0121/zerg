@@ -173,6 +173,8 @@ func (c *checker) builtinCall(n *ast.Call) (Type, bool) {
 			return c.unaryIntrinsic(n, Str, Bool), true
 		case "__zrt_proc_spawn":
 			return c.execIntrinsic(n), true
+		case "__zrt_proc_open3":
+			return c.procOpenIntrinsic(n), true
 		case "__zrt_proc_wait":
 			return c.unaryIntrinsic(n, Int, Int), true
 		case "__zrt_remove":
@@ -454,6 +456,19 @@ func (c *checker) execIntrinsic(n *ast.Call) Type {
 	}
 	c.check(n.Args[0].Value, &types.List{Elem: types.Str})
 	return Int
+}
+
+// procOpenIntrinsic checks `__zrt_proc_open3(argv)` — the spawn-with-pipes leaf the stdlib
+// `os.command` lowers onto. It answers `[pid, stdin, stdout, stderr]`, a list of four and not
+// a struct, because that is what crosses this boundary without a new type on either side.
+func (c *checker) procOpenIntrinsic(n *ast.Call) Type {
+	if len(n.Args) != 1 {
+		c.errorf(n.Span(), "proc-open intrinsic takes (argv), got %d argument(s)", len(n.Args))
+		c.synthArgs(n)
+		return &types.List{Elem: types.Int}
+	}
+	c.check(n.Args[0].Value, &types.List{Elem: types.Str})
+	return &types.List{Elem: types.Int}
 }
 
 // atomicIntrinsic checks a compiler atomic-cell intrinsic `__zrt_atomic_<op>(a,

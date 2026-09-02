@@ -176,7 +176,7 @@ fn test_hello_names_who() {
 
 ## 接下來去哪
 
-- **[Zerg by example](../examples/README.zh-TW.md)** —— 三十三支附閱讀順序的程式，每一支都由一道
+- **[Zerg by example](../examples/README.zh-TW.md)** —— 四十六支附閱讀順序的程式，每一支都由一道
   gate 建起來並執行。
 - **[語言參考](language.zh-TW.md)** —— 索引：每一章，以及每一章決定了什麼。
 - **[Conformance](conformance.zh-TW.md)** —— 怎麼讀規格的狀態標記。值得在**你撞到某個還沒建的東西

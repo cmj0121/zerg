@@ -19,61 +19,49 @@ An **override** is a method in the type's `impl` with a fixed shape: `fn display
 declaration. `print`, a format hole and `str(…)` all consult the override, and a type that writes only
 `debug` renders through it everywhere, since `display` defaults to it.
 
-> **Status.** Rendering a **scalar**, a **`str`**, or an **`Err`** — through a plain `{x}` hole, `print`,
-> or an f-string — works, and an **override is consulted** on any named type (`type X = Y`, a `struct`, an
-> `enum`) that declares one. An `Err` renders as its **message**; its kind is there to be compared
-> (`e is IOError`), not read out. The **structural default rendering of a composite** (a `struct`, `list`,
-> or `map` with no override) is **[not yet]**: such a composite is **rejected at compile time** today, and
-> by two codes at the two doors — _E9059 NotImplemented: rendering a `P` as text — a composite needs the
-> structural `Display` this compiler does not generate; render its fields_ from `print`, a hole and
-> `str(x)` alike, and _E4011 `str(…)` over a list bridges bytes or code points_ where the argument is a
-> `list` of something else. An **`enum`** is a third door with a third code — _E9085 NotImplemented:
-> rendering an `E` as text — an enum has no name for it_ — which the 0.2.0 re-measurement found unnamed
-> here (#74). So the intended "every value renders" holds for scalars, strings, errors and
-> overridden types now, and for a **composite** once structural `debug` lands. It does not hold for every
-> remaining receiver: a **channel**, a **function value** and **nil** are waiting for nothing, and the
-> paragraph on the three of them below says why a structural `debug` would not be their answer if it
-> arrived. The exact spelling of a structural `debug` string is therefore **not pinned** ([not yet]).
+> **Status.** Every value renders except one class. A **scalar**, a **`str`**, an **`Err`** and a
+> **composite** — a `struct`, an `enum`, a `list`, a `map`, a tuple, an array, a carrier — all render
+> through a plain `{x}` hole, `print`, `str(x)` and the two methods, and an **override is consulted**
+> first on any named type (`type X = Y`, a `struct`, an `enum`) that declares one. An `Err` renders as its
+> **message**; its kind is there to be compared (`e is IOError`), not read out. What does **not** render is
+> the class that has no parts and is waiting for nothing: a **channel**, a **function value** — _E4076 a …
+> is an identity rather than a value, and the language gives it no rendering_ — and **nil**, which is not a
+> value at all (_E3086 this rendering needs a value, and this one is nil_).
 >
-> It is one gap with a third face: a composite has no structural **equality** either, so `xs == ys` over
-> two lists is `E9057` ([Specs & Generics](../core/specs.md)). Rendering and comparing are the two things a
-> reader most expects a container to do for free, and neither is derived.
+> **The structural spellings are the language's own literals.** A composite renders as the literal a reader
+> would write for it, with one difference that is the whole point of a developer view: a **`str` inside a
+> composite is quoted and escaped**, because `["a, b"]` and `["a", "b"]` are two different lists. A
+> `str` **on its own** is its own text — the quoting is a property of the POSITION and not of the view,
+> which is
+> what keeps `print s` printing `hi` while `print [s]` prints `["hi"]`.
 >
-> **The renderings are reached by name, not by call.** `str(x)`, a hole and `print` consult them on every
-> value, and `x.display()` / `x.debug()` written out reach the override alone: a type that declares one
-> answers through it, and a value that has not — an `int`, a `str`, a `list`, a `map`, an `Err`, a carrier —
-> is **[not yet]**, _E9107 NotImplemented: the method `display` on a int — `str(x)` renders it, and an
-> `impl` on a declared type is how a type overrides that_, and the same sentence for _NotImplemented: the
-> method `debug` on a int_. It is one answer for every receiver, which is what "on every value" means: a
-> `map` does not get the map's sentence about `len` and `has` for a rendering. So "available on every value"
-> holds through the three spellings above and not yet through the fourth.
+> | shape               | renders as                                                                         |
+> | ------------------- | ---------------------------------------------------------------------------------- |
+> | `list[T]`, `[T; N]` | `[1, 2]`                                                                           |
+> | `map[K, V]`         | `{"k": 1}` — in **insertion** order, the order a `for` walks it in                 |
+> | tuple               | `(1, "x")`                                                                         |
+> | `struct P`          | `P(x: 1, y: "a")` — the constructor, with the names a reader would otherwise count |
+> | `enum E`            | `E.A`, and `E.B(3)` for a variant that carries a payload                           |
+> | `T?`                | the value, or `nil`                                                                |
+> | `Either[X, Y]`      | `Left(1)` / `Right(…)` — tag, then payload                                         |
 >
-> **What to write while it waits is NOT one answer for every receiver**, and that is the paragraph above
-> read back against this one. `str(x)` stands in only where the value renders at all — a scalar, a `str`,
-> an `Err`, a `list[byte]`, a `list[rune]`, or a type with an override. Both list spellings are there
-> because `str(…)` **bridges** them — bytes and code points are the two ways back to a string — and it is
-> the bridge and not the word "list" that decides it. On the composites the Status note rejects there is
-> nothing to stand in, because the fourth spelling is waiting on the same gap the first three are, and the
-> message says so rather than naming an expression this same compiler refuses: _E9107 NotImplemented: the
-> method `display` on a list[int] — there is nothing to write in its place — this value has no rendering of
-> its own until the structural `Display` this compiler does not generate, so render its parts_. For a
-> composite it is one gap and not two.
+> A composite has no structural **equality**, which is the same question asked of a different verb: `xs ==
+ys` over two lists is `E9057` ([Specs & Generics](../core/specs.md)). Rendering is derived and comparing
+> is not — the two are separate decisions, and the reason is that a rendering is a view while an equality
+> is a claim about the values.
 >
-> **Three receivers are in neither set, and what they are missing is not what a composite is missing.** A
-> composite is _waiting_: the structural `Display` above is exactly what stands between it and a rendering,
-> and its parts are what to render meanwhile. A **channel** and a **function value** are not waiting for
-> anything. They are an identity rather than a value — the same class `==` is refused on, _E4034 a … is an
-> identity rather than a value, and the language gives it no equality_ — so there are no parts to render
-> instead, and a `Display` would not be their answer if it arrived: _E9107 NotImplemented: the method
-> `display` on a chan[int] — there is nothing to write in its place — a chan[int] is an identity rather than
-> a value_. **The three rendering positions say the same thing** — `print x`, `str(x)` and `f"{x}"` are one
-> check, and an identity reaching it is _E4076 a … is an identity rather than a value, and the language
-> gives it no rendering_. That refusal names no unbuilt form: nothing is coming. **nil** is a third answer,
-> because nil is not a value at all: a `fn` with no `-> type` answers it
-> ([`GRAMMAR#fn-decl`](../../GRAMMAR)), `str(f())` is told so by name — _E3086 this rendering needs a value,
-> and this one is nil_ — and what the reader needs is a `fn` that answers with something, not a rendering.
-> So `str(x)` stands in on the first set; on the second there is nothing to stand in and something to wait
-> for; and on these three there is nothing to stand in and nothing coming.
+> **All four spellings reach the same generator.** `str(x)`, a hole, `print` and `x.display()` /
+> `x.debug()` written out consult the override first and fall to the structural rendering, so a `map` does
+> not get the map's sentence about `len` and `has` for a rendering, and none of the four can disagree with
+> the other three about a value.
+>
+> **The class that renders nowhere says so in one sentence.** A **channel** and a **function value** are an
+> identity rather than a value — the same class `==` is refused on, _E4034_ — so there are no parts to
+> render and nothing is coming: _E4076 a … is an identity rather than a value, and the language gives it no
+> rendering_, from all four spellings. **nil** is a third answer, because nil is not a value at all: a `fn`
+> with no `-> type` answers it ([`GRAMMAR#fn-decl`](../../GRAMMAR)), and `str(f())` is told so by name —
+> _E3086 this rendering needs a value, and this one is nil_ — where what the reader needs is a `fn` that
+> answers with something, not a rendering.
 
 **Interpolation — `f"…"`.** A plain `"…"` is a literal (braces are ordinary characters). An **`f`-string**
 embeds `{ expr }`, rendered through `display` and joined — `f"sum={x + y}"` — **desugaring at compile
@@ -81,16 +69,22 @@ time** to `str` concatenation (Collections), with no variadics and no runtime fo
 **Python-shaped** — `{ expr =? !conv? :spec? }`:
 
 - **`{x}`** uses `display`; a **conversion** picks another view first — **`!r`** the developer `debug`,
-  **`!s`** `display`, **`!a`** an ASCII-escaped debug. `f"{x!r}"` renders `x` through `debug`. All three
-  are **[not yet]** — _E9013 NotImplemented: an f-string '!r' / '!s' / '!a' conversion_.
+  **`!s`** `display`, **`!a`** an ASCII-escaped debug. `f"{x!r}"` renders `x` through `debug`, which is the
+  same text `x.debug()` answers.
 - **`{x=}`** is self-documenting: it prints the expression's source text, `=`, then the value —
-  `f"{n=}"` → `n=42` (compose with the rest: `f"{n=:04d}"`). **[not yet]** — recognized and then **refused by
-  the parser** (`E9014`) this phase.
+  `f"{n=}"` → `n=42` (compose with the rest: `f"{n=:04}"`).
 - **`{x:spec}`** hands the spec string to the type's **`Format`** protocol — `f"{pi:.2f}"`, `f"{n:04d}"`,
   `f"{p:>10}"`. This is a **per-type protocol**, not a `display` parameter: the language fixes only the
   `:spec` **syntax** (opaque text up to `}`); what a spec **means** is the type's own — the stdlib numbers
-  and `str` read the usual `[[fill]align][sign][#][0][width][.precision][type]`, mirroring Python. A format
-  spec is **[not yet]** — _E9012 NotImplemented: an f-string ':spec' format spec_.
+  and `str` read the usual `[[fill]align][sign][#][0][width][.precision][type]`, mirroring Python. A value
+  the language gives no numeric reading — a composite, or anything behind a conversion — is **rendered
+  first and then read as text**, which is what makes one spec syntax serve every value.
+
+  A `type` letter the value cannot render as is refused where it is written — _E3142 an int renders as
+  `b`, `o`, `x`, `X`, `c` or `d`, and a format spec asked for another_ — because the spec is a literal and
+  the type is inferred, so a program the runtime would end the same way on every run does not build. A
+  **brace** inside a spec is not a `fmt-char` at all (`GRAMMAR#fmt-char`), so Python's nested replacement
+  field is _E2080_ rather than a spec: `f"{n:>{4}}"` does not derive.
 
   > **A spec is text the program wrote, and every field of it is bounded.** The `type` letter is a
   > **closed set** per rendering — a float takes `e E f F g G`, an int `b o x X c d`, a `str` `s` — and

@@ -38,8 +38,12 @@ live allocations as five rounds do (`make mem-check`).
 > name (`StackOverflowError: stack overflow`, status 1) and not as a bare SIGSEGV, but that is a diagnosis
 > and not a recovery: the free runs on the scope-exit and abort-unwind paths, so no `guard` catches it and
 > no later `defer` runs. A **structure** that deep needs a shape the language has for it — a `list` of
-> nodes indexed by position, rather than a chain — until the
-> [door](../../FUTURE.md#an-iterative-chain-teardown) opens.
+> nodes indexed by position, rather than a chain.
+>
+> **[implementation-defined]** HOW a chain is torn down is this implementation's, not the language's: the
+> recursive free above is one way and an explicit worklist is another, and a program cannot tell them apart
+> except by the depth at which the first one runs out of stack. What the specification pins is the bound
+> and the diagnosis, which is what a reader needs to write a structure that stays inside it.
 
 ---
 

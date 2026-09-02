@@ -101,15 +101,16 @@ binding. The packages that import cleanly today — `io`, `fs`, `os`, `strings`,
 
 **[Getting started](docs/getting-started.md)** takes `hello, world` to a program in more than one
 file — the toolchain, the one canonical style, a module, a test beside it — and **[Zerg by
-example](examples/README.md)** is thirty-three programs in a reading order, every one of them built
+example](examples/README.md)** is forty-six programs in a reading order, every one of them built
 and run by a gate.
 
 **[`docs/README.md`](docs/README.md)** is the entry point: which chapter to open first, what each
 directory holds, and how the specification is meant to be read. Syntax is normative in
 [`GRAMMAR`](GRAMMAR); semantics are normative in the chapters under [`docs/`](docs).
 
-**[`FUTURE.md`](FUTURE.md)** is the other half: what the language decided **not** to have, and the
-threshold that would reopen each case. Nothing in it is part of the specification.
+**What the language decided NOT to have** is in the specification too, in the chapter that owns the
+question — there is no separate file of deferred features. A requirement the specification declines to pin
+carries **[implementation-defined]** where a reader meets it.
 
 ## Status
 

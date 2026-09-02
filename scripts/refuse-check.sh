@@ -672,7 +672,11 @@ enum E[T] {
 fn main() { print 1 }
 EOF
 
-expect "$ZERG" associated-value-binding E9006 <<'EOF'
+# THE ASSOCIATED VALUE IS BUILT, and this is the reading it makes possible to get wrong: a type
+# is not a value, so `B.NOPE` is a name an `impl B` never declared. Before it, the type name
+# lowered AS a value and `zg_B.zg_NOPE` reached cc as `expected ')'` — an escape the standing
+# contract has no room for, and one every struct in the language could reach.
+expect "$ZERG" a-struct-qualified-name-that-is-not-one E4089 <<'EOF'
 struct B {
 	pub n: int
 }
@@ -681,7 +685,7 @@ impl B {
 	LIMIT := 5
 }
 
-fn main() { print 1 }
+fn main() { print B.NOPE }
 EOF
 
 # ONE NUMBER, TWO QUESTIONS (#87). `#[repr]`, `#[packed]` and `#[align]` are RESERVED on
@@ -808,29 +812,6 @@ struct P {
 fn main() { print 1 }
 EOF
 
-# `#[derive(From)]` IS THE ONE ENTRY IN FUTURE.md WITH A MEASURED DEMAND, and the exact form
-# it is written in there — on an error enum, generating the wrapping `?` needs at a boundary
-# — was pinned by nothing. The case above is a struct and a spec the program declares; this
-# is an enum and a spec nothing declares, which is the other side of E4024's sentence and the
-# side a reader following FUTURE.md arrives at. It stops matching the day the derive lands.
-expect "$ZERG" derive-from-on-an-error-enum E4024 'cannot derive `From`' <<'EOF'
-struct IoError {
-	pub code: int
-}
-
-struct ParseError {
-	pub code: int
-}
-
-#[derive(From)]
-enum AppError {
-	Io(IoError)
-	Parse(ParseError)
-}
-
-fn main() { print 1 }
-EOF
-
 # A DECORATOR WITH NOTHING UNDER IT AT ALL — the last item in the file. This is the whole of
 # what E2007 says, and it used to be said about `#[derive(Eq)] fn main()` as well, where there
 # very much IS a declaration under it: the pending list was only ever drained by a `struct`,
@@ -929,17 +910,6 @@ struct P {
 }
 
 fn main() { print P().b }
-EOF
-
-expect "$ZERG" struct-pattern-binding E9008 <<'EOF'
-struct P {
-	pub x: int
-}
-
-fn main() {
-	P{x} := P(3)
-	print x
-}
 EOF
 
 # THE `is` FAMILY. The case above tests a primitive; docs name a STRUCT and the two error
@@ -1072,7 +1042,7 @@ EOF
 
 # A NAME NOTHING BINDS is the commonest mistake anyone makes, and it used to be spelled
 # `zg_<n>` and handed to cc. So did a call to a function nothing declares — which is also
-# how the specified-but-unbuilt raw-pointer builtins arrived.
+# how a specified-but-unbuilt built-in such as `sizeof` arrived.
 expect "$ZERG" undefined-name E3069 <<'EOF'
 fn main() {
 	print nope
@@ -1201,12 +1171,6 @@ EOF
 # program naming one of these has not made a typo, and "undefined name `sizeof`" told the
 # reader the language does not have a form the documentation describes and the SEED builds.
 # Every one of these was reported as an unknown name until the emitter learned the list.
-expect "$ZERG" raw-pointer-builtin E9045 <<'EOF'
-fn main() {
-	mut n := 1
-	print addr(n)
-}
-EOF
 
 expect "$ZERG" refcounted-box-builtin E9058 <<'EOF'
 fn main() {
@@ -1482,23 +1446,6 @@ impl B {
 fn main() { print 1 }
 EOF
 
-# THE OTHER HALF OF THAT NUMBER (#87). GRAMMAR#fn-decl spells `'pub'? 'unsafe'? 'mut'? 'fn'`
-# and GRAMMAR#impl-item takes a fn-decl, so an `unsafe fn` method IS a form — and its writer
-# was told this compiler "reads methods and nothing else", about a method they did write.
-expect "$ZERG" an-unsafe-method-in-an-impl E9109 <<'EOF'
-struct B {
-	pub n: int
-}
-
-impl B {
-	unsafe fn m() {
-		nop
-	}
-}
-
-fn main() { print 1 }
-EOF
-
 # A method that MUTATES its receiver cannot be served from a materialised temp: the edit
 # lands on the copy and is lost. `m["a"].append(3)` compiled and silently did nothing.
 expect "$ZERG" mutating-method-on-a-map-index E9049 <<'EOF'
@@ -1549,16 +1496,6 @@ struct P {
 
 fn main() {
 	print P(1) < P(2)
-}
-EOF
-
-expect "$ZERG" rendering-a-composite E9059 <<'EOF'
-struct P {
-	pub x: int
-}
-
-fn main() {
-	print str(P(1))
 }
 EOF
 
@@ -1662,25 +1599,10 @@ EOF
 # `display` from `next`, so a name that lands stops matching its own line.
 #
 # AND THE SENTENCE RUNS PAST THE NAME, as far as the SUBSTITUTE, for the three renderings.
-# `display`, `debug` and `format` are given on every receiver and what to write instead is
-# not: `str(x)` and `f"{x}"` render an `int` and are refused on a `list[int]` (E4011), a map,
-# a struct, a carrier (E9059) and an enum (E9085). A case that stopped at the receiver's name
-# passed while the compiler told the reader to write an expression it refuses, so each side of
-# that split is pinned by the words that differ — here the substitute, below its absence.
-expect "$ZERG" builtin-display E9107 'the method `display` on a int — `str(x)` renders it' <<'EOF'
-fn main() {
-	x := 5
-	print x.display()
-}
-EOF
-
-expect "$ZERG" builtin-debug E9107 'the method `debug` on a int — `str(x)` renders it' <<'EOF'
-fn main() {
-	x := 5
-	print x.debug()
-}
-EOF
-
+# `format` is given on every receiver and what to write instead is not, which is why its two
+# clauses are pinned by the words that differ. `display` and `debug` are no longer in that
+# split at all: they are BUILT (#112), so every value that renders answers them, and what is
+# left of E9107 for them is the class that renders nowhere — an identity, which E4076 names.
 expect "$ZERG" builtin-format E9107 'the method `format` on a int — a spec is unread here' <<'EOF'
 fn main() {
 	x := 5
@@ -1704,100 +1626,23 @@ fn main() {
 }
 EOF
 
-# AND ON A RECEIVER THAT HAS A FAMILY. Every case above stands on an `int` or a channel, and
-# neither is a list, a map, an `Err` or a carrier — which is to say every one of them reached
-# the fallback that carries this split, and none of them could see that the four families
-# above it were answering the same names for themselves. `m.display()` was `E3134`,
-# `e.display()` was `E3124`, `o.display()` was `E3129` and `xs.display()` was `E9056`: four
-# codes for one question, three of them permanent, for a rendering docs/runtime/format.md
-# gives every value. One case per family, because one case per family is what a shared
-# fallback cannot fake.
-expect "$ZERG" map-display E9107 'on a map[str, int] — there is nothing to write in its place' <<'EOF'
-fn main() {
-	m := {"a": 1}
-	print m.display()
-}
-EOF
-
-expect "$ZERG" err-display E9107 'the method `display` on a Err — `str(x)` renders it' <<'EOF'
-fn f() -> int {
-	raise ValueError("x")
-}
-
-fn main() {
-	r: Result[int] = guard {
-		f()
-	}
-	match r {
-		Either.Left(v) => {
-			print v
-		}
-		Either.Right(e) => {
-			print e.display()
-		}
-	}
-}
-EOF
-
-expect "$ZERG" carrier-display E9107 'on a int? — there is nothing to write in its place' <<'EOF'
-fn g() -> int? {
-	return nil
-}
-
-fn main() {
-	print g().display()
-}
-EOF
-
-expect "$ZERG" list-display E9107 'on a list[int] — there is nothing to write in its place' <<'EOF'
-fn main() {
-	xs := [1, 2]
-	print xs.display()
-}
-EOF
-
-# AND THE OTHER SIDE OF THE SAME RECEIVER, which is what proves the predicate is about the
-# rendering and not about the word "list". `str(xs)` over a `list[byte]` IS built — it is the
-# way back from the bytes — so this one is handed the substitute the case above is refused,
-# from the same clause, on a receiver spelled almost the same way.
-expect "$ZERG" bytes-display E9107 'on a list[byte] — `str(x)` renders it' <<'EOF'
-fn main() {
-	xs: list[byte] = [b'a', b'b']
-	print xs.display()
-}
-EOF
-
-# AND THE SECOND SPELLING OF THE SAME BRIDGE. `c_str_bridges_list` admits a `list[rune]` as
-# well — bytes and code points are the two ways back to a string — and only one of the two was
-# asserted, so deleting `c_is_rune` from that clause left the board green while the chapter's
-# stand-in set (docs/runtime/format.md) went on promising the substitute. Proved by deleting
-# it: this case fails alone and `bytes-display` does not.
-expect "$ZERG" runes-display E9107 'on a list[rune] — `str(x)` renders it' <<'EOF'
-fn main() {
-	xs: list[rune] = ['a', 'b']
-	print xs.display()
-}
-EOF
-
-# AND ON THE CLASS THAT HAS NO RENDERING AND NEVER WILL. The three above are composites: they
-# are waiting for the structural `Display` this compiler does not generate, and until it comes
-# their parts are what a reader renders instead. An IDENTITY is not waiting and has no parts —
-# `E4034` names the class, a channel and a function value, and the predicate that decides the
-# substitute wrote out the channel alone, so `f := g; f.display()` said "`str(x)` renders it"
-# while `str(f)` reached cc and was refused against a line nobody wrote. NIL is a third answer
-# and not either of those: `str(f())` is `E3086` by name.
+# AND ON THE CLASS THAT HAS NO RENDERING AND NEVER WILL. A composite renders structurally now
+# (#112), so `x.display()` answers on every value that renders at all — and these three are
+# what is left. An IDENTITY has no parts and is not waiting for a generator: `E4034` names the
+# class, a channel and a function value, and the rendering positions name it as `E4076`. NIL is
+# a third answer and neither of those: it is `E3086` by name.
 #
-# All three assert the WORDS and not the code, because the code was already `E9107` on every
-# one of them while the sentence was wrong — and the channel had no case at all, so deleting
-# the line that excludes it left the whole board green.
-expect "$ZERG" chan-display E9107 'on a chan[int] — there is nothing to write in its place — a chan[int] is an identity rather than a value' <<'EOF'
+# THE FOURTH SPELLING REACHES THE SAME GATE AS THE OTHER THREE, which is what these pin: the
+# method form used to have refusals of its own — four codes for one question — and now
+# `x.display()` is asked exactly what `print x` is asked.
+expect "$ZERG" chan-display E4076 'a chan[int] is an identity rather than a value, and the language gives it no rendering' <<'EOF'
 fn main() {
 	ch := chan[int](1)
 	print ch.display()
 }
 EOF
 
-expect "$ZERG" fn-display E9107 'on a fn() -> int — there is nothing to write in its place — a fn() -> int is an identity rather than a value' <<'EOF'
+expect "$ZERG" fn-display E4076 'a fn() -> int is an identity rather than a value, and the language gives it no rendering' <<'EOF'
 fn g() -> int {
 	return 1
 }
@@ -1808,7 +1653,7 @@ fn main() {
 }
 EOF
 
-expect "$ZERG" nil-display E9107 'on a void — there is nothing to write in its place — nil is the absence of a value' <<'EOF'
+expect "$ZERG" nil-display E3086 '`display` needs a value, and this one is nil' <<'EOF'
 fn h() {
 	nop
 }
@@ -1923,7 +1768,6 @@ expect "$ZERG0" seed-recv-on-send-only "cannot receive from a send-only channel 
 fn bad(tx: chan[int]<-) { print (<-tx)! }
 fn main() { print "x" }
 EOF
-
 
 
 # --- null safety: an optional says what it is at every edge ------------------------
@@ -2052,44 +1896,24 @@ fn main() {
 }
 EOF
 
-# GRAMMAR#impl-decl — `Type.f(…)` is an ASSOCIATED FUNCTION, the named-constructor form
-# (`User.from_json(…)`). The parser gives every `fn` in an `impl` a receiver, so there is
-# no such function to call; the answer used to be "the method `make` on a ?", which points
-# at inference having nothing to say rather than at the form.
-expect "$ZERG" associated-function E9051 <<'EOF'
-struct P {
-	pub x: int
-}
-
-impl P {
-	fn make(n: int) -> P {
-		return P(n)
-	}
-}
-
-fn main() {
-	p := P.make(7)
-	print(f"{p.x}")
-}
-EOF
-
 # EIGHT FORMS whose refusal named a TOKEN and not the form. A reader could not tell "this
 # is not built" from "you made a typo", which is the whole of the implemented-or-named
 # contract — every one of these is in GRAMMAR and none of them was being turned away by
 # the name GRAMMAR gives it.
-expect "$ZERG" array-type E9017 <<'EOF'
+expect "$ZERG" array-length-that-names-a-constant E9111 <<'EOF'
+WIDTH := 4
+
 fn main() {
-	xs: [int; 3] = [1, 2, 3]
+	xs: [int; WIDTH] = [1, 2, 3, 4]
 	print xs[0]
 }
 EOF
 
-expect "$ZERG" array-type-parameter E9017 <<'EOF'
-fn f(xs: [int; 3]) -> int {
-	return xs[0]
+expect "$ZERG" array-method E9112 <<'EOF'
+fn main() {
+	xs: [int; 2] = [1, 2]
+	print xs.get(0)
 }
-
-fn main() { print 1 }
 EOF
 
 # THE STRUCT PATTERN IS BUILT, and these are the three questions naming its fields makes it
@@ -2149,12 +1973,6 @@ fn main() {
 }
 EOF
 
-expect "$ZERG" interpolating-command-literal E9019 <<'EOF'
-fn main() {
-	n := "hi"
-	print f`echo {n}`
-}
-EOF
 
 # Every module flattens into ONE namespace, so two that declare the same constant mangle to
 # one symbol. The FUNCTION case has been refused since the tables were written; this one
@@ -2189,33 +2007,6 @@ EOF
 # THE REST OF THE `[not yet]` TABLE in docs/surface/grammar.md. That table claims a case
 # holds every entry; half of them had none, so the claim was the third unsynchronised copy
 # of a list that already lives in the parser's raises and in this file.
-expect "$ZERG" command-literal E9020 <<'EOF'
-fn main() {
-	c := `echo hi`
-	print c
-}
-EOF
-
-expect "$ZERG" fstring-conversion E9013 <<'EOF'
-fn main() {
-	n := 42
-	print f"{n!r}"
-}
-EOF
-
-expect "$ZERG" fstring-self-documenting E9014 <<'EOF'
-fn main() {
-	n := 42
-	print f"{n=}"
-}
-EOF
-
-expect "$ZERG" fstring-format-spec E9012 <<'EOF'
-fn main() {
-	pi := 3.5
-	print f"{pi:.2f}"
-}
-EOF
 
 # A generic FUNCTION is built — it monomorphizes, one specialization per set of type
 # arguments — so its case moved to the codegen corpus, where a working form belongs. What
@@ -2305,100 +2096,16 @@ fn deep[T](x: T, n: int) {
 fn main() { deep(1, 3) }
 EOF
 
-expect "$ZERG" spec-member-with-a-body E9002 <<'EOF'
+expect "$ZERG" spec-default-reads-a-field E3138 <<'EOF'
 spec Show {
 	fn show() -> int {
-		return 1
+		return this.n
 	}
 }
 
 fn main() { print 1 }
 EOF
 
-expect "$ZERG" unsafe-block E9011 <<'EOF'
-fn main() {
-	n := unsafe {
-		5
-	}
-	print n
-}
-EOF
-
-# A standalone `unsafe fn` is a DECLARATION — GRAMMAR#fn-decl is where `unsafe` sits — and
-# it is refused as itself, with a place. It used to fall into the top-level statement
-# fallback and answer "NotImplemented: unsafe", the block-expression's sentence about a
-# form that is not a block; and reading the `fn` as safe instead would erase the one thing
-# the keyword says while the trust boundary stays unenforced (docs/runtime/ffi.md).
-expect "$ZERG" unsafe-fn-declaration E9027 <<'EOF'
-unsafe fn g() -> int {
-	return 2
-}
-
-fn main() {
-	print g()
-}
-EOF
-
-# `pub unsafe fn` is the SAME declaration with its visibility marker, and it earns the
-# same sentence. It used to be told "`pub` binds to a declaration, and a statement takes
-# none" — which is false twice over: it IS a declaration, and the statement fallback was
-# never the right reader for it.
-expect "$ZERG" pub-unsafe-fn-declaration E9027 <<'EOF'
-pub unsafe fn g() -> int {
-	return 2
-}
-
-fn main() {
-	print g()
-}
-EOF
-
-expect "$ZERG" raw-pointer-type E9045 <<'EOF'
-fn f(p: ptr) -> int {
-	return 1
-}
-
-fn main() { print 1 }
-EOF
-
-# THE THIRD POSITION, and the one a signature reads last: a raw pointer as the RESULT. The
-# funnel that names every built-in this compiler has not got is one function, so a place is
-# owed at each of the three the same way — and none of them carried one.
-expect "$ZERG" raw-pointer-return-type E9045 <<'EOF'
-fn f() -> ptr[int] {
-	return 0
-}
-
-fn main() { print 1 }
-EOF
-
-expect "$ZERG" destructuring-binding E9021 <<'EOF'
-fn main() {
-	(a, b) := (1, 2)
-	print a + b
-}
-EOF
-
-expect "$ZERG" destructuring-binding-mut E9021 <<'EOF'
-fn main() {
-	mut (a, b) := (1, 2)
-	print a + b
-}
-EOF
-
-# THE THIRD SPELLING IS A DIFFERENT FORM. It BUILT and did nothing — the tuple was
-# evaluated, assigned to no one, and the program printed the values it started with — and
-# once it was refused it borrowed the binding's sentence, which quotes a `:=` at a reader
-# who wrote `=`. GRAMMAR#assign-target derives the tuple form on its own, so it is an unbuilt
-# form of its own and owes its own sentence.
-expect "$ZERG" destructuring-assignment E9072 'a destructuring assignment' <<'EOF'
-fn main() {
-	mut a := 1
-	mut b := 2
-	(a, b) = (3, 4)
-	print a + b
-}
-EOF
 
 expect "$ZERG" open-range-with-no-lower-bound E2071 <<'EOF'
 fn main() {
@@ -2459,16 +2166,6 @@ expect "$ZERG" render-a-list-of-ints E4011 <<'EOF'
 fn main() {
 	xs: list[int] = [65, 66, 67]
 	print(f"{xs}")
-}
-EOF
-
-# `print` has no two-argument form, so `print(a, b)` builds a TUPLE and prints that. A
-# composite has no rendering — the structural one is `Display`'s job and this compiler
-# generates none — and the cast reached cc as "operand of type 'zg_tup_...' where
-# arithmetic or pointer type is required". The mutation fuzzer is what found it.
-expect "$ZERG" print-a-tuple E9059 <<'EOF'
-fn main() {
-	print(1, 2)
 }
 EOF
 
@@ -3058,22 +2755,6 @@ fn main() {
 }
 EOF
 
-# `ptr` INSIDE an `unsafe` group, which is the one place the language says it belongs — so
-# this is not `raw-pointer-type` above with extra braces: that case shows the bare signature
-# is refused, this one shows the refusal is about the type not being built rather than about
-# where it was written.
-expect "$ZERG" ptr-type-in-an-unsafe-group E9045 <<'EOF'
-unsafe {
-	fn f(p: ptr) -> int {
-		return 1
-	}
-}
-
-fn main() {
-	print 1
-}
-EOF
-
 expect "$ZERG" associated-type-projection E9028 <<'EOF'
 spec It {
 	fn next() -> int
@@ -3147,33 +2828,6 @@ fn f(n: int) -> int {
 
 fn main() {
 	print f(3)
-}
-EOF
-
-# A `mut &` parameter cannot survive being turned into a bare function pointer: the call
-# site reads a signature from the callee's NAME, and a value has not got one. Both
-# spellings SEGFAULTED — the argument went in by value where a `T*` was declared.
-expect "$ZERG" mut-ref-param-on-a-closure E9065 <<'EOF'
-fn main() {
-	f := fn(mut &a: int) {
-		a = a + 1
-	}
-	mut x := 1
-	f(x)
-	print x
-}
-EOF
-
-expect "$ZERG" mut-ref-fn-taken-as-a-value E9065 <<'EOF'
-fn bump(mut &a: int) {
-	a = a + 1
-}
-
-fn main() {
-	g := bump
-	mut x := 1
-	g(x)
-	print x
 }
 EOF
 
@@ -3399,21 +3053,10 @@ fn main() {
 }
 EOF
 
-# `NotImplemented: unsafe` and `NotImplemented: asm` — the keyword and nothing else. A
-# marker that names no form, gives no place, and does not say that the module-level
-# `unsafe { … }` GROUP spelled the same way does work.
-expect "$ZERG" unsafe-as-an-expression E9011 <<'EOF'
-fn main() {
-	x := unsafe { 3 + 4 }
-	print x
-}
-EOF
-
-# THE OTHER HALF OF THAT NUMBER. A top-level `unsafe` opens a GROUP or marks a `fn`, and a
-# third thing used to fall through to the statement fallback, be read as an EXPRESSION, and
-# meet E9011 above — an answer describing a form the file does not contain (there is no
-# expression in `unsafe struct P`) under a code that says the language HAS the form. GRAMMAR
-# derives no `unsafe struct` in any position, so the split leaves E9011's sentence true (#87).
+# A TOP-LEVEL `unsafe` OPENS A GROUP OR MARKS A `fn`, and a third thing used to fall through
+# to the statement fallback and be read as an EXPRESSION — an answer describing a form the file
+# does not contain, since there is no expression in `unsafe struct P`. GRAMMAR derives no
+# `unsafe struct` in any position, which is what this code says (#87).
 expect "$ZERG" a-top-level-unsafe-that-opens-neither E2075 <<'EOF'
 unsafe struct P {
 	pub x: int
@@ -3424,12 +3067,6 @@ fn main() {
 }
 EOF
 
-expect "$ZERG" inline-assembly E9033 <<'EOF'
-fn main() {
-	asm("nop")
-	print 1
-}
-EOF
 
 # `nil` AS A PATTERN. GRAMMAR#literal makes `nil` a literal and GRAMMAR#literal-pat makes a
 # literal a pattern, so this is a well-formed program and belongs here rather than in
@@ -3505,27 +3142,11 @@ fn main() {
 }
 EOF
 
-# GRAMMAR#param-type puts `mut &` in a function TYPE — `param-type ::= ( 'mut' '&' )? type`
-# — and docs/code/functions.md says the distinction is real and cannot be written down. It
-# was refused by the tuple/parameter-list reader's `expect(Comma)`, so `fn(mut &int) -> bool`
-# answered "expected `,`, found `&`": a punctuation complaint about a type the language has.
-expect "$ZERG" mut-ref-in-a-fn-type E9035 <<'EOF'
-fn bump(mut &n: int) -> bool {
-	n = n + 1
-	return true
-}
-
-fn main() {
-	g: fn(mut &int) -> bool = bump
-	print 1
-}
-EOF
-
 # GRAMMAR#fn-sig opens a spec member with `'unsafe'? 'mut'? 'fn'`, so `unsafe fn f()` in a
 # spec IS a derivation. It used to be turned away by E2036 — the catch-all for a token that
 # starts no member at all — which DENIED the derivation and cited GRAMMAR#spec-member while
-# doing it. A top-level `unsafe fn` gets E9027 and a place, so the two spellings of one
-# unenforced trust boundary now answer alike.
+# doing it. A top-level `unsafe fn` is BUILT, so what is left here is the one spelling of the
+# marker this compiler does not read: a spec's required signature.
 expect "$ZERG" unsafe-in-a-spec-signature E9036 <<'EOF'
 spec Raw {
 	unsafe fn peek() -> int
@@ -3609,20 +3230,6 @@ fn main() {
 			n
 		}
 	}
-}
-EOF
-
-# GRAMMAR#fn-type carries an `unsafe` marker, and `unsafe` is a trust boundary this compiler
-# does not enforce — so the TYPE is refused rather than spelled and never honoured. Both type
-# positions reported the token after the keyword before this: neither named the form.
-expect "$ZERG" an-unsafe-fn-type E9073 <<'EOF'
-fn f(x: int) -> int {
-	return x
-}
-
-fn main() {
-	g: unsafe fn(int) -> int = f
-	print g(1)
 }
 EOF
 

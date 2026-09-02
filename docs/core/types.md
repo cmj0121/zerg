@@ -331,10 +331,9 @@ mechanism ([Pattern matching](../code/control-flow.md)).
 > is _E9057 NotImplemented: `==` on a `(int, int)` — structural equality over a container is unbuilt, and a
 > container has no declaration to derive it on_: the parts-inheritance rule above is specified and the
 > derivation over an unnamed form is what is missing.
-> **Destructuring** is refused a step earlier still, at the comma — `a, b := two()` reports _E2005 expected
-> a newline or `;` to separate statements, found `,`_, which names punctuation where it owes the form's
-> name (the parenthesized `(a, b) := two()` does say it, as `E9021`). Either way a tuple result is stored
-> and passed as specified, and read back only through `.0` / `.1`.
+> **Destructuring** is built and is the ordinary way to read one — `(a, b) := two()`. The unparenthesized
+> `a, b := two()` is not a form: GRAMMAR#bind-target derives the tuple shape with its brackets, so what the
+> comma reports is punctuation (_E2005 expected a newline or `;` to separate statements, found `,`_).
 
 **`type X = Y`** defines a **new, distinct type** — not a transparent alias. `X` takes on `Y`'s
 representation and implementation (its fields or variants, and its `spec` impls, now with `This` = `X`), yet
@@ -372,12 +371,14 @@ and need an explicit `ok_or` / `ok` to cross.
 The one primitive for building a value is the **struct literal** — it names every field, so it is
 usable only where every field is visible. A "constructor" is not a separate feature: it is an ordinary
 (usually `pub`) associated function that returns a literal, which runs inside the type's module and can
-establish the type's invariant at the moment of construction (**[not yet]** — an associated function is
-refused by name, _E9051 `User.from_id(…)` is an associated function_, so the invariant-establishing
-constructor this section reasons from is written as a free function today). A **private field is one an outsider never
+establish the type's invariant at the moment of construction. What makes a `fn` in an inherent `impl` an
+associated function rather than a method is its **body**: [`GRAMMAR#impl-decl`](../../GRAMMAR) draws the
+line at `this` — a `fn` that does not use it takes no receiver and is reached through the **type**,
+`User.from_id(…)`. A **private field is one an outsider never
 names**: it must carry a default (below), so an outside construction leaves it off and the declaration
 decides its value. Making the literal itself unavailable outside the module is what the `#[sealed]`
-decorator is for — **[not yet]**, so today the literal is reachable wherever the type is.
+decorator is for — **[not yet]**, _E9079 NotImplemented: the decorator `#[sealed]`_, so today the literal is
+reachable wherever the type is.
 
 > **[not yet]** The struct literal binds **by position only**, so the form that names a field does not exist:
 > `P(a: 1, b: 2)` reports _E9010 NotImplemented: the named argument `a:` — this compiler binds arguments by
@@ -488,11 +489,9 @@ spec Into[T] {
   [Type System](type-system.md) forbids in the same breath. And to text there is nothing to opt into:
   `display` is a built-in value **rendering** rather than a spec ([Format](../runtime/format.md)), so
   a generic that wants text needs **no bound at all**. That is a fact about `display` not being a spec, and
-  not a promise that every value renders. (**[not yet]** for a **composite**: `str(P(7))` on a `struct` is
-  _E9059 NotImplemented: rendering a P as text — a composite needs the structural `Display` this compiler
-  does not generate_, and a generic reaches the same refusal once monomorphized. A **channel**, a
-  **function value** and **nil** are not waiting for that and never render — see [Format](../runtime/format.md).
-  The no-bound rule is what holds; the rendering behind it is not universal.)
+  not a promise that every value renders. (A **composite** renders structurally — `str(P(7))` is
+  `P(x: 7)` — and so does a generic once monomorphized. A **channel**, a **function value** and **nil** never render — see
+  [Format](../runtime/format.md). The no-bound rule is what holds; the rendering behind it is not universal.)
 - **What is left is the conversion the language does not have**: `impl Into[Meters] for Feet`, called
   as the written `x.into()`. `into` on a built-in is refused by name, and says what to write instead.
 - **Generic code bounds on it** — `fn f[T: Into[Meters]](x: T)` may call `x.into()`, the target fixed

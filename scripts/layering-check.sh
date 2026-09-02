@@ -189,7 +189,14 @@ n_quals=$(grep -cE '\bp\.ty_quals\b' "$ZG/parser.zg")
 # decision, which is the whole of "the parser builds the AST from tokens alone". A read
 # would be the thing to catch — a parser that consults what it has recorded is a parser with
 # a symbol table, whatever the table happens to hold.
-ZPARSER_FIELDS="toks pos impl_ty path depth edepth ty_quals"
+# `saw_this` joins the list for `depth`'s reason and not `ty_quals`'s. It is CONSULTED, and it
+# is still token-derived: it records that the keyword `this` was READ, which is a fact about the
+# token stream and nothing else. GRAMMAR#impl-decl tells a method from an associated fn by
+# whether the body uses `this`, and the body is read after the head — so the flag is the answer
+# carried the few statements from where the keyword is consumed to where the declaration is
+# built. What would break the claim is a field holding what the parser has DECLARED; this holds
+# what it has READ, which is the difference between a symbol table and a cursor.
+ZPARSER_FIELDS="toks pos impl_ty path saw_this depth edepth ty_quals"
 zf=$(zg_fields "$ZG/parser.zg" Parser)
 if [ -z "$zf" ]; then
 	note "the zerg parser's fields did not extract"

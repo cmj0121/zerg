@@ -452,7 +452,7 @@ pub fn chk_assoc_projections(mut &em: emit.Emitter, f: ast.File) {
 			# finding here would be gathered, discarded, and the reader would meet the
 			# misspelling message anyway. A refusal that spells its code into the sentence is
 			# what a raise is for, and the gates hold the code either way.
-			raise emit.c_diag_at(q.path, q.line, q.col, rule.Rule.NotYetAssocTypeProjection, f"NotImplemented: an associated type projection `{q.ns}.{q.member}` — GRAMMAR lets a spec name a type its implementer supplies and a signature project it, and this compiler has no associated types at all")
+			raise emit.c_diag_at(q.path, q.line, q.col, rule.Rule.NotYetAssocTypeProjection, f"NotImplemented: an associated type projection `{q.ns}.{q.member}` — GRAMMAR lets a spec name a type its implementer supplies and a signature project it, and this compiler has no associated types at all (GRAMMAR#base-type)")
 		}
 	}
 }
@@ -506,7 +506,88 @@ pub fn chk_unsafe_reachable(mut &em: emit.Emitter, name: str, callee_unsafe: boo
 	# functions that touch it are declared together, and they reach each other.
 	return if em.in_unsafe_fn
 
-	chk_at(em, rule.Rule.UnsafeNameInSafeCode, f"`{name}` is declared in a module-level `unsafe {{ … }}` group, so it is an unsafe fn — GRAMMAR group 12 makes it callable only from unsafe, and {what}")
+	# THE SENTENCE NAMES THE MARKER AND NOT THE SPELLING. It used to say "declared in a
+	# module-level `unsafe { … }` group", which was the only way to be one — and stopped being
+	# true the day a standalone `unsafe fn` was built. Both spellings record the same thing on
+	# the declaration, so the rule is about that and the message says so.
+	chk_at(em, rule.Rule.UnsafeNameInSafeCode, f"`{name}` is an unsafe fn — declared `unsafe fn`, or inside a module-level `unsafe {{ … }}` group — and GRAMMAR group 12 makes it callable only from unsafe, and {what}")
+}
+
+# chk_asm_context holds inline assembly to `unsafe`. It is the same rule an unsafe fn's caller
+# meets, asked of a form rather than of a name: `asm` is the one expression that can do anything
+# at all, so the trust boundary is what makes it sayable.
+pub fn chk_asm_context(mut &em: emit.Emitter) {
+	return if em.in_unsafe_fn
+
+	chk_at(em, rule.Rule.AsmOutsideUnsafe, "`asm(…)` is legal only inside `unsafe` (GRAMMAR group 12) — it is the one expression this language cannot check, so the marker is what makes it sayable: put it in an `unsafe { … }` block, or in an `unsafe fn`")
+}
+
+# chk_asm_order holds an operand list to OUT-THEN-IN, which is what makes `%0` mean something.
+# A C compiler numbers the outputs first and then the inputs, so a list written the other way
+# round would have the reader counting one order and the template numbering another. The
+# alternative is for the emitter to renumber, which needs it to PARSE the template — and the
+# template is opaque, which is the whole reason it can be handed to `cc` unread.
+#
+# A `clobber` MAY SIT ANYWHERE, because it lowers to the third colon whatever its position.
+pub fn chk_asm_order(mut &em: emit.Emitter, ops: list[ast.AsmOp]) {
+	mut seen_in := false
+	for o in ops {
+		continue if o.kind == 3
+
+		if o.kind == 0 {
+			seen_in = true
+			continue
+		}
+		if seen_in {
+			chk_at_place(em, em.at_path, o.line, o.col, rule.Rule.AsmOrder, "an `asm` operand list writes its `out` and `inout` operands BEFORE its `in` ones — a C compiler numbers `%0`, `%1`, … outputs first, so the order written is the numbering, and a template is opaque here rather than renumbered")
+		}
+	}
+}
+
+# chk_ptr_context holds every raw-pointer OPERATION to `unsafe`. GRAMMAR draws the line there
+# and not at the type: a `ptr` in a signature describes pointer-shaped data and is checkable
+# like any other type, while a load through one is exactly what the compiler cannot check.
+pub fn chk_ptr_context(mut &em: emit.Emitter, what: str) {
+	return if em.in_unsafe_fn
+
+	chk_at(em, rule.Rule.PtrOpOutsideUnsafe, f"{what} is a raw-pointer operation, and GRAMMAR group 12 makes every one of them `unsafe`-only — the TYPE may be written anywhere, because describing pointer-shaped data is safe; reading through one is not")
+}
+
+# chk_ptr_typed refuses a load, a store or an offset on a BARE `ptr`. What `[T]` types is
+# exactly these three: without a pointee there is no width to step by and no type to read back.
+pub fn chk_ptr_typed(mut &em: emit.Emitter, meth: str, tty: ast.Ty, untyped: bool) {
+	return if not untyped
+
+	chk_at(em, rule.Rule.PtrUntypedOp, f"`.{meth}()` needs a pointee and `{ast.ty_name(tty)}` has none — `[T]` is what types the load, the store and the offset, so write `ptr[T]` or cast to one")
+}
+
+# chk_unsafe_call_value is the caller rule asked of a VALUE rather than a name.
+pub fn chk_unsafe_call_value(mut &em: emit.Emitter, fty: ast.Ty) {
+	return if not emit.c_is_unsafe_ty(fty)
+	return if em.in_unsafe_fn
+
+	# A CODE OF ITS OWN, because it is a different rule: the one above is about a NAME the
+	# reader wrote and this one about a value whose type carries the marker — and a code is an
+	# identity rather than a topic.
+	chk_at(em, rule.Rule.UnsafeValueInSafeCode, f"this value is an `{ast.ty_name(fty)}`, and GRAMMAR group 12 makes an unsafe function callable only from unsafe — call it inside an `unsafe {{ … }}` block, or from an `unsafe fn`")
+}
+
+# chk_ptr_source is what a pointer cast may be made FROM: another pointer, or an address held
+# as a number. Everything else is a value rather than an address, and reinterpreting one as a
+# pointer is not a cast this language has — it is how a program reads memory that was never
+# there.
+pub fn chk_ptr_source(mut &em: emit.Emitter, ty: ast.Ty, xt: ast.Ty) {
+	return if emit.c_is_ptr(xt) or emit.c_is_uint(xt) or emit.c_is_int(xt) or emit.c_is_unknown(xt)
+
+	chk_at(em, rule.Rule.PtrCastSource, f"`{ast.ty_name(ty)}(…)` casts a raw pointer or an address held as a number, and {ast.ty_name(xt)} is neither — a value is not an address")
+}
+
+# chk_ptr_arity is the arity rule for the three, which take a fixed count each rather than
+# reaching the parameter table an ordinary call is checked against.
+pub fn chk_ptr_arity(mut &em: emit.Emitter, meth: str, want: int, got: int) {
+	return if want == got
+
+	chk_at(em, rule.Rule.PtrOpArity, f"`{meth}` takes {chk_args(want)} and this gives {strconv.to_string(got, 10)}")
 }
 
 # chk_note is chk_at for something that is NOT an error. `L5xx` is the family that needs it:
@@ -1023,6 +1104,61 @@ pub fn chk_spec_impls(mut &em: emit.Emitter, f: ast.File) {
 	}
 }
 
+# chk_spec_defaults holds a PROVIDED member to the invariant the whole tier rests on: a
+# default body is written over other methods on `this`, never over fields (docs/core/derive.md,
+# "specs are field-blind"). Reading structure is a compiler privilege, and a spec is the one
+# place a body is written for a type it has never seen.
+#
+# It is checked at the SPEC and not at each impl, because the mistake is in the spec: the body
+# that reads `this.n` is wrong for every implementer, including the one that happens to have an
+# `n`. Checking it where it is written reports it once and reports it even when nothing
+# implements the spec yet.
+pub fn chk_spec_defaults(mut &em: emit.Emitter, f: ast.File) {
+	for sp in f.specs {
+		for req in sp.reqs {
+			continue if not req.has_body
+
+			chk_no_fields(em, sp, req, req.body)
+		}
+	}
+}
+
+fn chk_no_fields(mut &em: emit.Emitter, sp: ast.SpecDecl, req: ast.FnDecl, body: list[ast.Stmt]) {
+	for s in body {
+		for e in ast.stmt_exprs(s) {
+			chk_no_field_expr(em, sp, req, e)
+		}
+		chk_no_fields(em, sp, req, ast.stmt_kids(s))
+	}
+}
+
+fn chk_no_field_expr(mut &em: emit.Emitter, sp: ast.SpecDecl, req: ast.FnDecl, e: ast.Expr) {
+	fld := chk_this_field(e)
+	if fld != "" {
+		chk_at_place(em, req.path, req.line, req.col, rule.Rule.SpecDefaultReadsField, f"`{sp.name}.{req.name}` reads `this.{fld}`, and a spec is field-blind — a provided body is written over the METHODS on `this`, because the implementing type is not known here and every implementer would have to carry a field named `{fld}`")
+	}
+	for k in ast.expr_parts(e) {
+		chk_no_field_expr(em, sp, req, k)
+	}
+}
+
+# chk_this_field is the field name one expression reads off `this`, or "" for anything else.
+# A METHOD CALL IS A DIFFERENT NODE — `this.m()` is an EMethod — so asking about EField asks
+# exactly the question the invariant is about, with the calls a default is made of left alone.
+fn chk_this_field(e: ast.Expr) -> str {
+	return match e {
+		Expr.EField(t, n) => chk_field_of_this(t, n)
+		_ => ""
+	}
+}
+
+fn chk_field_of_this(t: ast.Expr, n: str) -> str {
+	return match t {
+		Expr.EIdent(nm) if nm == "this" => n
+		_ => ""
+	}
+}
+
 # chk_join renders a spec's type-parameter names for a message. ty_names wants a list[Ty],
 # and building TNamed leaves purely to join them is a list to make one sentence.
 fn chk_join(ns: list[str]) -> str {
@@ -1091,7 +1227,7 @@ fn chk_super_impl(sp: ast.SpecDecl, ip: ast.ImplDecl, args: list[ast.Ty]) -> ast
 
 	mut out: list[ast.Ty] = []
 	for a in args {
-		out.append(chk_spec_subst(a, sp, ip))
+		out.append(emit.c_spec_subst(a, sp, ip))
 	}
 	return ast.ImplDecl(ip.on, out, ip.target, ip.path, ip.line, ip.col)
 }
@@ -1113,7 +1249,7 @@ fn chk_impl_member(mut &em: emit.Emitter, f: ast.File, ip: ast.ImplDecl, sp: ast
 # chk_sig_differs answers WHY two signatures differ, or "" when they do not.
 #
 # Both signatures carry their receiver as the first parameter — a required one gets `This`,
-# which chk_spec_subst turns into the target — so the two are the same shape and are
+# which emit.c_spec_subst turns into the target — so the two are the same shape and are
 # compared position for position with nothing to offset. That is also what makes `mut fn`
 # comparable: it rides as the receiver's `mut &`, exactly like any other parameter's.
 fn chk_sig_differs(sp: ast.SpecDecl, ip: ast.ImplDecl, req: ast.FnDecl, sup: ast.FnDecl) -> str {
@@ -1134,7 +1270,7 @@ fn chk_sig_differs(sp: ast.SpecDecl, ip: ast.ImplDecl, req: ast.FnDecl, sup: ast
 		}
 		return f"parameter {at} is named `{g.name}`, and the spec names it `{w.name}` — a named argument selects by that name, so it is part of the contract" if w.name != g.name
 
-		wt := chk_spec_subst(w.ty, sp, ip)
+		wt := emit.c_spec_subst(w.ty, sp, ip)
 
 		return f"parameter `{g.name}` is {ast.ty_name(g.ty)}, and the spec declares {ast.ty_name(wt)}" if not ast.ty_eq(wt, g.ty)
 		return f"parameter `{g.name}` is `mut &` and the spec's is not" if g.is_ref and not w.is_ref
@@ -1148,54 +1284,10 @@ fn chk_sig_differs(sp: ast.SpecDecl, ip: ast.ImplDecl, req: ast.FnDecl, sup: ast
 	return "it returns nothing, and the spec declares a result" if req.has_ret and not sup.has_ret
 	return "it returns a value, and the spec declares none" if sup.has_ret and not req.has_ret
 
-	rt := chk_spec_subst(req.ret, sp, ip)
+	rt := emit.c_spec_subst(req.ret, sp, ip)
 	return f"it returns {ast.ty_name(sup.ret)}, and the spec declares {ast.ty_name(rt)}" if req.has_ret and not ast.ty_eq(rt, sup.ret)
 
 	return ""
-}
-
-# chk_spec_subst turns a type written in a SPEC into the type it means for one `impl`.
-#
-# Two things in a required signature are not concrete types yet. `This` is the implementing
-# type — inside an `impl` the parser already resolves it (parser.zg), so the supplied
-# signature holds the target and the required one must be brought to meet it. And a
-# parameterized spec's own `K` is whatever `impl Ix[int]` bound it to, which is why the
-# impl's type arguments are kept rather than skipped.
-fn chk_spec_subst(t: ast.Ty, sp: ast.SpecDecl, ip: ast.ImplDecl) -> ast.Ty {
-	return match t {
-		Ty.TNamed(n) => chk_subst_named(n, sp, ip)
-		Ty.TList(e) => ast.Ty.TList(chk_spec_subst(e, sp, ip))
-		Ty.TOpt(e) => ast.Ty.TOpt(chk_spec_subst(e, sp, ip))
-		Ty.TMap(k, v) => ast.Ty.TMap(chk_spec_subst(k, sp, ip), chk_spec_subst(v, sp, ip))
-		Ty.TChan(e, d) => ast.ty_chan(chk_spec_subst(e, sp, ip), d, "\n" + ast.place_line(ip.path, ip.line, ip.col))
-		Ty.TEither(l, r) => ast.Ty.TEither(chk_spec_subst(l, sp, ip), chk_spec_subst(r, sp, ip))
-		Ty.TTuple(es) => ast.Ty.TTuple(chk_subst_all(es, sp, ip))
-		Ty.TFn(ps, r) => ast.Ty.TFn(chk_subst_all(ps, sp, ip), chk_spec_subst(r, sp, ip))
-		_ => t
-	}
-}
-
-fn chk_subst_named(n: str, sp: ast.SpecDecl, ip: ast.ImplDecl) -> ast.Ty {
-	return ast.Ty.TNamed(ip.target) if n == "This"
-
-	mut i := 0
-	for i < sp.params.len() {
-		# an argument the impl did not give leaves the parameter as it stands, so the
-		# mismatch is reported about the type the reader wrote rather than about a
-		# substitution that did not happen
-		return ip.args[i] if sp.params[i] == n and i < ip.args.len()
-
-		i = i + 1
-	}
-	return ast.Ty.TNamed(n)
-}
-
-fn chk_subst_all(ts: list[ast.Ty], sp: ast.SpecDecl, ip: ast.ImplDecl) -> list[ast.Ty] {
-	mut out: list[ast.Ty] = []
-	for t in ts {
-		out.append(chk_spec_subst(t, sp, ip))
-	}
-	return out
 }
 
 # chk_int_literal rejects an integer literal that does not fit an i64.
@@ -1358,6 +1450,11 @@ fn chk_arg_says(key: str, pos: int) -> str {
 # It is the plain name of the slot, with no clause about what is wrong with it, so a borrow
 # rule and a fit rule can each finish the sentence their own way.
 pub fn chk_slot_says(key: str, pos: int) -> str {
+	# A CALL THROUGH A VALUE HAS NO NAME, and an empty key is how it says so. Backticks are
+	# for something the reader wrote, so quoting a phrase this compiler made up — "argument 1
+	# of `this call`" — points at a name no program contains.
+	return f"argument {strconv.to_string(pos, 10)} of this call" if key == ""
+
 	return f"argument {strconv.to_string(pos, 10)} of `{chk_call_name(key)}`"
 }
 
@@ -1689,7 +1786,7 @@ fn chk_intrinsic_params(name: str) -> list[ast.Ty] {
 
 	return [ast.Ty.TFloat] if name == "__zrt_trunc"
 
-	return [ast.Ty.TList(ast.Ty.TStr)] if name == "__zrt_exec" or name == "__zrt_proc_spawn"
+	return [ast.Ty.TList(ast.Ty.TStr)] if name == "__zrt_exec" or name == "__zrt_proc_spawn" or name == "__zrt_proc_open3"
 
 	return [ast.Ty.TStr, ast.Ty.TStr] if name == "__zrt_set_env"
 
@@ -2560,6 +2657,13 @@ fn chk_fits(mut &em: emit.Emitter, want: ast.Ty, got: ast.Ty) -> bool {
 		return chk_fits(em, we, ge)
 	}
 
+	# A LIST LITERAL FITS AN ARRAY SLOT, and the length is what decides whether it does. The
+	# literal is context-typed (docs/code/collections.md): `[1, 2, 3]` infers `list[int]`
+	# standing on its own, and IS a `[int; 3]` in an array position. So the ELEMENTS are asked
+	# here — the same recursion a list gets — and the LENGTH is asked at the lowering, where
+	# the literal's elements are in hand and the sentence can name both counts.
+	return chk_fits(em, emit.c_arr_elem(want), emit.c_list_elem(got)) if emit.c_is_arr(want) and emit.c_is_list(got)
+
 	# an optional handed to a value slot is a real mistake, and emit already has a better
 	# sentence for it than this rule can write — it names the three ways to unwrap one
 	return true if ast.ty_is_opt(got)
@@ -2815,7 +2919,7 @@ pub fn chk_typedef(mut &em: emit.Emitter, td: ast.TypeDecl, f: ast.File) -> ast.
 	# `str(l)` printed the pointer as a number. A form that answers wrongly is worse than one
 	# that says it is not built.
 	if emit.c_scalar_class(td.under) == emit.SC_NONE {
-		chk_at_place(em, td.path, td.line, td.col, rule.Rule.NotYetTypedefNonScalar, f"NotImplemented: `type {td.name} = {ast.ty_name(td.under)}` over a non-scalar — this compiler builds a strong typedef over a scalar, where the new name costs nothing at runtime; a `str`, a container or a struct underneath needs the copy and drop rules to follow the name")
+		chk_at_place(em, td.path, td.line, td.col, rule.Rule.NotYetTypedefNonScalar, f"NotImplemented: `type {td.name} = {ast.ty_name(td.under)}` over a non-scalar — this compiler builds a strong typedef over a scalar, where the new name costs nothing at runtime; a `str`, a container or a struct underneath needs the copy and drop rules to follow the name (GRAMMAR#type-decl)")
 		return ast.Ty.TUnknown
 	}
 	return td.under

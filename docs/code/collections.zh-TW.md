@@ -9,12 +9,10 @@ Zerg 的內建容器——**`list`**、**`map`**、**`set`**，外加定長的 *
 | `list[T]`   | 一個**有序序列**     | 任意 `T`（無 bound） | 索引序         |               |
 | `map[K, V]` | 一張**關聯**表       | `K: Eq + Hash`       | **插入**序     |               |
 | `set[T]`    | 一個**唯一成員**集合 | `T: Eq + Hash`       | **插入**序     | **[not yet]** |
-| `[T; N]`    | 一個**定長陣列**     | 任意 `T`（無 bound） | 索引序         | **[not yet]** |
+| `[T; N]`    | 一個**定長陣列**     | 任意 `T`（無 bound） | 索引序         |               |
 
 上表的 `map` key 需求是預期的那一種；這個階段 key 僅限 **`int`** 或 **`str`**（見下方 [key](#keyeq-免費hash-顯式)）。
-兩個 **[not yet]** 的列各自指名自己:`set[T]` 在型別或值任一位置都是 _E9064 NotImplemented: the built-in `set`_,
-而 `[T; N]` 是 _E9017 NotImplemented: an array type `[T; N]` — this compiler has `list[T]`, whose length is not
-part of its type_。
+唯一 **[not yet]** 的那一列指名自己:`set[T]` 在型別或值任一位置都是 _E9064 NotImplemented: the built-in `set`_。
 
 更豐富的形狀都是組合出來的，不是新的內建型別。`list[byte]` 是原始位元組序列（可索引、可含 NUL）；`str` 還是獨立的
 immutable primitive（見下）。
@@ -200,9 +198,9 @@ row := [b'\0'; WIDTH]           # WIDTH 是 top-level const——在裸 := 下�
 容器的值模型。其餘一切都從 `list` 已述的規則掉出來：
 
 - **建構**——list literal `[a, b, …]` 是 **context-typed**：預設 `list[T]`，當目標是 `[T; N]` 時才是陣列（長度在
-  編譯期查）。**fill 形式 `[v; N]`** 意圖做出 **N 份 `v`**——用來建大集合而不必逐一列出；沒有隱式 zero-fill。在裸
-  `:=` 下 fill 形式建的是一個 **`list[T]`**，不是陣列型別 `[T; N]`；陣列定型的 fill 形式（在明確的 `[T; N]` 位置）是
-  **[not yet]**。
+  編譯期查——_E3139 a [int; 3] slot takes 3 element(s) and this literal has 2_）。**fill 形式 `[v; N]`** 做出
+  **N 份 `v`**——用來建大集合而不必逐一列出；沒有隱式 zero-fill。在裸 `:=` 下 fill 形式建的是一個 **`list[T]`**，
+  不是陣列型別 `[T; N]`。
 
   這個 **count 就是陣列長度那個編譯期常數**——一個 literal、一個初始式摺得出來的名字（module-level 或 local），
   或它們之間的算術：`[0; 256]`、`[0; ROWS * COLS]` 與 `[b'\0'; WIDTH]` 是同一個形式。摺不出來的 count（runtime
@@ -214,11 +212,19 @@ row := [b'\0'; WIDTH]           # WIDTH 是 top-level const——在裸 := 下�
   而不是 N 個共用同一份的槽。
 
 - **存取**——`a[i]` by value、bounds-check → `IndexError`，而落在 `[0, N)` 之外的**常數** index 在**編譯期**就被
-  抓出；`a.get(i) -> T?` 是 checked 路徑。`mut a` 可原地改元素（`a[i] = v`），但**永遠不能 grow/shrink**——大小在
-  型別裡；plain `a` 則凍結。
+  抓出（_E3140 `5` is outside [int; 3]_）；`a.get(i) -> T?` 是 checked 路徑。`mut a` 可原地改元素（`a[i] = v`），
+  但**永遠不能 grow/shrink**——大小在型別裡（_E3141 an array answers `len`_）；plain `a` 則凍結。
+
+  > **[not yet]** `get` 尚未建置——_E9112 NotImplemented: the array method `get`_——下面的 `slice` 也是。讀一個元素
+  > 用 `a[i]`，它的邊界在 runtime 查。
+
 - **長度**——`a.len()` 就是 N，本身是編譯期常數。
 - **寫進簽章**——函式透過**值泛型**對長度泛化,`fn sum[N: int](xs: [int; N])`,`N` 由引數推出、呼叫端從不寫它。
 
+  > **[not yet]** **指名常數**的長度會被拒絕——_E9111 NotImplemented: an array length that names a constant_。
+  > 長度是型別的一部分,所以在任何兩個型別被比較之前它就得是一個數字,而讀這個型別的 parser 沒有常數表可以摺
+  > 一個名字。寫出數字,或改用 `list[T]`。
+  >
   > **[not yet]** 值參數會被拒絕——_E9029 NotImplemented: a value generic parameter `N: int`_——所以今天的函式只吃
   > 一個具體長度（`[int; 4]`）,要處理任意長度就改收 `list[T]`。
 
@@ -226,7 +232,7 @@ row := [b'\0'; WIDTH]           # WIDTH 是 top-level const——在裸 := 下�
   種元素型別皆然、包含 POD），並**逐元素** derive：當元素型別 `T` 具備時，陣列才逐元素 derive `Eq`／`Ord`（以及建置後的
   `Hash`／`Encode`）——兩個同型別陣列於是逐元素比較（與雜湊）。**沒有**任何一律 auto-derive 的 `Object`；相等性只來自
   元素上的 `derive(Eq)`。`a.slice(p, q)` 意圖產出**唯讀 `list[T]`** view——從陣列橋回 list 家族的 COW 通道——但
-  `slice` 這個 **method** 是 **[not yet]**（見 [切片](#切片唯讀子區間)）。
+  `slice` 這個 **method** 是 **[not yet]**——_E9112 NotImplemented: the array method `slice`_（見 [切片](#切片唯讀子區間)）。
 
 ## 字串與位元組
 

@@ -41,12 +41,20 @@ this is a command of its own rather than a `--desugar` mode on `fmt`.
 
 ## The rules
 
-| Code   | Rule                                                     | Same C |
-| ------ | -------------------------------------------------------- | ------ |
-| `D101` | a postfix guard becomes the `if` block it is sugar for   | yes    |
-| `D102` | a while-`for` becomes the infinite `for` it is sugar for | no     |
-| `D103` | a range-`for` becomes the infinite `for` it is sugar for | no     |
-| `D104` | an `assert` becomes the guarded raise it is sugar for    | yes    |
+| Code   | Rule                                                        | Same C |
+| ------ | ----------------------------------------------------------- | ------ |
+| `D101` | a postfix guard becomes the `if` block it is sugar for      | yes    |
+| `D102` | a while-`for` becomes the infinite `for` it is sugar for    | no     |
+| `D103` | a range-`for` becomes the infinite `for` it is sugar for    | no     |
+| `D104` | an `assert` becomes the guarded raise it is sugar for       | yes    |
+| `D105` | an f-string becomes the `str` concatenation it is sugar for | yes    |
+
+`D105` writes out what the PARSER builds for an f-string — `f"a{x}b"` is `"a" + str(x) + "b"` —
+so a hole's tail is written as the call it stands for: `{x!s}` is `x.display()`, `{x!r}` is
+`x.debug()`, and `{x=}` prefixes the expression's own source text. A `:spec` is `x.format(spec)`,
+which this compiler does not build (_E9107_), and `!a` has no written spelling at all — so a
+literal holding either is **left alone, whole**: an f-string is one token, and half a rewrite
+would be a literal that no longer says what it said.
 
 **Same C** is a real distinction and the gate measures it. `D101` produces a program whose emitted C
 is **byte-identical** to the sugar's, because four of the five postfix guards are desugared in the
@@ -217,6 +225,29 @@ the parser builds a tree, and this builds text.
 
 Like `D101` it declines on a comment anywhere in the statement — the rewrite becomes several
 statements, and a comment runs to the end of whichever line it lands on.
+
+### `D105` — an f-string becomes its concatenation
+
+An f-string is a fold: the leading run of text, then one part per hole, joined left to right by
+`+`. The parser builds exactly that, so this writes it out rather than lowering it a second way —
+which is why the C is byte-identical.
+
+```zerg
+fn main() {
+ n := 42
+ s := "hi"
+ print "n is " + str(n) + ", " + (s).debug()
+ print "" + "n=" + str(n)
+}
+```
+
+The first part is emitted **even when empty**, which is what the leading `""` is: the fold has to be
+seeded with a `str`, or `f"{a}{b}"` would add two values that are not strings yet.
+
+A hole's tail is written as the call it stands for — `{x!s}` is `x.display()`, `{x!r}` is
+`x.debug()` — and the expression is **parenthesized**, because `x + 1` with a `.debug()` on the end
+of it is a call on `1`. The `=` form prefixes the expression's own **source text**, which is a fact
+only the text has.
 
 ## What it declines, and why
 

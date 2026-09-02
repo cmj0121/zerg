@@ -1,0 +1,31 @@
+# 24 — A function value, and a closure that captures by copy.
+#
+# A named `fn` can be bound, passed, and called back through. A closure
+# (`fn (a: int) -> int { … }`) captures each closed-over binding BY COPY at
+# the point it is written, so the value it saw is the value it keeps.
+#
+# beyond-the-seed: a closure used as a value. The bootstrap seed does not lower
+# one, so this example is built by `zerg` — which is what `make examples` uses.
+fn double(x: int) -> int {
+	return x * 2
+}
+
+fn apply(f: fn (int) -> int, v: int) -> int {
+	return f(v)
+}
+
+fn adder(n: int) -> fn (int) -> int {
+	return fn (a: int) -> int {
+		return a + n
+	}
+}
+
+fn main() {
+	print apply(double, 21)
+
+	add10 := adder(10)
+	add100 := adder(100)
+	print add10(5)
+	print add100(5)
+	print add10(1)
+}

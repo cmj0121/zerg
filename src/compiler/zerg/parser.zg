@@ -27,6 +27,18 @@ pub struct Parser {
 	# path is the file being read, stamped onto every FnDecl so a diagnostic can name it
 	pub path: str
 
+	# saw_this is whether a `this` has been READ since the flag was last cleared. It is the one
+	# thing an inherent `impl`'s member needs that its head cannot supply: GRAMMAR#impl-decl
+	# tells a method from an associated fn by whether the body uses `this`, and the body is read
+	# after the head.
+	#
+	# IT IS TOKEN-DERIVED, like `depth` and `edepth` beside it, and it is set in the ONE place
+	# the keyword becomes an expression — which is what makes it right where a scan of the
+	# body's token range is not: an f-string's holes are RE-LEXED into a parser of their own, so
+	# `f"{this.n}"` reads a `this` that never appears in the outer range. Every hole goes through
+	# the same `parse_primary`, so every hole is counted here.
+	pub saw_this: bool
+
 	# depth counts how many recursion levels of nesting the parser is inside — one per
 	# nested expression, block, type, unary/receive prefix, `??` right arm, and `else if`.
 	# It exists so ZG_MAX_NESTING can be enforced: this parser recurses once per level on
@@ -673,12 +685,9 @@ fn parse_param_types(mut &p: Parser) -> list[ast.Ty] {
 	expect(p, token.Kind.LParen)
 	mut out: list[ast.Ty] = []
 	for not p_at(p, token.Kind.RParen) and not p_at(p, token.Kind.Eof) {
-		# The prefix is READ, and the type behind it read too, before anything is refused: a
-		# sentence made at the `&` names a bracket, and a sentence made here names the type
-		# the marker is on. `mut` with no `&` is not a param-type at all — the same rule
-		# GRAMMAR#param states for a declaration — so expect answers for it.
+		# `mut` WITH NO `&` IS NOT A PARAM-TYPE AT ALL — the same rule GRAMMAR#param states for
+		# a declaration — so expect answers for it, and names the bracket that is missing.
 		mut is_ref := false
-		mt := cur(p)
 		if p_at(p, token.Kind.Mut) {
 			p_advance(p)
 			expect(p, token.Kind.Amp)
@@ -686,14 +695,16 @@ fn parse_param_types(mut &p: Parser) -> list[ast.Ty] {
 		}
 		t := parse_type(p)
 
-		# `mut &` in a type is real in the LANGUAGE: it is part of the type, so `fn(mut &int)`
-		# and `fn(int)` are distinct (docs/code/functions.md). It is refused here because the
-		# value side of it is refused downstream anyway — a held function is a bare pointer in
-		# this compiler and the call site reads its convention from the callee's NAME (E9065) —
-		# so accepting the spelling would only mean a type nothing can ever hold.
-		raise p_diag_at(p, mt.line, mt.col, rule.Rule.NotYetFnTypeMutRefParam, f"NotImplemented: a `mut &` parameter in a function type — GRAMMAR#param-type derives `( 'mut' '&' )? type`, and `mut &` is part of the type, so `fn(mut &{ast.ty_name(t)})` is a distinct type from `fn({ast.ty_name(t)})`. A function VALUE is a bare pointer here and the call site reads a `mut &` from the callee's NAME, which a value has not got, so the type is refused rather than spelled and never honoured") if is_ref
-
-		out.append(t)
+		# `mut &` IS PART OF THE TYPE (GRAMMAR#param-type, docs/code/functions.md): `fn(mut &int)`
+		# and `fn(int)` are two types, because they differ in what the caller hands over. So the
+		# marker is built INTO the type rather than kept beside it — which is also what lets a
+		# call through a value read the convention from the type it is calling, having no name
+		# to read it from.
+		if is_ref {
+			out.append(ast.Ty.TRef(t))
+		} else {
+			out.append(t)
+		}
 		p_list_sep(p, token.Kind.RParen, ")", "a parameter type list")
 	}
 	expect(p, token.Kind.RParen)
@@ -723,12 +734,95 @@ fn parse_chan_elem(mut &p: Parser, line: int, col: int) -> ast.Ty {
 	return elem
 }
 
+# p_arr_len_key reduces an array length to the KEY the type carries. GRAMMAR#array-type derives
+# a const-expr there, and two spellings of one length have to be one type — so a fold that needs
+# no table runs here, and what it cannot fold is carried as the constant's NAME for the emitter
+# to resolve.
+#
+# ANYTHING ELSE IS REFUSED AT THE LENGTH. An expression mixing a name with arithmetic cannot be
+# reduced without the table, and carrying its source text instead would make two spellings of
+# one number two types — which is worse than saying so.
+fn p_arr_len_key(mut &p: Parser) -> str {
+	at := cur(p)
+	e := parse_expr(p)
+	v := p_fold_len(e)
+	return strconv.to_string(v, 10) if v >= 0
+
+	# A NAME IS THE HALF THAT NEEDS THE CONSTANT TABLE, and the parser has not got one. The
+	# length is part of the TYPE — two types are compared long before the emitter is reached —
+	# so carrying the name instead of the number would make `[byte; WIDTH]` and `[byte; 4]` two
+	# types whatever WIDTH is, which is worse than saying the form is not built.
+	raise p_diag_at(p, at.line, at.col, rule.Rule.NotYetArrayLenNamed, f"NotImplemented: an array length that names a constant — `{p_name_of(e)}` is a const-expr GRAMMAR#array-type derives, and the length is part of the TYPE, so it has to be a number before any two types are compared. Write the number, or use a `list[T]`") if p_name_of(e) != ""
+
+	raise p_diag_at(p, at.line, at.col, rule.Rule.ArrayLenNotConst, f"an array length is a compile-time constant (GRAMMAR#array-type derives a const-expr there), and {ast.expr_kind(e)} is not one")
+}
+
+fn p_fold_len(e: ast.Expr) -> int {
+	return match e {
+		Expr.EInt(lex, _, _) => p_len_int(lex)
+		Expr.EBinary(o, a, b) => p_len_binary(o, a, b)
+		_ => -1
+	}
+}
+
+fn p_len_int(lex: str) -> int {
+	return -1 if not lexer.int_fits(lex)
+
+	v := lexer.int_value(lex)
+	return -1 if v < 0
+
+	return v
+}
+
+fn p_len_binary(o: str, a: ast.Expr, b: ast.Expr) -> int {
+	x := p_fold_len(a)
+	y := p_fold_len(b)
+
+	return -1 if x < 0 or y < 0
+
+	return x + y if o == "+"
+	return x - y if o == "-" and x >= y
+	return x * y if o == "*"
+	return x / y if o == "/" and y != 0
+	return x % y if o == "%" and y != 0
+
+	return -1
+}
+
+fn p_name_of(e: ast.Expr) -> str {
+	return match e {
+		Expr.EIdent(nm) => nm
+		_ => ""
+	}
+}
+
 fn parse_base_type(mut &p: Parser) -> ast.Ty {
-	# `[T; N]` — an ARRAY TYPE (GRAMMAR#array-type). It is not built, and it was not turned away
-	# either: the `[` fell through to the name below, so `xs: [int; 3]` reported `expected
-	# `=`, found `int`` and `fn f(xs: [int; 3])` reported `expected `:`, found `;`` — two
-	# different tokens, neither of them the form.
-	raise p_diag(p, rule.Rule.NotYetArrayType, "NotImplemented: an array type `[T; N]` — this compiler has `list[T]`, whose length is not part of its type") if p_at(p, token.Kind.LBrack)
+	# `ptr` / `ptr[T]` — a RAW POINTER (GRAMMAR#ptr-type). `ptr` is a keyword, so it never
+	# reaches the name below; the bare form is the untyped address and `[T]` types what it
+	# points at. The TYPE is legal anywhere a type is — it describes pointer-shaped data — and
+	# every OPERATION on one is `unsafe`-only, which is a rule about the operation.
+	if p_at(p, token.Kind.Ptr) {
+		p_advance(p)
+		return ast.Ty.TPtr(ast.Ty.TUnknown) if not p_at(p, token.Kind.LBrack)
+
+		p_advance(p)
+		inner := parse_type(p)
+		expect(p, token.Kind.RBrack)
+		return ast.Ty.TPtr(inner)
+	}
+
+	# `[T; N]` — an ARRAY TYPE (GRAMMAR#array-type): the element type, and a length that is part
+	# of the type. The `[` is the only thing that opens one in type position, so it is read here
+	# rather than falling through to the name below, which is what used to report `expected `=`,
+	# found `int`` for `xs: [int; 3]`.
+	if p_at(p, token.Kind.LBrack) {
+		p_advance(p)
+		elem := parse_type(p)
+		expect(p, token.Kind.Semi)
+		key := p_arr_len_key(p)
+		expect(p, token.Kind.RBrack)
+		return ast.Ty.TArr(elem, key)
+	}
 
 	# `unsafe fn(…) -> R` — a FUNCTION TYPE carrying the unsafe marker (GRAMMAR#fn-type is
 	# `'unsafe'? 'fn' '(' param-type-list? ')' ret-type?`). `unsafe` is a keyword, so it never
@@ -736,13 +830,13 @@ fn parse_base_type(mut &p: Parser) -> ast.Ty {
 	# binding said ``expected `=`, found `fn` ``, a parameter said ``expected `,`, found `fn` ``
 	# — two tokens, neither of them the form, for a production GRAMMAR derives in full.
 	#
-	# It is refused for the reason a standalone `unsafe fn` is (E9027): the marker is a TRUST
-	# BOUNDARY this compiler does not enforce, so honouring it in a type would be a promise
-	# about calls it never checks. Dropping the word instead would be worse — a plain `fn`
-	# type is callable from safe code, which is the one thing the marker exists to prevent.
+	# `unsafe fn(…)` — a function TYPE carrying the marker (GRAMMAR#fn-type). The marker is
+	# part of the TYPE, so `unsafe fn() -> int` and `fn() -> int` are two types and a value of
+	# one is not a value of the other: that is what keeps a plain `fn` type from being a way to
+	# launder an unsafe function into safe code.
 	if p_at(p, token.Kind.Unsafe) {
-		u := cur(p)
-		raise p_diag_at(p, u.line, u.col, rule.Rule.NotYetUnsafeFnType, "NotImplemented: an `unsafe fn(…)` TYPE — GRAMMAR#fn-type carries the marker, and `unsafe` is a trust boundary this compiler does not enforce (the reason a standalone `unsafe fn` is E9027), so the type is refused rather than spelled and never honoured")
+		p_advance(p)
+		return ast.Ty.TUnsafe(parse_base_type(p))
 	}
 
 	if p_at(p, token.Kind.LArrow) {
@@ -1029,7 +1123,7 @@ fn parse_bound(mut &p: Parser, whose: str, allow_args: bool) -> list[str] {
 		# refuse every correct `impl Ord` with "parameter `o` is int, and the spec declares T"
 		# — a valid program turned away for a reason about the compiler.
 		if p_at(p, token.Kind.LBrack) {
-			raise p_diag(p, rule.Rule.NotYetParameterizedSpec, f"NotImplemented: a parameterized `{name}[…]` as {whose} — this compiler carries a spec's type arguments only on an `impl` and on a type parameter's bound, so it has nothing to substitute the parameters with here") if not allow_args
+			raise p_diag(p, rule.Rule.NotYetParameterizedSpec, f"NotImplemented: a parameterized `{name}[…]` as {whose} — this compiler carries a spec's type arguments only on an `impl` and on a type parameter's bound, so it has nothing to substitute the parameters with here (GRAMMAR#type-args)") if not allow_args
 
 			out.append(ast.spec_key(name, parse_ty_args(p)))
 		} else {
@@ -1110,7 +1204,7 @@ fn conv_ty(name: str) -> ast.Ty {
 # than a second door that says it by default.
 pub fn parse_at(src: str, path: str) -> ast.File {
 	toks := lexer.tokenize(src)
-	mut p := Parser(toks, 0, "", path, 0, 0, [])
+	mut p := Parser(toks, 0, "", path, false, 0, 0, [])
 	mut imports: list[ast.ImportDecl] = []
 	mut structs: list[ast.StructDecl] = []
 	mut enums: list[ast.EnumDecl] = []
@@ -1243,7 +1337,7 @@ pub fn parse_at(src: str, path: str) -> ast.File {
 			# `const` at the top level is a module constant, not a statement: it becomes a
 			# C global rather than a local of any function
 			p_advance(p)
-			consts.append(p_top_binding(p, false, true, is_pub, in_unsafe, t.line, t.col))
+			consts.append(p_top_binding(p, "", false, true, is_pub, in_unsafe, t.line, t.col))
 		} else if p_at(p, token.Kind.Init) {
 			# an `init()` is called by the RUNTIME, not by a reader in another module, so
 			# there is no visibility for a marker to grant (GRAMMAR#init-decl derives none)
@@ -1253,7 +1347,7 @@ pub fn parse_at(src: str, path: str) -> ast.File {
 			# an `impl` fulfils a spec rather than declaring a new name, so GRAMMAR#impl-decl
 			# derives no `pub` for it — visibility lives on the spec and on the type
 			raise p_diag_at(p, t.line, t.col, rule.Rule.PubOnImpl, "`pub` does not go on an `impl` block — an `impl` fulfils a spec, and visibility lives on the `spec` and the type it is for") if is_pub
-			parse_impl(p, fns, impls, in_unsafe)
+			parse_impl(p, fns, impls, consts, in_unsafe)
 		} else if p_at(p, token.Kind.Type) {
 			types.append(parse_typedecl(p, is_pub))
 		} else if p_at(p, token.Kind.Hash) {
@@ -1281,7 +1375,7 @@ pub fn parse_at(src: str, path: str) -> ast.File {
 			# instead of splitting into "compiles when unused" and `undefined name` at
 			# every use site.
 			p_advance(p)
-			consts.append(p_top_binding(p, true, false, is_pub, in_unsafe, t.line, t.col))
+			consts.append(p_top_binding(p, "", true, false, is_pub, in_unsafe, t.line, t.col))
 		} else if p_at(p, token.Kind.Ident) and (peek_kind(p, 1) == token.Kind.Walrus or peek_kind(p, 1) == token.Kind.Colon) {
 			# a plain top-level binding — `COUNT := 3`, `pub COUNT := 3`, or `answer: int
 			# = compute()` — is the same module constant the `const` arm reads, without
@@ -1289,19 +1383,15 @@ pub fn parse_at(src: str, path: str) -> ast.File {
 			# module's immutable state with `pub` as the visibility. It used to fall into
 			# the fallback below and vanish, so the module compiled WITHOUT the member and
 			# every use answered `undefined name` about a name the module plainly declares.
-			consts.append(p_top_binding(p, false, false, is_pub, in_unsafe, t.line, t.col))
+			consts.append(p_top_binding(p, "", false, false, is_pub, in_unsafe, t.line, t.col))
 		} else if p_at(p, token.Kind.Unsafe) and (peek_kind(p, 1) == token.Kind.Fn or (peek_kind(p, 1) == token.Kind.Mut and peek_kind(p, 2) == token.Kind.Fn)) {
-			# a standalone `unsafe fn` — GRAMMAR#fn-decl spells it (`'pub'? 'unsafe'?
-			# 'mut'? 'fn'`), and it IS a declaration. Refusing it is right — nothing here
-			# records the marker, so reading the `fn` as safe would erase the one thing the
-			# keyword says, which is the caller rule the GROUP form now carries (E3083) — but
-			# it must be refused AS ITSELF: the statement fallback below answered
-			# "NotImplemented: unsafe" about the block-expression, and the `pub` variant was
-			# told it had marked a statement, about a form that is a declaration. `is_pub` is
-			# already consumed, so `pub unsafe fn` lands here too and both spellings get this
-			# one message; `t` is the declaration's first token, so the refusal carries the
-			# place a declaration owes.
-			raise p_diag_at(p, t.line, t.col, rule.Rule.NotYetUnsafeFn, "NotImplemented: a standalone `unsafe fn` declaration — `unsafe` marks a trust boundary this compiler does not enforce yet (docs/runtime/ffi.md), so the function is refused rather than read as a safe `fn`")
+			# A STANDALONE `unsafe fn` — GRAMMAR#fn-decl spells it (`'pub'? 'unsafe'?
+			# 'mut'? 'fn'`), and it IS a declaration. What the marker does is what the
+			# module-level GROUP's marker does: it records `in_unsafe` on the declaration,
+			# and the caller rule (E3083) reads that — so the single-function form and the
+			# group form are one rule with two spellings rather than two rules.
+			p_advance(p)
+			fns.append(parse_fn(p, is_pub, "", false, true, false, false))
 		} else if p_at(p, token.Kind.Unsafe) and peek_kind(p, 1) == token.Kind.LBrace {
 			# a module-level `unsafe { … }` group opens. Every item inside goes through
 			# the arms above exactly as it would outside — the group is a CONTEXT, not a
@@ -1429,10 +1519,10 @@ fn p_is_nop(s: ast.Stmt) -> bool {
 # ever remember where it was written, and a declaration a rule can refuse owes a place.
 # `in_unsafe` is whether the binding sits inside a module-level `unsafe { … }` group — the
 # one place a top-level `mut` is legal (docs/runtime/ffi.md).
-fn p_top_binding(mut &p: Parser, is_mut: bool, is_const: bool, is_pub: bool, in_unsafe: bool, line: int, col: int) -> ast.ConstDecl {
+fn p_top_binding(mut &p: Parser, recv: str, is_mut: bool, is_const: bool, is_pub: bool, in_unsafe: bool, line: int, col: int) -> ast.ConstDecl {
 	s := parse_binding(p, is_mut, is_const)
 	return match s {
-		Stmt.SLet(name, ty, has_ty, im, ic, value) => ast.ConstDecl(name, ty, has_ty, im, ic, is_pub, in_unsafe, value, p.path, line, col)
+		Stmt.SLet(name, ty, has_ty, im, ic, value) => ast.ConstDecl(name, recv, ty, has_ty, im, ic, is_pub, in_unsafe, value, p.path, line, col)
 
 		# parse_binding only ever answers SLet; the arm is exhaustiveness, and it must be
 		# LOUD: fabricating a ConstDecl here would let a future non-SLet result flow into
@@ -1955,7 +2045,14 @@ fn parse_spec(mut &p: Parser, is_pub: bool) -> ast.SpecDecl {
 			# (the sig_unsafe column), and a `spec` member sits in no group. The signature is
 			# discarded by the raise below in any case.
 			sig := parse_fn_head(p, false, "This", u_mut, false)
-			raise p_diag_at(p, u.line, u.col, rule.Rule.NotYetUnsafeSpecSignature, f"NotImplemented: the `unsafe` `spec` signature `{sig.name}` — GRAMMAR#fn-sig derives `'unsafe'? 'mut'? 'fn'`, so this IS a spec member; `unsafe` marks a trust boundary this compiler does not enforce yet (docs/runtime/ffi.md), so the signature is refused rather than read as a safe one and its `unsafe` dropped")
+
+			# THE REASON IS NOT THE BOUNDARY ANY MORE. It said "`unsafe` marks a trust
+			# boundary this compiler does not enforce yet", which was true until group 12
+			# built it — a declaration carries the marker and the caller rule reads it. What
+			# is missing is one step further in: a spec's signature is a REQUIREMENT, and
+			# what an implementer owes for an unsafe one — whether a safe `fn` satisfies it,
+			# or the other way round — is a rule this compiler has not got.
+			raise p_diag_at(p, u.line, u.col, rule.Rule.NotYetUnsafeSpecSignature, f"NotImplemented: the `unsafe` `spec` signature `{sig.name}` — GRAMMAR#fn-sig derives `'unsafe'? 'mut'? 'fn'`, so this IS a spec member; what an implementer owes for an unsafe REQUIREMENT is a rule this compiler has not got (docs/core/specs.md), so the signature is refused rather than read as a safe one and its `unsafe` dropped")
 		}
 
 		# `mut fn` is part of a fn-sig (GRAMMAR#fn-sig), and it is INTERFACE: a `mut fn` method
@@ -1972,9 +2069,19 @@ fn parse_spec(mut &p: Parser, is_pub: bool) -> ast.SpecDecl {
 			# it a name makes a required signature the same SHAPE as a supplied one, so the
 			# two are compared position for position with nothing to offset.
 			sig := parse_fn_head(p, false, "This", recv_mut, false)
-			raise p_diag(p, rule.Rule.NotYetSpecMemberBody, f"NotImplemented: a `spec` member with a BODY — a provided method's body is read and dropped here, so nothing in it is checked and it is not the method that runs; declare the signature `{sig.name}` and write the body in each `impl`") if p_at(p, token.Kind.LBrace)
 
-			reqs.append(sig)
+			# A PROVIDED METHOD — `fn f() { … }` in a spec. GRAMMAR#spec-member is `fn-sig |
+			# fn-decl`, so a member with a body is the second alternative, and it is a DEFAULT:
+			# an `impl` that leaves it out gets this one rather than owing it.
+			#
+			# `has_body` and not an empty statement list, because `fn f() { }` is a provided
+			# method that does nothing and a signature is a requirement — two different things
+			# with the same body.
+			if p_at(p, token.Kind.LBrace) {
+				reqs.append(ast.FnDecl(sig.name, sig.recv, sig.params, sig.has_ret, sig.ret, parse_block(p), sig.is_pub, sig.path, sig.line, sig.col, sig.tparams, sig.tbounds, sig.in_unsafe, false, false, true, false))
+			} else {
+				reqs.append(sig)
+			}
 		} else if p_at(p, token.Kind.Type) {
 			raise p_diag(p, rule.Rule.AssocTypeNotSpecMember, "an associated type is not a `spec` member — a spec carries BEHAVIOUR and nothing else (GRAMMAR#spec-member), so `type Item` names a type nothing here binds. Take the type as a parameter of the spec instead")
 		} else if p_at(p, token.Kind.Ident) and peek_kind(p, 1) == token.Kind.Colon {
@@ -2020,7 +2127,7 @@ fn parse_typedecl(mut &p: Parser, is_pub: bool) -> ast.TypeDecl {
 	# refused for one reason, and the alias was the one a gate could not pin.
 	if p_at(p, token.Kind.LBrack) {
 		b := cur(p)
-		raise p_diag_at(p, b.line, b.col, rule.Rule.NotYetGenericTypedef, f"NotImplemented: a generic `type {name}[…] = …` — a parameterized alias is one instantiation per argument, and this compiler erases type parameters (the reason a generic `enum` is E9003 and a generic `struct` E9004)")
+		raise p_diag_at(p, b.line, b.col, rule.Rule.NotYetGenericTypedef, f"NotImplemented: a generic `type {name}[…] = …` — a parameterized alias is one instantiation per argument, and this compiler erases type parameters (the reason a generic `enum` is E9003 and a generic `struct` E9004) (GRAMMAR#type-decl)")
 	}
 
 	expect(p, token.Kind.Assign)
@@ -2042,7 +2149,7 @@ fn parse_init(mut &p: Parser, at: int) -> ast.FnDecl {
 	expect(p, token.Kind.RParen)
 	mut params: list[ast.Param] = []
 	body := parse_block(p)
-	return ast.FnDecl(init_name(at), "", params, false, ast.Ty.TVoid, body, false, p.path, kw.line, kw.col, [], [], false, false, false)
+	return ast.FnDecl(init_name(at), "", params, false, ast.Ty.TVoid, body, false, p.path, kw.line, kw.col, [], [], false, false, false, true, false)
 }
 
 # with_name is the binding a NAMELESS `with` gets, and is_with_name is how a rule that reads
@@ -2229,7 +2336,7 @@ fn parse_enum(mut &p: Parser, is_pub: bool) -> ast.EnumDecl {
 	# `enum E[T] { A(T) }` — the parameter list was read and dropped the way a struct's is,
 	# but an enum's payload NAMES it, so `T` reached cc as a type nothing declares. A struct's
 	# field types go through c_check_named_ty; a variant's did not.
-	raise p_diag(p, rule.Rule.NotYetGenericEnum, f"NotImplemented: a generic enum `{name}[…]` — this compiler erases type parameters, and a variant's payload names one") if p_at(p, token.Kind.LBrack)
+	raise p_diag(p, rule.Rule.NotYetGenericEnum, f"NotImplemented: a generic enum `{name}[…]` — this compiler erases type parameters, and a variant's payload names one (GRAMMAR#enum-decl)") if p_at(p, token.Kind.LBrack)
 	expect(p, token.Kind.LBrace)
 	skip_semis(p)
 
@@ -2306,7 +2413,7 @@ fn parse_struct(mut &p: Parser, is_pub: bool) -> ast.StructDecl {
 	# `no type named T`: a message about the consequence, from two steps away, for a form
 	# the compiler had already decided not to support. A generic ENUM has been refused by
 	# name since it was written; this is the same refusal for the other declaration.
-	raise p_diag(p, rule.Rule.NotYetGenericStruct, f"NotImplemented: a generic struct `{name}[…]` — this compiler erases type parameters, and a field names one") if p_at(p, token.Kind.LBrack)
+	raise p_diag(p, rule.Rule.NotYetGenericStruct, f"NotImplemented: a generic struct `{name}[…]` — this compiler erases type parameters, and a field names one (GRAMMAR#struct-decl)") if p_at(p, token.Kind.LBrack)
 	expect(p, token.Kind.LBrace)
 	skip_semis(p)
 	mut fields: list[ast.FieldDef] = []
@@ -2472,7 +2579,7 @@ fn parse_deco_item(mut &p: Parser, mut &pending: list[str]) {
 	# compiler "reads `#[derive(…)]` and `#[obj]`, and no other" answers a question they did
 	# not ask. What they need to know is that the word is the right one and the behaviour is
 	# not built, so nothing is protecting the constructor they thought they had sealed.
-	raise p_diag_at(p, nt.line, nt.col, rule.Rule.NotYetSealed, f"NotImplemented: the decorator `#[sealed]` — it is a reserved decorator (GRAMMAR group 7 gives it a meaning: the field-wise `T(…)` constructor becomes module-private) and this compiler does not build it, so the constructor stays public rather than being sealed in silence") if name == "sealed"
+	raise p_diag_at(p, nt.line, nt.col, rule.Rule.NotYetSealed, f"NotImplemented: the decorator `#[sealed]` — it is a reserved decorator (GRAMMAR group 7 gives it a meaning: the field-wise `T(…)` constructor becomes module-private) and this compiler does not build it, so the constructor stays public rather than being sealed in silence (GRAMMAR#deco-item)") if name == "sealed"
 
 	# THE LAYOUT THREE ARE RESERVED, and that is a different sentence from a typo.
 	# `docs/core/decorators.md` gives `#[repr]`, `#[packed]` and `#[align]` a meaning — in-memory
@@ -2482,7 +2589,7 @@ fn parse_deco_item(mut &p: Parser, mut &pending: list[str]) {
 	# there is no day its code retires on. Both got the unknown-decorator sentence, and the page
 	# said in as many words that the distinction was lost — which is exactly what `#[sealed]`'s
 	# own code had already bought back one bullet above (#87).
-	raise p_diag_at(p, nt.line, nt.col, rule.Rule.NotYetDecoratorLayout, f"NotImplemented: the decorator `#[{name}]` — it is a reserved LAYOUT decorator (in-memory width, padding and alignment against an external ABI) and this compiler does not build it, so the type is laid out as it would be without it") if name == "repr" or name == "packed" or name == "align"
+	raise p_diag_at(p, nt.line, nt.col, rule.Rule.NotYetDecoratorLayout, f"NotImplemented: the decorator `#[{name}]` — it is a reserved LAYOUT decorator (in-memory width, padding and alignment against an external ABI) and this compiler does not build it, so the type is laid out as it would be without it (GRAMMAR#deco-item)") if name == "repr" or name == "packed" or name == "align"
 
 	raise p_diag_at(p, nt.line, nt.col, rule.Rule.DecoratorUnknown, f"the decorator `#[{name}]` — the set is closed and compiler-owned, so an unknown name is not a directive this compiler has yet to build; it reads `#[derive(…)]`, `#[obj]`, `#[test]`, `#[fixture]` and `#[allow(…)]`, and no other") if name != "derive"
 
@@ -2513,7 +2620,7 @@ fn parse_deco_item(mut &p: Parser, mut &pending: list[str]) {
 	raise p_diag_at(p, dt.line, dt.col, rule.Rule.DeriveNamesNoSpec, "a `#[derive]` names the specs to generate — GRAMMAR#deco-item takes the arguments, and a derive with none asks for nothing while reading as though it asked for something") if pending.len() == before
 }
 
-fn parse_impl(mut &p: Parser, mut &fns: list[ast.FnDecl], mut &impls: list[ast.ImplDecl], in_unsafe: bool) {
+fn parse_impl(mut &p: Parser, mut &fns: list[ast.FnDecl], mut &impls: list[ast.ImplDecl], mut &consts: list[ast.ConstDecl], in_unsafe: bool) {
 	kw := cur(p)
 	p_advance(p) # 'impl'
 
@@ -2598,7 +2705,7 @@ fn parse_impl(mut &p: Parser, mut &fns: list[ast.FnDecl], mut &impls: list[ast.I
 	# is FALSE about a language whose grammar spells `list[T]` and whose every program uses
 	# one. Reading the arguments is what lets the refusal be about the form that was
 	# written, at the place it was written.
-	raise p_diag_at(p, ttok.line, ttok.col, rule.Rule.NotYetImplTypeArgument, f"NotImplemented: an `impl` on `{target}[{ast.ty_names(targs)}]` — a type ARGUMENT on the target: this compiler keys an implementation by the target's bare name, so every instantiation of `{target}` would share one, and telling them apart is the same monomorphization a generic target needs. Write the `impl` for a `struct` or an `enum` this program declares") if targs.len() > 0
+	raise p_diag_at(p, ttok.line, ttok.col, rule.Rule.NotYetImplTypeArgument, f"NotImplemented: an `impl` on `{target}[{ast.ty_names(targs)}]` — a type ARGUMENT on the target: this compiler keys an implementation by the target's bare name, so every instantiation of `{target}` would share one, and telling them apart is the same monomorphization a generic target needs. Write the `impl` for a `struct` or an `enum` this program declares (GRAMMAR#impl-decl)") if targs.len() > 0
 
 	if sp != "" {
 		impls.append(ast.ImplDecl(sp, args, target, p.path, kw.line, kw.col))
@@ -2616,6 +2723,21 @@ fn parse_impl(mut &p: Parser, mut &fns: list[ast.FnDecl], mut &impls: list[ast.I
 			p_advance(p)
 			is_pub = true
 		}
+
+		# `unsafe fn m()` IS A METHOD, and the marker sits where GRAMMAR#fn-decl puts it —
+		# `'pub'? 'unsafe'? 'mut'? 'fn'` — so it is read HERE, between the two, rather than in
+		# an arm of its own below. It records `in_unsafe` on the declaration exactly as the
+		# module-level group's marker does, which is the third spelling of one rule: the
+		# standalone `unsafe fn`, the group, and a method.
+		#
+		# THE PEEK IS WHAT KEEPS THE WORD UNCONSUMED otherwise. `unsafe` before anything that
+		# is not a `fn` derives no impl-item, and the arm that says so must still see the word
+		# it is reporting.
+		mut fn_unsafe := in_unsafe
+		if p_at(p, token.Kind.Unsafe) and (peek_kind(p, 1) == token.Kind.Fn or (peek_kind(p, 1) == token.Kind.Mut and peek_kind(p, 2) == token.Kind.Fn)) {
+			p_advance(p)
+			fn_unsafe = true
+		}
 		mut recv_mut := false
 		if p_at(p, token.Kind.Mut) {
 			mt := cur(p)
@@ -2631,24 +2753,15 @@ fn parse_impl(mut &p: Parser, mut &fns: list[ast.FnDecl], mut &impls: list[ast.I
 			recv_mut = true
 		}
 		if p_at(p, token.Kind.Fn) {
-			fns.append(parse_fn(p, is_pub, target, recv_mut, in_unsafe, false, false))
+			fns.append(parse_fn_at(p, is_pub, target, recv_mut, fn_unsafe, false, false, sp == ""))
 		} else if p_at(p, token.Kind.Ident) and peek_kind(p, 1) == token.Kind.Walrus {
-			# `LIMIT := 5` — an associated VALUE binding (GRAMMAR#val-bind). It was skipped a token
-			# at a time, so the name reached the emitter undeclared and cc reported it.
-			raise p_diag(p, rule.Rule.NotYetImplAssocValue, f"NotImplemented: an associated value binding `{token.says(cur(p))} := …` in an `impl`")
+			# `LIMIT := 5` — an associated VALUE (GRAMMAR#val-bind). It is a module constant that
+			# belongs to a TYPE: the same declaration in every way but its name, so it is read by
+			# the same function and joins the same list, carrying the impl's target.
+			vt := cur(p)
+			consts.append(p_top_binding(p, target, false, false, is_pub, in_unsafe, vt.line, vt.col))
 		} else if p_at(p, token.Kind.Type) {
-			raise p_diag(p, rule.Rule.NotYetImplAssocType, "NotImplemented: an associated type binding `type … = …` in an `impl`")
-		} else if p_at(p, token.Kind.Unsafe) {
-			# `unsafe fn m()` IS A METHOD. GRAMMAR#fn-decl spells the marker (`'pub'? 'unsafe'?
-			# 'mut'? 'fn'`) and GRAMMAR#impl-item takes a fn-decl, so this is a form the language
-			# has — and the arm below told its writer that this compiler "reads methods and
-			# nothing else", which is a sentence about a form they did write. It is refused for
-			# the reason the standalone one is (E9027) and the `unsafe fn` TYPE is (E9073): the
-			# marker is a trust boundary this compiler does not enforce, so honouring it would be
-			# a promise about calls it never checks, and dropping the word would make the method
-			# callable from safe code, which is the one thing the marker exists to prevent (#87).
-			ut := cur(p)
-			raise p_diag_at(p, ut.line, ut.col, rule.Rule.NotYetUnsafeMethod, "NotImplemented: an `unsafe fn` METHOD in an `impl` — `unsafe` marks a trust boundary this compiler does not enforce yet (docs/runtime/ffi.md), so the method is refused rather than read as a safe `fn`")
+			raise p_diag(p, rule.Rule.NotYetImplAssocType, "NotImplemented: an associated type binding `type … = …` in an `impl` (GRAMMAR#impl-item)")
 		} else {
 			# WHAT IS LEFT IS NOT AN ITEM AT ALL. GRAMMAR#impl-item derives a `fn-decl`, a
 			# `val-bind` and a `type` binding, and the three arms above take all of them, so a
@@ -2667,10 +2780,62 @@ fn parse_impl(mut &p: Parser, mut &fns: list[ast.FnDecl], mut &impls: list[ast.I
 # its own top-level item — it is read before the `fn` under it exists — and only the arm that
 # dispatched to this one has the list in hand.
 fn parse_fn(mut &p: Parser, is_pub: bool, recv: str, recv_mut: bool, in_unsafe: bool, is_test: bool, is_fixture: bool) -> ast.FnDecl {
-	head := parse_fn_head(p, is_pub, recv, recv_mut, in_unsafe)
-	body := parse_block(p)
+	return parse_fn_at(p, is_pub, recv, recv_mut, in_unsafe, is_test, is_fixture, false)
+}
 
-	return ast.FnDecl(head.name, head.recv, head.params, head.has_ret, head.ret, body, head.is_pub, head.path, head.line, head.col, head.tparams, head.tbounds, head.in_unsafe, is_test, is_fixture)
+# parse_fn_at is parse_fn with the one question an INHERENT `impl` adds: is this a method or an
+# ASSOCIATED FN? GRAMMAR#impl-decl answers it by the body — *a named constructor
+# `User.from_json(…)` (an associated fn, no `this`) or a private method `u.recompute()` (uses
+# `this`)* — and there is no other spelling, so the body is what decides.
+#
+# THAT IS WHY THE RECEIVER IS HELD BACK. `this` is synthesized into the parameter list, and it
+# used to be synthesized before the body existed; the decision needs the body, so the head is
+# read without it and the parameter is prepended afterwards to the ones that turn out to be
+# methods.
+#
+# A SPEC IMPL NEVER ASKS. `impl Show for P` implements members the spec DECLARED as methods, so
+# what the body happens to read decides nothing there — which is also why `assoc_ok` is a
+# parameter rather than a test on `recv`.
+fn parse_fn_at(mut &p: Parser, is_pub: bool, recv: str, recv_mut: bool, in_unsafe: bool, is_test: bool, is_fixture: bool, assoc_ok: bool) -> ast.FnDecl {
+	head := parse_fn_head_at(p, is_pub, recv, recv_mut, in_unsafe, not assoc_ok)
+
+	# SAVED AND RESTORED around the body, the discipline every parser flag here follows: a `fn`
+	# is read inside another declaration often enough — a closure in a default, a nested block —
+	# that leaving it set would make the next member a method for a `this` it never wrote.
+	outer_this := p.saw_this
+	p.saw_this = false
+	body := parse_block(p)
+	is_assoc := assoc_ok and not p.saw_this and not p_is_rendering(head.name)
+	p.saw_this = outer_this or p.saw_this
+
+	mut params := head.params
+	if assoc_ok and not is_assoc {
+		params = p_with_receiver(recv, recv_mut, head.params)
+	}
+	return ast.FnDecl(head.name, head.recv, params, head.has_ret, head.ret, body, head.is_pub, head.path, head.line, head.col, head.tparams, head.tbounds, head.in_unsafe, is_test, is_fixture, true, is_assoc)
+}
+
+# p_is_rendering names the two methods the LANGUAGE declares rather than the author:
+# `display` and `debug` are what `print`, an f-string hole and `str(…)` consult
+# (docs/runtime/format.md), so an `impl` writing one is implementing a requirement.
+#
+# THAT IS THE SPEC IMPL'S CARVE-OUT UNDER ANOTHER NAME. `impl Show for P` never asks what the
+# body reads, because the spec declared the member a method; these two are a spec the language
+# supplies without writing, and `fn display() -> str { return "P" }` — an override that needs
+# nothing from the value — is exactly the shape the body-derived rule would take away.
+fn p_is_rendering(name: str) -> bool {
+	return name == "display" or name == "debug"
+}
+
+# p_with_receiver puts `this` back at the FRONT of the parameter list, where the head would have
+# put it. A method is an ordinary function whose first argument happens to be called `this`, and
+# everything below the parser depends on that being the first one.
+fn p_with_receiver(recv: str, recv_mut: bool, ps: list[ast.Param]) -> list[ast.Param] {
+	mut out: list[ast.Param] = [ast.Param("this", ast.Ty.TNamed(recv), recv_mut, false, ast.Expr.ENil)]
+	for pm in ps {
+		out.append(pm)
+	}
+	return out
 }
 
 # p_type_params reads `[T, U: Eq]` — a type parameter list — into two parallel lists, the
@@ -2713,7 +2878,7 @@ fn p_type_params(mut &p: Parser, mut &names: list[str], mut &bounds: list[str]) 
 			# A bound naming anything else is a SPEC bound, exactly as before: a user type in
 			# that slot was read as a spec of that name then and is now, and the checker
 			# answers it the same way — _E3013 no spec named `MyStruct`_.
-			raise p_diag(p, rule.Rule.NotYetValueGenericParam, f"NotImplemented: a value generic parameter `{nm}: {bound}` — GRAMMAR lets a concrete-type bound make a parameter a compile-time value (`fn f[N: int]`, applied as `f[3]()`), and this compiler has type parameters only") if p_bound_is_concrete(bound)
+			raise p_diag(p, rule.Rule.NotYetValueGenericParam, f"NotImplemented: a value generic parameter `{nm}: {bound}` — GRAMMAR lets a concrete-type bound make a parameter a compile-time value (`fn f[N: int]`, applied as `f[3]()`), and this compiler has type parameters only (GRAMMAR#type-param)") if p_bound_is_concrete(bound)
 		}
 		names.append(nm)
 		bounds.append(bound)
@@ -2727,6 +2892,14 @@ fn p_type_params(mut &p: Parser, mut &names: list[str], mut &bounds: list[str]) 
 # spec's requirement and an impl's supply are read by one piece of code, and a comparison
 # between them is a comparison of like with like rather than of two parsers' opinions.
 fn parse_fn_head(mut &p: Parser, is_pub: bool, recv: str, recv_mut: bool, in_unsafe: bool) -> ast.FnDecl {
+	return parse_fn_head_at(p, is_pub, recv, recv_mut, in_unsafe, true)
+}
+
+# parse_fn_head_at is the head with the receiver's synthesis made a QUESTION. An inherent
+# `impl`'s member cannot know whether it has one until its body has been read, so that caller
+# asks for the head without it and puts it back itself; everything else — a free function, a
+# spec's member, a spec impl's method — knows at the head and takes it here.
+fn parse_fn_head_at(mut &p: Parser, is_pub: bool, recv: str, recv_mut: bool, in_unsafe: bool, want_recv: bool) -> ast.FnDecl {
 	# where the declaration BEGINS, read before anything is consumed: a diagnostic about the
 	# signature is made before any statement is emitted, so no SAt marker has spoken yet
 	kw := cur(p)
@@ -2743,7 +2916,7 @@ fn parse_fn_head(mut &p: Parser, is_pub: bool, recv: str, recv_mut: bool, in_uns
 	p_type_params(p, tparams, tbounds)
 	expect(p, token.Kind.LParen)
 	mut params: list[ast.Param] = []
-	if recv != "" {
+	if recv != "" and want_recv {
 		# The receiver is not written in the parameter list — `this` is implicit — so it is
 		# added here. From this point on a method is an ordinary function whose first
 		# argument happens to be called `this`, which is why nothing below the parser needs
@@ -2789,7 +2962,7 @@ fn parse_fn_head(mut &p: Parser, is_pub: bool, recv: str, recv_mut: bool, in_uns
 		has_ret = true
 	}
 	mut none: list[ast.Stmt] = []
-	return ast.FnDecl(name, recv, params, has_ret, ret, none, is_pub, p.path, kw.line, kw.col, tparams, tbounds, in_unsafe, false, false)
+	return ast.FnDecl(name, recv, params, has_ret, ret, none, is_pub, p.path, kw.line, kw.col, tparams, tbounds, in_unsafe, false, false, false, false)
 }
 
 # parse_block counts a nesting level per block, since statements nest through blocks and
@@ -2908,14 +3081,26 @@ fn p_starts_destructure(mut &p: Parser) -> int {
 	if p.toks[i].kind == token.Kind.Mut or p.toks[i].kind == token.Kind.Const {
 		i = i + 1
 	}
-	return 0 if i >= p.toks.len() or p.toks[i].kind != token.Kind.LParen
+	return 0 if i >= p.toks.len()
+
+	# `(` opens the tuple shape, and a TYPE NAME followed by `{` opens the struct one — the two
+	# alternatives GRAMMAR#bind-target and GRAMMAR#assign-target derive beside a plain name. The
+	# opener decides which bracket has to be matched, and nothing else about the scan differs.
+	mut open := p.toks[i].kind
+	mut shut := token.Kind.RParen
+	if open == token.Kind.Ident and is_pascal(p.toks[i].lexeme) and i + 1 < p.toks.len() and p.toks[i + 1].kind == token.Kind.LBrace {
+		open = token.Kind.LBrace
+		shut = token.Kind.RBrace
+		i = i + 1
+	}
+	return 0 if open != token.Kind.LParen and open != token.Kind.LBrace
 
 	mut depth := 0
 	for i < p.toks.len() {
 		k := p.toks[i].kind
-		if k == token.Kind.LParen {
+		if k == open {
 			depth = depth + 1
-		} else if k == token.Kind.RParen {
+		} else if k == shut {
 			depth = depth - 1
 			if depth == 0 {
 				nxt := p.toks[i + 1].kind
@@ -2931,6 +3116,101 @@ fn p_starts_destructure(mut &p: Parser) -> int {
 		i = i + 1
 	}
 	return 0
+}
+
+# p_destructure reads one whole `(a, b) := e` / `P{x, y} = e` statement. `is_bind` is the
+# spelling the scan above found, and it is carried rather than re-read because the two differ
+# by their separator alone: what follows the target is `:=` for a binding and `=` for an
+# assignment, and everything before it is the same target.
+fn p_destructure(mut &p: Parser, is_bind: bool) -> ast.Stmt {
+	mut is_mut := false
+	mut is_const := false
+	if p_at(p, token.Kind.Mut) {
+		p_advance(p)
+		is_mut = true
+	} else if p_at(p, token.Kind.Const) {
+		p_advance(p)
+		is_const = true
+	}
+
+	t := p_target(p, is_bind)
+	if is_bind {
+		expect(p, token.Kind.Walrus)
+	} else {
+		expect(p, token.Kind.Assign)
+	}
+	return ast.Stmt.SDestructure(t, parse_expr(p), is_bind, is_mut, is_const)
+}
+
+# p_target reads one target. The two shapes recurse — GRAMMAR nests both — and a LEAF is where
+# the binding and the assignment forms part company: a binding mints a name, so its leaf is an
+# identifier and nothing else, while an assignment writes into an lvalue, which is a whole
+# postfix expression (`obj.f`, `xs[i]`).
+fn p_target(mut &p: Parser, is_bind: bool) -> ast.Target {
+	if p_at(p, token.Kind.LParen) {
+		p_advance(p)
+		mut ts: list[ast.Target] = []
+		for not p_at(p, token.Kind.RParen) and not p_at(p, token.Kind.Eof) {
+			ts.append(p_target(p, is_bind))
+			p_list_sep(p, token.Kind.RParen, ")", "a destructuring target")
+		}
+		expect(p, token.Kind.RParen)
+		return ast.Target.TgtTuple(ts)
+	}
+
+	return p_target_struct(p, is_bind) if p_at(p, token.Kind.Ident) and is_pascal(cur(p).lexeme) and peek_kind(p, 1) == token.Kind.LBrace
+
+	# `_` is an ordinary identifier to the lexer, so the discard is told by its TEXT — the same
+	# way a pattern's wildcard and a select arm's are.
+	if p_at(p, token.Kind.Ident) and cur(p).lexeme == "_" {
+		p_advance(p)
+		return ast.Target.TgtWild
+	}
+
+	return ast.Target.TgtPlace(ast.Expr.EIdent(p_name(p, "a destructuring target"))) if is_bind
+
+	# AN ASSIGNMENT'S LEAF IS AN LVALUE, and it is read with the expression parser because that
+	# is the only thing that knows the postfix chain — `obj.f`, `xs[i]`, `t.0`. Whether what
+	# comes back names STORAGE is not asked here: it is the same question a plain `x = e` asks,
+	# and it is answered where that one is (E3002), so the two spellings meet one rule.
+	return ast.Target.TgtPlace(parse_expr(p))
+}
+
+# p_target_struct reads `P{x, y: inner}` and `P{x, ..}` (GRAMMAR#struct-pat, and the
+# field-target list GRAMMAR#assign-target derives). The shorthand is the common case and it is
+# the same thing written out: `P{x}` reads field `x` into the target `x`.
+fn p_target_struct(mut &p: Parser, is_bind: bool) -> ast.Target {
+	name := p_name(p, "a destructuring target")
+	expect(p, token.Kind.LBrace)
+
+	mut fields: list[str] = []
+	mut ts: list[ast.Target] = []
+	mut rest := false
+	for not p_at(p, token.Kind.RBrace) and not p_at(p, token.Kind.Eof) {
+		if p_at(p, token.Kind.DotDot) {
+			dt := cur(p)
+			p_advance(p)
+			raise p_diag_at(p, dt.line, dt.col, rule.Rule.TargetRestNotLast, "a `..` in a destructuring target says the fields NOT written are not wanted, so it comes last — there is nothing after it for it to skip") if not p_at(p, token.Kind.RBrace)
+
+			rest = true
+			continue
+		}
+
+		fname := p_name(p, "a field in a destructuring target")
+		fields.append(fname)
+		if p_at(p, token.Kind.Colon) {
+			p_advance(p)
+			ts.append(p_target(p, is_bind))
+		} else {
+			# THE SHORTHAND IS THE SAME THING WRITTEN OUT: `P{x}` reads field `x` into the
+			# target `x`, which is a fresh name for a binding and the existing one for an
+			# assignment — and in both spellings that target is the identifier itself.
+			ts.append(ast.Target.TgtPlace(ast.Expr.EIdent(fname)))
+		}
+		p_list_sep(p, token.Kind.RBrace, "}", "a destructuring target")
+	}
+	expect(p, token.Kind.RBrace)
+	return ast.Target.TgtStruct(name, fields, ts, rest)
 }
 
 # parse_stmt reads one statement, and it is a wrapper because a statement is where an
@@ -2975,27 +3255,17 @@ fn parse_stmt_node(mut &p: Parser) -> ast.Stmt {
 	# landed; nothing had asked it since, because no form could produce the node.
 	return ast.Stmt.SScope(parse_block(p)) if k == token.Kind.LBrace
 
-	# `P{x} := p` — a STRUCT PATTERN in binding position (GRAMMAR#bind-target). The `{` after
-	# a type name reached the expression parser, which reported a block used as an expression.
+	# A DESTRUCTURING BINDING OR ASSIGNMENT — `(a, b) := e`, `mut (a, b) := e`, `P{x, y} := e`
+	# and the two written with `=` (GRAMMAR#binding, GRAMMAR#bind-target, GRAMMAR#reassign,
+	# GRAMMAR#assign-target). It is decided HERE, at the statement's first token, because that
+	# is the only place the four spellings look alike: a `(` opens a tuple EXPRESSION just as
+	# often, and a type name followed by `{` is a block to everything downstream.
 	#
-	# A TUPLE pattern is the same form one bracket over: `(a, b) := f()` read as a tuple
-	# EXPRESSION, so the names in it came out undefined rather than bound.
-	raise p_diag(p, rule.Rule.NotYetStructPattern, f"NotImplemented: a struct pattern `{token.says(cur(p))}{{…}}` — this compiler destructures with field access, not with a pattern") if k == token.Kind.Ident and is_pascal(cur(p).lexeme) and peek_kind(p, 1) == token.Kind.LBrace
-
-	# A DESTRUCTURING BINDING OR ASSIGNMENT — `(a, b) := e`, `mut (a, b) := e`, `(a, b) = e`
-	# (GRAMMAR#binding, GRAMMAR#bind-target, GRAMMAR#assign-target). It is named HERE, where the
-	# token of a statement, because each spelling failed differently otherwise: the `:=` one
-	# reached the expression fallback and was named after its walrus, the `mut` one reported
-	# `expected `:`, found `a``, and the `=` one BUILT AND DID NOTHING — the tuple was
-	# evaluated, assigned to no one, and the program printed the values it started with.
-	# THE `=` SPELLING IS ITS OWN FORM, and it used to borrow this sentence — so a reader who
-	# wrote `(a, b) = (1, 2)` was told about `(a, b) := …`, a form they had not written and a
-	# `:=` their source does not contain. GRAMMAR derives them as two productions and each is
-	# separately unbuilt; the place is the statement's own token, which neither carried.
+	# THE LOOKAHEAD IS WHAT SEPARATES THEM, and it is a scan rather than a parse for the reason
+	# `p_starts_destructure` always was: what decides is the token AFTER the closing bracket,
+	# and finding it means matching brackets, which is not a decision a parser can back out of.
 	dtor := p_starts_destructure(p)
-
-	raise p_diag_at(p, cur(p).line, cur(p).col, rule.Rule.NotYetDestructuringBinding, "NotImplemented: a destructuring binding `(a, b) := …` — GRAMMAR#bind-target derives the tuple form, and this compiler binds one name at a time") if dtor == 1
-	raise p_diag_at(p, cur(p).line, cur(p).col, rule.Rule.NotYetDestructuringAssign, "NotImplemented: a destructuring assignment `(a, b) = …` — GRAMMAR#assign-target derives the tuple form, and this compiler assigns to one target at a time; write the two assignments out, reading the tuple with `.0` and `.1`") if dtor == 2
+	return p_destructure(p, dtor == 1) if dtor != 0
 
 	if k == token.Kind.Nop {
 		p_advance(p)
@@ -3230,7 +3500,7 @@ fn parse_assert(mut &p: Parser) -> ast.Stmt {
 # token list: `p` and `p.toks` cannot both be `mut &` in one call — they alias — and a list is
 # copy-on-write, so the value here is a refcount and not the file.
 fn p_scratch(mut &p: Parser, toks: list[token.Token], pos: int) -> Parser {
-	return Parser(toks, pos, p.impl_ty, p.path, p.depth, p.edepth, [])
+	return Parser(toks, pos, p.impl_ty, p.path, p.saw_this, p.depth, p.edepth, [])
 }
 
 # p_assert_claims is the split: one claim per conjunct of a top-level `and` chain, and ONE
@@ -3418,7 +3688,9 @@ fn p_assert_span(mut &p: Parser, lo: int, hi: int) -> list[token.Token] {
 fn p_assert_parse(mut &p: Parser, mut &toks: list[token.Token]) -> ast.Expr {
 	toks.append(token.Token(token.Kind.Eof, "", "", 0, 0))
 	mut sp := p_scratch(p, toks, 0)
-	return parse_expr(sp)
+	e := parse_expr(sp)
+	p.saw_this = p.saw_this or sp.saw_this
+	return e
 }
 
 # p_if_has_block reports whether the `if` beginning at `at` has a BLOCK after its
@@ -3568,7 +3840,7 @@ fn parse_for(mut &p: Parser) -> ast.Stmt {
 	# `for mut v in xs` binds the element MUTABLY and writes the edit back to its slot
 	# (GRAMMAR#for-stmt). The `mut` was not read here, so it fell into the condition expression
 	# and was reported as whatever that made of it.
-	raise p_diag(p, rule.Rule.NotYetForMutBinding, "NotImplemented: `for mut v in …` — the mutable loop binding writes each edited element back to its slot, which this compiler does not do") if p_at(p, token.Kind.Mut)
+	raise p_diag(p, rule.Rule.NotYetForMutBinding, "NotImplemented: `for mut v in …` — the mutable loop binding writes each edited element back to its slot, which this compiler does not do (GRAMMAR#for-stmt)") if p_at(p, token.Kind.Mut)
 
 	# for-in: `for name in iterable { ... }`
 	if p_names_here(p, p.pos) and peek_kind(p, 1) == token.Kind.In {
@@ -4019,7 +4291,7 @@ fn parse_postfix(mut &p: Parser) -> ast.Expr {
 					p_written_type_args(p, base, tn)
 				}
 			}
-			raise p_diag(p, rule.Rule.NotYetCallee, f"NotImplemented: calling {ast.expr_kind(e)} — a callee is a plain name in this compiler, so `fs[0](…)` (a function value in a container) and `p?.m(…)` (an optional method call) are unbuilt") if name == ""
+			raise p_diag(p, rule.Rule.NotYetCallee, f"NotImplemented: calling {ast.expr_kind(e)} — a callee is a plain name in this compiler, so `fs[0](…)` (a function value in a container) and `p?.m(…)` (an optional method call) are unbuilt (GRAMMAR#postfix)") if name == ""
 
 			args := parse_call_args(p)
 			if is_conv(name) {
@@ -4095,7 +4367,7 @@ fn parse_call_args(mut &p: Parser) -> list[ast.Expr] {
 		# positional-only, and the `:` reached parse_primary, which answered "`:` is not an
 		# expression this compiler reads" — a token, about a form the language specifies and
 		# the seed builds. An argument list is where the form is recognizable.
-		raise p_diag(p, rule.Rule.NotYetNamedArgument, f"NotImplemented: the named argument `{token.says(cur(p))}:` — this compiler binds arguments by position only") if p_at(p, token.Kind.Ident) and peek_kind(p, 1) == token.Kind.Colon
+		raise p_diag(p, rule.Rule.NotYetNamedArgument, f"NotImplemented: the named argument `{token.says(cur(p))}:` — this compiler binds arguments by position only (GRAMMAR#arg)") if p_at(p, token.Kind.Ident) and peek_kind(p, 1) == token.Kind.Colon
 
 		args.append(parse_expr(p))
 		p_list_sep(p, token.Kind.RParen, ")", "an argument list")
@@ -4163,6 +4435,7 @@ fn parse_primary(mut &p: Parser) -> ast.Expr {
 	if k == token.Kind.KwThis {
 		# the receiver reads as an ordinary binding, because the parser made it one
 		p_advance(p)
+		p.saw_this = true
 		return ast.Expr.EIdent("this")
 	}
 
@@ -4170,7 +4443,12 @@ fn parse_primary(mut &p: Parser) -> ast.Expr {
 	# so the parser saw a call with a stray token after it and said `expected `)`, found
 	# ``echo {n}```. GRAMMAR#fcmd-lit makes it a form of its own — one that runs through a shell
 	# and shell-quotes each hole — and it is refused as one.
-	raise p_diag(p, rule.Rule.NotYetCommandInterpolating, "NotImplemented: an interpolating command literal — " + p.toks[p.pos + 1].lexeme) if k == token.Kind.Ident and t.lexeme == "f" and peek_kind(p, 1) == token.Kind.Cmd
+	if k == token.Kind.Ident and t.lexeme == "f" and peek_kind(p, 1) == token.Kind.Cmd {
+		p_advance(p)
+		c := cur(p)
+		p_advance(p)
+		return cmd_call(p, c, cmd_argv(p, c, c.value))
+	}
 
 	if k == token.Kind.Ident {
 		# list[T](x) — a list-type conversion (e.g. bytearray(s))
@@ -4230,20 +4508,36 @@ fn parse_primary(mut &p: Parser) -> ast.Expr {
 		return ast.Expr.EGuard(parse_block(p))
 	}
 
-	# GRAMMAR#unsafe-expr and GRAMMAR#asm-expr, the two block-EXPRESSIONS this parser names
-	# and does not build. The `unsafe` block used to be swallowed whole with its statements
-	# never run, and naming it was only half the fix: both markers were the keyword and
-	# nothing else — `NotImplemented: unsafe` — so they named no form, carried no place, and
-	# let `unsafe` read as unsupported when the module-level GROUP spelled the same way works.
-	raise p_diag_at(p, t.line, t.col, rule.Rule.NotYetUnsafeExpr, "NotImplemented: `unsafe { … }` as an EXPRESSION — GRAMMAR makes it a block whose value the expression takes, and this compiler builds only the module-level `unsafe { … }` GROUP, which declares items rather than yielding a value") if k == token.Kind.Unsafe
-	raise p_diag_at(p, t.line, t.col, rule.Rule.NotYetAsm, "NotImplemented: `asm(…)` — GRAMMAR has inline assembly with an operand list (GRAMMAR#asm-operand), and this compiler emits C and has no assembler of its own") if k == token.Kind.Asm
+	# GRAMMAR#unsafe-expr — `unsafe { … }` where an expression is wanted. It is the block and
+	# the trust boundary together: the value is the block's, and the raw operations inside are
+	# legal because the author vouched for them.
+	if k == token.Kind.Unsafe {
+		p_advance(p)
+		return ast.Expr.EUnsafe(parse_block(p))
+	}
+
+	# `ptr(x)` / `ptr[T](x)` — the CASTS GRAMMAR#ptr-type names, in expression position. `ptr`
+	# is a keyword, so it never reaches the callee path a conversion like `int(x)` takes; the
+	# type is read here and the argument becomes an ordinary conversion node.
+	if k == token.Kind.Ptr {
+		pt := parse_base_type(p)
+		expect(p, token.Kind.LParen)
+		inner := parse_expr(p)
+		expect(p, token.Kind.RParen)
+		return ast.Expr.EConv(pt, inner, "ptr")
+	}
+
+	# GRAMMAR#asm-expr — a template string and an operand list. Everything about the strings is
+	# OPAQUE here: the template's `%N` and the constraints are the target backend's, which is
+	# what lets them be handed to the C compiler unread.
+	if k == token.Kind.Asm {
+		p_advance(p)
+		return p_asm(p, t)
+	}
 
 	if k == token.Kind.Cmd {
-		# A command literal runs a process, and what the EXPRESSION is worth — an exit
-		# code, the output, a process handle — is a stdlib question GRAMMAR deliberately
-		# leaves open. Until that is answered it refuses by name: today it parsed as
-		# nothing at all, so `c := `echo hi`` silently bound 0.
-		raise p_diag(p, rule.Rule.NotYetCommandLiteral, "NotImplemented: a command literal — " + t.lexeme)
+		p_advance(p)
+		return cmd_call(p, t, cmd_argv(p, t, t.value))
 	}
 	if k == token.Kind.LParen {
 		# `(e)` is grouping and `(a, b)` is a tuple — the comma is what tells them apart,
@@ -4377,7 +4671,7 @@ fn parse_if_expr(mut &p: Parser) -> ast.Expr {
 	# `e` is present. It is grammatical in expression position and this compiler unwraps an
 	# optional in the STATEMENT form only, so the `:=` reached the condition's expression
 	# parser and reported itself.
-	raise p_diag_at(p, t.line, t.col, rule.Rule.NotYetIfExprBindingHead, f"NotImplemented: a binding head in an `if` EXPRESSION — `if {token.says(t)} := …` unwraps an optional, and this compiler does that in the statement form only; bind it before the expression, or use `??`") if p_at(p, token.Kind.Ident) and peek_kind(p, 1) == token.Kind.Walrus
+	raise p_diag_at(p, t.line, t.col, rule.Rule.NotYetIfExprBindingHead, f"NotImplemented: a binding head in an `if` EXPRESSION — `if {token.says(t)} := …` unwraps an optional, and this compiler does that in the statement form only; bind it before the expression, or use `??` (GRAMMAR#if-head)") if p_at(p, token.Kind.Ident) and peek_kind(p, 1) == token.Kind.Walrus
 
 	cond := parse_expr(p)
 	then_e := parse_if_branch(p)
@@ -4400,7 +4694,7 @@ fn parse_if_branch(mut &p: Parser) -> ast.Expr {
 	skip_semis(p)
 
 	t := cur(p)
-	raise p_diag_at(p, t.line, t.col, rule.Rule.NotYetIfExprManyStatements, "NotImplemented: an `if` EXPRESSION whose branch has more than one statement — a block's value is its last statement's, and this compiler lowers the expression form to a conditional, which holds no statements. Use the `if` STATEMENT and assign in each branch") if not p_at(p, token.Kind.RBrace)
+	raise p_diag_at(p, t.line, t.col, rule.Rule.NotYetIfExprManyStatements, "NotImplemented: an `if` EXPRESSION whose branch has more than one statement — a block's value is its last statement's, and this compiler lowers the expression form to a conditional, which holds no statements. Use the `if` STATEMENT and assign in each branch (GRAMMAR#if-expr)") if not p_at(p, token.Kind.RBrace)
 
 	expect(p, token.Kind.RBrace)
 	return e
@@ -4467,7 +4761,7 @@ fn at_range_arm(mut &p: Parser) -> bool {
 # `what` names the shape, because one code covers both and the reader has to be told which
 # statement was left behind.
 fn p_arm_body_stmt(mut &p: Parser, what: str) -> str {
-	return p_diag(p, rule.Rule.NotYetMatchArmStatement, f"NotImplemented: a match arm's body is an expression — {what} in an arm needs a block body, which this emitter cannot yet lower")
+	return p_diag(p, rule.Rule.NotYetMatchArmStatement, f"NotImplemented: a match arm's body is an expression — {what} in an arm needs a block body, which this emitter cannot yet lower (GRAMMAR#match-arm)")
 }
 
 # --- patterns (GRAMMAR#pattern) -----------------------------------------------------------
@@ -4762,7 +5056,19 @@ fn fstr_expr(mut &p: Parser, t: token.Token) -> ast.Expr {
 				have = true
 			}
 			end := fstr_hole_end(src, i)
-			acc = fstr_join(acc, have, fstr_hole(p, t, fstr_slice(src, i + 1, end)))
+
+			# THE `=` FORM IS TWO PARTS AND NOT ONE — the source text, then the value — and it
+			# is joined here so the fold stays LEFT-associative like every other part's. Nesting
+			# the pair inside one part built `"" + ("n=" + str(n))` where the same program
+			# written out by `zerg desugar` builds `("" + "n=") + str(n)`: the same answer, and
+			# not the same C, which is a difference the differential gate is entitled to see.
+			mut lead := ""
+			h := fstr_hole(p, t, fstr_slice(src, i + 1, end), lead)
+			if lead != "" {
+				acc = fstr_join(acc, have, ast.Expr.EStr(lead))
+				have = true
+			}
+			acc = fstr_join(acc, have, h)
 			have = true
 			i = end + 1
 			lo = i
@@ -4778,6 +5084,133 @@ fn fstr_expr(mut &p: Parser, t: token.Token) -> ast.Expr {
 fn fstr_join(acc: ast.Expr, have: bool, part: ast.Expr) -> ast.Expr {
 	return part if not have
 	return ast.Expr.EBinary("+", acc, part)
+}
+
+# --- a command literal (GRAMMAR#cmd-lit, GRAMMAR#fcmd-lit) --------------------------------
+#
+# `` `ls -l` `` IS `os.command(["ls", "-l"])` — a child process with its three streams
+# (docs/runtime/io.md), and the desugaring is a call the reader could have written.
+#
+# THE ARGUMENT VECTOR IS BUILT HERE AND THERE IS NO SHELL. The static text is split on
+# whitespace, quotes respected, and an interpolated `{x}` is ONE ELEMENT whatever is inside
+# it — so a path with a space in it stays one argument, and there is no string for a shell to
+# re-split. That is the whole safety property: with no shell there is nothing to inject into.
+fn cmd_argv(mut &p: Parser, t: token.Token, body: str) -> list[ast.Expr] {
+	b := bytearray(body)
+	n := b.len()
+	mut out: list[ast.Expr] = []
+	mut word: list[byte] = []
+	mut have := false
+	mut i := 0
+	for i < n {
+		c := b[i]
+		if c == b'{' and i + 1 < n and b[i + 1] == b'{' {
+			word.append(b'{')
+			have = true
+			i = i + 2
+		} else if c == b'{' {
+			# A HOLE ENDS THE WORD IT SITS IN, because a value spliced INTO a word would
+			# have to be joined to it as text — and text is the thing this form does not
+			# build. `ls {dir}` is two arguments; `ls -{flag}` is refused rather than
+			# quietly making one of them two.
+			cmd_whole_word(p, t, body, have)
+
+			end := fstr_hole_end(b, i)
+			src := fstr_slice(b, i + 1, end)
+			mut toks := lexer.tokenize(src)
+			fstr_place(toks, t)
+			mut hp := p_scratch(p, toks, 0)
+			e := parse_expr(hp)
+			p.saw_this = p.saw_this or hp.saw_this
+			cmd_one_expr(p, t, src, hp)
+
+			out.append(e)
+			i = end + 1
+			cmd_whole_word(p, t, body, i < n and not cmd_is_space(b[i]))
+		} else if cmd_is_space(c) {
+			if have {
+				out.append(ast.Expr.EStr(str(word)))
+				word = []
+				have = false
+			}
+			i = i + 1
+		} else if c == b'\'' or c == b'"' {
+			q := c
+			i = i + 1
+			for i < n and b[i] != q {
+				word.append(b[i])
+				i = i + 1
+			}
+			i = i + 1
+			have = true
+		} else {
+			word.append(c)
+			have = true
+			i = i + 1
+		}
+	}
+	if have {
+		out.append(ast.Expr.EStr(str(word)))
+	}
+	raise p_diag_at(p, t.line, t.col, rule.Rule.CommandEmpty, "a command literal names the program to run, and this one is empty") if out.len() == 0
+
+	return out
+}
+
+# cmd_whole_word is the one raise for a hole that is not a word of its own — asked on both
+# sides of it, because text before and text after are the same mistake. One raise site and one
+# sentence, which is what keeps a code an identity rather than two rules wearing one number.
+# cmd_one_expr is the f-string's own rule asked of a command literal's hole, and it is a
+# function for the reason cmd_whole_word is: the code is an identity, so the raise is one site.
+fn cmd_one_expr(mut &p: Parser, t: token.Token, src: str, mut &hp: Parser) {
+	raise p_diag_at(p, t.line, t.col, rule.Rule.CommandHoleManyExprs, "a command literal's hole is a single expression: {" + src + "}") if not p_at(hp, token.Kind.Eof) and not p_at(hp, token.Kind.Semi)
+}
+
+fn cmd_whole_word(mut &p: Parser, t: token.Token, body: str, joined: bool) {
+	raise p_diag_at(p, t.line, t.col, rule.Rule.CommandHoleInWord, f"a `{{…}}` in a command literal is ONE argument, so it cannot be joined to the text beside it — `{body}` splices into the middle of a word, and building the argument as text is what a shell would do") if joined
+}
+
+fn cmd_is_space(c: byte) -> bool {
+	return c == b' ' or c == b'\t' or c == b'\n' or c == b'\r'
+}
+
+# cmd_call is the call the literal IS: `os.command([…])`. It is spelled as an ordinary
+# namespaced call, so everything downstream — the checker, the emitter, the module graph —
+# sees what a reader would have written, and a file that has not imported `os` is told so by
+# the rule that already answers for an unimported module.
+fn cmd_call(mut &p: Parser, t: token.Token, argv: list[ast.Expr]) -> ast.Expr {
+	# AND THE MODULE HAS TO BE THERE. Without the import the call reaches the rule for a name
+	# nothing bound — "undefined name `os`" — which names a word the reader did not write. The
+	# literal is what they wrote, so the literal is what the sentence is about.
+	raise p_diag_at(p, t.line, t.col, rule.Rule.CommandNeedsOs, "a command literal is `os.command(…)` — a child process and its three streams — and this file does not `import \"os\"`") if not cmd_imports_os(p)
+
+	return ast.Expr.EMethod(ast.Expr.EIdent("os"), "command", [ast.Expr.EListLit(argv)])
+}
+
+# cmd_imports_os reads the file's own token stream for an `import "os"`, in either spelling —
+# the single form and the parenthesized group. It asks the TOKENS and not the parsed imports
+# because an expression is parsed by a scratch parser that has no file around it, and the one
+# thing every parser does hold is the tokens it was handed.
+fn cmd_imports_os(mut &p: Parser) -> bool {
+	mut i := 0
+	for i < p.toks.len() {
+		if p.toks[i].kind == token.Kind.Import {
+			mut j := i + 1
+			for j < p.toks.len() and cmd_import_run(p.toks[j].kind) {
+				return true if p.toks[j].kind == token.Kind.Str and p.toks[j].value == "os"
+
+				j = j + 1
+			}
+			i = j
+		} else {
+			i = i + 1
+		}
+	}
+	return false
+}
+
+fn cmd_import_run(k: token.Kind) -> bool {
+	return k == token.Kind.Str or k == token.Kind.LParen or k == token.Kind.RParen or k == token.Kind.Pub or k == token.Kind.Semi
 }
 
 pub fn fstr_slice(src: list[byte], lo: int, hi: int) -> str {
@@ -4808,7 +5241,7 @@ fn fstr_esc_end(src: list[byte], at: int) -> int {
 
 # fstr_hole_end is the index of the `}` closing the hole that opens at `at`, counting the
 # braces a nested list or map literal brings with it.
-fn fstr_hole_end(src: list[byte], at: int) -> int {
+pub fn fstr_hole_end(src: list[byte], at: int) -> int {
 	n := src.len()
 	mut depth := 0
 	mut i := at
@@ -4880,10 +5313,45 @@ fn fstr_unbrace(raw: str) -> str {
 # fstr_hole turns one hole's source into an expression. It is RE-LEXED and parsed by the
 # ordinary machinery, so anything the compiler can parse in an expression position works
 # inside a hole; p.impl_ty rides along so `this` resolves as it does outside one.
-fn fstr_hole(mut &p: Parser, t: token.Token, hole: str) -> ast.Expr {
-	fstr_reject(p, t, hole)
+fn fstr_hole(mut &p: Parser, t: token.Token, hole: str, mut &lead: str) -> ast.Expr {
+	# THE THREE TAILS ARE PEELED OFF FIRST, in the order GRAMMAR#interp derives them —
+	# `'{' expr '='? conversion? format-spec? '}'` — so what is re-lexed below is an
+	# expression and only that.
+	b := bytearray(hole)
+	cut := fstr_tail(b)
+	mut conv := ""
+	mut fspec := ""
+	if cut < b.len() and b[cut] == b'!' {
+		conv = str([b[cut + 1]])
+		if cut + 2 < b.len() and b[cut + 2] == b':' {
+			fspec = fstr_slice(b, cut + 3, b.len())
+		}
+	} else if cut < b.len() {
+		fspec = fstr_slice(b, cut + 1, b.len())
+	}
 
-	mut toks := lexer.tokenize(hole)
+	# A BRACE IS NOT A `fmt-char` (GRAMMAR#fmt-char excludes `{` and `}`), so a spec holding one
+	# is not a spec — Python's nested replacement field is a form this grammar does not derive.
+	# It used to reach the runtime as an unreadable spec and end the program there, which is a
+	# refusal made at the worst possible time about a text that was in the source all along.
+	raise p_diag_at(p, t.line, t.col, rule.Rule.FStringSpecBrace, f"a format spec is made of `fmt-char`s and a brace is not one (GRAMMAR#fmt-char) — `{fspec}` holds one, and a spec is not a place a second hole may open") if fstr_has_brace(fspec)
+
+	mut src := fstr_slice(b, 0, cut)
+
+	# `{x=}` RENDERS THE EXPRESSION'S SOURCE TEXT, then `=`, then the value. The text is a fact
+	# only the parser has — the hole's own lexeme — so it is spliced here as an ordinary
+	# literal rather than carried to a pass that would have to reconstruct it.
+	sb := bytearray(src)
+	if fstr_is_selfdoc(sb) {
+		mut k := sb.len() - 1
+		for k >= 0 and sb[k] == b' ' {
+			k = k - 1
+		}
+		src = fstr_slice(sb, 0, k)
+		lead = src + "="
+	}
+
+	mut toks := lexer.tokenize(src)
 
 	# THE HOLE IS LEXED ON ITS OWN, so its tokens count from line 1 column 1 of the hole and not
 	# of the file. Every refusal below already says `t.line, t.col` for that reason — but a
@@ -4905,9 +5373,19 @@ fn fstr_hole(mut &p: Parser, t: token.Token, hole: str) -> ast.Expr {
 	mut hp := p_scratch(p, toks, 0)
 	e := parse_expr(hp)
 
+	# A HOLE'S `this` IS THE ENCLOSING BODY'S. The hole is re-lexed into a parser of its own, so
+	# what it read has to be carried back — `f"{this.n}"` is a body that uses `this`, and the
+	# rule that tells a method from an associated fn (GRAMMAR#impl-decl) reads exactly that.
+	p.saw_this = p.saw_this or hp.saw_this
+
 	# a hole is ONE expression; emitting just the prefix of something longer is exactly the
 	# silent wrong answer this path exists to avoid
 	raise p_diag_at(p, t.line, t.col, rule.Rule.FStringHoleManyExprs, "f-string: a hole must be a single expression: {" + hole + "}") if not p_at(hp, token.Kind.Eof) and not p_at(hp, token.Kind.Semi)
+
+	# A HOLE WITH NO TAIL IS THE `str(x)` IT ALWAYS WAS. The node below is what carries a tail
+	# to the emitter, which is the pass that has the type both tails need.
+	return ast.Expr.EFmt(e, conv, fspec) if conv != "" or fspec != ""
+
 	return ast.Expr.EConv(ast.Ty.TStr, e, "str")
 }
 
@@ -4921,14 +5399,85 @@ fn fstr_place(mut &toks: list[token.Token], t: token.Token) {
 	}
 }
 
-# fstr_reject refuses the hole forms this compiler does not implement, naming which one.
+# p_asm reads `asm(template, operand*)`. The operand heads `out` / `inout` / `clobber` are
+# CONTEXTUAL — special only here, since `in` is already a keyword — so they are read as
+# identifiers and told apart by their text, which is what "contextual" means in a parser with
+# no symbol table.
+fn p_asm(mut &p: Parser, t: token.Token) -> ast.Expr {
+	expect(p, token.Kind.LParen)
+	tt := cur(p)
+	raise p_diag_at(p, tt.line, tt.col, rule.Rule.AsmTemplateNotStr, "an `asm(…)` opens with its TEMPLATE, a string literal (GRAMMAR#asm-expr) — the operands follow it") if not p_at(p, token.Kind.Str)
+
+	tpl := tt.value
+	p_advance(p)
+
+	mut ops: list[ast.AsmOp] = []
+	for p_at(p, token.Kind.Comma) {
+		p_advance(p)
+		break if p_at(p, token.Kind.RParen)
+
+		ops.append(p_asm_operand(p))
+	}
+	expect(p, token.Kind.RParen)
+	return ast.Expr.EAsm(tpl, ops)
+}
+
+fn p_asm_operand(mut &p: Parser) -> ast.AsmOp {
+	h := cur(p)
+	kind := p_asm_kind(p, h)
+	p_advance(p)
+	expect(p, token.Kind.LParen)
+
+	mut cons: list[str] = []
+	c := cur(p)
+	p_asm_constraint(p, c)
+
+	cons.append(c.value)
+	p_advance(p)
+
+	# A CLOBBER TAKES A LIST AND NO VALUE — `clobber("rax", "cc")` — which is the one operand
+	# shape that names registers rather than binding one.
+	if kind == 3 {
+		for p_at(p, token.Kind.Comma) {
+			p_advance(p)
+			c2 := cur(p)
+			p_asm_constraint(p, c2)
+
+			cons.append(c2.value)
+			p_advance(p)
+		}
+		expect(p, token.Kind.RParen)
+		return ast.AsmOp(kind, cons, ast.Expr.ENil, h.line, h.col)
+	}
+
+	expect(p, token.Kind.RParen)
+	return ast.AsmOp(kind, cons, parse_expr(p), h.line, h.col)
+}
+
+# p_asm_constraint is the ONE raise for a constraint that is not a string. It is asked in two
+# places — the first operand and a clobber's rest — and a code is an identity, so two raises
+# under it would be two rules wearing one number.
+fn p_asm_constraint(mut &p: Parser, c: token.Token) {
+	raise p_diag_at(p, c.line, c.col, rule.Rule.AsmConstraintNotStr, "an `asm` operand's CONSTRAINT is a string literal (GRAMMAR#asm-operand) — its meaning is the target backend's, so it is opaque here") if c.kind != token.Kind.Str
+}
+
+fn p_asm_kind(mut &p: Parser, h: token.Token) -> int {
+	return 0 if h.kind == token.Kind.In
+	return 1 if h.kind == token.Kind.Ident and h.lexeme == "out"
+	return 2 if h.kind == token.Kind.Ident and h.lexeme == "inout"
+	return 3 if h.kind == token.Kind.Ident and h.lexeme == "clobber"
+
+	raise p_diag_at(p, h.line, h.col, rule.Rule.AsmOperandHead, f"an `asm` operand opens with `in`, `out`, `inout` or `clobber` (GRAMMAR#asm-operand), and `{h.lexeme}` is none of them")
+}
+
+# fstr_tail finds where a hole's EXPRESSION ends and its tails begin — the index of the `!` of
+# a conversion or the `:` of a format spec, whichever comes first, or the hole's length.
 #
-# GRAMMAR gives a hole three optional tails, and every one of them needs a STATIC TYPE to
-# mean anything — the seed picks its display and format leaves from it. This compiler
-# desugars in the PARSER, where no type exists yet. Dropping a `:04d` would print the wrong
-# text and say nothing, so each is refused by name instead.
-fn fstr_reject(mut &p: Parser, t: token.Token, hole: str) {
-	b := bytearray(hole)
+# IT IS A SCAN AND NOT A PARSE, because the tails are the one part of a hole that is not an
+# expression: `{d["k"]:>8}` has a `:` inside a subscript and a `"` around a colon, and both
+# have to be skipped to find the one that opens the spec. Depth and quotes are the whole of
+# that, which is why this reads bytes rather than tokens.
+pub fn fstr_tail(b: list[byte]) -> int {
 	n := b.len()
 	mut depth := 0
 	mut i := 0
@@ -4943,14 +5492,29 @@ fn fstr_reject(mut &p: Parser, t: token.Token, hole: str) {
 			depth = depth - 1
 			i = i + 1
 		} else if depth == 0 and c == b':' {
-			raise p_diag_at(p, t.line, t.col, rule.Rule.NotYetFStringFormatSpec, "NotImplemented: an f-string ':spec' format spec — {" + hole + "}")
-		} else if depth == 0 and c == b'!' and i + 1 < n and fstr_is_conv(b[i + 1]) {
-			raise p_diag_at(p, t.line, t.col, rule.Rule.NotYetFStringConversion, "NotImplemented: an f-string '!r' / '!s' / '!a' conversion — {" + hole + "}")
+			return i
+		} else if depth == 0 and c == b'!' and i + 1 < n and fstr_is_conv(b[i + 1]) and fstr_conv_ends(b, i + 2) {
+			return i
 		} else {
 			i = i + 1
 		}
 	}
-	raise p_diag_at(p, t.line, t.col, rule.Rule.NotYetFStringSelfDoc, "NotImplemented: the f-string '{expr=}' self-documenting form — {" + hole + "}") if fstr_is_selfdoc(b)
+	return n
+}
+
+fn fstr_has_brace(s: str) -> bool {
+	for c in bytearray(s) {
+		return true if c == b'{' or c == b'}'
+	}
+	return false
+}
+
+# fstr_conv_ends is what tells `{x!r}` from `{x != y}`: a conversion is the LAST thing before
+# the spec or the end of the hole, so the letter is followed by `}`, a `:`, or nothing.
+fn fstr_conv_ends(b: list[byte], at: int) -> bool {
+	return true if at >= b.len()
+
+	return b[at] == b':'
 }
 
 fn fstr_is_conv(c: byte) -> bool {
@@ -4959,7 +5523,7 @@ fn fstr_is_conv(c: byte) -> bool {
 
 # fstr_is_selfdoc reports a hole ending in `=`, the self-documenting form — but not one
 # ending in a comparison, whose `=` is the second half of an operator.
-fn fstr_is_selfdoc(b: list[byte]) -> bool {
+pub fn fstr_is_selfdoc(b: list[byte]) -> bool {
 	mut i := b.len() - 1
 	for i >= 0 and b[i] == b' ' {
 		i = i - 1

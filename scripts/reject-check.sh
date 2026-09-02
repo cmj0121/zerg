@@ -776,11 +776,13 @@ fn main() {
 }
 EOF
 
-# THE SAME RULE AT THE NAME, not only at the call. A bare function name where a value is
-# wanted IS that function, so binding it and calling the binding would be the identical
-# call one line later — a rule that only watched call sites would be one `f := poke` away
-# from meaning nothing.
-reject unsafe-group-fn-as-a-value E3083 'hand safe code the same call' <<'EOF'
+# THE SAME RULE THROUGH A VALUE, which is where the marker had to become part of the TYPE.
+# Binding the name is ordinary code now — an unsafe function is storable, which is what makes
+# a table of them writable at all — and the value it binds is an `unsafe fn(…)`, so the CALL
+# one line later is the checked thing. Before the type could carry the marker, the value
+# became a plain `fn` and the rule had nothing left to read, which is why the NAME was refused
+# instead.
+reject unsafe-fn-called-through-a-value E3149 'this value is an `unsafe fn() -> int`' <<'EOF'
 unsafe {
 	fn poke() -> int {
 		return 7
@@ -790,6 +792,173 @@ unsafe {
 fn main() {
 	f := poke
 	print f()
+}
+EOF
+
+# AND THE THIRD SPELLING — a method. GRAMMAR#fn-decl puts the marker in one place and
+# GRAMMAR#impl-item takes a fn-decl, so an `unsafe fn` method carries what the other two carry;
+# what makes this a case and not a repetition is WHERE the rule is asked. A declared method is
+# lowered down a path of its own, and a rule enforced at one of a form's spellings is one
+# spelling away from meaning nothing — which is what E9109 was hiding: the form was refused, so
+# nobody could find out that the call site had no rule.
+reject unsafe-method-called-from-safe-code E3083 '`B.peek` is an unsafe fn' <<'EOF'
+struct B {
+	pub n: int
+}
+
+impl B {
+	unsafe fn peek() -> int {
+		return this.n
+	}
+}
+
+fn main() {
+	b := B(7)
+	print b.peek()
+}
+EOF
+
+# --- destructuring targets (GRAMMAR#bind-target, GRAMMAR#assign-target) --------------
+#
+# A target is not a pattern: `match` asks whether a value has a shape and a destructuring
+# binding is TOLD it. That is the whole of what these rules come to — a leaf that tests has no
+# meaning where nothing can fail, and a shape written against the wrong type is wrong at the
+# place it is written rather than at the arm it did not take.
+#
+# THE STRUCT SHAPE'S THREE RULES ARE THE MATCH ARM'S. GRAMMAR derives one `struct-pat` and puts
+# it in two positions, so `Q{x} := p` meets the same E4085 that `Q{x} => …` does — which it did
+# not, for as long as the rule lived inside the pattern walk.
+
+reject a-destructuring-leaf-that-is-not-a-name E2054 'a destructuring target needs a name' <<'EOF'
+fn main() {
+	t := (1, 2)
+	(1, b) := t
+	print b
+}
+EOF
+
+reject a-rest-that-is-not-last-in-a-target E2088 'so it comes last' <<'EOF'
+struct P {
+	pub x: int
+	pub y: int
+}
+
+fn main() {
+	p := P(1, 2)
+	P{.., x} := p
+	print x
+}
+EOF
+
+reject a-destructuring-assignment-leaf-that-is-not-a-place E3002 'is not a place' <<'EOF'
+fn main() {
+	mut b := 0
+	t := (1, 2)
+	(b + 1, b) = t
+	print b
+}
+EOF
+
+reject a-struct-target-naming-the-wrong-type E4085 'a struct pattern names `Q`' seed-gap <<'EOF'
+struct P {
+	pub x: int
+}
+
+fn main() {
+	p := P(1)
+	Q{x} := p
+	print x
+}
+EOF
+
+reject a-struct-target-that-names-no-such-field E4086 'has no field' <<'EOF'
+struct P {
+	pub x: int
+}
+
+fn main() {
+	p := P(1)
+	P{nope, ..} := p
+	print nope
+}
+EOF
+
+reject a-struct-target-missing-a-field-and-a-rest E4087 'does not name `y`' seed-gap <<'EOF'
+struct P {
+	pub x: int
+	pub y: int
+}
+
+fn main() {
+	p := P(1, 2)
+	P{x} := p
+	print x
+}
+EOF
+
+reject a-tuple-target-wider-than-its-value E3074 'has no `.2`' <<'EOF'
+fn main() {
+	t := (1, 2)
+	(a, b, c) := t
+	print a
+}
+EOF
+
+# --- associated fns (GRAMMAR#impl-decl) ---------------------------------------------
+#
+# An INHERENT `impl` holds both — *a named constructor `User.from_json(…)` (an associated fn, no
+# `this`) or a private method `u.recompute()` (uses `this`)* — and the body is what tells them
+# apart, because the language gives no other spelling. They share one namespace, so the two
+# refusals below are one rule from its two sides: each names what the declaration IS and how the
+# other spelling would read.
+
+reject a-method-reached-through-its-type E3151 'is a METHOD of `P`' <<'EOF'
+struct P {
+	pub x: int
+}
+
+impl P {
+	fn twice() -> int {
+		return this.x * 2
+	}
+}
+
+fn main() {
+	print P.twice()
+}
+EOF
+
+reject an-associated-fn-reached-through-an-instance E3152 'is an ASSOCIATED FN of `P`' seed-gap <<'EOF'
+struct P {
+	pub x: int
+}
+
+impl P {
+	fn make(v: int) -> P {
+		return P(v)
+	}
+}
+
+fn main() {
+	p := P(1)
+	q := p.make(2)
+	print q.x
+}
+EOF
+
+reject a-type-that-declares-no-such-name E3150 'declares no `nope`' <<'EOF'
+struct P {
+	pub x: int
+}
+
+impl P {
+	fn make(v: int) -> P {
+		return P(v)
+	}
+}
+
+fn main() {
+	print P.nope(1).x
 }
 EOF
 
@@ -2948,6 +3117,262 @@ fn main() {
 }
 EOF
 
+# --- group 12: the unsafe boundary, raw pointers, inline assembly ------------------
+#
+# `unsafe` marks a boundary the compiler does not check, so what it guards is checked instead:
+# every raw-pointer OPERATION and every `asm` is legal only inside it, and both the TYPE of a
+# pointer and the TYPE of an unsafe function are writable anywhere. That split is GRAMMAR's —
+# describing pointer-shaped data is safe; reading through one is not.
+#
+# THE ASM ORDER IS A LANGUAGE RULE AND NOT AN EMITTER DETAIL. A C compiler numbers `%0`, `%1`,
+# … outputs first, so an operand list written the other way round would have the reader
+# counting one order and the template numbering another. Renumbering would need the emitter to
+# PARSE the template, and the template is opaque — which is the whole reason it can be handed
+# to `cc` unread.
+
+reject asm-outside-unsafe E3143 'legal only inside `unsafe`' <<'EOF'
+fn main() {
+	asm("nop")
+	print 1
+}
+EOF
+
+reject asm-an-input-before-an-output E3144 'BEFORE its `in` ones' <<'EOF'
+fn main() {
+	mut x := 0
+	y := 7
+	unsafe {
+		asm("mov %1, %0", in("r") y, out("=r") x)
+	}
+	print x
+}
+EOF
+
+reject asm-template-is-not-a-string E2085 'opens with its TEMPLATE' <<'EOF'
+fn main() {
+	unsafe {
+		asm(1)
+	}
+	print 1
+}
+EOF
+
+reject asm-constraint-is-not-a-string E2086 'CONSTRAINT is a string literal' <<'EOF'
+fn main() {
+	y := 1
+	unsafe {
+		asm("nop", in(2) y)
+	}
+	print 1
+}
+EOF
+
+reject asm-operand-head-is-none-of-the-four E2087 'in`, `out`, `inout` or `clobber`' <<'EOF'
+fn main() {
+	mut x := 0
+	unsafe {
+		asm("nop", into("=r") x)
+	}
+	print x
+}
+EOF
+
+reject a-raw-pointer-operation-outside-unsafe E3145 'raw-pointer operation' <<'EOF'
+fn main() {
+	mut n := 1
+	p := addr(n)
+	print 1
+}
+EOF
+
+reject a-load-through-an-untyped-pointer E3146 'needs a pointee' <<'EOF'
+fn main() {
+	mut n := 1
+	unsafe {
+		b := ptr(addr(n))
+		print b.load()
+	}
+}
+EOF
+
+reject a-pointer-operation-with-the-wrong-arity E3147 '`load` takes 0 arguments' <<'EOF'
+fn main() {
+	mut n := 1
+	unsafe {
+		p: ptr[int] = addr(n)
+		print p.load(1)
+	}
+}
+EOF
+
+reject a-pointer-cast-of-something-that-is-not-an-address E3148 'a value is not an address' <<'EOF'
+fn main() {
+	b := true
+	unsafe {
+		p := ptr(b)
+		print 1
+	}
+}
+EOF
+
+# --- `#[derive(From)]` --------------------------------------------------------------
+#
+# It wraps a VARIANT'S PAYLOAD into the enum that holds it, so the three refusals are about
+# what it has to read: a type with no variants, two variants that would give one payload type
+# two conversions, and an enum with no payload to wrap at all.
+
+reject derive-from-on-a-struct E4090 'is not an enum' <<'EOF'
+#[derive(From)]
+struct Q {
+	pub y: int
+}
+
+fn main() { print 1 }
+EOF
+
+reject derive-from-two-variants-of-one-type E4091 'both carry a `P`' <<'EOF'
+struct P {
+	pub x: int
+}
+
+#[derive(From)]
+enum E {
+	A(P)
+	B(P)
+}
+
+fn main() { print 1 }
+EOF
+
+reject derive-from-with-nothing-to-wrap E4092 'no variant of `E` carries exactly one' <<'EOF'
+#[derive(From)]
+enum E {
+	A
+	B
+}
+
+fn main() { print 1 }
+EOF
+
+# --- the command literal -----------------------------------------------------------
+#
+# `` `ls -l` `` IS `os.command(["ls", "-l"])` — an argument vector and no shell — so the two
+# refusals are about the argument vector: a hole is ONE argument and cannot be joined to the
+# text beside it, and a literal names a program to run.
+#
+# THE THIRD IS ABOUT THE MODULE. Without the import the desugared call reaches "undefined name
+# `os`", which names a word the reader did not write; the literal is what they wrote.
+
+reject command-literal-hole-inside-a-word E2081 'is ONE argument' <<'EOF'
+import "os"
+
+fn main() {
+	x := "X"
+	p := f`echo -{x}`
+	print p.wait()
+}
+EOF
+
+reject command-literal-hole-with-two-expressions E2084 'a single expression' <<'EOF'
+import "os"
+
+fn main() {
+	x := "X"
+	p := f`echo {x 1}`
+	print p.wait()
+}
+EOF
+
+reject command-literal-with-no-program E2082 'names the program to run' <<'EOF'
+import "os"
+
+fn main() {
+	p := ``
+	print p.wait()
+}
+EOF
+
+reject command-literal-without-the-os-import E2083 'does not `import "os"`' <<'EOF'
+fn main() {
+	p := `echo hi`
+	print p.wait()
+}
+EOF
+
+# --- the f-string's tails ---------------------------------------------------------
+#
+# A SPEC AND ITS VALUE ARE BOTH IN THE SOURCE — the spec is a literal and the type is inferred
+# — so a program the runtime would end the same way on every run is refused here instead. The
+# sentences are the runtime's own, because they answer the same question one stage earlier.
+#
+# THE BRACE IS A FORM AND NOT A MEANING: GRAMMAR#fmt-char excludes `{` and `}`, so Python's
+# nested replacement field is not derived here, and it used to reach the runtime as an
+# unreadable spec.
+
+reject fstring-spec-an-int-cannot-render E3142 'an int renders as `b`, `o`, `x`, `X`, `c` or `d`' seed-gap <<'EOF'
+fn main() {
+	n := 42
+	print f"{n:z}"
+}
+EOF
+
+reject fstring-spec-a-float-cannot-render E3142 'a float renders as `e`, `f` or `g`' seed-gap <<'EOF'
+fn main() {
+	pi := 3.5
+	print f"{pi:d}"
+}
+EOF
+
+reject fstring-spec-holds-a-brace E2080 'a brace is not one' <<'EOF'
+fn main() {
+	n := 42
+	print f"{n:>{4}}"
+}
+EOF
+
+# --- the fixed-size array ---------------------------------------------------------
+#
+# The LENGTH IS PART OF THE TYPE, which is the whole of what separates `[T; N]` from a list —
+# so a literal of the wrong length, a constant index outside it, and a method that would
+# change the size are all mistakes the type already knows about. Each is checked at compile
+# time rather than left to the bound check that guards a variable index.
+#
+# The CONSTANT INDEX is the seed's gap: it has no array type at all, so what it refuses is the
+# type, and a rule about an index inside one is a rule it never reaches.
+
+reject array-length-that-is-not-a-constant E2079 'an array length is a compile-time constant' <<'EOF'
+fn f() -> int {
+	return 3
+}
+
+fn main() {
+	xs: [int; f()] = [1, 2, 3]
+	print xs[0]
+}
+EOF
+
+reject array-literal-of-the-wrong-length E3139 'takes 3 element(s) and this literal has 2' <<'EOF'
+fn main() {
+	xs: [int; 3] = [1, 2]
+	print xs[0]
+}
+EOF
+
+reject array-constant-index-outside-the-length E3140 'is outside [int; 3]' seed-gap <<'EOF'
+fn main() {
+	xs: [int; 3] = [1, 2, 3]
+	print xs[5]
+}
+EOF
+
+reject array-has-no-append E3141 'an array answers `len`' <<'EOF'
+fn main() {
+	mut xs: [int; 2] = [1, 2]
+	xs.append(3)
+	print xs[0]
+}
+EOF
+
 # --- a borrow needs a place ------------------------------------------------------
 #
 # A `mut &` argument is the caller's own storage handed over to be written. `m["k"]` reads
@@ -2962,6 +3387,70 @@ fn main() {
 	mut m: map[str, int] = {"k": 1}
 	poke(m["k"])
 	print(f"{m["k"]}")
+}
+EOF
+
+# --- a `mut &` through a function VALUE ------------------------------------------
+#
+# `mut &` is part of the TYPE (GRAMMAR#param-type), so a call through a value reads the
+# convention from what it is calling rather than from a name it has not got. These are the
+# three rules that used to be unreachable because the type itself was refused: two function
+# types that differ only in the marker are different types, and the borrow rules hold at a
+# call site with no name exactly as they do at one with a name.
+#
+# THE TWO BORROW RULES ARE THE SEED'S GAP, and a familiar one: the seed reads a `mut &` from
+# the callee's NAME, so a call through a value asks the rules of nothing at all and takes the
+# address of whatever it was handed. That is the same gap the shipping compiler had until the
+# marker moved into the type.
+
+reject bind-a-mut-ref-fn-to-a-plain-fn-type E3033 'cannot bind fn(mut &int) -> void to a fn(int) -> void binding' <<'EOF'
+fn bump(mut &n: int) {
+	n = n + 1
+}
+
+fn main() {
+	f: fn (int) = bump
+	mut x := 1
+	f(x)
+	print x
+}
+EOF
+
+reject bind-a-plain-fn-to-a-mut-ref-fn-type E3033 'cannot bind fn(int) -> void to a fn(mut &int) -> void binding' <<'EOF'
+fn plain(n: int) {
+	print n
+}
+
+fn main() {
+	f: fn (mut &int) = plain
+	mut x := 1
+	f(x)
+	print x
+}
+EOF
+
+reject a-borrow-of-a-value-through-a-fn-value E3022 'argument 1 of this call' seed-gap <<'EOF'
+fn bump(mut &n: int) {
+	n = n + 1
+}
+
+fn main() {
+	f: fn (mut &int) = bump
+	f(1 + 2)
+	print 1
+}
+EOF
+
+reject a-write-back-to-a-non-mut-through-a-fn-value E3024 'argument 1 of this call' seed-gap <<'EOF'
+fn bump(mut &n: int) {
+	n = n + 1
+}
+
+fn main() {
+	f: fn (mut &int) = bump
+	x := 1
+	f(x)
+	print x
 }
 EOF
 
@@ -5368,9 +5857,9 @@ EOF
 # The grammar makes the binding module-PRIVATE, which is what these cases pin, and it is the
 # whole of the crossing: without the `pub` a reader outside is refused by the ordinary
 # visibility rule, so there is no second rule owed. A SAME-module safe read or write stays
-# legal, deliberately — GRAMMAR says "callable only from unsafe" of the `fn` alone, and with
-# `unsafe { … }` as an expression still E9011 no function body can open an unsafe context, so
-# a rule there would make the group unreachable from anything a program can write.
+# legal, deliberately — GRAMMAR says "callable only from unsafe" of the `fn` alone, and a
+# binding is not a call. What reads a mutable global is ordinary code in the module that
+# declared it; what may not is another module, which the visibility rule already answers.
 
 reject a-pub-mutable-global E3108 at=2:2 <<'EOF'
 unsafe {
@@ -7425,18 +7914,6 @@ reject bridge-a-str-to-a-list-of-something-that-is-not-a-byte E4060 <<'EOF'
 fn main() {
 	s := "ab"
 	print list[int](s).len()
-}
-EOF
-
-reject render-an-enum-as-text E9085 <<'EOF'
-enum Color {
-	Red
-	Green
-}
-
-fn main() {
-	c := Color.Red
-	print str(c)
 }
 EOF
 

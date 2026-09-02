@@ -937,19 +937,6 @@ fn fmt_opens_block(mut &toks: list[token.Token], at: int) -> bool {
 	return not fmt_brace_is_map(toks, at)
 }
 
-# fmt_brace_is_pattern — the `{` of a STRUCT PATTERN, which is not a block and not a map.
-#
-# `P{x, y} => …` and `if c { … }` look the same at this layer: a `{` after a name. What tells
-# them apart is where the matching `}` lands — a pattern's is followed by the `=>` that ends the
-# arm head, and a block's is not. A NESTED one (`Wrap{inner: P{x}, tag}`) is followed by a `,`
-# or a `}` instead, so the question is asked again of the brace outside it, which terminates at
-# the outermost one.
-#
-# THIS IS THE ONE PLACE the decision lives, which is why it is asked here rather than at each of
-# the eight sites that consult `is_lbrace`. Before it, `P{x} => x` had its `{` read as a block
-# opener: `zerg fmt` produced source that would not parse, and its own safety check refused to
-# write the file — which is the formatter behaving exactly as it should about a form it could
-# not print (#110).
 # fmt_enclosing_brace is the `{` that HOLDS the one at `at`, or -1 at the outermost. It walks
 # LEFT, which is what makes the recursion above terminate: each step is strictly nearer index 0.
 fn fmt_enclosing_brace(mut &toks: list[token.Token], at: int) -> int {
@@ -969,6 +956,23 @@ fn fmt_enclosing_brace(mut &toks: list[token.Token], at: int) -> int {
 	return 0 - 1
 }
 
+# fmt_brace_is_pattern — the `{` of a STRUCT SHAPE, which is not a block and not a map.
+#
+# `P{x, y} => …` and `if c { … }` look the same at this layer: a `{` after a name. What tells
+# them apart is where the matching `}` lands — a shape's is followed by the token that ends its
+# head, and a block's is not. There are three of those, and they are the three positions
+# GRAMMAR derives a `struct-pat` in: `=>` ends a `match` arm, and `:=` and `=` end a
+# destructuring target (GRAMMAR#bind-target, GRAMMAR#assign-target). A NESTED one
+# (`Wrap{inner: P{x}, tag}`) is followed by a `,` or a `}` instead, so the question is asked
+# again of the brace outside it, which terminates at the outermost one.
+#
+# THIS IS THE ONE PLACE the decision lives, which is why it is asked here rather than at each of
+# the eight sites that consult `is_lbrace`. Before it, `P{x} => x` had its `{` read as a block
+# opener: `zerg fmt` produced source that would not parse, and its own safety check refused to
+# write the file — which is the formatter behaving exactly as it should about a form it could
+# not print (#110). A destructuring target reached this the other way round: `zerg desugar`
+# printed `P{x, y} := p` as a name followed by a block, three lines where the author wrote one,
+# and the result still parsed — so nothing refused it.
 fn fmt_brace_is_pattern(mut &toks: list[token.Token], at: int) -> bool {
 	p := fmt_prev_code(toks, at)
 
@@ -986,7 +990,7 @@ fn fmt_brace_is_pattern(mut &toks: list[token.Token], at: int) -> bool {
 				n := fmt_next_code(toks, i)
 
 				return false if n < 0
-				return true if toks[n].kind == token.Kind.FatArrow
+				return true if toks[n].kind == token.Kind.FatArrow or toks[n].kind == token.Kind.Walrus or toks[n].kind == token.Kind.Assign
 
 				# NESTED INSIDE ANOTHER PATTERN: ask the brace that HOLDS this one, which is
 				# found by walking OUT and not by asking what this `}` closes. Asking the

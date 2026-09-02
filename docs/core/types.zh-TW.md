@@ -279,9 +279,9 @@ tuple 的結果是 **first-class**——可存、可傳、可解構——所以�
 > **[not yet]** 這段文字說 tuple 免費就有的那兩件事,一件都沒建。tuple 上的 `==` 是
 > _E9057 NotImplemented: `==` on a `(int, int)` — structural equality over a container is unbuilt, and a
 > container has no declaration to derive it on_:上面的組成繼承規則已是規格,而缺的是無名形式上的那個衍生。
-> **解構**被拒絕得更早一步、在逗號上——`a, b := two()` 報 _E2005 expected a newline or `;` to separate
-> statements, found `,`_,在該指名形式的地方指名了標點(加了括號的 `(a, b) := two()` 則說得出來,是 `E9021`)。
-> 無論哪一種,tuple 的結果如規範般可存、可傳,但只能用 `.0` / `.1` 讀回來。
+> **解構**已經建好,而且是讀回一個 tuple 的日常方式——`(a, b) := two()`。沒有括號的 `a, b := two()` 不是一個
+> 形式:GRAMMAR#bind-target 導出的 tuple 形狀是帶括號的,所以逗號上報的是標點(_E2005 expected a newline or
+> `;` to separate statements, found `,`_)。
 
 **`type X = Y`** 定義一個**全新、獨立的型別**——不是透明 alias。`X` 承接 `Y` 的表示與實作（它的欄位或 variant、
 以及它的 `spec` impl,現在 `This` = `X`),但是一個**獨立身分**:`X` 與 `Y` 是**不同型別、即使結構完全相同**,而且
@@ -311,11 +311,12 @@ tuple 的結果是 **first-class**——可存、可傳、可解構——所以�
 
 建立一個值的**唯一原語是 struct literal**——它會指名每個欄位，所以只在「每個欄位都可見」處才能用。所謂
 **constructor 不是獨立特性**：它就是一個（通常 `pub` 的）associated function，內部回傳一個 literal；該函式在型別
-自己的 module 內執行，能在**建構當下**就把型別的 invariant 立好（**[not yet]**——associated function 會被指名
-拒絕,_E9051 `User.from_id(…)` is an associated function_,所以本節推理所依據的那種「立 invariant 的 constructor」
-今天要寫成自由函式）。**私有欄位是外部永遠指不出的欄位**：它必須帶預設值
+自己的 module 內執行，能在**建構當下**就把型別的 invariant 立好。inherent `impl` 裡的一個 `fn` 是 associated
+function 還是方法,由它的 **body** 決定:[`GRAMMAR#impl-decl`](../../GRAMMAR) 把線畫在 `this` 上——不用它的 `fn`
+不帶 receiver,要透過**型別**去叫,`User.from_id(…)`。**私有欄位是外部永遠指不出的欄位**：它必須帶預設值
 （見下），所以外部的建構把它省略掉、由宣告決定它的值。要讓 literal 本身在 module 之外不可用，那是 `#[sealed]`
-decorator 的職責——**[not yet]**，所以今天只要型別可及，literal 就可及。
+decorator 的職責——**[not yet]**,_E9079 NotImplemented: the decorator `#[sealed]`_,所以今天只要型別可及,
+literal 就可及。
 
 > **[not yet]** struct literal **只依位置**綁定,所以那個指名欄位的形式並不存在:`P(a: 1, b: 2)` 報
 > _NotImplemented: the named argument `a:` — this compiler binds arguments by position only_
@@ -406,10 +407,9 @@ spec Into[T] {
   在同一句話裡禁止的。而轉成文字則根本沒有東西可加入:`display` 是內建的值**渲染**、不是 spec
   (見 [Format](../runtime/format.zh-TW.md)),所以想要文字的泛型完全**不需要 bound**。那是關於 `display` 不是
   spec 的事實,不是「每個值都渲染得出來」的保證。
-  (對**複合值**是 **[not yet]**:`struct` 上的 `str(P(7))` 是 _E9059 NotImplemented: rendering a P as text — a
-  composite needs the structural `Display` this compiler does not generate_,而泛型在 monomorphize 之後撞到的
-  是同一個拒絕。**channel**、**函式值**與 **nil** 不在等那個東西,而且永遠不會渲染——見
-  [Format](../runtime/format.zh-TW.md)。成立的是「不需要 bound」這條規則;撐在它後面的那個渲染並不是普世的。)
+  (**複合值**會結構化渲染——`str(P(7))` 就是 `P(x: 7)`——泛型在 monomorphize 之後也一樣。**channel**、**函式值**
+  與 **nil** 則永遠不會渲染——見 [Format](../runtime/format.zh-TW.md)。成立的是「不需要 bound」這條規則;撐在它
+  後面的那個渲染並不是普世的。)
 - **剩下的是語言沒有的那種轉換**:`impl Into[Meters] for Feet`,以寫出來的 `x.into()` 呼叫。內建型別上的 `into`
   會被指名拒絕,並說出該改寫什麼。
 - **泛型程式碼以它為 bound**——`fn f[T: Into[Meters]](x: T)` 可以呼叫 `x.into()`,目標由 bound 定死。**引數

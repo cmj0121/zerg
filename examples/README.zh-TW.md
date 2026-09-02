@@ -46,6 +46,12 @@ make                            # ./bin/zerg
 | [`18_scoped.zg`](18_scoped.zg)           | 什麼會釋放一個值，以及誰決定何時                         |
 | [`19_environment.zg`](19_environment.zg) | 環境變數：到處可讀，只在啟動時可寫                       |
 | [`20_typedefs.zg`](20_typedefs.zg)       | `type X = Y`:一個誰都遇不到的身分,加上 Y 的運算子        |
+| [`21_structs.zg`](21_structs.zg)         | 一個 `struct`，以及透過型別呼叫的 associated fn          |
+| [`22_enums.zg`](22_enums.zg)             | 一個 `enum`，以及必須點名每一個變體的 `match`            |
+| [`23_collections.zg`](23_collections.zg) | `list`、`map`、`[T; N]`——三種形狀，三份工作              |
+| [`24_closures.zg`](24_closures.zg)       | 函式當值，以及按複本捕捉的 closure                       |
+| [`25_errors.zg`](25_errors.zg)           | `Result[T]`、`?` / `??`，以及把 abort 降回值的 `guard`   |
+| [`26_derive.zg`](26_derive.zg)           | `#[derive(Eq)]`——相等是選擇加入的，由編譯器寫            |
 
 ## 模組這一層
 
@@ -57,6 +63,7 @@ entry 檔，加上它所 import 的模組。
 | [`modules/`](modules)               | 一支兩個模組的程式——一個 entry 檔與並排的目錄模組                |
 | [`1g/visible/`](1g/visible)         | 一個 `pub` 表面**確實**能跨過模組邊界抵達什麼                    |
 | [`1g/pubconst/`](1g/pubconst)       | `pub COUNT := 3` 是真正的成員；模組繫結不需要 `const`            |
+| [`1g/pubname/`](1g/pubname)         | 兩個模組可以宣告同一個公開名字；由限定呼叫來選                   |
 | [`1g/modconst/`](1g/modconst)       | 模組常數是同一個物件，不管在哪裡讀都一樣                         |
 | [`1g/shapedconst/`](1g/shapedconst) | 有拼出型別的模組常數——tuple、optional                            |
 | [`1g/modtype/`](1g/modtype)         | 透過 import 抵達的型別，同時也是它的建構子                       |
@@ -80,7 +87,6 @@ entry 檔，加上它所 import 的模組。
 | 範例                            | 被什麼拒收                             |
 | ------------------------------- | -------------------------------------- |
 | [`1g/private/`](1g/private)     | `… is not a public member of module …` |
-| [`1g/pubname/`](1g/pubname)     | 兩個模組宣告同一個公開名字             |
 | [`1g/privconst/`](1g/privconst) | 同一條規則，用在模組**常數**上         |
 
 如果你編了這兩支之一而得到一個錯誤，那個錯誤**就是**這個範例。

@@ -583,8 +583,12 @@ choose otherwise.
 than a shortfall against one. The shape of the failure is a count, not a switch: one spinner costs a core,
 `M` spinners leave nothing to run anything else — including `main` — and on a single-CPU host (`M` = 1) the
 first spinner is already the whole program. So an unbounded compute loop needs a channel operation in it,
-the same discipline every cooperative runtime asks for. Preemption would lift that requirement; it is a
-[door](../../FUTURE.md#preemptive-scheduling), not a promise this page makes.
+the same discipline every cooperative runtime asks for.
+
+> **[implementation-defined]** WHETHER a scheduler is preemptive is this implementation's. Preemption would
+> lift the requirement above — a spinner would be interrupted rather than have to park itself — and it would
+> cost a safepoint on every back edge, which the specification does not ask for either way. What is pinned
+> is where a coroutine yields; whether anything else can take the worker from it is not.
 
 `M` is the worker count — one OS thread per CPU, capped at 16 — draining one shared FIFO run queue, and a
 coroutine migrates freely between workers, so it may resume on a thread it never started on. **`main` is

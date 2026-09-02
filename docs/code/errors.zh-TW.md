@@ -151,8 +151,11 @@ guard page 與 `main` 的原生 stack)皆然。
 它做不到的是展開。那條會去跑待決 `defer` 的 stack 正是已經耗盡的那一條,所以 `defer` 被**跳過**、沒有 `guard` 能
 把它降級,`err is StackOverflowError` 也不可寫——根本沒有一個值可以拿去問。它也是 coroutine **無法**包住的那一個
 結束:一個沒有 handler 的一般 abort 只結束該 coroutine,溢位卻結束整個行程。它落在哪一份契約之外見
-[Conformance](../conformance.zh-TW.md),而一張深度檢查的安全網要付什麼代價,見
-[那扇門](../../FUTURE.zh-TW.md#一次深度檢查的-stack-溢位)。
+[Conformance](../conformance.zh-TW.md)。
+
+> **[implementation-defined]** 一次溢位**怎麼**被偵測是這個實作的事。一個擁有並自行成長 stack 的 runtime,可以
+> 在 fault 之前就檢查呼叫深度、然後乾淨地 unwind;這一個是接下那個 fault、然後指名它。規範釘住的是「深度是有界
+> 的」以及「碰到界限會指名結束程式」,不是那個察覺它的機制。
 
 一個 **`DeadlockError`**——每個 coroutine 都阻塞、無法再前進——現在已是規格所要求的那次乾淨 abort:它 unwind、跑
 pending `defer`，`guard` 也攔得住。它在 `main` 的 coroutine 上 raise，而且**每一次**偵測都會重新 raise、不是只有

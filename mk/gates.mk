@@ -22,7 +22,7 @@
 .PHONY: suites test-runner stdlib-test install-check examples corpus fixpoint sanitize-conc \
 	mem-check refuse reject oracle lsp editor-align treesitter desugar gates reject-fuzz \
 	check-equal fmt-corpus fmt-self fmt-tokens fmt-roundtrip docs-links docs-mirror docs-zerg \
-	grammar-cites grammar-keywords grammar-mirror sha256 layering conformance productions \
+	grammar-cites grammar-cited grammar-keywords grammar-mirror refusal-cites sha256 layering conformance productions \
 	counterexamples behaviour version-check cache-key-check error-codes-check seed-gaps lint-check \
 	deviation-check marker-codes \
 	chapter-codes method-gaps \
@@ -128,7 +128,7 @@ install-check:                  # the installed toolchain works, and uninstall t
 # copy the next directory is not added to.
 EXAMPLE_SRCS := examples/[0-9][0-9]_*.zg examples/*/main.zg examples/1g/*/main.zg
 
-EXAMPLE_MIN ?= 20
+EXAMPLE_MIN ?= 40
 
 # The examples that must be REFUSED, and the sentence they must be refused with. An example
 # is a claim about the language, and a NEGATIVE one — this program is not Zerg — is a claim
@@ -161,7 +161,7 @@ EXAMPLE_REFUSED_SAYS ?= is not a public member of module
 # renamed directory or a moved corpus turns the whole assertion off and leaves a target that
 # reports "39 examples built and run" having compared none of them. `EXAMPLE_OUT_MIN` is what
 # tells that apart from the concurrent examples legitimately having no file.
-EXAMPLE_OUT_MIN ?= 30
+EXAMPLE_OUT_MIN ?= 36
 
 # CHECKED AS WELL AS BUILT, because they are not the same walk. `--emit bin` loads the program
 # unit by unit (cmd/unit.zg) and every other stage loads it whole (cmd/source.zg), so a rule
@@ -476,7 +476,7 @@ gates:                          # every gate is on the board, and the board is r
 	./scripts/gates-check.sh
 
 # `version-check` sits straight after `build` because it reads bin/ rather than filling it.
-LINUX_GATES ?= build version-check suites test-runner stdlib-test examples corpus desugar lsp editor-align treesitter install-check refuse reject oracle reject-fuzz check-equal fmt-corpus fmt-tokens fmt-roundtrip fmt-self lint lint-check doc-check fixpoint docs-links docs-mirror docs-zerg grammar-cites grammar-keywords grammar-mirror layering stmt-walk entry-path examples-index conformance productions counterexamples behaviour error-codes-check seed-gaps deviation-check marker-codes chapter-codes method-gaps build-deps-check cache-key-check sha256 gates mem-check mem-peak release-notes sanitize-conc
+LINUX_GATES ?= build version-check suites test-runner stdlib-test examples corpus desugar lsp editor-align treesitter install-check refuse reject oracle reject-fuzz check-equal fmt-corpus fmt-tokens fmt-roundtrip fmt-self lint lint-check doc-check fixpoint docs-links docs-mirror docs-zerg grammar-cites grammar-cited grammar-keywords grammar-mirror refusal-cites layering stmt-walk entry-path examples-index conformance productions counterexamples behaviour error-codes-check seed-gaps deviation-check marker-codes chapter-codes method-gaps build-deps-check cache-key-check sha256 gates mem-check mem-peak release-notes sanitize-conc
 
 # `reject` holds the mistakes somebody thought of; this holds the ones nobody did. It takes
 # the corpus's WELL-FORMED programs, breaks each in a way the language has a rule about,
@@ -517,6 +517,25 @@ docs-zerg:                      # every ```zerg block in the docs is a program t
 grammar-cites:                  # every GRAMMAR citation the repo makes must resolve
 	./scripts/grammar-cites.sh
 
+# AND THE OTHER DIRECTION, which nothing asked until #116: `grammar-cites` can be green over a
+# handful of citations, so it says every anchor resolves and nothing about whether a form has
+# one. A reader who meets a production should be able to find the chapter that explains it —
+# the same shape `chapter-codes` gives an error code.
+#
+# ITS NUMBER IS A FLOOR AND THE SCRIPT SAYS SO. It reads the anchor, not the paragraph, and a
+# pass that scattered anchors into the nearest paragraph would turn it green while saying
+# nothing. What keeps it honest is the rule the pass follows, which is written in the script.
+grammar-cited:                  # every production a reader writes is named by a chapter
+	./scripts/grammar-cited-check.sh
+
+# The third direction, and the one neither of the two above could ask. `grammar-cites` holds a
+# citation to a real production and `grammar-cited` holds a production to being cited; both read
+# the DOCS. This reads the COMPILER: a refusal has to say where the form it turns away is
+# specified, which is what makes "a production that runs and still has a form inside it refused
+# by name" a number rather than a sweep by hand.
+refusal-cites:                  # every `NotImplemented:` names where its form is specified
+	./scripts/refusal-cites-check.sh
+
 # The one thing in this tree with an OUTSIDE authority. `make oracle` is no use for a hash:
 # both compilers would run the same Zerg source, so a wrong rotation is wrong identically on
 # both sides and the comparison stays green. FIPS 180-4's vectors and the system tool are
@@ -541,7 +560,7 @@ stmt-walk:                      # a walk that reaches into a block reaches into 
 	./scripts/stmt-walk-check.sh
 
 # Thirty-three example programs sat here and no document linked to any of them; `examples/README.md`
-# is the door now, and an index of thirty-three names is a list written twice. This is the direction
+# is the door now, and an index of forty-six names is a list written twice. This is the direction
 # the drift goes — somebody adds an example, the glob starts building it, and nothing reminds them
 # to write a line about it. `docs-links` cannot see it: an example nobody cites is invisible to a
 # gate that asks whether a citation resolves.

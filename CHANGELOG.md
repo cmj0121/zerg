@@ -14,8 +14,9 @@ a name belongs to. → [full notes](notes/0.2/0.2.0_CHANGELOG.md)
 
 - **No `[deviation]` markers.** 0.1.0 shipped a specification that named the places it was wrong; this one
   has none. Every marker it carried was closed three ways only — the compiler was fixed, the spec moved, or
-  the requirement became a door in `FUTURE.md` — and then the tree was searched for the ones nobody had
-  written down.
+  the requirement became a door with a threshold — and then the tree was searched for the ones nobody had
+  written down. (The doors were disposed of in 0.3.0: each became a position in the chapter that owns the
+  question, or an `[implementation-defined]` where a reader meets it.)
 - **The file is the unit.** Visibility and imports are the file's, a folder is a module by holding `mod.zg`,
   and a project's own modules are spelled `./`. A module is what an import RESOLVED to, not how it was
   spelled, so one directory reached two ways is one module.

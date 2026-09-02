@@ -244,8 +244,9 @@ other fenced block.
 Two kinds of function cannot have an example in that form, and both are in the standard library today rather than
 hypothetical:
 
-- **One answering a `list`, a `map` or a struct.** `print` renders no composite in this compiler (`E9059`), so the
-  example has to reduce the answer to something printable. `strings.split` detours through `join` for exactly that
+- **One answering a `list`, a `map` or a struct.** `print` renders a composite structurally now, so an
+  example may show the answer whole — but reducing it is usually the better example anyway.
+  `strings.split` detours through `join` for exactly that
   reason — `strings.join(strings.split("a,b,c", ","), "|")` prints `a|b|c`, which shows the pieces **and** that
   `join` inverts `split`. Issue [#16](https://github.com/cmj0121/zerg/issues/16) files it as `E449`, a composite
   has no rendering.

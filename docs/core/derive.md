@@ -39,20 +39,36 @@ invariant above). It lets a spec expose many methods from a small required core;
 **inherits** them or **overrides** one. Every user spec can carry these — this is the **extensible**
 tier.
 
-> **[not yet]** A `spec` member with a **body** is refused at the declaration — _E9002 NotImplemented: a
-> `spec` member with a BODY_ — so the block below declares an interface no program can carry today.
-> Declare the signature and write the body in each `impl`; see [Specs & Generics](specs.md).
-
-```text
+```zerg
 spec Summable {
-    fn zero() -> This                       # required
-    fn add(other: This) -> This             # required
+ fn zero() -> This                       # required
+ fn add(other: This) -> This             # required
 
-    fn sum(items: list[This]) -> This {     # provided — reads only methods, no fields, no match
-        mut acc := This.zero()
-        for x in items { acc = acc.add(x) }
-        return acc
-    }
+ fn sum(items: list[This]) -> This {     # provided — reads only methods, no fields, no match
+  mut acc := this.zero()
+  for x in items {
+   acc = acc.add(x)
+  }
+  return acc
+ }
+}
+
+struct Cents {
+ pub v: int
+}
+
+impl Summable for Cents {
+ fn zero() -> Cents {
+  return Cents(0)
+ }
+
+ fn add(other: Cents) -> Cents {
+  return Cents(this.v + other.v)
+ }
+}
+
+fn main() {
+ print Cents(0).sum([Cents(1), Cents(2), Cents(3)]).v
 }
 ```
 
@@ -118,9 +134,24 @@ Two shapes are **refused**, and both for the same reason — the rewrite does no
 ## The derivable specs
 
 The blessed set — each with a canonical structural reading the compiler owns. Every one is **opt-in**
-via `derive`; there is **no auto-derived equality** and no implicit `Object` spec. **`Eq`** is built;
-**`Ord`**, **`Hash`**, **`Encode`** and **`Decode`** are specified here and **[not yet]** — naming one is
-`E9054`.
+via `derive`; there is **no auto-derived equality** and no implicit `Object` spec. **`Eq`** and **`From`**
+are built; **`Ord`**, **`Hash`**, **`Encode`** and **`Decode`** are specified here and **[not yet]** —
+naming one is `E9054`.
+
+**`From`** is the one whose reading is not the type's own structure but a variant's: on an `enum` it
+generates the conversion each variant implies, `impl Into[E] for P` per single-payload variant, so a
+layer's error becomes the caller's with `e.into()` rather than a `match` written per variant. It is the
+wrapping this language chose to cost — there is no open error downcast, and a per-layer error enum is the
+answer taken instead. The conversion is still WRITTEN: a position never converts, so `?` does not lift an
+error by itself. A variant carrying nothing implies no conversion and is skipped; two variants carrying
+one type would give it two conversions and are refused (_E4091_), since a type has one `Into` per
+destination.
+
+**There is no `#[derive(Reflect)]`, and the threshold for one is a caller.** A per-type constant
+describing a type's fields and their types is derivable — the knowledge is the compiler's already — but
+nothing yet needs a general description that `Encode` / `Decode` do not answer more directly. The case for
+one is that a description several derives share is cheaper than several derives that each read structure;
+until a caller exists, that is a saving with nobody to save.
 
 > **[not yet]** `#[derive(Eq)]` on a **payload** `enum` is unbuilt and refused by its own code — _E9055 …
 > it carries a payload (`A`), and this compiler derives equality for a fieldless enum, whose variants

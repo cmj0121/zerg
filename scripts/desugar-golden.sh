@@ -21,7 +21,7 @@ set -u
 
 ZERG=${ZERG:-./bin/zerg}
 DIR=${DIR:-test-data/desugar}
-RULES=${RULES:-"D101 D102 D103 D104"}
+RULES=${RULES:-"D101 D102 D103 D104 D105"}
 MIN=${MIN_CASES:-6}
 
 if [ ! -d "$DIR" ]; then

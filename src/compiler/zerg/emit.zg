@@ -235,6 +235,22 @@ pub struct Emitter {
 	# two sections whose fixed order is wrong for whichever nesting came second.
 	pub tup_names: list[str]
 
+	# arr_names is tup_names for the fixed-size array — one C struct per (element, length),
+	# generated on demand into the same stream, because an array typedef spells a tuple or a
+	# carrier element exactly the way a tuple's does.
+	pub arr_names: list[str]
+
+	# rnd_names are the shapes whose STRUCTURAL RENDERER has been generated — one function
+	# per shape, on demand, into the same stream the typedefs go into. A renderer spells the
+	# renderers of its parts, so the stream's met-order is what places them: a list's is
+	# written after its element's, because it is the element's that names it.
+	pub rnd_names: list[str]
+
+	# rnd_decls is where the renderer BODIES go, and it is a stream of its own because of
+	# where they have to land: a renderer may call a type's own `display` override, so it
+	# follows the PROTOTYPES — the typedef stream above is written before them.
+	pub rnd_decls: list[str]
+
 	# mvt_names / mvt_decls are the map VTABLES — one static per distinct key/value shape,
 	# holding the hash and equality for the key type.
 	pub mvt_names: list[str]
@@ -477,6 +493,12 @@ pub struct Emitter {
 	# call is resolved, and the CONTEXT a declaration was written in is exactly what is lost.
 	pub sig_unsafe: list[bool]
 
+	# sig_assoc is the fourth: whether the declaration was an ASSOCIATED FN rather than a
+	# method (GRAMMAR#impl-decl). It shares its type's namespace, so the KEY cannot tell the two
+	# apart — and what differs is how a call reaches it, which is the question every call site
+	# asks and none of them could answer.
+	pub sig_assoc: list[bool]
+
 	# in_unsafe_fn is whether the function being emitted RIGHT NOW is one of them, which is
 	# the other half of the rule: the check is a comparison between the callee's context and
 	# the caller's, and nothing else on this struct says which function the walk is inside.
@@ -646,18 +668,31 @@ fn c_sub_active(mut &em: Emitter, sb: Subst) -> Subst {
 # c_type maps a value type to its C spelling.
 fn c_type(t: ast.Ty) -> str {
 	return match t {
-		Ty.TInt => "int64_t"
-		Ty.TFloat => "double"
-		Ty.TStr => "const char*"
-		Ty.TBool => "bool"
-		Ty.TVoid => "void"
-		Ty.TByte => "uint8_t"
-		Ty.TUint => "uint64_t"
-		Ty.TRune => "int32_t"
+		Ty.TInt       => "int64_t"
+		Ty.TFloat     => "double"
+		Ty.TStr       => "const char*"
+		Ty.TBool      => "bool"
+		Ty.TVoid      => "void"
+		Ty.TByte      => "uint8_t"
+		Ty.TUint      => "uint64_t"
+		Ty.TRune      => "int32_t"
 		Ty.TNamed(nm) => "zg_" + nm
-		Ty.TList(_) => "zrt_list"
-		Ty.TFn(_, _) => "zg_fnptr"
+		Ty.TList(_)   => "zrt_list"
+		Ty.TFn(_, _)  => "zg_fnptr"
+
+		# a `mut &T` is the caller's own storage lent for one call, which is a POINTER to it —
+		# the same C parameter a `mut &` on a declaration has always lowered to
+		Ty.TRef(e) => c_type(e) + "*"
+
+		# a raw pointer is a raw address: the untyped one is C's `void*`, and a typed one is a
+		# pointer to the pointee's C type — the same width, which is what `[T]` only typing the
+		# load/store/offset means
+		Ty.TPtr(e) => c_ptr_type(e)
+
+		# the marker is a compile-time fact: both are one function pointer
+		Ty.TUnsafe(e) => c_type(e)
 		Ty.TTuple(ts) => c_tuple_cname(ts)
+		Ty.TArr(e, n) => c_arr_cname(e, n)
 		Ty.TMap(_, _) => "zrt_map"
 		Ty.TChan(_, _) => "zrt_chan*"
 		Ty.TEither(l, r) => c_carrier_cname(l, r)
@@ -729,6 +764,7 @@ fn c_opt_wrap(mut &em: Emitter, where: str, elem: ast.Ty, e: ast.Expr, sb: Subst
 fn c_is_block_expr(e: ast.Expr) -> bool {
 	return match e {
 		Expr.EBlock(_) => true
+		Expr.EUnsafe(_) => true
 		_ => false
 	}
 }
@@ -853,6 +889,7 @@ fn c_fit_copied(mut &em: Emitter, where: str, want: ast.Ty, e: ast.Expr, sb: Sub
 	# back as doubles. Each element is a typed position of its own, which is also where `Into`
 	# fires on it.
 	return c_list_lit_vals(em, c_list_elem(want), c_elem_exprs(em, e, c_list_elem(want))) if c_is_list(want) and c_is_listlit(e)
+
 	return c_into(em, want, e, sb)
 }
 
@@ -869,6 +906,13 @@ fn c_fit_copied(mut &em: Emitter, where: str, want: ast.Ty, e: ast.Expr, sb: Sub
 # chk_fits_expr with the written form as the fix, and `L501` — the lint that reported each
 # such application while it was still legal — retires with them.
 fn c_into(mut &em: Emitter, want: ast.Ty, e0: ast.Expr, sb: Subst) -> str {
+	# A LIST LITERAL IN AN ARRAY POSITION IS AN ARRAY (docs/code/collections.md): the literal
+	# is context-typed, a `list[T]` by default and a `[T; N]` when the target is one. It is
+	# read HERE rather than in c_fit_copied because a DECLARED BINDING is the one typed
+	# position that does not lower through that one, and `xs: [int; 3] = [1, 2, 3]` is the
+	# first thing anybody writes.
+	return c_arr_lit(em, c_into_says(want), want, e0) if c_is_arr(want) and c_is_listlit(e0)
+
 	# CARVE-OUT (c): a closure's omitted parameter types — and its omitted return type —
 	# come from the function type it is CHECKED AGAINST, which is a fact about THIS POSITION
 	# and not about the closure. It is filled here because c_fit_copied's eighteen slots come
@@ -1432,6 +1476,7 @@ fn c_carrier_emit(mut &em: Emitter, c: ast.Ty) -> str {
 # even a shape the walk meets twice answers "" instead of being walked again.
 fn c_spelled_pre(mut &em: Emitter, t: ast.Ty) -> str {
 	return c_tuple_decl(em, ast.ty_tuple_elems(t)) if c_is_tuple(t)
+	return c_arr_decl(em, t) if c_is_arr(t)
 	return c_carrier_emit(em, t) if c_is_carrier(t)
 
 	return ""
@@ -1603,7 +1648,7 @@ fn c_fnptr_helpers() -> str {
 # thing behind it does with the pointer. c_fnval_thunk is what gives a plain function that
 # shape.
 fn c_fnptr_cast(t: ast.Ty) -> str {
-	return match t {
+	return match c_unmark(t) {
 		Ty.TFn(ps, r) => f"({c_type(r)} (*)(const void *{c_ptypes_after(ps)}))"
 		_             => ""
 	}
@@ -1618,9 +1663,29 @@ fn c_ptypes_after(ps: list[ast.Ty]) -> str {
 }
 
 pub fn c_is_fn(t: ast.Ty) -> bool {
-	return match t {
+	return match c_unmark(t) {
 		Ty.TFn(_, _) => true
 		_            => false
+	}
+}
+
+# c_unmark strips the `unsafe` MARKER off a function type. The marker says who may call the
+# value and nothing about its shape, so every reader that asks about the shape — the arity, the
+# parameters, the result, the C cast — asks through here rather than each learning about it.
+# That is the same reason `mut &` rides inside the parameter list rather than beside it.
+pub fn c_unmark(t: ast.Ty) -> ast.Ty {
+	return match t {
+		Ty.TUnsafe(e) => e
+		_             => t
+	}
+}
+
+# c_is_unsafe_ty is the other half: the question the CALL asks, which is the only one the
+# marker answers.
+pub fn c_is_unsafe_ty(t: ast.Ty) -> bool {
+	return match t {
+		Ty.TUnsafe(_) => true
+		_             => false
 	}
 }
 
@@ -1635,7 +1700,7 @@ pub fn c_is_identity(t: ast.Ty) -> bool {
 }
 
 fn c_fn_ret(t: ast.Ty) -> ast.Ty {
-	return match t {
+	return match c_unmark(t) {
 		Ty.TFn(_, r) => r
 		_            => ast.Ty.TUnknown
 	}
@@ -1648,6 +1713,12 @@ fn c_fn_ret(t: ast.Ty) -> ast.Ty {
 # two-argument cast and cc reported it.
 fn c_args_after(mut &em: Emitter, fty: ast.Ty, args: list[ast.Expr], sb: Subst) -> str {
 	check.chk_fnval_arity(em, fty, args.len())
+
+	# A CALL THROUGH AN UNSAFE FUNCTION VALUE IS AN UNSAFE CALL. The marker rides in the type
+	# so that this question has an answer at all: a value has no name for the caller rule to
+	# look up, and without it an unsafe function bound to a plain `fn` would be callable from
+	# anywhere — which is the one thing the keyword exists to prevent.
+	check.chk_unsafe_call_value(em, fty)
 
 	# A CALL THROUGH A FUNCTION VALUE SEQUENCES ITS ARGUMENTS, exactly as a direct call
 	# does. This was the last combining form in either compiler still handing its operands
@@ -1668,7 +1739,7 @@ fn c_args_after(mut &em: Emitter, fty: ast.Ty, args: list[ast.Expr], sb: Subst) 
 # from anything else. It lives here rather than beside its caller so the two halves of one
 # destructuring are read together.
 pub fn c_fn_params(t: ast.Ty) -> list[ast.Ty] {
-	return match t {
+	return match c_unmark(t) {
 		Ty.TFn(ps, _) => ps
 		_             => []
 	}
@@ -1920,7 +1991,7 @@ fn c_env_restore(mut &em: Emitter, saved: EnvCols) {
 fn c_no_shadow_sub(mut &em: Emitter, name: str) {
 	mut i := 0
 	for i < em.sub.names.len() {
-		raise c_diag(em, rule.Rule.NotYetRebindMatchBinding, f"NotImplemented: `{name}` re-binds a name a `match` arm's pattern already binds in this block — the arm's binding is spliced in as text, so the new one would never be read. Pick another name") if em.sub.names[i] == name
+		raise c_diag(em, rule.Rule.NotYetRebindMatchBinding, f"NotImplemented: `{name}` re-binds a name a `match` arm's pattern already binds in this block — the arm's binding is spliced in as text, so the new one would never be read. Pick another name (GRAMMAR#binding)") if em.sub.names[i] == name
 		i = i + 1
 	}
 }
@@ -2266,7 +2337,7 @@ fn c_sig_seen(mut &em: Emitter, key: str) -> bool {
 fn c_build_generics(mut &em: Emitter, f: ast.File) {
 	for fn_i in f.fns {
 		if c_is_template(fn_i) {
-			raise c_diag_at(fn_i.path, fn_i.line, fn_i.col, rule.Rule.NotYetGenericMethod, f"NotImplemented: a generic METHOD `{fn_i.recv}.{fn_i.name}[…]` — this compiler instantiates a free function, and a method's specializations would each need a name in its type's namespace") if fn_i.recv != ""
+			raise c_diag_at(fn_i.path, fn_i.line, fn_i.col, rule.Rule.NotYetGenericMethod, f"NotImplemented: a generic METHOD `{fn_i.recv}.{fn_i.name}[…]` — this compiler instantiates a free function, and a method's specializations would each need a name in its type's namespace (GRAMMAR#fn-decl)") if fn_i.recv != ""
 			c_check_gen_dup(em, f, fn_i)
 			em.gen_names.append(fn_i.name)
 			em.gen_tpls.append(fn_i)
@@ -2616,6 +2687,7 @@ fn c_add_sig(mut &em: Emitter, fn_i: ast.FnDecl) {
 	em.sig_pub.append(fn_i.is_pub)
 	em.sig_path.append(fn_i.path)
 	em.sig_unsafe.append(fn_i.in_unsafe)
+	em.sig_assoc.append(fn_i.is_assoc)
 	em.sig_rets.append(fn_i.ret)
 	em.sig_hasret.append(fn_i.has_ret)
 	em.sig_nparams.append(fn_i.params.len())
@@ -2770,14 +2842,13 @@ fn c_is_free_fn(mut &em: Emitter, n: str) -> bool {
 pub fn c_builtin_check(mut &em: Emitter, n: str) {
 	c_fixed_width_check(em, n)
 
-	raise c_diag(em, rule.Rule.NotYetRefBox, "NotImplemented: a refcounted box `Ref(x)` / `deref(r)` — this compiler has no `Ref[T]` type") if n == "Ref" or n == "deref"
-	raise c_diag(em, rule.Rule.NotYetRawPointerBuiltin, f"NotImplemented: the raw-pointer built-in `{n}` — bare-metal memory access, which is `unsafe`-only and not built here") if n == "addr" or n == "ptr"
-	raise c_diag(em, rule.Rule.NotYetCompileTimeBuiltin, f"NotImplemented: the compile-time built-in `{n}[T]` — this compiler does not compute a type's layout") if n == "sizeof" or n == "alignof"
+	raise c_diag(em, rule.Rule.NotYetRefBox, "NotImplemented: a refcounted box `Ref(x)` / `deref(r)` — this compiler has no `Ref[T]` type (docs/runtime/builtins.md)") if n == "Ref" or n == "deref"
+	raise c_diag(em, rule.Rule.NotYetCompileTimeBuiltin, f"NotImplemented: the compile-time built-in `{n}[T]` — this compiler does not compute a type's layout (docs/runtime/builtins.md)") if n == "sizeof" or n == "alignof"
 
 	# `set([1, 2])` read as "undefined function `set`", the message a misspelled call gets.
 	# Why a set is spelled as a CONSTRUCTOR and not as a brace literal is GRAMMAR#map-lit's
 	# note: `{1}` cannot be told from a one-statement block.
-	raise c_diag(em, rule.Rule.NotYetSetBuiltin, "NotImplemented: the built-in `set` — a set is built through its constructor (`set([1, 2])`, `set()` for the empty one) because `{1}` cannot be told from a block, and this compiler has `list[T]` and `map[K, V]` only") if n == "set"
+	raise c_diag(em, rule.Rule.NotYetSetBuiltin, "NotImplemented: the built-in `set` — a set is built through its constructor (`set([1, 2])`, `set()` for the empty one) because `{1}` cannot be told from a block, and this compiler has `list[T]` and `map[K, V]` only (docs/code/collections.md)") if n == "set"
 }
 
 # c_fixed_width_check names the fixed-width ladder rather than letting it read as a typo.
@@ -2798,7 +2869,7 @@ fn c_fixed_width_check(mut &em: Emitter, n: str) {
 	ladder := ["i8", "i16", "i32", "i64", "u8", "u16", "u32", "u64", "f32", "f64"]
 	return if not c_name_in(ladder, n)
 
-	raise c_diag(em, rule.Rule.NotYetFixedWidthLadder, f"NotImplemented: `{n}` is part of the fixed-width ladder — `i8`…`i64`, `u8`…`u64`, `f32` and `f64` are specified as stdlib types and none is declared yet; the built-in widths are `int`, `uint`, `byte`, `rune` and `float`")
+	raise c_diag(em, rule.Rule.NotYetFixedWidthLadder, f"NotImplemented: `{n}` is part of the fixed-width ladder — `i8`…`i64`, `u8`…`u64`, `f32` and `f64` are specified as stdlib types and none is declared yet; the built-in widths are `int`, `uint`, `byte`, `rune` and `float` (docs/runtime/stdlib.md)")
 }
 
 # c_type_decls writes every type declaration a unit needs, IN DEPENDENCY ORDER: the enums,
@@ -2830,7 +2901,7 @@ fn c_type_decls(mut &em: Emitter, f: ast.File, carriers: list[ast.Ty], tuples: l
 		all.append(c_carrier_ty_cname(c))
 	}
 	for t in tuples {
-		all.append(c_tuple_cname(ast.ty_tuple_elems(t)))
+		all.append(c_shape_cname(t))
 	}
 
 	mut done: list[str] = []
@@ -2925,10 +2996,9 @@ fn c_type_decls(mut &em: Emitter, f: ast.File, carriers: list[ast.Ty], tuples: l
 		# which is where it was and why `pair: (Q, int)` had to be turned away.
 		mut ts2: list[ast.Ty] = []
 		for t in ts {
-			elems := ast.ty_tuple_elems(t)
-			tn := c_tuple_cname(elems)
-			if c_deps_done(c_ty_list_deps(elems), done, all) {
-				out = out + c_tuple_decl(em, elems)
+			tn := c_shape_cname(t)
+			if c_deps_done(c_ty_list_deps(c_shape_deps(t)), done, all) {
+				out = out + c_shape_decl(em, t)
 				done.append(tn)
 			} else {
 				ts2.append(t)
@@ -3023,6 +3093,7 @@ fn c_ty_struct_deps(t: ast.Ty, mut &out: list[str]) {
 		Ty.TOpt(el) => out.append(c_carrier_ty_cname(ast.Ty.TOpt(el)))
 		Ty.TEither(l, r) => out.append(c_carrier_ty_cname(ast.Ty.TEither(l, r)))
 		Ty.TTuple(ts) => out.append(c_tuple_cname(ts))
+		Ty.TArr(el, n) => out.append(c_arr_cname(el, n))
 		_ => c_skip()
 	}
 }
@@ -3189,6 +3260,7 @@ fn c_decl_types(sites: list[Site], mut &tups: list[ast.Ty], mut &cars: list[ast.
 fn c_decl_collect(t: ast.Ty, mut &tups: list[ast.Ty], mut &cars: list[ast.Ty]) {
 	match t {
 		Ty.TTuple(ts) => c_decl_collect_tuple(ts, tups, cars)
+		Ty.TArr(el, n) => c_decl_collect_arr(el, n, tups, cars)
 		Ty.TOpt(el) => c_decl_collect_carrier(ast.Ty.TOpt(el), tups, cars)
 		Ty.TEither(l, r) => c_decl_collect_carrier(ast.Ty.TEither(l, r), tups, cars)
 		Ty.TList(el) => c_decl_collect(el, tups, cars)
@@ -3212,6 +3284,38 @@ fn c_decl_collect_tuple(ts: list[ast.Ty], mut &tups: list[ast.Ty], mut &cars: li
 		return if c_tuple_cname(ast.ty_tuple_elems(t)) == name
 	}
 	tups.append(ast.Ty.TTuple(ts))
+}
+
+# c_decl_collect_arr adds an array to the same list the tuples are in, and for the same
+# reason: both are a typedef the sweep has to place after whatever they spell, and a struct
+# field of either type depends on one. `c_shape_cname` is what tells the two apart there.
+fn c_decl_collect_arr(el: ast.Ty, n: str, mut &tups: list[ast.Ty], mut &cars: list[ast.Ty]) {
+	c_decl_collect(el, tups, cars)
+	name := c_arr_cname(el, n)
+	for t in tups {
+		return if c_shape_cname(t) == name
+	}
+	tups.append(ast.Ty.TArr(el, n))
+}
+
+# c_shape_cname and c_shape_decl are the tuple's two questions asked of either shape, so the
+# sweep below stays one arm rather than two that must be kept in step.
+fn c_shape_cname(t: ast.Ty) -> str {
+	return c_arr_cname(c_arr_elem(t), c_arr_key(t)) if c_is_arr(t)
+
+	return c_tuple_cname(ast.ty_tuple_elems(t))
+}
+
+fn c_shape_decl(mut &em: Emitter, t: ast.Ty) -> str {
+	return c_arr_decl(em, t) if c_is_arr(t)
+
+	return c_tuple_decl(em, ast.ty_tuple_elems(t))
+}
+
+fn c_shape_deps(t: ast.Ty) -> list[ast.Ty] {
+	return [c_arr_elem(t)] if c_is_arr(t)
+
+	return ast.ty_tuple_elems(t)
 }
 
 # c_decl_collect_carrier adds a carrier once per SHAPE, then descends into its payloads — a
@@ -3250,7 +3354,7 @@ fn c_check_named_types(mut &em: Emitter, f: ast.File, sites: list[Site]) {
 	# it was given — `… `int` (parameter `this` of `tag`)`. It is a question about the
 	# DECLARATION rather than about a type it spells, which is why it is not a site.
 	for fn_i in f.fns {
-		raise c_diag_at(fn_i.path, fn_i.line, fn_i.col, rule.Rule.NotYetImplOnBuiltin, f"NotImplemented: an `impl` on the built-in type `{fn_i.recv}` — this compiler gives a method a declared struct or enum receiver") if fn_i.recv != "" and parser.is_conv(fn_i.recv)
+		raise c_diag_at(fn_i.path, fn_i.line, fn_i.col, rule.Rule.NotYetImplOnBuiltin, f"NotImplemented: an `impl` on the built-in type `{fn_i.recv}` — this compiler gives a method a declared struct or enum receiver (GRAMMAR#impl-decl)") if fn_i.recv != "" and parser.is_conv(fn_i.recv)
 	}
 
 	for s in sites {
@@ -3333,7 +3437,7 @@ fn c_check_type_name(mut &em: Emitter, nm: str, s: Site) {
 	# gives it, beside the bound and the interface — and this compiler has not built that
 	# one. Saying "no type named `Tag`" about a spec the reader declared three lines above
 	# invites them to go and declare it again.
-	raise c_diag(em, rule.Rule.NotYetSpecAsType, f"NotImplemented: the `spec` `{nm}` used as a TYPE ({site}) — a spec is a bound and an interface here, not yet a value's type; take the concrete type, or a generic parameter bounded by it") if c_is_spec_name(em, nm)
+	raise c_diag(em, rule.Rule.NotYetSpecAsType, f"NotImplemented: the `spec` `{nm}` used as a TYPE ({site}) — a spec is a bound and an interface here, not yet a value's type; take the concrete type, or a generic parameter bounded by it (GRAMMAR#type-name)") if c_is_spec_name(em, nm)
 
 	# EVERY BUILT-IN NAME THE LANGUAGE HAS AND THIS COMPILER DOES NOT, not only the ladder. A
 	# type position reached `c_fixed_width_check` alone, so `p: ptr` reported "no type named
@@ -3633,7 +3737,7 @@ fn c_build_top_names(mut &em: Emitter, f: ast.File) {
 	# constant-versus-function half from, so the place a reader is pointed at does not move:
 	# the collision is reported at the constant's own declaration in both orders.
 	for c in f.consts {
-		c_check_type_dup(em, seen, kind, wpath, wline, c.name, "a module constant", c.path, c.line, c.col)
+		c_check_type_dup(em, seen, kind, wpath, wline, c_const_scope_name(c), "a module constant", c.path, c.line, c.col)
 	}
 
 	# AND THE TABLE IS KEPT. What the six loops above have in hand is "what the top level
@@ -3734,7 +3838,7 @@ fn c_check_field_default(sd: ast.StructDecl, fnames: list[str], earlier: list[st
 	# with a place, which a refusal usually has none of: this one runs over a DECLARATION and
 	# the field carries its own line and column, so there is a position to give and no reason
 	# to make the reader find the struct themselves
-	raise c_diag_at(sd.path, fd.line, fd.col, rule.Rule.NotYetDefaultReadsField, f"NotImplemented: the default on field `{fd.name}` of `{sd.name}` reads the field `{nm}` — a default is materialised at the construction, where a field is not a name in scope, so `{nm}` would resolve to whatever else carries that name (or to nothing at all)") if nm != ""
+	raise c_diag_at(sd.path, fd.line, fd.col, rule.Rule.NotYetDefaultReadsField, f"NotImplemented: the default on field `{fd.name}` of `{sd.name}` reads the field `{nm}` — a default is materialised at the construction, where a field is not a name in scope, so `{nm}` would resolve to whatever else carries that name (or to nothing at all) (GRAMMAR#field)") if nm != ""
 }
 
 # c_default_names_field is the first of `fnames` a default expression mentions, or "". The
@@ -3988,6 +4092,11 @@ fn c_needs_copy(mut &em: Emitter, t: ast.Ty) -> bool {
 	# branch and buys one rule.
 	return true if c_is_fn(t)
 
+	# AN ARRAY owes a copy exactly when its ELEMENT does, which is the tuple's rule with one
+	# element type instead of a list of them: a `[str; 4]` copied by the C struct assignment
+	# alone would give two names one set of cells.
+	return c_needs_copy(em, c_arr_elem(t)) if c_is_arr(t)
+
 	# A TUPLE is the third composite, and it was missing: `mut t := (a, 0)` bit-copied the
 	# list `a`, so `t.0[0] = 99` was read back through `a`. Its elements are a list of
 	# types, so the same question is asked of each.
@@ -4060,6 +4169,11 @@ fn c_copy_of(mut &em: Emitter, t: ast.Ty, x: str) -> str {
 		return "({ " + ct + " zgt_cs = (" + x + "); " + ct + " zgt_cp; " + ct + "_copy(&zgt_cp, &zgt_cs); zgt_cp; })"
 	}
 	return f"{c_tuple_cname(ast.ty_tuple_elems(t))}_copy({x})" if c_is_tuple(t)
+
+	# an array's, named after its SHAPE the way a tuple's is — c_arr_decl generates the pair
+	# under this same question asked as c_needs_copy, so a POD array has neither and is copied
+	# by the C struct assignment alone
+	return f"{c_arr_cname(c_arr_elem(t), c_arr_key(t))}_copy({x})" if c_is_arr(t)
 	if c_is_str(t) {
 		em.used_rt = true
 		return f"zrt_str_retain({x})"
@@ -4212,6 +4326,7 @@ fn c_elem_kind(mut &em: Emitter, t: ast.Ty) -> str {
 	return "str" if c_is_str(t)
 	return "" if not c_needs_copy(em, t)
 	return c_tuple_cname(ast.ty_tuple_elems(t)) if c_is_tuple(t)
+	return c_arr_cname(c_arr_elem(t), c_arr_key(t)) if c_is_arr(t)
 
 	# a carrier's kind is its own C name, for the reason c_copy_of gives one line up: there
 	# is no declared name to build it out of. Without this a `list[str?]` took the memcpy
@@ -4301,6 +4416,7 @@ fn c_drop_fn(mut &em: Emitter, t: ast.Ty) -> str {
 	# the tuple's, named after the SHAPE the way its copy is — c_tuple_decl generates the
 	# pair together, under this same question asked as c_needs_copy
 	return f"{c_tuple_cname(ast.ty_tuple_elems(t))}_drop" if c_is_tuple(t) and c_needs_copy(em, t)
+	return f"{c_arr_cname(c_arr_elem(t), c_arr_key(t))}_drop" if c_is_arr(t) and c_needs_copy(em, t)
 
 	# the carrier's, which c_carrier_decl generates beside its copy and answers "" for when
 	# the payload owns nothing
@@ -4483,6 +4599,43 @@ fn c_bind_env(mut &em: Emitter, a: ast.Arm, st: ast.Ty) {
 # c_pat_env registers what a pattern binds, with the TYPE each name gets. It is the third walk
 # over the same tree and it exists because a body is typed before it is lowered: `match n { x =>
 # x }` typed its arm from a name nothing answered for, and the whole match came back TUnknown.
+# c_struct_shape is the three questions a `Name{ … }` SHAPE asks of the type it is written
+# against, and it answers with the struct's name so the caller can read a field's type from it.
+#
+# ONE FUNCTION BECAUSE GRAMMAR GIVES THE SHAPE ONE PRODUCTION. A `match` arm's struct-pat and a
+# destructuring target's are the same derivation in two positions (GRAMMAR#struct-pat is a
+# `pattern-core` and a `bind-target` both), so a rule asked at one of them is one position away
+# from meaning nothing — which is exactly what `Q{x} := p` did while this lived inside the
+# pattern walk: it bound `x` out of a `P` under a name no type in the program has.
+fn c_struct_shape(mut &em: Emitter, st: ast.Ty, want: str, fs: list[str], open: bool) -> str {
+	sn := c_named_of(st)
+
+	# THE TYPE NAME IS AN ASSERTION, not a reference. GRAMMAR writes it, and the value's type is
+	# what decides which struct this is — so the name is here to be CHECKED against it, exactly
+	# as a variant pattern's qualifier is. A name that was read and thrown away would let `Q{x}`
+	# match a `P` and renaming a struct leave every shape of it still matching.
+	raise c_diag(em, rule.Rule.StructPatternWrongType, f"a struct pattern names `{want}` and the value is a {ast.ty_name(st)}") if not c_is_struct_name(em, sn) or sn != want
+
+	have := c_struct_field_names(em, sn)
+	mut i := 0
+	for i < fs.len() {
+		raise c_diag(em, rule.Rule.StructPatternNoSuchField, f"`{want}` has no field `{fs[i]}`") if not c_name_in(have, fs[i])
+		i = i + 1
+	}
+
+	# WITHOUT `..` THE SHAPE NAMES EVERY FIELD, and the reader is told WHICH one is missing
+	# rather than that one is: a struct gaining a field should break what was written before it,
+	# by name, which is the whole reason the `..` is opt-in.
+	if not open {
+		mut k := 0
+		for k < have.len() {
+			raise c_diag(em, rule.Rule.StructPatternIncomplete, f"a struct pattern names every field or ends in `..`, and this one does not name `{have[k]}`") if not c_name_in(fs, have[k])
+			k = k + 1
+		}
+	}
+	return sn
+}
+
 fn c_pat_env(mut &em: Emitter, pt: ast.Pat, st: ast.Ty) {
 	bn := c_pat_bind_name(pt)
 	if bn != "" {
@@ -4524,36 +4677,9 @@ fn c_pat_env(mut &em: Emitter, pt: ast.Pat, st: ast.Ty) {
 	# A STRUCT PATTERN NAMES ITS FIELDS, so it asks three questions the positional shapes do
 	# not — and all three are about the TYPE, which is why they are here, in the first walk.
 	if c_pat_is_struct(pt) {
-		want := c_pat_struct_name(pt)
-		sn := c_named_of(st)
-
-		# THE TYPE NAME IS AN ASSERTION, not a reference. GRAMMAR#struct-pat writes it, and the
-		# scrutinee's type is what decides which struct this is — so the name is here to be
-		# CHECKED against it, exactly as a variant pattern's qualifier is. A name that was read
-		# and thrown away would let `Q{x}` match a `P` and renaming a struct leave every
-		# pattern of it still matching.
-		raise c_diag(em, rule.Rule.StructPatternWrongType, f"a struct pattern names `{want}` and the value is a {ast.ty_name(st)}") if not c_is_struct_name(em, sn) or sn != want
-
 		fs := c_pat_struct_fields(pt)
 		ps := c_pat_struct_pats(pt)
-		have := c_struct_field_names(em, sn)
-
-		mut i := 0
-		for i < fs.len() {
-			raise c_diag(em, rule.Rule.StructPatternNoSuchField, f"`{want}` has no field `{fs[i]}`") if not c_name_in(have, fs[i])
-			i = i + 1
-		}
-
-		# WITHOUT `..` THE PATTERN NAMES EVERY FIELD, and the reader is told WHICH one is
-		# missing rather than that one is: a struct gaining a field should break the patterns
-		# that were written before it, by name, which is the whole reason the `..` is opt-in.
-		if not c_pat_struct_open(pt) {
-			mut k := 0
-			for k < have.len() {
-				raise c_diag(em, rule.Rule.StructPatternIncomplete, f"a struct pattern names every field or ends in `..`, and this one does not name `{have[k]}`") if not c_name_in(fs, have[k])
-				k = k + 1
-			}
-		}
+		sn := c_struct_shape(em, st, c_pat_struct_name(pt), fs, c_pat_struct_open(pt))
 
 		mut j := 0
 		for j < fs.len() {
@@ -4573,7 +4699,7 @@ fn c_pat_env(mut &em: Emitter, pt: ast.Pat, st: ast.Ty) {
 		# one and release none. A `match` lowers to a conditional expression, which has no place
 		# to declare the temporary that would own it. The anonymous `..` needs none, and is
 		# built.
-		raise c_diag(em, rule.Rule.NotYetListPatternRestBinding, "NotImplemented: a NAMED rest in a list pattern — `..rest` binds a fresh list and a `match` arm is an expression with nowhere to keep it; write `..` and index what you need") if c_pat_list_rest_name(pt) != ""
+		raise c_diag(em, rule.Rule.NotYetListPatternRestBinding, "NotImplemented: a NAMED rest in a list pattern — `..rest` binds a fresh list and a `match` arm is an expression with nowhere to keep it; write `..` and index what you need (GRAMMAR#list-pat-elem)") if c_pat_list_rest_name(pt) != ""
 
 		et := c_list_elem(st)
 		mut i := 0
@@ -5428,7 +5554,7 @@ fn c_list_method_unknown(mut &em: Emitter, meth: str) -> str {
 	collection := meth == "insert" or meth == "remove" or meth == "get" or meth == "slice" or meth == "retain"
 	adapters := meth == "map" or meth == "filter" or meth == "fold"
 	unbuilt := collection or adapters
-	return c_diag(em, rule.Rule.NotYetListMethod, f"NotImplemented: the list method `{meth}` — this compiler has `len` and `append`") if unbuilt
+	return c_diag(em, rule.Rule.NotYetListMethod, f"NotImplemented: the list method `{meth}` — this compiler has `len` and `append` (docs/code/collections.md)") if unbuilt
 
 	return c_diag(em, rule.Rule.ListMethodUnknown, f"the list method `{meth}` — a list answers `len` and `append`, and is read with `xs[i]`")
 }
@@ -5550,6 +5676,7 @@ fn c_expr_node(mut &em: Emitter, e: ast.Expr, sb: Subst) -> str {
 		Expr.EListLit(elems) => c_list_lit(em, elems, sb)
 		Expr.EFill(v, n) => c_fill_lit(em, v, n, sb)
 		Expr.EConv(ty, x, nm) => c_conv(em, ty, x, nm, sb)
+		Expr.EFmt(x, cv, sp) => c_fmt_hole(em, x, cv, sp, sb)
 		Expr.EIf(cond, then_e, else_e) => c_ternary(em, cond, then_e, else_e, sb)
 		Expr.EMatch(scrut, arms) => c_match(em, scrut, arms, sb)
 
@@ -5567,6 +5694,8 @@ fn c_expr_node(mut &em: Emitter, e: ast.Expr, sb: Subst) -> str {
 		Expr.ECoalesce(a, b, jump) => c_coalesce(em, a, b, jump, sb)
 		Expr.EGuard(body) => c_guard(em, body, sb)
 		Expr.EBlock(body) => c_block_expr(em, body, sb)
+		Expr.EUnsafe(body) => c_unsafe_expr(em, body, sb)
+		Expr.EAsm(tpl, ops) => c_asm(em, tpl, ops, sb)
 		Expr.EIs(x, name) => c_is_test(em, x, name, sb)
 		Expr.EIn(x, set) => c_in_test(em, x, set, sb)
 	}
@@ -5728,6 +5857,22 @@ fn c_block_expr(mut &em: Emitter, body: list[ast.Stmt], sb: Subst) -> str {
 	return out + "})"
 }
 
+# c_unsafe_expr lowers `unsafe { … }` in expression position (GRAMMAR#unsafe-expr). It IS the
+# block expression, with the trust boundary open for the statements inside it — which is the
+# whole of what the keyword does here: `unsafe` marks a region the author vouches for, and what
+# it unlocks is the raw operations and the calls to other unsafe functions.
+#
+# THE FLAG IS SAVED AND RESTORED, the discipline c_fn already follows for the same field: a
+# block-expression is lowered in the middle of an enclosing function's expression, so leaving
+# it set would make the rest of that function unsafe by accident.
+fn c_unsafe_expr(mut &em: Emitter, body: list[ast.Stmt], sb: Subst) -> str {
+	saved := em.in_unsafe_fn
+	em.in_unsafe_fn = true
+	out := c_block_expr(em, body, sb)
+	em.in_unsafe_fn = saved
+	return out
+}
+
 # c_block_val_ty is a block expression's value type, and c_guard_val_ty is the same question
 # about the block a guard holds. Both defer to c_last_val_ty, because GRAMMAR states the
 # rule once: the value is the last statement's, and only an expression statement has one.
@@ -5787,7 +5932,7 @@ fn c_last_val_ty(mut &em: Emitter, body: list[ast.Stmt], what: str) -> ast.Ty {
 		}
 	}
 
-	raise c_diag(em, rule.Rule.NotYetValueUnnameableType, f"NotImplemented: {what} whose value has no type this compiler can name — give the block's last expression a call, a literal or a typed binding") if c_is_unknown(t) and not named
+	raise c_diag(em, rule.Rule.NotYetValueUnnameableType, f"NotImplemented: {what} whose value has no type this compiler can name — give the block's last expression a call, a literal or a typed binding (docs/core/types.md)") if c_is_unknown(t) and not named
 	return ast.Ty.TNil if c_is_nil_ty(t)
 
 	return t
@@ -6010,7 +6155,7 @@ fn c_guard_loop_jump(mut &em: Emitter, kw: str, in_loop: bool) {
 }
 
 fn c_guard_jump_err(mut &em: Emitter, kw: str) {
-	raise c_diag(em, rule.Rule.NotYetJumpOutOfGuard, f"NotImplemented: `{kw}` leaving a `guard` block — the guard's handler would stay installed on a frame that has returned")
+	raise c_diag(em, rule.Rule.NotYetJumpOutOfGuard, f"NotImplemented: `{kw}` leaving a `guard` block — the guard's handler would stay installed on a frame that has returned (GRAMMAR#guard-expr)")
 }
 
 # c_str_concat joins two strings and gives back whichever operand it OWNS.
@@ -6385,7 +6530,7 @@ fn c_eq_refuse(mut &em: Emitter, oper: str, t: ast.Ty) {
 		return
 	}
 	if not c_is_struct_name(em, c_named_of(t)) and not c_is_enum_ty(em, t) {
-		check.chk_at(em, rule.Rule.NotYetContainerEquality, f"NotImplemented: `{oper}` on a {ast.ty_name(t)} — structural equality over a container is unbuilt, and a container has no declaration to derive it on; compare the elements you mean to compare")
+		check.chk_at(em, rule.Rule.NotYetContainerEquality, f"NotImplemented: `{oper}` on a {ast.ty_name(t)} — structural equality over a container is unbuilt, and a container has no declaration to derive it on; compare the elements you mean to compare (docs/core/types.md)")
 		return
 	}
 
@@ -6658,7 +6803,7 @@ fn c_in_container(mut &em: Emitter, x: ast.Expr, set: ast.Expr, st: ast.Ty, sb: 
 	if c_is_aggregate(em, elem) {
 		raise c_diag(em, rule.Rule.InElemNoEq, f"`in` over {ast.ty_name(st)} — its elements are compared with `==`, and {ast.ty_name(elem)} has none: add `#[derive(Eq)]` to it or write `impl Eq for {ast.ty_name(elem)}`") if c_in_elem_owes_eq(em, elem)
 
-		raise c_diag(em, rule.Rule.NotYetInOverNoEq, f"NotImplemented: `in` over {ast.ty_name(st)} — its elements are compared with `==`, and this compiler does not write that comparison for {ast.ty_name(elem)}")
+		raise c_diag(em, rule.Rule.NotYetInOverNoEq, f"NotImplemented: `in` over {ast.ty_name(st)} — its elements are compared with `==`, and this compiler does not write that comparison for {ast.ty_name(elem)} (GRAMMAR#cmp-expr)")
 	}
 
 	# WHAT IS LEFT IS NOT AN AGGREGATE, AND `in` STILL CANNOT COMPARE ALL OF IT. `in` compares
@@ -6842,7 +6987,7 @@ fn c_in_range_offender(mut &em: Emitter, run: list[ast.Expr]) -> str {
 # which this had not got. `reject-fuzz` is what found it: retype one binding to `str` and the
 # guard `x if x in 1..=3` two lines down is refused with nowhere to go and look.
 fn c_in_range_unbuilt(mut &em: Emitter, set: ast.Expr, off: str) -> str {
-	raise c_diag(em, rule.Rule.NotYetInOverType, f"NotImplemented: `in` over {c_set_says(em, set)} — a range's members are found by comparing its bounds, and {off} is not a type this compiler compares that way")
+	raise c_diag(em, rule.Rule.NotYetInOverType, f"NotImplemented: `in` over {c_set_says(em, set)} — a range's members are found by comparing its bounds, and {off} is not a type this compiler compares that way (GRAMMAR#cmp-expr)")
 }
 
 fn c_in_not_a_set(mut &em: Emitter, set: ast.Expr) -> str {
@@ -6903,7 +7048,7 @@ fn c_is_aggregate(mut &em: Emitter, t: ast.Ty) -> bool {
 	# because a NAME for the variant is what `Display` would give and there is none.
 	return true if c_is_enum_ty(em, t)
 
-	return c_is_struct_name(em, c_named_of(t)) or c_is_list(t) or c_is_map(t) or c_is_tuple(t)
+	return c_is_struct_name(em, c_named_of(t)) or c_is_list(t) or c_is_map(t) or c_is_tuple(t) or c_is_arr(t)
 }
 
 # c_is_enum_ty reports whether a type is a declared enum (a TNamed matching an enum).
@@ -7034,7 +7179,7 @@ fn c_conv(mut &em: Emitter, ty: ast.Ty, x: ast.Expr, nm: str, sb: Subst) -> str 
 		}
 
 		c_display_check(em, xt0, "this rendering")
-		return c_display(xt0, c_expr(em, x, sb))
+		return c_render_of(em, xt0, c_expr(em, x, sb), false)
 	}
 	if c_is_list(ty) {
 		em.used_str = true
@@ -7267,6 +7412,24 @@ fn c_conv_scalar(mut &em: Emitter, dc: int, db: int, xt: ast.Ty, ty: ast.Ty, inn
 	xr := c_repr_of(em, xt)
 	sc := c_scalar_class(xr)
 
+	# A RAW POINTER IS AN ADDRESS, and `uint(p)` is the cast GRAMMAR names for reading one as a
+	# number. It is a raw-pointer operation like any other, so it is `unsafe`-only — and it is
+	# the reason the refusal below does not fire on a `ptr`: an address IS a scalar, and the
+	# only thing that made it look otherwise was that nothing here had a case for it.
+	if c_is_ptr(xt) and (c_is_uint(ty) or c_is_int(ty)) {
+		check.chk_ptr_context(em, f"`{ast.ty_name(ty)}(…)` of a raw pointer")
+		return f"(({c_type(ty)})({inner}))"
+	}
+
+	# AND THE POINTER CASTS THEMSELVES — `ptr(p)`, `ptr[T](p)`, and back from an address.
+	# GRAMMAR names them beside the operations, and they are the same kind of thing: a
+	# reinterpretation nothing can check, legal where the author has said so.
+	if c_is_ptr(ty) {
+		check.chk_ptr_context(em, f"`{ast.ty_name(ty)}(…)`")
+		check.chk_ptr_source(em, ty, xt)
+		return f"(({c_type(ty)})({inner}))"
+	}
+
 	# NOT A SCALAR ON EITHER SIDE. Naming only the aggregates left `TChan`, `TErr` and an
 	# unresolved `TNamed` falling through to the cast below — the same class this whole
 	# function exists to close, one type-family over. TUnknown keeps the plain cast: a type
@@ -7399,15 +7562,13 @@ pub fn c_param_is_ref(mut &em: Emitter, key: str, idx: int) -> bool {
 # c_display is the runtime leaf that renders one scalar as its display text. A `byte` goes
 # through the unsigned one, and anything whose type did not survive inference falls to the
 # integer one — where the C cast is what reports it, rather than this pass guessing.
-# c_display is the runtime leaf that renders one SCALAR. A composite has no rendering here
-# — the structural one is `Display`'s job and there is no derive for it — so it is named
-# rather than cast, which is what reached cc as "operand of type 'zg_P'".
+# c_display_check is the ONE GATE THE THREE RENDERING POSITIONS SHARE — `print x`, an
+# f-string's `{x}` and `str(x)` — and what is left in it is the class that has no rendering
+# at all. A composite has one now (c_render_of).
 fn c_display_check(mut &em: Emitter, t: ast.Ty, where: str) {
-	# an ENUM's advice is not a struct's: it has variants and not fields, and the thing a
-	# reader can actually write is the discriminant
-	raise c_diag(em, rule.Rule.NotYetRenderEnumAsText, f"NotImplemented: rendering a {ast.ty_name(t)} as text — an enum has no name for its variant without the structural `Display` this compiler does not generate; `int(v)` gives its discriminant, or `match` it") if c_is_enum_ty(em, t)
-	raise c_diag(em, rule.Rule.NotYetRenderAsText, f"NotImplemented: rendering a {ast.ty_name(t)} as text — a composite needs the structural `Display` this compiler does not generate; render its fields") if c_is_aggregate(em, t) or c_is_carrier(t)
-
+	# A COMPOSITE RENDERS STRUCTURALLY NOW (c_render_of), so the two refusals that stood here
+	# — one for an enum, one for every other composite — are gone with the gap they named.
+	# What is left is the class that is not waiting for a generator at all.
 	# AN IDENTITY IS NOT WAITING FOR A `Display`, so its refusal is not the composite's. A
 	# composite has parts to render meanwhile and a gap that will close; a CHANNEL and a
 	# FUNCTION VALUE are a place to send to and a place to jump to, and the language gives
@@ -7476,7 +7637,9 @@ fn c_index(mut &em: Emitter, target: ast.Expr, idx: ast.Expr, sb: Subst) -> str 
 		return "0"
 	}
 
-	raise c_diag(em, rule.Rule.IndexOfNonContainer, f"`[…]` indexes a list or a map, and this is {ast.ty_name(tty)}") if not c_is_list(tty) and not c_is_map(tty) and not c_is_unknown(tty)
+	return c_arr_index(em, target, idx, tty, sb) if c_is_arr(tty)
+
+	raise c_diag(em, rule.Rule.IndexOfNonContainer, f"`[…]` indexes a list, a map or an array, and this is {ast.ty_name(tty)}") if not c_is_list(tty) and not c_is_map(tty) and not c_is_unknown(tty)
 
 	return c_map_index(em, target, idx, tty, sb) if c_is_map(tty)
 
@@ -7653,7 +7816,10 @@ fn c_is_lvalue(e: ast.Expr) -> bool {
 # Which one it is has to be decided identically when the call is EMITTED and when it is
 # TYPED, so it is decided once, here, and both ask. Deciding it twice is how the two drift.
 enum MethKind {
+	MRender
+	MPtr
 	MList
+	MArr
 	MMap
 	MErr
 	MCarrier
@@ -7670,7 +7836,7 @@ enum MethKind {
 # that have one. Narrower than this and a `map`'s `iter` is refused permanently for a loop the
 # language gives it; wider and an `int` is promised a loop nothing walks.
 fn c_ty_is_iterable(tty: ast.Ty) -> bool {
-	return c_is_list(tty) or c_is_map(tty) or c_is_str(tty) or ast.ty_is_chan(tty)
+	return c_is_list(tty) or c_is_arr(tty) or c_is_map(tty) or c_is_str(tty) or ast.ty_is_chan(tty)
 }
 
 # c_renders_as_text answers whether this value HAS a rendering, and it is asked because a
@@ -7749,21 +7915,18 @@ fn c_no_render_says(mut &em: Emitter, t: ast.Ty) -> str {
 # that same paragraph — `Iterable[T]` is what has `iter()`, and `for x in X` requires
 # `X: Iterable[T]` — so it is given on everything that loop walks, not on a channel alone.
 #
-# THE THREE RENDERINGS ARE GIVEN ON EVERY RECEIVER AND THEIR SUBSTITUTE IS NOT. `display`,
-# `debug` and `format` were widened to every value, correctly — the chapter says "on every
-# value" — while their substitutes went on naming `str(x)` and `f"{x}"`, which a `list[int]`
-# answers with E4011 and a map, a struct, an enum and a carrier with E9059 and E9085. The
-# compiler was telling a reader to write an expression the same compiler refuses, which is a
-# worse answer than the permanent rejection this split was built to remove. So each of the
-# three has TWO clauses, one per side of c_renders_as_text: where the value renders, the
-# substitute is the expression that renders it, and where it does not there is no substitute
-# and c_no_render_says says which absence it is. The fourth spelling waits on whatever the
-# first three wait on, so for a composite that is one gap and not two.
+# `format` IS GIVEN ON EVERY RECEIVER AND ITS SUBSTITUTE IS NOT, which is why it has TWO
+# clauses, one per side of c_renders_as_text: where the value renders, the substitute is the
+# expression that renders it, and where it does not there is no substitute and c_no_render_says
+# says which absence it is. Naming one the same compiler refuses is a worse answer than the
+# permanent rejection this split was built to remove.
+#
+# `display` AND `debug` HAVE LEFT THIS SPLIT: they are built (#112), so every value that
+# renders answers them through the same generator the other three spellings reach, and the
+# class that renders nowhere is named by the rendering gate rather than here.
 fn c_specified_meth_says(mut &em: Emitter, tty: ast.Ty, meth: str) -> str {
 	renders := c_renders_as_text(em, tty)
 
-	return "`str(x)` renders it, and an `impl` on a declared type is how a type overrides that" if renders and (meth == "display" or meth == "debug")
-	return f"there is nothing to write in its place — {c_no_render_says(em, tty)}" if meth == "display" or meth == "debug"
 	return "a spec is unread here (`E9012` is the same gap spelled in an f-string hole), and `f\"{x}\"` renders without one" if renders and meth == "format"
 	return f"a spec is unread here (`E9012` is the same gap spelled in an f-string hole), and there is no spec-less rendering to fall back on — {c_no_render_says(em, tty)}" if meth == "format"
 	return "receive one element with `<-ch`, or drain the channel with `for v in ch`" if meth == "next" and ast.ty_is_chan(tty)
@@ -7777,7 +7940,19 @@ fn c_specified_meth_says(mut &em: Emitter, tty: ast.Ty, meth: str) -> str {
 # the value turned out to be is not part of it.
 fn c_specified_method(mut &em: Emitter, tty: ast.Ty, meth: str) {
 	says := c_specified_meth_says(em, tty, meth)
-	raise c_diag(em, rule.Rule.NotYetSpecifiedMethod, f"NotImplemented: the method `{meth}` on a {ast.ty_name(tty)} — {says}") if says != ""
+	raise c_diag(em, rule.Rule.NotYetSpecifiedMethod, f"NotImplemented: the method `{meth}` on a {ast.ty_name(tty)} — {says} (docs/runtime/builtins.md)") if says != ""
+}
+
+# MRender is `x.display()` and `x.debug()` WRITTEN OUT, on a value whose type declares
+# neither. They are built-in renderings and not methods of any spec, so they answer for every
+# value that renders at all — which is now every scalar, every `str`, every `Err` and every
+# composite, through the one generator the other three spellings go through.
+fn c_render_meth(mut &em: Emitter, target: ast.Expr, meth: str, tty: ast.Ty, sb: Subst) -> str {
+	# `debug` IS THE DEVELOPER VIEW and `display` the human one, and for every value but a
+	# `str` they are the same text — a composite's parts are rendered as debug either way,
+	# because a rendering nobody can read back is not a developer view. So the METHOD picks
+	# the flag, which is what makes `x.debug()` and `f"{x!r}"` one answer.
+	return c_render_of(em, tty, c_expr(em, target, sb), meth == "debug")
 }
 
 fn c_meth_kind(mut &em: Emitter, tty: ast.Ty, meth: str) -> MethKind {
@@ -7798,10 +7973,21 @@ fn c_meth_kind(mut &em: Emitter, tty: ast.Ty, meth: str) -> MethKind {
 	# both). `strings.display()` is a member no module declares, not a rendering.
 	nm := c_named_of(tty)
 	if not c_is_unknown(tty) and not c_has_method(em, nm, meth) and not c_is_fn(c_field_ty(em, nm, meth)) {
+		# THE TWO RENDERINGS ARE BUILT NOW, and they are the same generator the other three
+		# spellings reach. What is left of `E9107` for them is the class with no rendering at
+		# all, which c_display_check names — so the check is asked here, and the answer is a
+		# rendering rather than a refusal.
+		if meth == "display" or meth == "debug" {
+			c_display_check(em, tty, f"`{meth}`")
+			return MethKind.MRender
+		}
+
 		c_specified_method(em, tty, meth)
 	}
 
 	return MethKind.MList if c_is_list(tty)
+	return MethKind.MArr if c_is_arr(tty)
+	return MethKind.MPtr if c_is_ptr(tty)
 	return MethKind.MMap if c_is_map(tty)
 
 	# EVERY method on an `Err`, not only the three that exist. An `Err` has no declaration
@@ -7838,11 +8024,14 @@ fn c_method(mut &em: Emitter, target: ast.Expr, meth: str, args: list[ast.Expr],
 	tty := c_infer(em, target)
 	recv := c_named_of(tty)
 	return match c_meth_kind(em, tty, meth) {
+		MethKind.MRender => c_render_meth(em, target, meth, tty, sb)
 		MethKind.MList => c_list_method(em, target, meth, args, tty, sb)
+		MethKind.MArr => c_arr_method(em, meth, tty)
+		MethKind.MPtr => c_ptr_method(em, target, meth, args, tty, sb)
 		MethKind.MMap => c_map_method(em, target, meth, args, tty, sb)
 		MethKind.MErr => c_err_method(em, target, meth, args, sb)
 		MethKind.MCarrier => c_carrier_method(em, target, meth, args, tty, sb)
-		MethKind.MRecv => f"{c_fn_cname(recv, meth)}({c_recv_args(em, c_sig_key(recv, meth), target, args, sb)})"
+		MethKind.MRecv => c_recv_call(em, recv, meth, target, args, sb)
 		MethKind.MFnField => c_fnfield_call(em, recv, meth, target, args, sb)
 		_ => c_free_method(em, target, meth, args, sb)
 	}
@@ -8007,7 +8196,7 @@ fn c_list_method(mut &em: Emitter, target: ast.Expr, meth: str, args: list[ast.E
 		# `NotImplemented:` on any of the three would have retired.
 		raise c_diag(em, rule.Rule.MutateAValueNotAPlace, f"`{meth}` MUTATES its list, and `{c_place_why(em, target)}` is a value rather than a place — bind it to a name first") if c_meth_mutates(meth) and not (c_is_index(target) and c_is_map(c_infer(em, c_index_target(target))))
 
-		raise c_diag(em, rule.Rule.NotYetMutateListRvalue, f"NotImplemented: `{meth}` MUTATES its list, and `{c_place_why(em, target)}` is a value rather than a place — bind it to a name first") if c_meth_mutates(meth)
+		raise c_diag(em, rule.Rule.NotYetMutateListRvalue, f"NotImplemented: `{meth}` MUTATES its list, and `{c_place_why(em, target)}` is a value rather than a place — bind it to a name first (docs/core/memory.md)") if c_meth_mutates(meth)
 
 		return c_list_method_rv(em, target, meth, args, tty, sb)
 	}
@@ -8106,16 +8295,35 @@ fn c_enum_of(mut &em: Emitter, en: str, meth: str, args: list[ast.Expr], sb: Sub
 # emitted `zg_meth(…)` for a function nobody declared, and the diagnostic came from the C
 # compiler pointing at generated code. `s.len()` is the common way in: a str has no
 # methods here, and the message now says so at the Zerg level.
+# c_assoc_call lowers `Type.f(…)`. An associated fn shares its type's NAMESPACE — GRAMMAR says
+# every method and associated fn on a type does — so the row it looks up is keyed exactly as a
+# method's is; what tells the two apart is `sig_assoc`, which is the parser's answer to "does
+# this body use `this`" and not a second derivation of it.
+#
+# THE TWO REFUSALS ARE ONE RULE FROM ITS TWO SIDES. A method reached through its type has no
+# receiver to be called on, and an associated fn reached through an instance has nowhere to put
+# one — so each names what the declaration is and what the other spelling would be.
+fn c_assoc_call(mut &em: Emitter, tn: str, meth: str, args: list[ast.Expr], sb: Subst) -> str {
+	key := c_sig_key(tn, meth)
+	r := c_sig_row(em, key)
+
+	raise c_diag(em, rule.Rule.NoSuchAssociatedFn, f"`{tn}` declares no `{meth}` — an `impl` of it declares the methods and associated fns it has, and they share one namespace (GRAMMAR#impl-decl)") if r < 0
+	raise c_diag(em, rule.Rule.MethodThroughItsType, f"`{meth}` is a METHOD of `{tn}` — its body uses `this`, so it is reached through an instance (`x.{meth}(…)`) and not through the type (GRAMMAR#impl-decl)") if not em.sig_assoc[r]
+
+	c_chk_unsafe_fn(em, f"{tn}.{meth}", "this call is in safe code", r)
+
+	# base 0, and `lead` false: an associated fn has no receiver, so its first written argument
+	# is parameter 0 and there is no operand standing in front of the run.
+	return f"{c_fn_cname(tn, meth)}({c_args_from(em, key, 0, args, false, sb)})"
+}
+
 fn c_free_method(mut &em: Emitter, target: ast.Expr, meth: str, args: list[ast.Expr], sb: Subst) -> str {
 	# `Type.f(…)` is an ASSOCIATED FUNCTION (GRAMMAR#impl-decl) — the named-constructor form,
-	# `User.from_json(…)`. A TYPE NAME on the left is how a reader spells one, and the
-	# answer used to be "the method `make` on a ?": the target is a type rather than a
-	# value, so inference had nothing to name and the message pointed at the hole rather
-	# than at the form. The parser gives every `fn` in an `impl` a receiver, so there is no
-	# such function to call yet — which is a thing to say, not a `?`.
+	# `User.from_json(…)`. A TYPE NAME on the left is how a reader spells one, and the answer
+	# used to be "the method `make` on a ?": the target is a type rather than a value, so
+	# inference had nothing to name and the message pointed at the hole rather than at the form.
 	tn := c_ident_name(target)
-
-	raise c_diag(em, rule.Rule.NotYetAssociatedFn, f"NotImplemented: `{tn}.{meth}(…)` is an associated function — this compiler gives every `fn` in an `impl` a receiver, so a method is reached through an instance (`x.{meth}(…)`) and never through its type") if tn != "" and c_is_struct_name(em, tn)
+	return c_assoc_call(em, tn, meth, args, sb) if tn != "" and c_is_struct_name(em, tn)
 
 	# WHAT THE PREFIX NAMES, asked once (c_ns_kind) and answered here for both halves of a
 	# qualified call. It used to be asked by NOBODY on this path: whatever stood to the left
@@ -8362,7 +8570,7 @@ fn c_call_written(mut &em: Emitter, name: str, args: list[ast.Expr], ts: list[as
 	# got: `set[str]()` would otherwise be told how to write an empty one, and there is no
 	# `set` here to write.
 	c_builtin_check(em, name)
-	raise c_diag(em, rule.Rule.NotYetGenericConstructor, f"NotImplemented: `{name}[…](…)` as a constructor — this compiler builds an empty map with the literal `{{:}}` and an empty list with `[]`, so a built-in container's type arguments come from what it is bound to") if name == "map"
+	raise c_diag(em, rule.Rule.NotYetGenericConstructor, f"NotImplemented: `{name}[…](…)` as a constructor — this compiler builds an empty map with the literal `{{:}}` and an empty list with `[]`, so a built-in container's type arguments come from what it is bound to (GRAMMAR#type-args)") if name == "map"
 
 	return c_call(em, c_instantiate_at(em, name, ts), args, sb)
 }
@@ -8379,6 +8587,12 @@ fn c_infer_call_written(mut &em: Emitter, name: str, args: list[ast.Expr], ts: l
 }
 
 fn c_call(mut &em: Emitter, name: str, args: list[ast.Expr], sb: Subst) -> str {
+	# `addr(x)` IS AN INTRINSIC AND NOT A FUNCTION (GRAMMAR#ptr-type). It takes the storage
+	# behind a name, which nothing written in Zerg can do, so it is answered here — above the
+	# name lookup, since a program that declares its own `addr` would otherwise shadow the one
+	# operation that has no other spelling.
+	return c_addr(em, args, sb) if name == "addr"
+
 	if c_is_intrinsic(em, name) {
 		check.chk_intrinsic_call(em, name, args)
 		em.used_rt = true
@@ -8557,10 +8771,14 @@ fn c_chk_visible_const(mut &em: Emitter, name: str) {
 # read the innermost live binding of `COUNT`, so a local of that name answered a question
 # that named `lib`. It is also how "does any module declare this name" is asked, since the
 # names are a field of the rows rather than a list of their own.
+# c_k_idx finds a constant by the name it is REACHED BY, which for an associated value is
+# `P.LIMIT` and not `LIMIT`. Matching the declaration's own field made `impl P { LIMIT := 5 }`
+# and `impl Q { LIMIT := 9 }` one name — the duplicate rule refused a program with two types
+# that each have a limit, which is the ordinary case rather than a mistake.
 fn c_k_idx(mut &em: Emitter, name: str) -> int {
 	mut i := 0
 	for i < em.k_decls.len() {
-		return i if em.k_decls[i].name == name
+		return i if c_const_scope_name(em.k_decls[i]) == name
 		i = i + 1
 	}
 	return -1
@@ -9055,8 +9273,12 @@ fn c_ident_val(mut &em: Emitter, n: str, sb: Subst) -> str {
 	# only reached when nothing has bound the name, so a binding always wins — which is the
 	# ordinary scoping rule, and it means a local can shadow a function without surprise.
 	if c_is_free_fn(em, n) and not c_is_bound(em, n) {
-		c_no_ref_param_value(em, n)
-		c_chk_unsafe_fn(em, n, "naming it here would hand safe code the same call", c_sig_row_of(em, n))
+		# NAMING ONE IS SAFE NOW, AND CALLING IT IS STILL CHECKED. This used to be refused —
+		# "naming it here would hand safe code the same call" — and it was true while a
+		# function TYPE could not carry the marker: the value became a plain `fn` and the
+		# caller rule had nothing left to read. The type carries it (`unsafe fn(…)`), so the
+		# call through the value is the checked thing and the binding is ordinary code, which
+		# is what makes an unsafe function storable in a table at all.
 		em.used_fnptr = true
 		return f"((zg_fnptr){{(void (*)(void))zg_{c_fnval_thunk(em, n, c_fn_ty_of(em, n))}, NULL}})"
 	}
@@ -9173,11 +9395,26 @@ fn c_fn_ty_of(mut &em: Emitter, n: str) -> ast.Ty {
 	mut i := 0
 	for i < em.pr_fn.len() {
 		if em.pr_fn[i] == n {
-			ptys.append(em.pr_ty[i])
+			# THE MARKER RIDES IN THE TYPE. The table keeps `mut &` in a column of its own,
+			# because a declaration has a name to hang it on; a VALUE has not, so what the
+			# call site reads it from is the type — and that is what this builds.
+			if em.pr_ref[i] {
+				ptys.append(ast.Ty.TRef(em.pr_ty[i]))
+			} else {
+				ptys.append(em.pr_ty[i])
+			}
 		}
 		i = i + 1
 	}
-	return ast.Ty.TFn(ptys, c_lookup_sig_ret(em, n))
+
+	# AND THE MARKER, if the declaration carried one. `unsafe fn` is part of the TYPE, so a
+	# value of an unsafe function is an `unsafe fn(…)` and not a plain one — which is what
+	# stops it being bound to a plain `fn` type and called from safe code.
+	ft := ast.Ty.TFn(ptys, c_lookup_sig_ret(em, n))
+	r := c_sig_row_of(em, n)
+	return ast.Ty.TUnsafe(ft) if r >= 0 and em.sig_unsafe[r]
+
+	return ft
 }
 
 # c_args renders the arguments of a call this emitter has no PARAMETER TABLE for: a call
@@ -9208,7 +9445,14 @@ fn c_args_typed(mut &em: Emitter, ftys: list[ast.Ty], args: list[ast.Expr], sb: 
 			out = out + ", "
 		}
 		mut val := ""
-		if i < ftys.len() {
+		if i < ftys.len() and c_ty_is_ref(ftys[i]) {
+			# A `mut &` SLOT IS THE CALLER'S OWN STORAGE, handed over to be written, so it is
+			# lowered like an assignment target rather than copied like every other argument.
+			# This is the same pair of steps `c_arg` takes for a call it has a name for; what
+			# differs is only where the convention was read from — the type, not the table.
+			check.chk_ref_arg(em, "", i + 1, args[i])
+			val = f"&({c_lvalue(em, args[i], sb)})"
+		} else if i < ftys.len() {
 			val = c_fit_copied(em, f"argument {strconv.to_string(i + 1, 10)} of this call", ftys[i], args[i], sb)
 		} else {
 			val = c_expr(em, args[i], sb)
@@ -9226,10 +9470,185 @@ fn c_args_typed(mut &em: Emitter, ftys: list[ast.Ty], args: list[ast.Expr], sb: 
 # field's type is wanted twice, for the cast and for the parameter list, and c_field_ty is a
 # scan of every field of every struct in the program; asking once is the whole reason this
 # is a function and not an arm of the match that calls it.
+# c_ty_is_ref answers whether a parameter slot is a `mut &` — the question a call through a
+# VALUE asks of the type, where a call by name asks the parameter table.
+pub fn c_ty_is_ref(t: ast.Ty) -> bool {
+	return match t {
+		Ty.TRef(_) => true
+		_          => false
+	}
+}
+
 fn c_fnfield_call(mut &em: Emitter, recv: str, meth: str, target: ast.Expr, args: list[ast.Expr], sb: Subst) -> str {
 	fty := c_field_ty(em, recv, meth)
 	tv := c_expr(em, target, sb)
 	return f"({c_fnptr_cast(fty)}({tv}.zg_{meth}).fn)({tv}.zg_{meth}.env{c_args_after(em, fty, args, sb)})"
+}
+
+# --- raw pointers (GRAMMAR#ptr-type) -------------------------------------------------------
+#
+# The TYPE is grammar and the OPERATIONS are not: GRAMMAR says a `ptr` / `ptr[T]` may appear in
+# a signature or a field to DESCRIBE pointer-shaped data, and that taking an address,
+# dereferencing, storing, offsetting and casting are unsafe INTRINSICS. They are the compiler's
+# rather than the standard library's for the reason `print` is: none of them can be written in
+# Zerg — `addr(x)` needs the storage behind a name, and a load needs a type to read back.
+#
+# EVERY ONE OF THEM IS `unsafe`-ONLY, and that is the same rule an unsafe fn's caller meets:
+# the marker is what makes an operation the compiler cannot check sayable at all.
+
+# c_addr lowers `addr(x)` — the address of a place, typed to what is there.
+fn c_addr(mut &em: Emitter, args: list[ast.Expr], sb: Subst) -> str {
+	check.chk_ptr_context(em, "addr(…)")
+	check.chk_ptr_arity(em, "addr", 1, args.len())
+	return "0" if args.len() != 1
+
+	check.chk_ref_arg(em, "", 1, args[0])
+	return f"((void*)&({c_lvalue(em, args[0], sb)}))"
+}
+
+# c_ptr_method is `load` / `store` / `offset` on a raw pointer. A bare `ptr` has no pointee, so
+# each of the three is refused on one: what `[T]` types is exactly these operations.
+fn c_ptr_method(mut &em: Emitter, target: ast.Expr, meth: str, args: list[ast.Expr], tty: ast.Ty, sb: Subst) -> str {
+	check.chk_ptr_context(em, f"`.{meth}()` on a raw pointer")
+	el := c_ptr_elem(tty)
+	check.chk_ptr_typed(em, meth, tty, c_is_unknown(el))
+	ct := c_type(el)
+	tgt := c_expr(em, target, sb)
+
+	if meth == "load" {
+		check.chk_ptr_arity(em, "load", 0, args.len())
+		return f"(*({ct}*)({tgt}))"
+	}
+	if meth == "store" {
+		check.chk_ptr_arity(em, "store", 1, args.len())
+		return "0" if args.len() != 1
+
+		return f"((*({ct}*)({tgt})) = {c_fit_copied(em, "`store`", el, args[0], sb)})"
+	}
+
+	check.chk_ptr_arity(em, "offset", 1, args.len())
+	return "0" if args.len() != 1
+
+	return f"((void*)((({ct}*)({tgt})) + ({c_expr(em, args[0], sb)})))"
+}
+
+fn c_ptr_method_ret(mut &em: Emitter, meth: str, tty: ast.Ty) -> ast.Ty {
+	return c_ptr_elem(tty) if meth == "load"
+	return tty if meth == "offset"
+
+	return ast.Ty.TVoid
+}
+
+fn c_addr_elem(mut &em: Emitter, args: list[ast.Expr]) -> ast.Ty {
+	return ast.Ty.TUnknown if args.len() != 1
+
+	return c_infer(em, args[0])
+}
+
+pub fn c_is_ptr(t: ast.Ty) -> bool {
+	return match t {
+		Ty.TPtr(_) => true
+		_          => false
+	}
+}
+
+pub fn c_ptr_elem(t: ast.Ty) -> ast.Ty {
+	return match t {
+		Ty.TPtr(e) => e
+		_          => ast.Ty.TUnknown
+	}
+}
+
+# c_ptr_type is the C a `ptr` / `ptr[T]` lowers to: the untyped one is `void*` and a typed one
+# is a pointer to the pointee's C type. One width, two types, which is what `[T]` typing only
+# the load, the store and the offset means.
+fn c_ptr_type(e: ast.Ty) -> str {
+	return "void*" if c_is_unknown(e)
+
+	return c_type(e) + "*"
+}
+
+# --- inline assembly (GRAMMAR#asm-expr) ---------------------------------------------------
+#
+# `asm("mov %0, %1", out("=r") x, in("r") y, clobber("cc"))` lowers to
+# `__asm__ volatile ("mov %0, %1" : "=r"(x) : "r"(y) : "cc");` — the reference implementation
+# emits C and needs no assembler of its own, because GRAMMAR already says the template and the
+# constraint strings are OPAQUE and belong to the target backend. That promise is exactly what
+# lets them be handed to `cc` unread.
+#
+# TWO DECISIONS THE GRAMMAR LEAVES OPEN, both settled here and written into the chapter:
+#
+#   THE WRITTEN ORDER IS THE NUMBERING. A C compiler numbers `%0`, `%1`, … outputs first and
+#   then inputs, and an operand list that may be written in any order has no defined answer for
+#   `%0`. The alternative — renumbering — needs the emitter to PARSE the template, which
+#   contradicts the opacity the whole lowering rests on. So the language requires `out` and
+#   `inout` before `in`, one refusal rule, and the order a reader wrote IS what they numbered.
+#   A `clobber` may sit anywhere, because it lowers to the third colon whatever its position.
+#
+#   `volatile` IS ALWAYS EMITTED. Zerg has no spelling for it, an `asm` here is reachable only
+#   inside `unsafe` and is rare, and eliding it is the optimisation that silently deletes a
+#   memory-mapped write. Never eliding it is a decision rather than a gap.
+fn c_asm(mut &em: Emitter, tpl: str, ops: list[ast.AsmOp], sb: Subst) -> str {
+	check.chk_asm_context(em)
+	check.chk_asm_order(em, ops)
+	em.used_rt = true
+
+	mut outs := ""
+	mut ins := ""
+	mut clob := ""
+	for o in ops {
+		if o.kind == 3 {
+			for c in o.cons {
+				if clob != "" {
+					clob = clob + ", "
+				}
+				clob = clob + c_str_lit(c)
+			}
+			continue
+		}
+
+		one := f"{c_str_lit(o.cons[0])}({c_asm_operand(em, o, sb)})"
+		if o.kind == 0 {
+			if ins != "" {
+				ins = ins + ", "
+			}
+			ins = ins + one
+		} else {
+			if outs != "" {
+				outs = outs + ", "
+			}
+			outs = outs + one
+		}
+	}
+
+	return f"__asm__ volatile ({c_str_lit(tpl)} : {outs} : {ins} : {clob})"
+}
+
+# c_asm_operand renders one operand's value. An `out` or an `inout` binds a PLACE — the callee
+# writes through it — so it is lowered as an assignment target, exactly as a `mut &` argument
+# is; an `in` is an ordinary read.
+fn c_asm_operand(mut &em: Emitter, o: ast.AsmOp, sb: Subst) -> str {
+	return c_expr(em, o.expr, sb) if o.kind == 0
+
+	return c_lvalue(em, o.expr, sb)
+}
+
+# c_recv_call lowers a call to a DECLARED method. It is a function rather than the one-line
+# arm it was because the caller rule owes an answer here too: `unsafe` on a method is the same
+# marker a free function carries, so a method declared `unsafe fn` is callable only from
+# unsafe — and an arm that only spelled the C name had nowhere to ask.
+fn c_recv_call(mut &em: Emitter, recv: str, meth: str, target: ast.Expr, args: list[ast.Expr], sb: Subst) -> str {
+	key := c_sig_key(recv, meth)
+	r := c_sig_row(em, key)
+
+	# THE OTHER SIDE OF ONE RULE. An associated fn takes no receiver, so an instance in front of
+	# the dot has nowhere to go — it used to be passed as the first written argument, which is
+	# how `p.make(2)` came out as `argument 0 of `P.make` is int, and this gives P`: a sentence
+	# about the argument the caller did not write.
+	raise c_diag(em, rule.Rule.AssocFnThroughAnInstance, f"`{meth}` is an ASSOCIATED FN of `{recv}` — its body does not use `this`, so it takes no receiver and is reached through the type (`{recv}.{meth}(…)`) (GRAMMAR#impl-decl)") if r >= 0 and em.sig_assoc[r]
+
+	c_chk_unsafe_fn(em, f"{recv}.{meth}", "this call is in safe code", r)
+	return f"{c_fn_cname(recv, meth)}({c_recv_args(em, key, target, args, sb)})"
 }
 
 fn c_args(mut &em: Emitter, args: list[ast.Expr], sb: Subst) -> str {
@@ -9802,7 +10221,7 @@ fn c_pat_cond(mut &em: Emitter, pt: ast.Pat, s: str, st: ast.Ty, sb: Subst) -> s
 		# GRAMMAR#literal-pat makes a literal a pattern, so `match o { nil => … }` is the
 		# natural way to ask about absence — and the arm beside it is what is not built: a
 		# binding pattern over an optional binds the CARRIER rather than what it holds.
-		raise c_diag(em, rule.Rule.NotYetNilPattern, "NotImplemented: `nil` as a `match` pattern — GRAMMAR makes it a literal pattern and this compiler compares it as one; write `if v := o { … }` for the presence test, or `o ?? d` for a default") if c_is_nil_lit(lit)
+		raise c_diag(em, rule.Rule.NotYetNilPattern, "NotImplemented: `nil` as a `match` pattern — GRAMMAR makes it a literal pattern and this compiler compares it as one; write `if v := o { … }` for the presence test, or `o ?? d` for a default (GRAMMAR#literal-pat)") if c_is_nil_lit(lit)
 
 		# the PATTERN is handed as both operands: this comparison is a scrutinee against a
 		# literal, and a literal pattern is always the one adopting the scrutinee's type, so
@@ -10058,7 +10477,7 @@ fn c_pat_tuple_elems(pt: ast.Pat) -> list[ast.Pat] {
 # or the slice silently ran zero times — the shape the arm path now handles deliberately, and
 # these two do not handle at all.
 fn c_range_needs_hi(mut &em: Emitter, e: ast.Expr, what: str) {
-	raise c_diag(em, rule.Rule.NotYetOpenRangeHere, "NotImplemented: an open-ended range has no upper bound here — " + what) if c_is_range(e) and c_is_nil_lit(c_range_hi(e))
+	raise c_diag(em, rule.Rule.NotYetOpenRangeHere, "NotImplemented: an open-ended range has no upper bound here —  (GRAMMAR#range-expr)" + what) if c_is_range(e) and c_is_nil_lit(c_range_hi(e))
 }
 
 # c_arm_eq is the scrutinee against a literal pattern. A `str` is not a native C operand, so the
@@ -10217,6 +10636,7 @@ fn c_infer_node(mut &em: Emitter, e: ast.Expr) -> ast.Ty {
 
 		Expr.EFill(v, _) => c_infer_fill(em, v)
 		Expr.EConv(ty, x, nm) => ty
+		Expr.EFmt(_, _, _) => ast.Ty.TStr
 		Expr.EIf(cond, then_e, else_e) => c_infer(em, then_e)
 		Expr.EMatch(scrut, arms) => c_infer_match(em, scrut, arms)
 		Expr.ERange(lo, hi, inclusive) => ast.Ty.TUnknown
@@ -10229,8 +10649,12 @@ fn c_infer_node(mut &em: Emitter, e: ast.Expr) -> ast.Ty {
 		Expr.ECoalesce(a, b, jump) => c_infer_coalesce(em, a, b)
 		Expr.EGuard(body) => ast.Ty.TEither(c_guard_elem(c_guard_val_ty(em, body)), ast.Ty.TErr)
 		Expr.EBlock(body) => c_block_val_ty(em, body)
+		Expr.EUnsafe(body) => c_block_val_ty(em, body)
+
+		# an `asm(…)` yields nothing: its effects are its operands and its clobbers
+		Expr.EAsm(_, _)   => ast.Ty.TVoid
 		Expr.EIs(x, name) => ast.Ty.TBool
-		Expr.EIn(x, set) => ast.Ty.TBool
+		Expr.EIn(x, set)  => ast.Ty.TBool
 	}
 }
 
@@ -10258,10 +10682,20 @@ fn c_infer_methcall(mut &em: Emitter, target: ast.Expr, meth: str, args: list[as
 		return ast.Ty.TNamed(en) if c_is_variant_in(em, en, meth)
 	}
 
+	# `P.make(…)` — an ASSOCIATED FN (GRAMMAR#impl-decl). Its target is a TYPE, so the walk
+	# below has nothing to infer from: `c_infer` of a type name answers `?`, and every arm past
+	# it reads that. The row is what carries the answer, and it is keyed the way a method's is —
+	# an associated fn shares its type's namespace.
+	sn := c_ident_name(target)
+	return c_lookup_sig_ret(em, c_sig_key(sn, meth)) if sn != "" and c_is_struct_name(em, sn)
+
 	tty := c_infer(em, target)
 	recv := c_named_of(tty)
 	return match c_meth_kind(em, tty, meth) {
+		MethKind.MRender  => ast.Ty.TStr
 		MethKind.MList    => c_list_method_ret(em, meth)
+		MethKind.MArr     => c_arr_method_ret(em, meth)
+		MethKind.MPtr     => c_ptr_method_ret(em, meth, tty)
 		MethKind.MMap     => c_map_method_ret(meth)
 		MethKind.MErr     => c_err_method_ret(em, meth)
 		MethKind.MCarrier => c_carrier_method_ret(em, tty, meth)
@@ -10281,6 +10715,7 @@ fn c_elem_ty(mut &em: Emitter, target: ast.Expr, idx: ast.Expr) -> ast.Ty {
 	# a slice is the same kind of container as what it came from
 	return t if c_is_range(idx)
 	return c_map_val_ty(t) if c_is_map(t)
+	return c_arr_elem(t) if c_is_arr(t)
 
 	return c_list_elem(t)
 }
@@ -10318,6 +10753,11 @@ fn c_list_method_ret(mut &em: Emitter, meth: str) -> ast.Ty {
 }
 
 fn c_infer_call(mut &em: Emitter, name: str, args: list[ast.Expr]) -> ast.Ty {
+	# `addr(x)` answers a pointer TO WHAT IS THERE, which is the whole reason it is typed
+	# rather than a bare address: `p.load()` reads the pointee back, and something has to have
+	# said what a pointee is.
+	return ast.Ty.TPtr(c_addr_elem(em, args)) if name == "addr"
+
 	# A GENERIC CALL answers the SPECIALIZATION's result, never the template's. The template
 	# says `T`, which is not a type — so the answer used to fall through to the signature
 	# table, find nothing, and come back unknown: `print id("hi")` then took the integer path
@@ -10403,6 +10843,11 @@ fn c_intrinsic_ret(name: str) -> ast.Ty {
 
 	return ast.Ty.TList(ast.Ty.TByte) if name == "__zrt_read"
 	return ast.Ty.TList(ast.Ty.TStr) if name == "__zrt_listdir"
+
+	# `[pid, stdin, stdout, stderr]` — a child and the parent's ends of its three streams. A
+	# list of four and not a struct, because that is what crosses this boundary without a new
+	# C type on either side of it.
+	return ast.Ty.TList(ast.Ty.TInt) if name == "__zrt_proc_open3"
 	return ast.Ty.TInt if name == "__zrt_open" or name == "__zrt_exec" or name == "__zrt_proc_spawn" or name == "__zrt_proc_wait"
 	return ast.Ty.TInt if name == "__zrt_open_write"
 	return ast.Ty.TInt if name == "__zrt_time_unix" or name == "__zrt_time_mono"
@@ -10510,6 +10955,7 @@ fn c_stmt(mut &em: Emitter, s: ast.Stmt, ind: str) -> str {
 	return match s {
 		Stmt.SLet(name, ty, has_type, is_mut, is_const, ival) => c_let(em, name, ty, has_type, is_mut, is_const, ival, ind)
 		Stmt.SAssign(lhs, rhs) => c_assign(em, lhs, rhs, ind)
+		Stmt.SDestructure(t, v, is_bind, is_mut, is_const) => c_destructure(em, t, v, is_bind, is_mut, is_const, ind)
 		Stmt.SPrint(e) => c_print(em, e, ind)
 		Stmt.SReturn(has_val, e) => c_return(em, has_val, e, ind)
 		Stmt.SReturnIf(val, cond) => c_return_if(em, val, cond, ind)
@@ -10614,6 +11060,7 @@ fn c_discards_a_value(e: ast.Expr) -> bool {
 	return match e {
 		Expr.EGuard(_) => true
 		Expr.EBlock(_) => true
+		Expr.EUnsafe(_) => true
 		Expr.EMatch(_, _) => true
 		_ => false
 	}
@@ -10699,6 +11146,94 @@ fn c_fill_elems(mut &em: Emitter, v: ast.Expr, n: ast.Expr) -> list[ast.Expr] {
 # c_assign lowers `lhs = rhs`. Re-assigning a list literal to a name re-initialises the
 # list (leak-style: the old buffer is abandoned); otherwise the lhs (a name, field, or
 # index) is emitted as a C lvalue.
+# c_destructure lowers `(a, b) := e`, `P{x, y} := e` and the two written with `=`
+# (GRAMMAR#bind-target, GRAMMAR#assign-target).
+#
+# IT BUILDS STATEMENTS AND LOWERS THOSE, rather than writing C. What a leaf needs is exactly
+# what an ordinary binding or assignment needs — the copy, the carrier wrap, the release
+# registered at the declaration, the checks — and every one of those lives in `c_let` and
+# `c_assign`. A second lowering here would be a second place for all of it to be right, which
+# is the shape this compiler keeps finding wrong in itself.
+#
+# THE VALUE IS READ ONCE, INTO A TEMPORARY, BEFORE ANY LEAF IS WRITTEN. That is not an
+# optimisation, it is the meaning: `(a, b) = (b, a)` is a swap, and a lowering that assigned
+# leaf by leaf out of the source expression would read `b` after it had already been written.
+fn c_destructure(mut &em: Emitter, t: ast.Target, v: ast.Expr, is_bind: bool, is_mut: bool, is_const: bool, ind: str) -> str {
+	tmp := c_tmp(em, "zg_dt")
+	mut body: list[ast.Stmt] = [ast.Stmt.SLet(tmp, ast.Ty.TUnknown, false, false, false, v)]
+	c_target_stmts(em, t, ast.Expr.EIdent(tmp), c_infer(em, v), is_bind, is_mut, is_const, body)
+
+	mut out := ""
+	for st in body {
+		out = out + c_stmt(em, st, ind)
+	}
+	return out
+}
+
+# c_target_stmts walks one target beside the expression that READS it, and appends the
+# statement each leaf is. The two shapes differ only in how a position is spelled: a tuple
+# position is `.0`, a struct position is `.field`, and both are an EField because a tuple is
+# read back by static index.
+fn c_target_stmts(mut &em: Emitter, t: ast.Target, src: ast.Expr, sty: ast.Ty, is_bind: bool, is_mut: bool, is_const: bool, mut &out: list[ast.Stmt]) {
+	match t {
+		Target.TgtWild => c_target_nothing(em)
+		Target.TgtPlace(e) => c_target_leaf(em, e, src, is_bind, is_mut, is_const, out)
+		Target.TgtTuple(ts) => c_target_tuple(em, ts, src, sty, is_bind, is_mut, is_const, out)
+		Target.TgtStruct(nm, fs, ts, open) => c_target_struct(em, nm, fs, ts, open, src, sty, is_bind, is_mut, is_const, out)
+	}
+}
+
+# A `_` READS NOTHING. GRAMMAR#assign-target has no wildcard of its own — the discard is the
+# pattern spelling — and what it means here is that the position is skipped: no name is minted
+# and no storage is written, so there is no statement to append.
+fn c_target_nothing(mut &em: Emitter) {
+	em.tmp_n = em.tmp_n
+}
+
+fn c_target_leaf(mut &em: Emitter, e: ast.Expr, src: ast.Expr, is_bind: bool, is_mut: bool, is_const: bool, mut &out: list[ast.Stmt]) {
+	if is_bind {
+		out.append(ast.Stmt.SLet(c_target_name(em, e), ast.Ty.TUnknown, false, is_mut, is_const, src))
+		return
+	}
+	out.append(ast.Stmt.SAssign(e, src))
+}
+
+fn c_target_name(mut &em: Emitter, e: ast.Expr) -> str {
+	return match e {
+		Expr.EIdent(n) => n
+		_ => ""
+	}
+}
+
+# THE TYPE IS THREADED RATHER THAN INFERRED FROM THE TEMPORARY. The statements are built before
+# any of them is lowered, so the temporary is not a name the emitter knows yet — asking it what
+# `zg_dt1` holds answers `?`, and a rule that reads `?` is a rule that never fires.
+fn c_target_tuple(mut &em: Emitter, ts: list[ast.Target], src: ast.Expr, sty: ast.Ty, is_bind: bool, is_mut: bool, is_const: bool, mut &out: list[ast.Stmt]) {
+	els := c_tuple_elems(sty)
+	mut i := 0
+	for sub in ts {
+		mut et := ast.Ty.TUnknown
+		if i < els.len() {
+			et = els[i]
+		}
+		c_target_stmts(em, sub, ast.Expr.EField(src, strconv.to_string(i, 10)), et, is_bind, is_mut, is_const, out)
+		i = i + 1
+	}
+}
+
+# A STRUCT TARGET IS A `struct-pat` IN ANOTHER POSITION, so it asks the same three questions of
+# the type: the name is an assertion, every field it lists must exist, and without a `..` it
+# names them all. `c_struct_shape` is where those live, once.
+fn c_target_struct(mut &em: Emitter, nm: str, fs: list[str], ts: list[ast.Target], open: bool, src: ast.Expr, sty: ast.Ty, is_bind: bool, is_mut: bool, is_const: bool, mut &out: list[ast.Stmt]) {
+	sn := c_struct_shape(em, sty, nm, fs, open)
+
+	mut i := 0
+	for sub in ts {
+		c_target_stmts(em, sub, ast.Expr.EField(src, fs[i]), c_field_ty(em, sn, fs[i]), is_bind, is_mut, is_const, out)
+		i = i + 1
+	}
+}
+
 fn c_assign(mut &em: Emitter, lhs: ast.Expr, rhs: ast.Expr, ind: str) -> str {
 	check.chk_assignable(em, lhs)
 
@@ -10947,7 +11482,7 @@ fn c_build_const_vals(mut &em: Emitter, f: ast.File) {
 		if not c.is_mut {
 			v = check.chk_const_eval(em, c.value)
 		}
-		em.kv_names.append(c.name)
+		em.kv_names.append(c_const_scope_name(c))
 		em.kv_vals.append(v)
 	}
 }
@@ -10999,7 +11534,7 @@ fn c_const_globals(mut &em: Emitter, f: ast.File, own: ast.File, whole: bool) ->
 		# WHICH of the two rules is the earlier declaration's FILE, exactly as it is for a
 		# signature: one file declaring a constant twice is ill-formed for good, and two files
 		# under one directory is the flat namespace this compiler still has.
-		ki := c_k_idx(em, c.name)
+		ki := c_k_idx(em, c_const_scope_name(c))
 		if ki >= 0 {
 			# ONE FILE IS NOT THIS WALK'S TO ANSWER, for the reason c_mod_collide states: it
 			# is recorded as E4073 there and rendered at the end, while this raises and would
@@ -11046,11 +11581,11 @@ fn c_const_globals(mut &em: Emitter, f: ast.File, own: ast.File, whole: bool) ->
 		# globals follow; a scalar or a container answers "nothing to do" by itself.
 		c_spelled_register(em, ty)
 		if whole {
-			out = out + f"static {c_type(ty)} zg_{c.name};\n"
+			out = out + f"static {c_type(ty)} {c_const_cname(c)};\n"
 		} else if c_const_in(own, c.name) {
-			out = out + f"{c_type(ty)} zg_{c.name};\n"
+			out = out + f"{c_type(ty)} {c_const_cname(c)};\n"
 		} else {
-			out = out + f"extern {c_type(ty)} zg_{c.name};\n"
+			out = out + f"extern {c_type(ty)} {c_const_cname(c)};\n"
 		}
 	}
 	em.at_path = keep_path
@@ -11062,10 +11597,28 @@ fn c_const_globals(mut &em: Emitter, f: ast.File, own: ast.File, whole: bool) ->
 # c_const_bind puts one constant's row into scope 0, which is what c_reset_env does for all of
 # them before every function body. It is spelled once and called from both, because a row
 # written two ways is two rows the day one of them gains a field.
+# c_const_cname — a constant's C name. An ASSOCIATED value carries the type it belongs to, which
+# is what keeps `impl P { LIMIT := 5 }` and a module `LIMIT` apart in the one flat C namespace —
+# the same reason a method is `zg_P_show` and not `zg_show`.
+fn c_const_cname(c: ast.ConstDecl) -> str {
+	return f"zg_{c.recv}_{c.name}" if c.recv != ""
+
+	return "zg_" + c.name
+}
+
+# c_const_scope_name — how a constant is REACHED. A module one is a bare name; an associated one
+# is `P.LIMIT` and nothing else, which is what stops it from joining the flat name space and
+# shadowing a binding somewhere.
+fn c_const_scope_name(c: ast.ConstDecl) -> str {
+	return f"{c.recv}.{c.name}" if c.recv != ""
+
+	return c.name
+}
+
 fn c_const_bind(mut &em: Emitter, c: ast.ConstDecl, ty: ast.Ty) {
-	em.env_names.append(c.name)
+	em.env_names.append(c_const_scope_name(c))
 	em.env_tys.append(ty)
-	em.env_cnames.append("zg_" + c.name)
+	em.env_cnames.append(c_const_cname(c))
 	em.env_dead.append(0)
 	em.env_mut.append(c.is_mut)
 	em.env_scope.append(0)
@@ -11157,12 +11710,12 @@ fn c_const_assigns(mut &em: Emitter, f: ast.File) -> str {
 		# constant happened to be registered third and rendered an int through
 		# `zrt_str_retain`. c_k_idx is the lookup that cannot drift, and it is the same one the
 		# duplicate-name check already uses.
-		ty := em.k_tys[c_k_idx(em, c.name)]
+		ty := em.k_tys[c_k_idx(em, c_const_scope_name(c))]
 		mut val := c_into(em, ty, c.value, c_nosub())
 		if c.has_ty and c_is_carrier(ty) {
 			val = c_carrier_fit(em, check.chk_binding_says(c.name), ty, c.value, c_nosub())
 		}
-		out = out + f"    zg_{c.name} = {val};\n"
+		out = out + f"    {c_const_cname(c)} = {val};\n"
 	}
 	em.at_path = keep_path
 	em.at_line = keep_line
@@ -11462,7 +12015,7 @@ fn c_main_entry(mut &em: Emitter, own: ast.File, inits: str) -> str {
 		# running main(args) as coroutine 0 needs a scheduler shim that does not exist.
 		# entry.c's zrt_run_args shows the SHAPE is fine; it is the scheduler's version
 		# of it that is missing.
-		raise c_diag(em, rule.Rule.NotYetMainArgsWithConcurrency, "NotImplemented: main(args) in a program that uses concurrency")
+		raise c_diag(em, rule.Rule.NotYetMainArgsWithConcurrency, "NotImplemented: main(args) in a program that uses concurrency (docs/code/coroutine.md)")
 	}
 	if ret_res {
 		# The Result travels as an int64 exit code so the two shims `-> int` already has
@@ -11983,7 +12536,7 @@ fn c_del(mut &em: Emitter, name: str, ind: str) -> str {
 	# The header above is why the drop cannot simply be added here: the release is registered
 	# on the runtime's cleanup stack at the declaration and every exit unwinds to a mark, so
 	# there is no taking one entry out of the middle early.
-	raise c_diag(em, rule.Rule.NotYetDelChannel, f"NotImplemented: `del {name}` on a CHANNEL — GRAMMAR makes this drop a sender reference and close the stream when it was the last one, and this compiler releases a channel where its binding's scope ends. Write `close({name})` to end it now") if ast.ty_is_chan(c_lookup_var(em, name))
+	raise c_diag(em, rule.Rule.NotYetDelChannel, f"NotImplemented: `del {name}` on a CHANNEL — GRAMMAR makes this drop a sender reference and close the stream when it was the last one, and this compiler releases a channel where its binding's scope ends. Write `close({name})` to end it now (GRAMMAR#del-stmt)") if ast.ty_is_chan(c_lookup_var(em, name))
 
 	# `del` OF AN OWNING VALUE — a local `struct`, `list` or `map` — is the other half of the
 	# same absence (#94). GRAMMAR and docs/core/memory.md give it a job the revocation is only
@@ -12315,12 +12868,6 @@ fn c_lambda(mut &em: Emitter, ps: list[ast.Param], has_ret: bool, ret: ast.Ty, b
 		allps.append(pm)
 	}
 
-	for pm in ps {
-		if pm.is_ref {
-			c_no_ref_param(em, f"the parameter `{pm.name}` of a closure")
-		}
-	}
-
 	tag := strconv.to_string(em.lam_n, 10)
 	em.lam_n = em.lam_n + 1
 	name := "lambda__" + tag
@@ -12348,7 +12895,7 @@ fn c_lambda(mut &em: Emitter, ps: list[ast.Param], has_ret: bool, ret: ast.Ty, b
 	# the substitution still in force.
 	saved_sub := em.sub
 	em.sub = c_nosub()
-	em.lam_defs.append(c_fn(em, ast.FnDecl(name, "", allps, has_ret, ret, body, false, em.at_path, em.at_line, em.at_col, [], [], em.in_unsafe_fn, false, false)))
+	em.lam_defs.append(c_fn(em, ast.FnDecl(name, "", allps, has_ret, ret, body, false, em.at_path, em.at_line, em.at_col, [], [], em.in_unsafe_fn, false, false, true, false)))
 	em.sub = saved_sub
 	c_env_restore(em, saved_env)
 	em.open_scopes = saved_open
@@ -12511,7 +13058,11 @@ fn c_fn_typed_at(want: ast.Ty, ps: list[ast.Param], has_ret: bool, ret: ast.Ty, 
 fn c_lambda_ty(ps: list[ast.Param], has_ret: bool, ret: ast.Ty) -> ast.Ty {
 	mut tys: list[ast.Ty] = []
 	for pm in ps {
-		tys.append(pm.ty)
+		if pm.is_ref {
+			tys.append(ast.Ty.TRef(pm.ty))
+		} else {
+			tys.append(pm.ty)
+		}
 	}
 	mut r := ast.Ty.TVoid
 	if has_ret {
@@ -12547,34 +13098,6 @@ pub fn c_name_in(names: list[str], name: str) -> bool {
 		return true if n == name
 	}
 	return false
-}
-
-# A `mut &` PARAMETER CANNOT SURVIVE THE TRIP THROUGH A FUNCTION VALUE. A held function is
-# one type here, `zg_fnptr`, cast back at the call from what the CALL SITE believes the
-# signature is — and what it believes comes from the parameter table, keyed by the callee's
-# NAME. A value has no name in that table, so `c_arg` found no row, skipped the borrow rules
-# and passed the argument by value into a C parameter declared `T*`. Both spellings
-# segfaulted: `f := fn(mut &a: int) { … }  f(x)` and `g := bump  g(x)`.
-#
-# It is not a lowering this compiler could quietly get right, either: `TFn` carries parameter
-# TYPES and no `mut &` flag, which is the same reason GRAMMAR's `param-type ::= ( 'mut' '&' )?
-# type` has no spelling here. So the function value is refused where it is MADE — at the
-# lambda, and at the name — rather than at a call that no longer knows what it is calling.
-fn c_no_ref_param(mut &em: Emitter, what: str) {
-	raise c_diag(em, rule.Rule.NotYetFnValueMutRef, f"NotImplemented: {what} is a `mut &`, and a function VALUE cannot carry one — a held function is a bare pointer here and the call site reads its signature from the callee's name, which a value has not got. Call it by name, or pass the value it should answer with")
-}
-
-# c_no_ref_param_value asks the same of a NAMED function about to become one. A lambda has
-# its parameters in hand; a name has only the table, so this is the same question as a scan
-# of it — and it names the parameter's POSITION, which is what the table keeps.
-fn c_no_ref_param_value(mut &em: Emitter, n: str) {
-	mut i := 0
-	for i < em.pr_fn.len() {
-		if em.pr_fn[i] == n and em.pr_ref[i] {
-			c_no_ref_param(em, f"parameter {strconv.to_string(em.pr_idx[i] + 1, 10)} of `{n}`")
-		}
-		i = i + 1
-	}
 }
 
 # --- defer ----------------------------------------------------------------------
@@ -12768,7 +13291,7 @@ fn c_callee_free(mut &em: Emitter, name: str, args: list[ast.Expr], what: str) -
 fn c_chk_callable(mut &em: Emitter, name: str, what: str) {
 	bt := c_lookup_var(em, name)
 
-	raise c_diag(em, rule.Rule.NotYetSpawnOfBinding, f"NotImplemented: a `{what}` of `{name}`, a binding that HOLDS a function — a `{what}` lowers to a C thunk that names a symbol, and a function value has none. Name the function itself, or call it inside a `{what}`ed one") if c_is_fn(bt)
+	raise c_diag(em, rule.Rule.NotYetSpawnOfBinding, f"NotImplemented: a `{what}` of `{name}`, a binding that HOLDS a function — a `{what}` lowers to a C thunk that names a symbol, and a function value has none. Name the function itself, or call it inside a `{what}`ed one (GRAMMAR#spawn-stmt)") if c_is_fn(bt)
 
 	if not c_is_unknown(bt) {
 		c_not_callable(em, name, bt)
@@ -12844,7 +13367,7 @@ fn c_callee_raw(mut &em: Emitter, x: ast.Expr, what: str) -> Callee {
 		# what is actually missing rather than denying the call is a method.
 		raise c_no_method_says(em, m, recv) if recv != ""
 
-		raise c_diag(em, rule.Rule.NotYetSpawnOfUnknownName, f"NotImplemented: {what} of the method `{m}` on a {ast.ty_name(c_infer(em, tgt))} — this compiler thunks a free function and a method on a NAMED type, and a built-in receiver answers through a dispatch a thunk does not reach")
+		raise c_diag(em, rule.Rule.NotYetSpawnOfUnknownName, f"NotImplemented: {what} of the method `{m}` on a {ast.ty_name(c_infer(em, tgt))} — this compiler thunks a free function and a method on a NAMED type, and a built-in receiver answers through a dispatch a thunk does not reach (GRAMMAR#spawn-stmt)")
 	}
 
 	# a method's receiver is parameter 0 — the parser put `this` there when it flattened the
@@ -12990,7 +13513,7 @@ fn c_map_vt(mut &em: Emitter, kt: ast.Ty, vt: ast.Ty) -> str {
 	# they keep the number (#87).
 	raise c_diag(em, rule.Rule.MapKeyHasNoHash, f"a map key of type {ast.ty_name(kt)} — a key needs `Hash`, and a `float` has no equality a hash can agree with (docs/core/derive.md), so it can never be one") if c_is_float(kt)
 
-	raise c_diag(em, rule.Rule.NotYetMapKeyType, f"NotImplemented: a map key of type {ast.ty_name(kt)} — a key needs `Hash`, and this compiler has one for `int` and for `str`") if not c_is_int(kt) and not c_is_str(kt) and not c_is_unknown(kt)
+	raise c_diag(em, rule.Rule.NotYetMapKeyType, f"NotImplemented: a map key of type {ast.ty_name(kt)} — a key needs `Hash`, and this compiler has one for `int` and for `str` (docs/code/collections.md)") if not c_is_int(kt) and not c_is_str(kt) and not c_is_unknown(kt)
 
 	mut hash := "zrt_hash_int"
 	mut eq := "zrt_eq_int"
@@ -13202,7 +13725,7 @@ fn c_map_method(mut &em: Emitter, target: ast.Expr, meth: str, args: list[ast.Ex
 	# day it is built. Any other name is a method the LANGUAGE does not give a map, and there
 	# is no day on which it does.
 	unbuilt := meth == "insert" or meth == "remove" or meth == "get"
-	raise c_diag(em, rule.Rule.NotYetMapMethod, f"NotImplemented: the map method `{meth}`") if unbuilt
+	raise c_diag(em, rule.Rule.NotYetMapMethod, f"NotImplemented: the map method `{meth}` (docs/code/collections.md)") if unbuilt
 
 	raise c_diag(em, rule.Rule.MapMethodUnknown, f"the map method `{meth}` — a map answers `len` and `has`, and is read with `m[k]`")
 }
@@ -13298,6 +13821,570 @@ fn c_tuple_helpers(mut &em: Emitter, name: str, tys: list[ast.Ty]) -> str {
 		j = j - 1
 	}
 	return out + "}\n"
+}
+
+# c_arr_index reads or writes one slot of `[T; N]`. The bound is CHECKED AT RUNTIME like a
+# list's, and a constant index outside the length is caught here as well — an array's length is
+# part of its type, so an out-of-range constant is a mistake the type already knows about.
+fn c_arr_index(mut &em: Emitter, target: ast.Expr, idx: ast.Expr, tty: ast.Ty, sb: Subst) -> str {
+	c_list_index_int(em, idx)
+	n := c_arr_len(tty)
+
+	k := check.chk_const_eval(em, idx)
+	if k.ok and (k.value < 0 or k.value >= n) {
+		check.chk_at(em, rule.Rule.ArrayIndexConst, f"`{strconv.to_string(k.value, 10)}` is outside {ast.ty_name(tty)} — an array's length is part of its type, so a constant index is checked here rather than at run time")
+		return "0"
+	}
+
+	w := em.lv_write
+	tgt := c_expr(em, target, sb)
+	em.lv_write = false
+	ix := c_expr(em, idx, sb)
+	em.lv_write = w
+
+	em.used_rt = true
+	return f"({tgt}).v[zrt_arr_index({ix}, {strconv.to_string(n, 10)})]"
+}
+
+# c_arr_method is every method an array answers, which is `len` and nothing else. The length
+# is part of the type, so it is a COMPILE-TIME CONSTANT rather than a field read — and that is
+# also why an array has no `append`: the size is in the type and a method cannot change one.
+fn c_arr_method(mut &em: Emitter, meth: str, tty: ast.Ty) -> str {
+	c_arr_method_ret(em, meth)
+	return strconv.to_string(c_arr_len(tty), 10)
+}
+
+fn c_arr_method_ret(mut &em: Emitter, meth: str) -> ast.Ty {
+	return ast.Ty.TInt if meth == "len"
+
+	# THE SPLIT A LIST'S FALLBACK MAKES, made here for the same reason (#74): a name the
+	# chapter marks `[not yet]` is a form that is coming, and every other name is a permanent
+	# rejection. `get` and `slice` are the two docs/code/collections.md gives an array.
+	unbuilt := meth == "get" or meth == "slice"
+	raise c_diag(em, rule.Rule.NotYetArrayMethod, f"NotImplemented: the array method `{meth}` — this compiler has `len`, and reads an element with `a[i]` (docs/code/collections.md)") if unbuilt
+
+	raise c_diag(em, rule.Rule.ArrayMethodUnknown, f"an array answers `len`, and is read with `a[i]` — `{meth}` is not one of its methods, and its size is part of its type, so nothing may grow or shrink it")
+}
+
+# c_forarr walks `[T; N]`. It is the list loop with the bound taken from the TYPE and no
+# runtime header to read — and the copy is the same copy for the same reason: the loop walks
+# the sequence as it was when it started, and the body may write the binding it came from.
+fn c_forarr(mut &em: Emitter, var: str, iter: ast.Expr, ct: ast.Ty, body: list[ast.Stmt], ind: str) -> str {
+	elem := c_arr_elem(ct)
+	et := c_type(elem)
+	at := c_type(ct)
+	n := strconv.to_string(c_arr_len(ct), 10)
+	outer_scope := c_scope_open(em)
+	c_add_var(em, var, elem, false, false)
+
+	cv := c_var_cname(em, var)
+
+	in2 := ind + "    "
+	keep := em.rel_cnames.len()
+	mark := c_new_mark(em)
+	c_spelled_register(em, ct)
+	mut out := ind + "{\n" + in2 + f"size_t {mark} = zrt_scope_mark();\n"
+	out = out + in2 + f"{at} zgt_ai = " + c_copied(em, ct, iter, c_nosub()) + ";\n"
+	out = out + c_pend_drop(em, ct, "zgt_ai", in2)
+	out = out + in2 + f"for (int64_t zgt_i = 0; zgt_i < {n}; zgt_i++) {{\n"
+	out = out + in2 + "    " + et + " " + cv + " = zgt_ai.v[zgt_i];\n"
+
+	frz := c_frz_push(em, iter)
+	out = out + c_loop_block(em, body, in2 + "    ")
+	c_frz_pop(em, frz, iter)
+	out = out + in2 + "}\n"
+	c_scope_close(em, outer_scope)
+	c_scope_forget(em, keep)
+	return out + in2 + f"zrt_unwind_to({mark});\n" + ind + "}\n"
+}
+
+# c_arr_fill is `[v; N]` in an array position: one evaluation, then N - 1 copies.
+fn c_arr_fill(mut &em: Emitter, want: ast.Ty, et: ast.Ty, e: ast.Expr, n: int) -> str {
+	ct := c_type(et)
+	fv := c_tmp(em, "zgt_af")
+	mut out := f"({{ {ct} {fv} = " + c_fit_copied(em, c_into_says(want), et, c_fill_value(e), c_nosub()) + "; "
+	out = out + f"({c_type(want)}){{{{"
+	mut i := 0
+	for i < n {
+		if i > 0 {
+			out = out + ", "
+		}
+		mut src := fv
+		if i > 0 and c_needs_copy(em, et) {
+			src = c_copy_of(em, et, fv)
+		}
+		out = out + src
+		i = i + 1
+	}
+	return out + "}}; })"
+}
+
+fn c_is_fill(e: ast.Expr) -> bool {
+	return match e {
+		Expr.EFill(_, _) => true
+		_ => false
+	}
+}
+
+fn c_fill_value(e: ast.Expr) -> ast.Expr {
+	return match e {
+		Expr.EFill(v, _) => v
+		_ => e
+	}
+}
+
+# --- structural rendering (docs/runtime/format.md) ----------------------------------------
+#
+# `debug` IS DEFINED STRUCTURALLY — a sum by tag-then-payload, a product by its fields — and
+# `display` defaults to it, so one generator answers `print x`, `str(x)`, `f"{x}"` and the two
+# methods. It is the COMPILER'S, keyed on structure, exactly as `#[derive(Eq)]` is: there is no
+# auto-implemented `Object` spec and this adds none (docs/core/specs.md).
+#
+# THE SPELLINGS ARE THE LANGUAGE'S OWN. A composite renders as the literal a reader would
+# write for it — `[1, 2]`, `{"k": 1}`, `(1, "x")`, `P(x: 1, y: "a")`, `E.B(3)` — with one
+# difference that is the whole point of a debug rendering: a `str` INSIDE one is quoted and
+# escaped, because `["a, b"]` and `["a", "b"]` are two different lists.
+#
+# A USER OVERRIDE STILL WINS. c_render_override is asked first at every site, so a type that
+# declares `display` or `debug` renders through it and its parts are rendered by whatever they
+# themselves declare — the generator recurses through the same dispatch, not around it.
+
+# c_render_of is the rendering of one value: the override if the type declares one, the
+# structural renderer if it has parts, and the scalar spelling otherwise.
+fn c_render_of(mut &em: Emitter, t: ast.Ty, inner: str, quoted: bool) -> str {
+	if meth := c_render_override(em, t) {
+		return f"{c_fn_cname(c_named_of(t), meth)}({inner})" if meth != ""
+		return "\"\""
+	}
+
+	# A `str` IS THE ONE TYPE THAT READS DIFFERENTLY IN THE TWO VIEWS: on its own it is its
+	# own text, and inside a composite it is quoted. That is the only place the two renderings
+	# part, which is why it rides as a flag rather than as a second walk.
+	if c_is_str(t) {
+		em.used_rt = true
+		return f"zrt_debug_str({inner})" if quoted
+		return f"zrt_str_retain({inner})"
+	}
+
+	return f"{c_render_fn(em, t)}({inner})" if c_has_parts(em, t)
+	return c_display(t, inner)
+}
+
+# c_has_parts is the class the generator answers for: a value made OF other values. An
+# identity has none (a channel, a function value), and a scalar is its own rendering.
+fn c_has_parts(mut &em: Emitter, t: ast.Ty) -> bool {
+	return c_is_list(t) or c_is_map(t) or c_is_tuple(t) or c_is_arr(t) or c_is_carrier(t) or c_is_enum_ty(em, t) or c_is_struct_name(em, c_named_of(t))
+}
+
+# c_render_fn names the generated renderer for one shape and emits it once. The PARTS go
+# first, depth first, for the reason a typedef's do: the function about to be written calls
+# theirs by name.
+fn c_render_fn(mut &em: Emitter, t: ast.Ty) -> str {
+	name := "zg_render_" + c_render_key(em, t)
+	for n in em.rnd_names {
+		return name if n == name
+	}
+
+	em.rnd_names.append(name)
+	em.used_rt = true
+	em.used_str = true
+	em.rnd_decls.append(c_render_body(em, name, t))
+	return name
+}
+
+# c_render_key is the shape's identity, and it is the ZERG type's name rather than the C one.
+# Every list is `zrt_list` in C, so a key read off c_type gave `list[int]` and `list[list[int]]`
+# one renderer — and the outer one then recursed into itself, rendering nonsense for a nested
+# composite. What a renderer is keyed on is what it renders, which is the Zerg type.
+fn c_render_key(mut &em: Emitter, t: ast.Ty) -> str {
+	mut out: list[byte] = []
+	for c in bytearray(ast.ty_name(t)) {
+		if ascii.is_alpha(c) or ascii.is_digit(c) or c == b'_' {
+			out.append(c)
+		} else {
+			out.append(b'_')
+		}
+	}
+	return str(out)
+}
+
+fn c_render_body(mut &em: Emitter, name: str, t: ast.Ty) -> str {
+	head := f"static const char *{name}({c_type(t)} v) {{\n"
+
+	return head + c_render_list_body(em, t) + "}\n\n" if c_is_list(t) or c_is_arr(t)
+	return head + c_render_map_body(em, t) + "}\n\n" if c_is_map(t)
+	return head + c_render_tuple_body(em, t) + "}\n\n" if c_is_tuple(t)
+	return head + c_render_carrier_body(em, t) + "}\n\n" if c_is_carrier(t)
+	return head + c_render_enum_body(em, c_named_of(t)) + "}\n\n" if c_is_enum_ty(em, t)
+
+	return head + c_render_struct_body(em, c_named_of(t)) + "}\n\n"
+}
+
+# A SEQUENCE RENDERS AS ITS LITERAL, `[a, b]`, and the two sequences share this body: what
+# differs is where the length comes from and how a slot is reached, which is two lines.
+fn c_render_list_body(mut &em: Emitter, t: ast.Ty) -> str {
+	arr := c_is_arr(t)
+	mut et := ast.Ty.TUnknown
+	if arr {
+		et = c_arr_elem(t)
+	} else {
+		et = c_list_elem(t)
+	}
+
+	mut n := "zrt_list_len(&v)"
+	mut slot := f"(*({c_type(et)}*)zrt_list_at_ref(&v, i))"
+	if arr {
+		n = strconv.to_string(c_arr_len(t), 10)
+		slot = "v.v[i]"
+	}
+
+	mut out := "    const char *s = zrt_str_dup(\"[\");\n"
+	out = out + f"    for (size_t i = 0; i < (size_t)({n}); i++) {{\n"
+	out = out + "        if (i > 0) { s = zrt_str_concat(s, \", \"); }\n"
+	out = out + f"        s = zrt_str_concat(s, {c_render_of(em, et, slot, true)});\n"
+	out = out + "    }\n"
+	return out + "    return zrt_str_concat(s, \"]\");\n"
+}
+
+# A MAP RENDERS AS ITS LITERAL, `{k: v}`, in INSERTION ORDER — the order the language pins for
+# walking one (docs/code/collections.md), so a rendering that used any other would disagree
+# with the loop a reader writes to check it.
+fn c_render_map_body(mut &em: Emitter, t: ast.Ty) -> str {
+	kt := c_map_key_ty(t)
+	vt := c_map_val_ty(t)
+	ks := f"(*({c_type(kt)}*)zrt_map_key_at(&v, i))"
+	vs := f"(*({c_type(vt)}*)zrt_map_val_at(&v, i))"
+
+	mut out := "    const char *s = zrt_str_dup(\"{\");\n"
+	out = out + "    for (size_t i = 0; i < zrt_map_len(&v); i++) {\n"
+	out = out + "        if (i > 0) { s = zrt_str_concat(s, \", \"); }\n"
+	out = out + f"        s = zrt_str_concat(s, {c_render_of(em, kt, ks, true)});\n"
+	out = out + "        s = zrt_str_concat(s, \": \");\n"
+	out = out + f"        s = zrt_str_concat(s, {c_render_of(em, vt, vs, true)});\n"
+	out = out + "    }\n"
+	return out + "    return zrt_str_concat(s, \"}\");\n"
+}
+
+fn c_render_tuple_body(mut &em: Emitter, t: ast.Ty) -> str {
+	es := ast.ty_tuple_elems(t)
+	mut out := "    const char *s = zrt_str_dup(\"(\");\n"
+	mut i := 0
+	for i < es.len() {
+		if i > 0 {
+			out = out + "    s = zrt_str_concat(s, \", \");\n"
+		}
+		out = out + f"    s = zrt_str_concat(s, {c_render_of(em, es[i], f"v.f{strconv.to_string(i, 10)}", true)});\n"
+		i = i + 1
+	}
+	return out + "    return zrt_str_concat(s, \")\");\n"
+}
+
+# A CARRIER RENDERS WHAT IT HOLDS, and an absent optional renders `nil` — the word the program
+# would have written. An `Either` is a sum, so it renders by tag then payload like any other.
+fn c_render_carrier_body(mut &em: Emitter, t: ast.Ty) -> str {
+	if ast.ty_is_opt(t) {
+		el := c_opt_elem(t)
+		out := "    if (v.tag != 0) { return zrt_str_dup(\"nil\"); }\n"
+		return out + f"    return {c_render_of(em, el, "v.ok", true)};\n"
+	}
+
+	lt := c_either_left(t)
+	rt := c_either_right(t)
+	mut out := "    if (v.tag != 0) {\n"
+	out = out + f"        return zrt_str_concat(zrt_str_dup(\"Right(\"), zrt_str_concat({c_render_of(em, rt, "v.err", true)}, \")\"));\n"
+	out = out + "    }\n"
+	return out + f"    return zrt_str_concat(zrt_str_dup(\"Left(\"), zrt_str_concat({c_render_of(em, lt, "v.ok", true)}, \")\"));\n"
+}
+
+# A SUM RENDERS BY TAG THEN PAYLOAD: `E.A` for a variant that carries nothing, `E.B(3)` for one
+# that does — which is what a reader would have written to construct it.
+fn c_render_enum_body(mut &em: Emitter, en: str) -> str {
+	mut out := "    switch (v.tag) {\n"
+	mut i := 0
+	for i < em.var_name.len() {
+		if em.var_enum[i] == en {
+			vn := em.var_name[i]
+			out = out + "    case " + strconv.to_string(em.var_tag[i], 10) + ":\n"
+			out = out + f"        return {c_render_variant(em, en, vn)};\n"
+		}
+		i = i + 1
+	}
+	return out + "    default: break;\n    }\n    return zrt_str_dup(\"" + en + "\");\n"
+}
+
+fn c_render_variant(mut &em: Emitter, en: str, vn: str) -> str {
+	mut ps: list[str] = []
+	mut i := 0
+	for i < em.vf_variant.len() {
+		if em.vf_enum[i] == en and em.vf_variant[i] == vn {
+			ty := em.vf_ty[i]
+			mut slot := f"v.u.{vn}.f{strconv.to_string(em.vf_index[i], 10)}"
+
+			# A BOXED PAYLOAD IS A POINTER — the auto-boxing a self-recursive enum gets — so
+			# the value is read back out of the cell before it is rendered.
+			if em.vf_boxed[i] {
+				slot = f"(*({c_type(ty)}*)zrt_ref_payload({slot}))"
+			}
+			ps.append(c_render_of(em, ty, slot, true))
+		}
+		i = i + 1
+	}
+
+	lit := f"zrt_str_dup(\"{en}.{vn}\")"
+	return lit if ps.len() == 0
+
+	mut out := f"zrt_str_concat({lit}, \"(\")"
+	mut j := 0
+	for j < ps.len() {
+		if j > 0 {
+			out = f"zrt_str_concat({out}, \", \")"
+		}
+		out = f"zrt_str_concat({out}, {ps[j]})"
+		j = j + 1
+	}
+	return f"zrt_str_concat({out}, \")\")"
+}
+
+# A PRODUCT RENDERS BY ITS FIELDS, named: `P(x: 1, y: "a")` is the constructor a reader would
+# write with the names a reader would have to count without.
+fn c_render_struct_body(mut &em: Emitter, sn: str) -> str {
+	mut out := f"    const char *s = zrt_str_dup(\"{sn}(\");\n"
+	mut first := true
+	mut i := 0
+	for i < em.fld_struct.len() {
+		if em.fld_struct[i] == sn {
+			if not first {
+				out = out + "    s = zrt_str_concat(s, \", \");\n"
+			}
+			first = false
+			fnm := em.fld_name[i]
+			out = out + f"    s = zrt_str_concat(s, \"{fnm}: \");\n"
+			out = out + f"    s = zrt_str_concat(s, {c_render_of(em, em.fld_ty[i], f"v.zg_{fnm}", true)});\n"
+		}
+		i = i + 1
+	}
+	return out + "    return zrt_str_concat(s, \")\");\n"
+}
+
+# --- an f-string hole with a tail (GRAMMAR#interp) ----------------------------------------
+#
+# `{ expr =? !conv? :spec? }` — the `=` is spliced at the parse, and the other two land here,
+# because both need the value's TYPE and the parser that reads the hole has not got one.
+#
+# THE CONVERSION PICKS THE VIEW and the spec formats what it produced. `!s` is `display`,
+# which is what a bare hole already uses; `!r` is the developer `debug`, which differs from
+# display in exactly one place — a `str` renders quoted — and `!a` is that same debug with
+# every non-ASCII byte escaped.
+#
+# THE SPEC IS READ BY THE VALUE'S OWN TYPE where the language gives it one: a number reads
+# `[[fill]align][sign][#][0][width][.prec][type]` as a NUMBER, so `{n:04d}` is zero-padded
+# rather than a padded rendering of its text. Everything else is rendered first and then read
+# as text, which is what `zrt_fmt_str` is — and it is also why a conversion overrides that: a
+# value asked for a VIEW has already become text by the time the spec sees it.
+fn c_fmt_hole(mut &em: Emitter, x: ast.Expr, conv: str, fspec: str, sb: Subst) -> str {
+	t := c_infer(em, x)
+	c_display_check(em, t, "this rendering")
+	em.used_rt = true
+	em.used_str = true
+
+	c_fmt_spec_type(em, t, conv, fspec)
+
+	return f"{c_fmt_num_fn(t)}({c_expr(em, x, sb)}, {c_str_lit(fspec)})" if conv == "" and fspec != "" and c_fmt_is_number(t)
+
+	text := c_render_of(em, t, c_expr(em, x, sb), conv == "r" or conv == "a")
+	mut out := text
+	if conv == "a" {
+		out = f"zrt_ascii_escape({out})"
+	}
+	return out if fspec == ""
+
+	return f"zrt_fmt_str({out}, {c_str_lit(fspec)})"
+}
+
+# c_fmt_spec_type holds a spec's TYPE LETTER to what the value can render as. Both halves are
+# in the source — the spec is a literal and the type is inferred — so a program the runtime
+# would always end the same way is refused here instead. The sentences are the runtime's own,
+# because they are answers to the same question asked one stage earlier.
+fn c_fmt_spec_type(mut &em: Emitter, t: ast.Ty, conv: str, fspec: str) {
+	says := c_fmt_spec_says(t, conv, c_fmt_spec_letter(fspec))
+	if says != "" {
+		check.chk_at(em, rule.Rule.FStringSpecType, says)
+	}
+}
+
+# c_fmt_spec_says is why this letter is wrong for this value, or "" when it is not. It is ONE
+# sentence-maker and one raise site, which is what keeps the three readings one rule: a code is
+# an identity, and three raises under it would be three rules wearing one number.
+fn c_fmt_spec_says(t: ast.Ty, conv: str, c: byte) -> str {
+	return "" if c == b'\0'
+
+	# A CONVERSION HAS ALREADY MADE IT TEXT, so the spec that follows one is a str's whatever
+	# the value was — which is the same order the lowering runs in.
+	if conv != "" or not c_fmt_is_number(t) {
+		return "" if c == b's'
+
+		return "a str renders as `s`, and a format spec asked for another"
+	}
+
+	if c_is_float(t) {
+		return "" if c_fmt_float_letter(c)
+
+		return "a float renders as `e`, `f` or `g` (in either case), and a format spec asked for another"
+	}
+	return "" if c_fmt_int_letter(c)
+
+	return "an int renders as `b`, `o`, `x`, `X`, `c` or `d`, and a format spec asked for another"
+}
+
+# c_fmt_spec_letter is the spec's trailing TYPE letter, or NUL for a spec that names none. A
+# width and a precision end in digits and a fill character is not last, so the last byte being
+# a letter is the whole of the question.
+fn c_fmt_spec_letter(fspec: str) -> byte {
+	b := bytearray(fspec)
+	return b'\0' if b.len() == 0
+
+	c := b[b.len() - 1]
+	return c if ascii.is_alpha(c)
+
+	return b'\0'
+}
+
+fn c_fmt_int_letter(c: byte) -> bool {
+	return c == b'b' or c == b'o' or c == b'x' or c == b'X' or c == b'c' or c == b'd'
+}
+
+fn c_fmt_float_letter(c: byte) -> bool {
+	return c == b'e' or c == b'E' or c == b'f' or c == b'F' or c == b'g' or c == b'G'
+}
+
+fn c_fmt_is_number(t: ast.Ty) -> bool {
+	return c_is_int(t) or c_is_uint(t) or c_is_float(t) or c_is_byte(t) or c_is_rune(t)
+}
+
+fn c_fmt_num_fn(t: ast.Ty) -> str {
+	return "zrt_fmt_float" if c_is_float(t)
+	return "zrt_fmt_uint" if c_is_uint(t) or c_is_byte(t)
+
+	return "zrt_fmt_int"
+}
+
+# c_into_says names the slot for the length message. A declared binding, an argument and a
+# field all reach c_into with only the TYPE in hand, so the sentence names the type — which is
+# the half the reader has to change anyway.
+fn c_into_says(want: ast.Ty) -> str {
+	return f"a {ast.ty_name(want)} slot"
+}
+
+# c_arr_lit builds `[T; N]` out of a list literal in an array position. The ELEMENTS are each
+# a typed position of their own, exactly as a list literal's are, so a literal element adopts
+# the array's element type rather than the first element's.
+fn c_arr_lit(mut &em: Emitter, where: str, want: ast.Ty, e: ast.Expr) -> str {
+	et := c_arr_elem(want)
+	elems := c_elem_exprs(em, e, et)
+	n := c_arr_len(want)
+	if elems.len() != n {
+		check.chk_at(em, rule.Rule.ArrayLitLen, f"{where} takes {strconv.to_string(n, 10)} element(s) and this literal has {strconv.to_string(elems.len(), 10)} — an array's length is part of its type, so the two have to agree")
+		return "{0}"
+	}
+
+	c_spelled_register(em, want)
+
+	# THE FILL FORM EVALUATES `v` ONCE (docs/code/collections.md): `[f(); 4]` is four copies of
+	# one value, not four calls. The list's own fill says so with a temporary, and an array
+	# would otherwise render the expression once per slot, because a fill's elements are the
+	# same expression repeated.
+	return c_arr_fill(em, want, et, e, n) if c_is_fill(e) and n > 1
+
+	mut out := f"({c_type(want)}){{{{"
+	mut i := 0
+	for i < elems.len() {
+		if i > 0 {
+			out = out + ", "
+		}
+		out = out + elems[i]
+		i = i + 1
+	}
+	return out + "}}"
+}
+
+# --- the fixed-size array (GRAMMAR#array-type) -------------------------------------------
+#
+# `[T; N]` is a C STRUCT WRAPPING AN ARRAY, and not a bare `T[N]`: a bare one is not a value in
+# C — it cannot be assigned, returned, or passed without decaying to a pointer — and every rule
+# the language states about an array is a rule about a VALUE. Wrapped, it assigns, returns and
+# passes by value for free, which is the whole of copy-by-value for a POD element.
+#
+# It is the tuple's machinery with a loop where the tuple has a list: one shape per (element,
+# length), the name a pure function of both so `c_type` can spell it with no Emitter to ask,
+# and a copy/drop pair emitted only when the element owes one.
+
+# c_arr_cname is the C name of `[T; N]`. It is pure, for the reason c_tuple_cname is: c_type
+# has to be able to spell it, and one shape must get one name in every translation unit.
+pub fn c_arr_cname(e: ast.Ty, n: str) -> str {
+	return f"zga_{c_ident_safe(c_type(e))}_{n}"
+}
+
+# c_arr_decl registers one array shape and answers its declaration text, or "" for a shape
+# already out. The ELEMENT goes first, depth first, exactly as a tuple's does: a typedef
+# spelling `zgt_tup_…` or a carrier needs that name written above it.
+fn c_arr_decl(mut &em: Emitter, t: ast.Ty) -> str {
+	e := c_arr_elem(t)
+	key := c_arr_key(t)
+	out := c_spelled_pre(em, e)
+	name := c_arr_cname(e, key)
+	for n in em.arr_names {
+		return out if n == name
+	}
+
+	em.arr_names.append(name)
+	decl := f"typedef struct {{ {c_type(e)} v[{key}]; }} {name};\n"
+	mut helpers := ""
+	if c_needs_copy(em, e) {
+		helpers = c_arr_helpers(em, name, e, key) + c_elem_vt_helper(em, t)
+	}
+	return out + decl + helpers
+}
+
+# c_arr_helpers is the tuple's copy/drop pair over a loop. An array of a POD element needs
+# neither — the struct assignment IS the copy — and one whose element owns something needs both,
+# for the same reason a tuple holding a list does: without them the copy's slots named the
+# source's buffers.
+fn c_arr_helpers(mut &em: Emitter, name: str, e: ast.Ty, key: str) -> str {
+	mut out := f"static {name} {name}_copy({name} v) {{\n    {name} r = v;\n"
+	out = out + f"    for (int64_t i = 0; i < {key}; i++) {{ r.v[i] = " + c_copy_of(em, e, "v.v[i]") + f"; }}\n"
+	out = out + "    return r;\n}\n"
+
+	out = out + f"static void {name}_drop({name} *v) {{\n"
+	out = out + f"    for (int64_t i = {key} - 1; i >= 0; i--) {{ " + c_drop_stmt(em, e, "v->v[i]") + f" }}\n"
+	return out + "}\n"
+}
+
+pub fn c_is_arr(t: ast.Ty) -> bool {
+	return match t {
+		Ty.TArr(_, _) => true
+		_             => false
+	}
+}
+
+pub fn c_arr_elem(t: ast.Ty) -> ast.Ty {
+	return match t {
+		Ty.TArr(e, _) => e
+		_             => ast.Ty.TUnknown
+	}
+}
+
+pub fn c_arr_key(t: ast.Ty) -> str {
+	return match t {
+		Ty.TArr(_, n) => n
+		_             => "0"
+	}
+}
+
+# c_arr_len is an array's length as a number. Every key this compiler builds is decimal digits
+# — a name is refused at the type (E9111) — so the fold cannot fail, and -1 would be a shape
+# nothing constructs rather than a length to guard against.
+pub fn c_arr_len(t: ast.Ty) -> int {
+	return ast.ty_arr_len(c_arr_key(t))
 }
 
 fn c_tuple_cname(tys: list[ast.Ty]) -> str {
@@ -13412,6 +14499,16 @@ fn c_field_ty_of(mut &em: Emitter, target: ast.Expr, fld: str) -> ast.Ty {
 		return em.k_tys[ki] if ki >= 0
 	}
 
+	# `P.LIMIT` — an ASSOCIATED VALUE has the type its declaration gives it, and asking here is
+	# what carries that to the reader. Without it the lowering was right and the TYPE was `int`
+	# for everything: `print P.NAME` on a `str` printed the pointer as a number, which is the
+	# silent wrong answer this compiler's whole contract is against.
+	tn := c_ident_name(target)
+	if tn != "" and c_is_struct_name(em, tn) {
+		ki := c_k_idx(em, f"{tn}.{fld}")
+		return em.k_tys[ki] if ki >= 0
+	}
+
 	t := c_infer(em, target)
 	if c_is_tuple(t) and c_all_digits(fld) {
 		ts := c_tuple_tys(t)
@@ -13465,6 +14562,23 @@ fn c_fieldref(mut &em: Emitter, target: ast.Expr, fld: str, sb: Subst) -> str {
 	# statements about a program the language rejects, not forms this compiler has not built;
 	# the C built after a finding is thrown away, which is what lets the walk carry on.
 	tn := c_ident_name(target)
+
+	# `P.LIMIT` — a name qualified by a STRUCT, which is where an associated value lives
+	# (GRAMMAR#val-bind). It is looked up by its full spelling: an associated value never joins
+	# the flat name space, so `P.LIMIT` is the only way to reach it and a bare `LIMIT` beside it
+	# is a different constant.
+	#
+	# THE FALL-THROUGH WAS AN ESCAPE TO cc. Without this arm the type name lowered as a VALUE
+	# and `P.LIMIT` became `zg_P.zg_LIMIT` — a member of a type — which cc reported as
+	# `expected ')'` against a line nobody wrote. That is the one thing the standing contract
+	# has no room for, and it was reachable for every struct in the language.
+	if tn != "" and c_is_struct_name(em, tn) {
+		qn := f"{tn}.{fld}"
+		return c_ident_val(em, qn, sb) if c_is_bound(em, qn)
+
+		raise c_diag(em, rule.Rule.NoAssociatedValue, f"`{tn}` has no associated value `{fld}` — a type is not a value, so `{tn}.{fld}` reads one an `impl {tn}` declares with `{fld} := …`")
+	}
+
 	if tn != "" and c_is_enum_name(em, tn) {
 		if c_is_variant(em, fld) {
 			check.chk_at(em, rule.Rule.VariantOfOtherEnum, f"`{fld}` is a variant of `{c_variant_enum(em, fld)}`, not of `{tn}`")
@@ -13609,7 +14723,7 @@ fn c_tuple_tys(t: ast.Ty) -> list[ast.Ty] {
 # gate could not pin it and a reader was told what a range is NOT good for without being
 # told where they had written one.
 fn c_range_unsupported(mut &em: Emitter) -> str {
-	raise c_diag(em, rule.Rule.NotYetRangeAsValue, "NotImplemented: a range used as a value — `x..y` is a `for … in` iterable and a membership test (`v in x..y`) so far, and there is no Range value to bind, pass or return")
+	raise c_diag(em, rule.Rule.NotYetRangeAsValue, "NotImplemented: a range used as a value — `x..y` is a `for … in` iterable and a membership test (`v in x..y`) so far, and there is no Range value to bind, pass or return (GRAMMAR#range-expr)")
 }
 
 fn c_is_range(e: ast.Expr) -> bool {
@@ -13833,8 +14947,10 @@ fn c_forin(mut &em: Emitter, var: str, iter: ast.Expr, body: list[ast.Stmt], ind
 	# TUnknown, and the first USE of `x` reported "undefined name `x`". The loop variable was
 	# blamed for the thing being walked: a sentence about the consequence, naming the one part
 	# of the line that is fine.
+	return c_forarr(em, var, iter, ct, body, ind) if c_is_arr(ct)
+
 	if not c_is_list(ct) and not c_is_unknown(ct) {
-		check.chk_at(em, rule.Rule.NotIterable, f"`for … in` walks a list, a map, a str, a range or a channel, and {ast.ty_name(ct)} is not iterable")
+		check.chk_at(em, rule.Rule.NotIterable, f"`for … in` walks a list, an array, a map, a str, a range or a channel, and {ast.ty_name(ct)} is not iterable")
 	}
 
 	elem := c_list_elem(ct)
@@ -14249,6 +15365,17 @@ fn c_print(mut &em: Emitter, e: ast.Expr, ind: str) -> str {
 	# reader does not see coming — there is no two-argument `print`, so it builds a TUPLE
 	# and prints that. c_display_check is the same refusal `str(…)` already makes.
 	c_display_check(em, ty, "`print`")
+
+	# A COMPOSITE RENDERS STRUCTURALLY, and its rendering is a FRESH cell like an f-string's:
+	# built here, shown, and given back on the same line, because nothing else will ever name
+	# it. The arm below used to cast a struct, a list or a tuple to `long long` for cc to
+	# report — `print(a, b)` is the way into that a reader does not see coming, since there is
+	# no two-argument `print` and the pair builds a tuple.
+	if c_has_parts(em, ty) {
+		em.used_rt = true
+		return f"{ind}{{ const char* zgt_ps = {c_render_of(em, ty, c_expr(em, e, c_nosub()), false)}; printf(\"%s\\n\", zgt_ps); zrt_str_release(zgt_ps); }}\n"
+	}
+
 	ex := c_expr(em, e, c_nosub())
 
 	# A FRESH string is nobody's: `print f"{x}"` builds a cell, shows it, and had nothing
@@ -15366,6 +16493,109 @@ fn c_declares_spec(prog: ast.File, name: str) -> bool {
 # field. What comes back is an ordinary ImplDecl, so it registers in the method namespace,
 # meets the duplicate-impl check, and emits — with nothing downstream knowing it was derived.
 
+# c_spec_subst turns a type written in a SPEC into the type it means for one `impl`.
+#
+# Two things in a required signature are not concrete types yet. `This` is the implementing
+# type — inside an `impl` the parser already resolves it (parser.zg), so the supplied
+# signature holds the target and the required one must be brought to meet it. And a
+# parameterized spec's own `K` is whatever `impl Ix[int]` bound it to, which is why the
+# impl's type arguments are kept rather than skipped.
+pub fn c_spec_subst(t: ast.Ty, sp: ast.SpecDecl, ip: ast.ImplDecl) -> ast.Ty {
+	return match t {
+		Ty.TNamed(n) => c_subst_named(n, sp, ip)
+		Ty.TList(e) => ast.Ty.TList(c_spec_subst(e, sp, ip))
+		Ty.TOpt(e) => ast.Ty.TOpt(c_spec_subst(e, sp, ip))
+		Ty.TMap(k, v) => ast.Ty.TMap(c_spec_subst(k, sp, ip), c_spec_subst(v, sp, ip))
+		Ty.TChan(e, d) => ast.ty_chan(c_spec_subst(e, sp, ip), d, "\n" + ast.place_line(ip.path, ip.line, ip.col))
+		Ty.TEither(l, r) => ast.Ty.TEither(c_spec_subst(l, sp, ip), c_spec_subst(r, sp, ip))
+		Ty.TTuple(es) => ast.Ty.TTuple(c_subst_all(es, sp, ip))
+		Ty.TFn(ps, r) => ast.Ty.TFn(c_subst_all(ps, sp, ip), c_spec_subst(r, sp, ip))
+		_ => t
+	}
+}
+
+fn c_subst_named(n: str, sp: ast.SpecDecl, ip: ast.ImplDecl) -> ast.Ty {
+	return ast.Ty.TNamed(ip.target) if n == "This"
+
+	mut i := 0
+	for i < sp.params.len() {
+		# an argument the impl did not give leaves the parameter as it stands, so the
+		# mismatch is reported about the type the reader wrote rather than about a
+		# substitution that did not happen
+		return ip.args[i] if sp.params[i] == n and i < ip.args.len()
+
+		i = i + 1
+	}
+	return ast.Ty.TNamed(n)
+}
+
+fn c_subst_all(ts: list[ast.Ty], sp: ast.SpecDecl, ip: ast.ImplDecl) -> list[ast.Ty] {
+	mut out: list[ast.Ty] = []
+	for t in ts {
+		out.append(c_spec_subst(t, sp, ip))
+	}
+	return out
+}
+
+# --- a spec's PROVIDED members (GRAMMAR#spec-member) ---------------------------------------
+#
+# `spec-member ::= fn-sig | fn-decl`: a member with a body is a DEFAULT, and an `impl` that
+# leaves it out gets that body rather than owing one. The expansion is what makes that true —
+# it seats the spec's declaration on the target as an ordinary method, so from here down the
+# default is indistinguishable from one the implementer wrote, and the requirement check, the
+# method namespace and the lowering all see it without knowing where it came from.
+#
+# IT IS DRIVEN BY THE UNIT'S OWN `impl` LIST, exactly as `derive` is driven by the unit's own
+# decorators. An impl is written in one unit, so the body is defined once; expanding over the
+# whole program instead would define `zg_P_hello` in every unit that can see the impl.
+
+# c_with_spec_defaults adds `one`'s missing default methods, reading the specs of `prog`.
+pub fn c_with_spec_defaults(prog: ast.File, one: ast.File) -> ast.File {
+	mut out := one
+	for ip in one.impls {
+		at := c_derive_spec_at(prog, ip.on)
+		continue if at < 0
+
+		sp := prog.specs[at]
+		for req in sp.reqs {
+			continue if not req.has_body
+
+			# AGAINST `one` AND NOT `prog`: a method is written in the same unit as its
+			# `impl` — the parser flattens the block into that file's functions — so the
+			# unit's own list is the honest answer to "did the implementer supply it".
+			# Asking the whole program instead made the second view find the FIRST view's
+			# generated default and skip it, so the body was declared and never defined.
+			continue if c_method_defined(one, ip.target, req.name)
+
+			out.fns.append(c_default_method(sp, ip, req))
+		}
+	}
+	return out
+}
+
+# c_with_spec_defaults_self is the whole-program view: every impl in it is its own unit's.
+pub fn c_with_spec_defaults_self(prog: ast.File) -> ast.File {
+	return c_with_spec_defaults(prog, prog)
+}
+
+fn c_method_defined(prog: ast.File, target: str, name: str) -> bool {
+	for fnd in prog.fns {
+		return true if fnd.recv == target and fnd.name == name
+	}
+	return false
+}
+
+# c_default_method is the spec's declaration seated on one target: the same body, with `This`
+# and the spec's own parameters resolved through the impl. The PLACE stays the spec's, because
+# that is where the body is written and so where a diagnostic about it belongs.
+fn c_default_method(sp: ast.SpecDecl, ip: ast.ImplDecl, req: ast.FnDecl) -> ast.FnDecl {
+	mut ps: list[ast.Param] = []
+	for pm in req.params {
+		ps.append(ast.Param(pm.name, c_spec_subst(pm.ty, sp, ip), pm.is_ref, pm.has_def, pm.def))
+	}
+	return ast.FnDecl(req.name, ip.target, ps, req.has_ret, c_spec_subst(req.ret, sp, ip), req.body, req.is_pub, req.path, req.line, req.col, req.tparams, req.tbounds, req.in_unsafe, false, false, true, false)
+}
+
 # c_with_derived expands every `#[derive(…)]` into the impl it stands for.
 pub fn c_with_derived(prog: ast.File) -> ast.File {
 	mut out := prog
@@ -15399,8 +16629,9 @@ pub fn c_with_derived(prog: ast.File) -> ast.File {
 fn c_derive_src(prog: ast.File, target: str, nm: str) -> str {
 	return c_obj_src(prog, target) if nm == "#obj"
 
-	raise c_derive_diag(prog, target, rule.Rule.NotYetDerive, f"NotImplemented: `#[derive({nm})]` — this compiler derives `Eq`; `Ord`, `Hash`, `Encode` and `Decode` are specified and unbuilt") if nm == "Ord" or nm == "Hash" or nm == "Encode" or nm == "Decode"
+	raise c_derive_diag(prog, target, rule.Rule.NotYetDerive, f"NotImplemented: `#[derive({nm})]` — this compiler derives `Eq`; `Ord`, `Hash`, `Encode` and `Decode` are specified and unbuilt (docs/core/derive.md)") if nm == "Ord" or nm == "Hash" or nm == "Encode" or nm == "Decode"
 	return c_derive_eq(prog, target) if nm == "Eq"
+	return c_derive_from(prog, target) if nm == "From"
 
 	# A `spec` YOU WROTE, on an ENUM. The two halves of `derive` answer to different rules
 	# and the difference is where the generated code comes from: on a struct it is read out
@@ -15541,6 +16772,50 @@ fn c_derive_diag(prog: ast.File, target: str, code: rule.Rule, msg: str) -> str 
 	return c_diag_at("", 0, 0, code, msg)
 }
 
+# c_derive_from writes what `#[derive(From)]` on an error enum stands for: the conversion each
+# variant implies, one `impl Into[E] for P` per payload.
+#
+# THIS IS THE WRAPPING THE LANGUAGE CHOSE TO COST. Zerg has no open error downcast; the answer
+# it took instead is a per-layer error enum, and what that answer costs is the wrapping written
+# by hand at every boundary. This derives it, so a layer's error becomes the caller's with
+# `e.into()` rather than a `match` written per variant.
+#
+# THE CONVERSION IS STILL WRITTEN. A position never converts (docs/core/types.md), so what this
+# generates is the conversion and not its application: `?` does not lift an error by itself,
+# and `into()` at the boundary is what does.
+#
+# A VARIANT WITH NO PAYLOAD IMPLIES NO CONVERSION and is skipped — there is nothing to convert
+# FROM. A variant with two implies none either, for the same reason read the other way: there
+# is no single type that is the source.
+fn c_derive_from(prog: ast.File, target: str) -> str {
+	at := c_derive_enum_at(prog, target)
+	raise c_derive_diag(prog, target, rule.Rule.DeriveFromNotEnum, f"cannot derive `From` for `{target}`: it wraps a VARIANT'S PAYLOAD into the enum that holds it, and `{target}` is not an enum") if at < 0
+
+	ed := prog.enums[at]
+	mut out := ""
+	mut seen: list[str] = []
+	for v in ed.variants {
+		continue if v.fields.len() != 1
+
+		src := ast.ty_name(v.fields[0])
+
+		# TWO VARIANTS OF ONE PAYLOAD TYPE ARE TWO CONVERSIONS FROM IT, and a type has one
+		# `Into` per destination — the method is keyed by name. Generating both would be a
+		# duplicate impl reported about code nobody wrote, so it is refused about the enum.
+		raise c_derive_diag(prog, target, rule.Rule.DeriveFromTwice, f"cannot derive `From` for `{target}`: `{v.name}` and an earlier variant both carry a `{src}`, and a type has one conversion to a destination — which of the two a `{src}` becomes is not something a derive may pick") if c_name_in(seen, src)
+
+		seen.append(src)
+		out = out + f"impl Into[{target}] for {src} {{\n\tfn into() -> {target} {{\n\t\treturn {target}.{v.name}(this)\n\t}}\n}}\n"
+	}
+
+	# NOTHING TO DERIVE IS A MISTAKE AND NOT A NO-OP. An enum whose variants carry nothing has
+	# no conversion to generate, and a decorator that generated nothing would read as one that
+	# worked.
+	raise c_derive_diag(prog, target, rule.Rule.DeriveFromNoPayload, f"cannot derive `From` for `{target}`: it wraps a variant's payload, and no variant of `{target}` carries exactly one") if out == ""
+
+	return out
+}
+
 fn c_derive_enum_at(prog: ast.File, target: str) -> int {
 	mut i := 0
 	for i < prog.enums.len() {
@@ -15660,7 +16935,7 @@ fn c_derive_fields(fields: list[ast.FieldDef]) -> str {
 # replace, and half of it is worse than none.
 fn c_derive_variants(ed: ast.EnumDecl, target: str) -> str {
 	for v in ed.variants {
-		raise c_diag_at(ed.path, ed.line, ed.col, rule.Rule.NotYetDeriveEq, f"NotImplemented: `#[derive(Eq)]` on `{target}` — it carries a payload (`{v.name}`), and this compiler derives equality for a fieldless enum, whose variants differ exactly as their discriminants do; write `impl Eq for {target}` with a `match`") if v.fields.len() > 0
+		raise c_diag_at(ed.path, ed.line, ed.col, rule.Rule.NotYetDeriveEq, f"NotImplemented: `#[derive(Eq)]` on `{target}` — it carries a payload (`{v.name}`), and this compiler derives equality for a fieldless enum, whose variants differ exactly as their discriminants do; write `impl Eq for {target}` with a `match` (docs/core/derive.md)") if v.fields.len() > 0
 	}
 	return "int(this) == int(o)"
 }
@@ -15714,7 +16989,7 @@ fn c_build_intos(mut &em: Emitter, f: ast.File) {
 			# than by name, which is also what would let `x.into()` written by hand say which
 			# one is meant. Named here, where the pair is in hand, rather than reported later
 			# as two methods with one name.
-			raise c_diag_at(ip.path, ip.line, ip.col, rule.Rule.NotYetSecondIntoImpl, f"NotImplemented: a second `impl Into[…] for {ip.target}` — this compiler keys a method by its NAME, so one type carries one `into`; the language allows several, and reaching that needs the method keyed by the spec and its arguments") if c_into_user_from(em, ip.target)
+			raise c_diag_at(ip.path, ip.line, ip.col, rule.Rule.NotYetSecondIntoImpl, f"NotImplemented: a second `impl Into[…] for {ip.target}` — this compiler keys a method by its NAME, so one type carries one `into`; the language allows several, and reaching that needs the method keyed by the spec and its arguments (GRAMMAR#impl-decl)") if c_into_user_from(em, ip.target)
 			em.into_src.append(ip.target)
 		}
 	}
@@ -15855,7 +17130,7 @@ fn c_emit_unit(prog0: ast.File, own0: ast.File, ms: Mods, whole: bool, want_lint
 	# first left `zg_ArgKind_eq` declared, called, and defined nowhere — a link error against
 	# a function the program never spells. Each expands from its own derive list, so the unit
 	# gets exactly the impls whose decorators are in it.
-	f0 := c_with_derived(c_with_builtin_specs(prog0))
+	f0 := c_with_spec_defaults_self(c_with_derived(c_with_builtin_specs(prog0)))
 
 	# THE FINDINGS SO FAR TRAVEL IN, in the `diags` slot. `chk_at_place` drops an exact repeat —
 	# same file, same line, same column, same sentence — so that one mistake earns one message;
@@ -15864,7 +17139,7 @@ fn c_emit_unit(prog0: ast.File, own0: ast.File, ms: Mods, whole: bool, want_lint
 	# is what makes that invariant hold for a multi-unit program, at the place it already lives,
 	# and it is what lets the declaration passes below go back to reading the WHOLE program.
 	seen := diags.len()
-	mut em := Emitter([], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], false, false, false, [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], 0, [], 0, [], [], false, "", "", [], [], ast.Ty.TVoid, 0, "", 0, 0, diags, 0, 0, [], [], [], [], [], false, 0, false, "", 0, false, false, [], want_lints, [], [], [], [], [], [], [], [], [], [], [], false, 0, [], [], "", c_nosub(), [], [], [], [], [], [], [], [], [])
+	mut em := Emitter([], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], false, false, false, [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], 0, [], 0, [], [], false, "", "", [], [], ast.Ty.TVoid, 0, "", 0, 0, diags, 0, 0, [], [], [], [], [], false, 0, false, "", 0, false, false, [], want_lints, [], [], [], [], [], [], [], [], [], [], [], [], false, 0, [], [], "", c_nosub(), [], [], [], [], [], [], [], [], [])
 
 	# ASSIGNED, NOT PASSED. Every argument above is a zero value, and `layering` asserts that
 	# — it lines the call up with the fields by KIND, which only works while nothing in it
@@ -15881,7 +17156,7 @@ fn c_emit_unit(prog0: ast.File, own0: ast.File, ms: Mods, whole: bool, want_lint
 	# in these passes and in any added later — `f.fns` holds functions only.
 	c_build_generics(em, f0)
 	f := c_without_templates(f0)
-	own := c_without_templates(c_with_derived(own0))
+	own := c_without_templates(c_with_spec_defaults(f0, c_with_derived(own0)))
 
 	# OVER `f0`, THE PROGRAM WITH ITS TEMPLATES STILL IN IT. A template is not a function
 	# to lower, which is what the removal above says, but it IS a name at the top level:
@@ -15955,6 +17230,7 @@ fn c_emit_unit(prog0: ast.File, own0: ast.File, ms: Mods, whole: bool, want_lint
 	# and the specs, which need the same whole-program view for the same reason: an `impl`
 	# in one file names a spec declared in another, and the driver has already merged them
 	check.chk_spec_impls(em, f)
+	check.chk_spec_defaults(em, f)
 
 	# and the rendering overrides: c_render_override dispatches through a `display` /
 	# `debug` method only when its shape is the contract's, so the mis-shaped one must be
@@ -16135,6 +17411,13 @@ fn c_emit_unit(prog0: ast.File, own0: ast.File, ms: Mods, whole: bool, want_lint
 		mvts = mvts + c_lowered(checking, d)
 	}
 
+	# THE STRUCTURAL RENDERERS go here too, and for the same reason: one may call a type's
+	# `display` override, which is a program function the prototypes above declare.
+	mut rnds := ""
+	for d in em.rnd_decls {
+		rnds = rnds + c_lowered(checking, d)
+	}
+
 	# the defer thunks go AFTER the prototypes — each one calls a program function — and
 	# before the bodies that schedule them
 	mut dfns := ""
@@ -16169,5 +17452,5 @@ fn c_emit_unit(prog0: ast.File, own0: ast.File, ms: Mods, whole: bool, want_lint
 	# lowering step, so it is the one c_lowered never sees. A check-only walk returns
 	# the empty string, not a file with nothing but includes in it.
 	return "" if checking
-	return f"{hdr}{types}{ress}{mvts}{globals}{protos}\n{dfns}{lams}{defs}{mainw}"
+	return f"{hdr}{types}{ress}{mvts}{globals}{protos}\n{rnds}{dfns}{lams}{defs}{mainw}"
 }

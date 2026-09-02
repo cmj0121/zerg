@@ -95,14 +95,22 @@ q := new_query().where("age > 18").order("name").limit(10)
 
 ## 解構與 pattern 支援
 
-解構可直接在 `:=` 綁定:一個 tuple `(a, b) := e` 與一個 struct `P{x, y} := e` 都一步解開——這是消費
-多重回傳或小型 record 的日常方式,而兩者皆為 **[not yet]**,`match` 裡的 struct、tuple 與 `as` pattern 也是。
-一個 pattern 能是什麼、以及每個未建置的形狀被哪個碼拒絕,見
-[控制流](control-flow.zh-TW.md);這裡要談的是在它們落地之前還站得住的慣用法。
+解構可直接在 `:=` 綁定:一個 tuple `(a, b) := e` 與一個 struct `P{x, y} := e` 都一步解開——這是消費多重回傳或
+小型 record 的日常方式。一個 pattern 能是什麼,見[控制流](control-flow.zh-TW.md);這裡要談的是 **target 不是
+pattern**。`match` 問的是「這個值是不是這個形狀」,而解構綁定是被**告知**形狀的,所以 target 裡沒有任何東西在
+測試:每個葉子不是**鑄造**一個名字（`:=`）就是指名已經存在的儲存（`=`）,而一個會測試的葉子——一個字面量——會在
+它被寫下的地方被拒絕。
 
-每一種會觸發的 pattern 都只有**一層深**。所以 tuple 用靜態索引（`.0` / `.1`）讀回、struct 用欄位讀回,而不是
-解構;而在有巢狀 pattern 的語言裡會寫成 `L(Yes(v))` 的地方,就比對一層、把 payload 綁起來,再對那個 binding 做
-一次 `match`。
+兩種形狀都可以**巢狀**,而且可以互相巢狀:`((a, b), c) := e` 與 `Pair{a: P{x, y}, n} := e`。`_` 讀一個位置然後
+丟掉它。`mut` 與 `const` 放在**整個** target 之前——[`GRAMMAR#binding`](../../GRAMMAR) 就是把它們放在那裡——所以
+它們套用到它鑄造的每一個名字。
+
+一個 struct target 問的是 struct **pattern** 問的同樣三個問題,因為它就是同一條產生式
+（[`GRAMMAR#struct-pat`](../../GRAMMAR)）擺在另一個位置:它指名的型別必須就是那個值的型別、它指名的每個欄位都
+必須存在,而沒有 `..` 時它要指名**全部**。
+
+每一種會觸發的 pattern 都只有**一層深**。所以在有巢狀 pattern 的語言裡會寫成 `L(Yes(v))` 的地方,就比對一層、
+把 payload 綁起來,再對那個 binding 做一次 `match`。
 
 > **[not yet]** `L(Yes(v))` 與 `L(0)` 都是 _E9076 NotImplemented: a sub-pattern inside a variant payload,
 > beginning at `…`_。payload 位置上的**保留字**是另一條規則、保有它自己的碼：`L(this)` 是

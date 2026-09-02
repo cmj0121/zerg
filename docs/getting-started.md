@@ -189,7 +189,7 @@ quietly omitted one would make the library look more complete than it is.
 
 ## Where to go next
 
-- **[Zerg by example](../examples/README.md)** — thirty-three programs in a reading order, each
+- **[Zerg by example](../examples/README.md)** — forty-six programs in a reading order, each
   one built and run by a gate.
 - **[The Language Reference](language.md)** — the index: every chapter, and what each decides.
 - **[Conformance](conformance.md)** — how to read the specification's status markers. Worth

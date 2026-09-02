@@ -5,23 +5,75 @@ Because C is Zerg's **codegen target** (not just an escape hatch), FFI is a nati
 directly on the type, memory, error, and visibility models in the [Language Reference](../language.md) and
 the public-surface rules in [Modules, Packages & Programs](package.md). Also in [繁體中文](ffi.zh-TW.md).
 
-> **[not yet]** **Neither edge is built, so this chapter is a design rather than a description.** The
-> `unsafe` context a foreign call sits inside is where it stops: the **block-expression** form is refused by name,
-> with a place (`E9011`), and so is a standalone **`unsafe fn`** (`E9027`) and the **`unsafe fn` TYPE** the bindings
-> above are spelled with (`E9073`) — which takes the import edge with it. Inline assembly is refused
-> beside them: `asm(…)` is _E9033 NotImplemented: `asm(…)` — GRAMMAR has inline assembly with an
-> operand list (GRAMMAR#asm-operand)_. There is no `ffi` module in the shipped
-> standard library, so `import "ffi"` fails at the import itself — _E5002 cannot resolve import `ffi` under any source
-> root_ — rather than later, at the `unsafe` the binding would have needed. The module-level **group** is the shape
-> that IS built, for its `mut` bindings; a top-level `unsafe` that opens neither it nor a `fn` is a malformed group
-> and says so — _E2075 a top-level `unsafe` opens a GROUP or marks a `fn`_, which is a parse refusal and names no
-> unbuilt form, because `unsafe struct P { … }` is not a shape this grammar derives anywhere. What the group's `fn`
-> may do inside is still refused, one operation at a time. On the
-> export edge a `--emit lib` build writes an object and **no header**, and nothing reports which `pub` declarations
-> would have been left out of one. >
-> Nothing in this chapter reaches `cc` any more. `handle` is a name no declaration in a `zerg` program
-> carries, so a binding annotated with it — `mut h: handle = 0` or `mut h: handle? = nil` — is refused
-> where it is written, as _E4056 no type named `handle` (the binding `h`)_.
+**Group 12 is built.** The `unsafe` context a foreign call sits inside is here: the **block-expression**
+`unsafe { … }` yields its block's value, a standalone **`unsafe fn`** declares one, and the **`unsafe fn`
+TYPE** carries the marker so a value of one is not a value of a plain `fn`. Inline assembly is here beside
+them, and so are the raw-pointer type and its operations — the rest of this chapter describes what runs.
+
+> **[not yet]** The **import edge** is not. There is no `ffi` module in the shipped standard library, so
+> `import "ffi"` fails at the import itself — _E5002 cannot resolve import `ffi` under any source root_ —
+> and a binding annotated `handle` is refused where it is written, as _E4056 no type named `handle` (the
+> binding `h`)_. On the **export edge** a `--emit lib` build writes an object and **no header**, and nothing
+> reports which `pub` declarations would have been left out of one. A top-level `unsafe` that opens neither
+> a group nor a `fn` is a malformed group and says so — _E2075 a top-level `unsafe` opens a GROUP or marks a
+> `fn`_ — which is a parse refusal naming no unbuilt form, because `unsafe struct P { … }` is not a shape
+> this grammar derives anywhere.
+
+## Inline assembly
+
+`asm(template, operand*)` lowers to the C compiler's own inline assembly. The reference implementation
+emits C and has no assembler of its own, and needs none: `GRAMMAR` says the template and the constraint
+strings are **opaque** and belong to the target backend, which is exactly the promise that lets them be
+handed to `cc` unread.
+
+```zerg
+fn main() {
+ mut x := 0
+ y := 7
+ unsafe {
+  asm("mov %1, %0", out("=r") x, in("r") y)
+ }
+ print x
+}
+```
+
+Two things the grammar leaves open are decided here, and they are language rules rather than emitter
+details:
+
+- **The written order IS the numbering.** A C compiler numbers `%0`, `%1`, … **outputs first**, so the
+  language requires an [`GRAMMAR#asm-operand`](../../GRAMMAR) that writes — `out` and `inout` — **before**
+  every `in` one — _E3144 an `asm` operand list writes its `out` and `inout` operands BEFORE its `in`
+  ones_. The alternative is for the compiler to renumber, which
+  needs it to **parse** the template — and the template is opaque, which is the whole reason it can be
+  passed through. A **`clobber`** may sit anywhere, since it lowers to the third colon whatever its position.
+- **`volatile` is always emitted.** Zerg has no spelling for it. An `asm` here is reachable only inside
+  `unsafe` and is rare, and eliding it is the optimisation that silently deletes a memory-mapped write, so
+  never eliding it is the default — a decision rather than a gap.
+
+An `asm(…)` outside `unsafe` is _E3143_: it is the one expression this language cannot check, so the marker
+is what makes it sayable at all.
+
+## Raw pointers
+
+The **type** is grammar and the **operations** are not. A `ptr` / `ptr[T]` may appear in a signature or a
+field — describing pointer-shaped data is safe — while taking an address, reading through one, storing,
+offsetting and casting are `unsafe`-only intrinsics (_E3145_).
+
+| written                | what it is                                                |
+| ---------------------- | --------------------------------------------------------- |
+| `addr(x)`              | the address of a place, typed to what is there — `ptr[T]` |
+| `p.load()`             | the pointee, read back                                    |
+| `p.store(v)`           | a write through the pointer                               |
+| `p.offset(n)`          | the address `n` pointees along                            |
+| `uint(p)` / `int(p)`   | the address as a number                                   |
+| `ptr(p)` / `ptr[T](p)` | the casts between the two pointer forms                   |
+
+`[T]` is what types the load, the store and the offset, so a **bare `ptr`** has no pointee and each of the
+three is refused on one (_E3146_). A cast is made **from a pointer or from an address held as a number**,
+and from nothing else — a value is not an address (_E3148_).
+
+A `ptr` is **nullable by construction** (address 0) and **orthogonal to `T?`**: there is no `ptr[T]?`, and a
+null test is `p == 0`.
 
 ## Two edges, one contract
 
@@ -238,9 +290,8 @@ it rather than swallowing the rest of the file. Neither is pedantry about braces
 declaration below it read as being inside, which is exactly how a `mut` binding in safe code becomes a
 mutable global with nothing said.
 
-> **[not yet]** A standalone `unsafe fn` declaration is **refused by name, with a place** — _E9027_. Building it would
-> read the `fn` as safe — nothing enforces the boundary the keyword marks — so until that check exists the
-> form is turned away rather than silently disarmed.
+A **standalone `unsafe fn`** is the single-function form of the same marker: it records `in_unsafe` on the
+declaration, which is what the caller rule reads, so the two spellings are one rule rather than two.
 
 The group's own rule **is** enforced: a `fn` declared inside a module-level `unsafe { … }` group is an
 unsafe fn, and naming it from safe code — calling it, or binding the bare name as a function value — is

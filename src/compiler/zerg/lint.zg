@@ -756,6 +756,7 @@ fn lint_captures_expr(e: ast.Expr, w: LWhere, refs: list[str], mut &muts: list[s
 	match e {
 		Expr.EGuard(b) => lint_captures_body(b, w, refs, muts, out)
 		Expr.EBlock(b) => lint_captures_body(b, w, refs, muts, out)
+		Expr.EUnsafe(b) => lint_captures_body(b, w, refs, muts, out)
 		Expr.EFn(ps, has_ret, ret, b) => lint_captures_body(b, w, refs, muts, out)
 		Expr.ECall(nm, args, _) => lint_captures_each(args, w, refs, muts, out)
 		Expr.EMethod(t, m, args) => lint_captures_each(args, w, refs, muts, out)
@@ -1078,8 +1079,9 @@ fn collect_binds_let(name: str, value: ast.Expr, w: LWhere, mut &names: list[str
 # statement that holds the guard rather than from a statement of its own.
 fn collect_binds_expr(e: ast.Expr, w: LWhere, mut &names: list[str], mut &ats: list[LWhere]) {
 	match e {
-		Expr.EGuard(body_b) => collect_binds_at(body_b, w, names, ats)
-		Expr.EBlock(body_b) => collect_binds_at(body_b, w, names, ats)
+		Expr.EGuard(body_b)  => collect_binds_at(body_b, w, names, ats)
+		Expr.EBlock(body_b)  => collect_binds_at(body_b, w, names, ats)
+		Expr.EUnsafe(body_b) => collect_binds_at(body_b, w, names, ats)
 
 		# a closure's body is a block too, and `walk_body` already counts the reads inside one
 		# — so without this the bindings in a closure were collected by nobody and answered to
@@ -1172,6 +1174,11 @@ pub fn walk_body(body: list[ast.Stmt], mut &ids: list[str], mut &calls: list[str
 		match s {
 			Stmt.SLet(name, ty, has_ty, is_mut, is_const, value) => walk_expr(value, ids, calls, ns)
 			Stmt.SAssign(target, value) => walk_pair(target, value, ids, calls, ns)
+
+			# a destructuring target READS what its leaves name when it assigns, and mints them
+			# when it binds — `ast.stmt_exprs` is what already tells the two apart, so this asks
+			# it rather than walking the shape a second time
+			Stmt.SDestructure(t, v, ib, im, ic) => walk_each(ast.stmt_exprs(s), ids, calls, ns)
 			Stmt.SPrint(x) => walk_expr(x, ids, calls, ns)
 			Stmt.SReturn(has_value, value) => walk_expr(value, ids, calls, ns)
 			Stmt.SReturnIf(value, cond) => walk_pair(value, cond, ids, calls, ns)
@@ -1211,6 +1218,12 @@ pub fn walk_body(body: list[ast.Stmt], mut &ids: list[str], mut &calls: list[str
 			Stmt.SNop      => skip()
 			Stmt.SAt(_, _) => skip()
 		}
+	}
+}
+
+fn walk_each(es: list[ast.Expr], mut &ids: list[str], mut &calls: list[str], mut &ns: list[str]) {
+	for e in es {
+		walk_expr(e, ids, calls, ns)
 	}
 }
 
@@ -1267,6 +1280,7 @@ fn walk_expr(e: ast.Expr, mut &ids: list[str], mut &calls: list[str], mut &ns: l
 		Expr.EListLit(elems) => walk_all(elems, ids, calls, ns)
 		Expr.EFill(v, n) => walk_pair(v, n, ids, calls, ns)
 		Expr.EConv(ty, x, nm) => walk_expr(x, ids, calls, ns)
+		Expr.EFmt(x, _, _) => walk_expr(x, ids, calls, ns)
 		Expr.EIf(cond, then_e, else_e) => walk_three(cond, then_e, else_e, ids, calls, ns)
 		Expr.EMatch(scrut, arms) => walk_match(scrut, arms, ids, calls, ns)
 		Expr.ERange(lo, hi, inclusive) => walk_pair(lo, hi, ids, calls, ns)

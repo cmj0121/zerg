@@ -271,11 +271,22 @@ Because `is` never yields the concrete value, it drives **control flow, not data
 on "is this a `T`?", but to read a `T`'s own fields you must **already hold the concrete type** — one you
 never boxed. It composes as an ordinary `bool` — in an `if`, under `not` / `and` / `or`, or as a `match`
 guard — needing no new pattern form. Its main use is dispatching on an **erased error's** type (see
-[Null-safety & Errors](../code/errors.md)). This phase, **that is the only implemented use** — `is` works on the
-built-in error taxonomy, while the general existential test `x is T` for a
-**non-error** type is **[not yet]**: _E9078 NotImplemented: `is P` — an `is` test names one of the built-in
-error kinds here, and `P` is not one; GRAMMAR#cmp-expr takes any `type-name`, so this is a narrower test
-than the grammar writes_.
+[Null-safety & Errors](../code/errors.md)).
+
+Both halves of the sentence above are built. An **error kind** compares the tag an `Err` carries; every
+other name compares the operand's **own type** against it, and since this compiler has no existentials at
+all — a `spec` cannot be used as a type (above, _E9048_) — every operand it can see has
+a known concrete type, so every such test is the compile-time constant this section decides. A strong
+`type X = Y` is its **own** identity there: `m is Meters` and `m is int` are not the same question. What is
+still **[not yet]** is the **existential** test itself, and it waits on _E9048_ rather than on `is`.
+
+A name that denotes **no type to compare against** is refused instead of answered: a `spec`, a name that
+needs arguments (`list`, `Result`), a built-in alias (`bytearray`), an error-carrier constructor (`Left`),
+and the taxonomy kinds this compiler cannot name (`UnwrapError`, `MatchError`, `AliasError`) — each is
+_E9078 NotImplemented: `is P` — an `is` test compares the operand's own type against a named one here, and
+`P` names no type to put on the right of it; GRAMMAR#cmp-expr takes any `type-name`, so this is a narrower
+test than the grammar writes_. The refusal is what keeps `xs is list` from reading as a confident `false`
+for a value that IS a list.
 
 ## Methods, `this` / `This`, and default bodies
 

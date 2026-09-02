@@ -146,9 +146,11 @@ the three the concurrency chapter names — `SendOnClosedError`, `DeadlockError`
 kind buys over a message: `zerg test` reports a claim that did not hold as a **failure** and anything else
 that reached the top of a test body as a **crash**, and it tells them apart by asking `e is AssertionError`.
 The rest cannot be **named** at the surface yet: `UnwrapError`, `MatchError` and `AliasError` are
-**[not yet]** — `err is AliasError` is _E9078 NotImplemented: `is AliasError` — an `is` test names one of
-the built-in error kinds here, and `AliasError` is not one_, in **both** compilers — and the abort carries
-no distinct reified kind for them, only a generic message.
+**[not yet]** — `err is AliasError` is _E9078 NotImplemented: `is AliasError` — an `is` test compares the
+operand's own type against a named one here, and `AliasError` names no type to put on the right of it_ — and
+the abort carries no distinct reified kind for them, only a generic message. The refusal is what keeps them
+out of the fold below: a kind the taxonomy HAS and this compiler cannot name must not read as a confident
+"no, it is not one of those".
 
 **`StopIteration` is testable but not constructible.** It is the one name a program may put on the right
 of `is` and may **not** call: `raise StopIteration("…")` is _E4063 `StopIteration` is testable but not
@@ -247,10 +249,12 @@ match guard { work() } {
 ```
 
 `is` yields only a `bool`, so a branch may use the **`Error` interface** (`message` / `code` / `unwrap`)
-but **not the concrete type's own fields** — the value was erased and is never re-constructed. This phase `is`
-is built **for the error taxonomy** — the eleven reified kinds above and nothing else, which is why a name
-outside them is `E9078` rather than a test that answers `false`; the general existential test `x is T` for a
-**non-error** type is **[not yet]**.
+but **not the concrete type's own fields** — the value was erased and is never re-constructed. On an error
+that is what `is` is FOR: the eleven reified kinds above are the only names it answers from a runtime tag,
+and a taxonomy name outside them is `E9078` rather than a test that answers `false`. Every OTHER name is
+answered from the operand's own type as a compile-time constant, which
+[Specs & Generics](../core/specs.md#type-tests--is) decides; what is still **[not yet]** is the
+**existential** test, and it waits on a `spec` being usable as a type (_E9048_).
 The set of errors reachable here is treated as **open** for coverage, so an `is`-chain can never be
 exhaustive: a **catch-all is mandatory**. An unmatched error would abort like any uncovered `match` — but
 `MatchError` is **[not yet]** a reified kind, and because the final `match` arm is always unconditional the

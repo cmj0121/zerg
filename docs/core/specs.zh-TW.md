@@ -198,11 +198,21 @@ reinterpret（見 [型別轉換](types.zh-TW.md)）。`T` 必須實作 `x` 所�
 因為 `is` 永不交出具體值，它只能驅動**控制流、不是資料存取**：你可以就「它是不是 `T`」分支，但要讀 `T` 自己的欄位，
 你必須**一開始就握著具體型別**、從未 box 它。它就是個普通 `bool`——用在 `if`、搭 `not` / `and` / `or`、或當 `match`
 guard——不需要任何新的 pattern 形式。它的主要用途是對**被抹除的錯誤**依型別分派
-(見 [Null-safety 與錯誤處理](../code/errors.zh-TW.md))
-——而**這個階段那也是唯一已實作的用途**:`is` 可用於內建的錯誤分類,而對**非錯誤**型別的一般
-存在性測試 `x is T` 是 **[not yet]**:_E9078 NotImplemented: `is P` — an `is` test names one of the built-in
-error kinds here, and `P` is not one; GRAMMAR#cmp-expr takes any `type-name`, so this is a narrower test
-than the grammar writes_。
+(見 [Null-safety 與錯誤處理](../code/errors.zh-TW.md))。
+
+上面那句話的兩半都已經建起來了。**error kind** 比較的是 `Err` 攜帶的 tag;其他每一個名字比較的是運算元
+**自己的型別**——而這個編譯器根本沒有 existential(`spec` 不能當型別,見上文,_E9048_),
+所以它看得到的每一個運算元都有已知的具體型別,於是每一個這種測試都是本節所定的那個編譯期常數。強 `type X = Y`
+在這裡是**它自己的**身分:`m is Meters` 與 `m is int` 不是同一個問題。仍然 **[not yet]** 的是 **existential**
+測試本身,而它等的是 _E9048_、不是 `is`。
+
+一個**指不出可比對型別**的名字會被拒收、而不是被回答:一個 `spec`、一個需要引數的名字(`list`、`Result`)、
+一個內建別名(`bytearray`)、一個 error-carrier 建構子(`Left`),以及這個編譯器叫不出名字的分類種類
+(`UnwrapError`、`MatchError`、`AliasError`)——每一個都是
+_E9078 NotImplemented: `is P` — an `is` test compares the operand's own type against a named one here, and
+`P` names no type to put on the right of it; GRAMMAR#cmp-expr takes any `type-name`, so this is a narrower
+test than the grammar writes_。這道拒收,正是讓 `xs is list` 不會對一個**確實是** list 的值,自信地回答
+`false` 的那一道。
 
 ## Method、`this` / `This` 與 default body
 

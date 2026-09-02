@@ -491,7 +491,7 @@ shipping compiler rather than a part of it (the line
 | `E9075` | a generic `type …[…] = …`                                                                             |
 | `E9076` | a sub-pattern inside a variant payload                                                                |
 | `E9077` | a range used as a value                                                                               |
-| `E9078` | `is …` names one of the built-in error kinds                                                          |
+| `E9078` | `is …` names no type to compare against                                                               |
 | `E9079` | the decorator `#[sealed]` — reserved                                                                  |
 | `E9097` | main(args) in a program that uses concurrency                                                         |
 | `E9099` | … of the method `…` on a built-in receiver, which a thunk does not reach                              |

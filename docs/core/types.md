@@ -452,9 +452,10 @@ intermediate states — against immutable-by-default and valid-at-construction.
 Zerg **converts by re-construction, never by reinterpretation** — a conversion `T(x)` _builds a new `T`_
 from `x`'s value, the way a constructor does; there is **no C-style cast** that views one type's bytes as
 another (a `reinterpret`), and none is offered. The three type operations stay cleanly apart: **build** a
-new value (`T(x)`, here), **test** an existential's identity (`x is T` → `bool`, [Type tests](specs.md) —
-**[not yet]** for non-error types this phase — _E9078_ — only the error taxonomy is `is`-testable today), and
-**never** reinterpret one type's storage as another.
+new value (`T(x)`, here), **test** a value's identity (`x is T` → `bool`, [Type tests](specs.md) — an
+error kind from the tag it carries, every other name as a compile-time constant on the operand's own type;
+the **existential** test is **[not yet]** and waits on _E9048_), and **never** reinterpret one type's
+storage as another.
 
 Conversion is **explicit by default** — an `int` isn't a `bool`; build one with a constructor-style call
 (`bool(8)`, `int(c)`). `bool(x)` on a number answers `x != 0` — the question truthiness would have asked

@@ -99,8 +99,9 @@ as a generic **bound**, a **conformance** a type declares, and a **type** in its
 heap-boxed, dynamically dispatched existential). Covers the built-in specs (`Eq`, `Ord`, `Hash`, `Error`,
 the operators — there is **no auto-implemented `Object` spec** and no implicit `==`: equality and ordering
 are **opt-in** via `derive(Eq)` / `derive(Ord)` or a hand-written impl), the iteration protocol, and the
-`is` type test (`x is T` on an error kind works; a general `x is T` on an arbitrary value
-is **[not yet]** — _E9078_). See **[Specs & Generics](core/specs.md)**.
+`is` type test (`x is T` on an error kind compares a runtime tag; on any other name it is a compile-time
+constant from the operand's own type — the **existential** test is **[not yet]**, waiting on _E9048_). See
+**[Specs & Generics](core/specs.md)**.
 
 ## Decorators & compiler-derived behavior
 

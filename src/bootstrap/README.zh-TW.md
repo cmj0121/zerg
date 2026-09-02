@@ -420,6 +420,14 @@ chan[int]() }`——或任何不是字面值、模組常數，或它們之間算
   這對 bootstrap 不花任何代價:編譯器自己的原始碼沒有寫過跨這兩種形狀的泛型,而種子建不起來的程式是一個
   **skip**、不是一次比對。`test-data/codegen/generic_shapes.zg` 連同它的理由列在表上。
 
+- **`impl` 目標的限定詞不會被檢查。** `zerg` 會記下 `impl` 的目標上有人打了限定詞——`impl Show for shape.P`——
+  並問其他每個型別位置的限定詞都會被問的同一個問題:是一個這個檔案沒有 import 的真模組,還是一個程式裡根本沒有
+  綁定過的名字。種子把限定詞丟掉、只讀裸名字,所以 `impl Show for bogus.P` 建得起來。
+
+  這對 bootstrap 不花任何代價:編譯器自己的原始碼沒有在點名目標上寫過 `impl`,而「種子接受、`zerg` 拒絕」的程式
+  永遠不會被 `make oracle` 拿去比對。`scripts/reject-check.sh` 的
+  `an-impl-target-through-a-module-that-is-not-imported` 帶著 `seed-gap` 標記。
+
 ## 修改種子時
 
 讓一項改動可以放心進行的不變量：**自舉原始碼所產生的 C 不得變動**。若那是真正的死碼移除，前後產生的 C 會逐位元組

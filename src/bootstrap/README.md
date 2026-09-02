@@ -546,6 +546,17 @@ byte(N)` and `byte(N * 3)` are compile errors. The seed folds the literal alone:
   and a program the seed cannot build is a SKIP rather than a comparison.
   `test-data/codegen/generic_shapes.zg` is listed with its reason.
 
+- **AN `impl` TARGET'S QUALIFIER IS NOT CHECKED.** `zerg` records that a qualifier was typed on
+  an `impl`'s target — `impl Show for shape.P` — and asks the same question every other type
+  position's qualifier is asked: a real module this file did not import, or a name nothing in the
+  program bound. The seed drops the qualifier and reads the bare name, so
+  `impl Show for bogus.P` builds.
+
+  It costs the bootstrap nothing: the compiler's own sources write no `impl` on a dotted target,
+  and a program the seed accepts and `zerg` rejects is never compared by `make oracle`.
+  `scripts/reject-check.sh`'s `an-impl-target-through-a-module-that-is-not-imported` carries the
+  `seed-gap` marker.
+
 ## Changing the seed
 
 The invariant that makes a change safe to make: **the C emitted for the self-host source

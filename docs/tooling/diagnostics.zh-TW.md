@@ -325,6 +325,7 @@ seed 全程維持句子比對:代碼是語言的契約,而 seed 是建置正式�
 | `E3150` | `…` 沒有宣告 `…`                                                                                      |
 | `E3151` | `…` 是 `…` 的方法,要透過實例去叫                                                                      |
 | `E3152` | `…` 是 `…` 的 associated fn,要透過型別去叫                                                            |
+| `E3153` | 陣列長度指名 `…`,而這次 build 摺不出同名的編譯期常數                                                  |
 | `E4001` | `break` / `continue` 在它所屬的迴圈之外                                                               |
 | `E4002` | `raise … from` 的 cause 不是 `Err`                                                                    |
 | `E4004` | `…(…)` names one side of an `Either`, which holds exactly one value                                   |
@@ -479,7 +480,7 @@ seed 全程維持句子比對:代碼是語言的契約,而 seed 是建置正式�
 | `E9107` | … 上的方法 `…` —— `display`、`debug`、`format`;channel 上的 `next`;`for` 走得到的東西上的 `iter`      |
 | `E9108` | `del …` 用在擁有值（struct/list/map）上 —— 提早釋放,而 release 是 scope 退出時的 unwind               |
 | `E9110` | list pattern 裡具名的 rest                                                                            |
-| `E9111` | 指名常數的陣列長度                                                                                    |
+| `E9111` | 透過 import 取得的陣列長度                                                                            |
 | `E9112` | 陣列的方法 `…`                                                                                        |
 
 它們在檔案被**讀進來**的當下就報告，早於掃描它的 import——掃描 import 會 parse，而一個拿到

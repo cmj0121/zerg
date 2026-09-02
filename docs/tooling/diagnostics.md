@@ -349,6 +349,7 @@ shipping compiler rather than a part of it (the line
 | `E3150` | `…` declares no `…` — an `impl` declares the methods and associated fns it has                        |
 | `E3151` | `…` is a METHOD of `…`, reached through an instance                                                   |
 | `E3152` | `…` is an ASSOCIATED FN of `…`, reached through the type                                              |
+| `E3153` | an array length names `…`, and no compile-time constant this build can fold answers to it             |
 | `E4001` | `…` outside of a loop: it belongs to a `for`, and a `select` arm is not one                           |
 | `E4002` | a `from` cause is an `Err`, and … is not one                                                          |
 | `E4004` | `…(…)` names one side of an `Either`, which holds exactly one value                                   |
@@ -503,7 +504,7 @@ shipping compiler rather than a part of it (the line
 | `E9107` | the method `…` on a … — `display`, `debug`, `format`; `next` on a channel; `iter` on what `for` walks |
 | `E9108` | `del …` on an owning struct, list or map — the early free, where the release is a scope-exit unwind   |
 | `E9110` | a NAMED rest in a list pattern                                                                        |
-| `E9111` | an array length that names a constant                                                                 |
+| `E9111` | an array length reached through an import                                                             |
 | `E9112` | the array method `…`                                                                                  |
 
 They are reported the moment a file is **read**, before its imports are scanned — scanning

@@ -2713,7 +2713,22 @@ fn parse_impl(mut &p: Parser, mut &fns: list[ast.FnDecl], mut &impls: list[ast.I
 		# sentence says that rather than promising it later.
 		raise p_diag_at(p, d.line, d.col, rule.Rule.ImplSpecNotBare, f"an `impl`'s spec is named by a bare `type-name` (GRAMMAR#impl-decl), and `{target}.{tail}` is a name reached through an import — import the spec's module and name the spec alone") if sp == "" and p_at(p, token.Kind.For)
 
-		raise p_diag_at(p, d.line, d.col, rule.Rule.NotYetImplDottedTarget, f"NotImplemented: an `impl` on `{target}.{tail}` — GRAMMAR#impl-decl's target is a `type` and GRAMMAR#base-type derives a dotted name, but this compiler keys an implementation by the target's BARE name, which a type reached through an import does not have here. Write the `impl` in the module that declares the type")
+		# WHAT THE QUALIFIER IS FOR, and what it is not. GRAMMAR#base-type derives the dotted
+		# name, and the name it resolves to is the BARE one: every module of a program flattens
+		# into one namespace here, and two modules declaring one type name is E3078 — so `P` is
+		# the key whichever module wrote it. The qualifier is a separate claim, about which
+		# module the writer believes it came from, and only the emitter can check that.
+		#
+		# THE REFUSAL SAID THE OPPOSITE. It read *a type reached through an import does not have
+		# a bare name here*, and it does: `shape.P` is `P`, uniquely, by a rule this compiler
+		# already enforces.
+		# THE QUALIFIER GOES WHERE EVERY OTHER TYPE POSITION'S GOES. `parse_base_type` records
+		# that one was TYPED, and `chk_ty_quals` asks the checker's half — a real module this
+		# file did not import, or a name nothing in the program bound, which are two findings
+		# and two sentences. An `impl` target is a type position like any other, so it earns
+		# both by joining the same list rather than by growing a rule of its own.
+		p.ty_quals.append(ast.TyQual(target, tail, p.path, d.line, d.col))
+		target = tail
 	}
 
 	# An `impl` is keyed here by a bare NAME — `ImplDecl` holds a `str` for its target, and

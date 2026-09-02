@@ -221,12 +221,23 @@ row := [b'\0'; WIDTH]           # WIDTH 是 top-level const——在裸 := 下�
 - **長度**——`a.len()` 就是 N，本身是編譯期常數。
 - **寫進簽章**——函式透過**值泛型**對長度泛化,`fn sum[N: int](xs: [int; N])`,`N` 由引數推出、呼叫端從不寫它。
 
-  > **[not yet]** **指名常數**的長度會被拒絕——_E9111 NotImplemented: an array length that names a constant_。
-  > 長度是型別的一部分,所以在任何兩個型別被比較之前它就得是一個數字,而讀這個型別的 parser 沒有常數表可以摺
-  > 一個名字。寫出數字,或改用 `list[T]`。
-  >
   > **[not yet]** 值參數會被拒絕——_E9029 NotImplemented: a value generic parameter `N: int`_——所以今天的函式只吃
   > 一個具體長度（`[int; 4]`）,要處理任意長度就改收 `list[T]`。
+
+- **指名的長度**——`[T; N]` 裡的 `N` 是一個 **const-expr**,所以它可以是一個名字:`const W: int = 4`,然後
+  `[byte; W]`;也可以是這種名字上的算術。它在**整個程式**的範圍內、在任何兩個型別被比較之前就解析掉,這正是
+  `[byte; W]` 與 `[byte; 4]` 是**同一個型別**而不是兩個的原因——長度是型別的一部分,而兩個型別相遇的時機,遠早於
+  任何有常數表的東西跑起來。**宣告順序無所謂**:那張表是一個 fixpoint,所以 `const B = A * 2` 可以寫在
+  `const A = 2` 上面。
+
+  一個名字可以是什麼,恰好就是這次 build **摺得出來**的東西:一個字面量,或者在摺得出來的名字上做算術。一個沒有
+  被宣告的名字、以及一個值是 call 的常數,都是 _E3153 an array length names `…`, and no compile-time constant
+  this build can FOLD answers to it_。
+
+  > **[not yet]** 透過 **import** 取得的常數,是名字唯一答不出來的那種 const-expr——
+  > _E9111 NotImplemented: an array length reached through an import_。長度是在合併後的程式上**按名字**解析的,
+  > 所以兩個模組各自宣告 `WIDTH` 會變成同一個 key;要分得開靠的是 module identity,而這個編譯器替一次 call
+  > 決定它、不替一個長度決定。
 
 - **迭代／derive／slice**——它實作 `Iterator`／`Iterable`（`for x in a`；**`for mut x in a` 是 [not yet]**，對每一
   種元素型別皆然、包含 POD），並**逐元素** derive：當元素型別 `T` 具備時，陣列才逐元素 derive `Eq`／`Ord`（以及建置後的

@@ -305,6 +305,7 @@ pub enum Rule {
 	NoSuchAssociatedFn = 3150
 	MethodThroughItsType = 3151
 	AssocFnThroughAnInstance = 3152
+	ArrayLenUnresolved = 3153
 	SpecDefaultReadsField = 3138
 
 	# emitting — a form this compiler will not lower
@@ -526,7 +527,7 @@ pub enum Rule {
 	# from the other side, and both retire when a release can be taken out of the middle.
 	NotYetDelOwning = 9108
 	NotYetListPatternRestBinding = 9110
-	NotYetArrayLenNamed = 9111
+	NotYetArrayLenImported = 9111
 	NotYetArrayMethod = 9112
 }
 

@@ -124,6 +124,17 @@ fn gen_match_inner(tparams: list[str], mut &sol: list[ast.Ty], decl: ast.Ty, act
 # gen_parts is a type's SUB-TYPES, in written order — the one place this file knows how a
 # type is built out of others. A scalar has none, and so does a name: a `TNamed` reaching
 # here is a struct or an enum, whose fields are not the type's arguments.
+#
+# FOUR SHAPES WERE MISSING, and every one of them was added to `Ty` after this was written:
+# the array, the `mut &`, the raw pointer and the `unsafe` marker. What falls out of that is a
+# refusal whose sentence is FALSE — `fn first[T](xs: [T; 2])` was told *the type parameter `T`
+# is not decided by this call: no argument's type mentions it*, about an argument whose type
+# says `T` in plain sight. A catch-all is what let each of them arrive silently; the arms are
+# written out for the reason `expr_parts` writes its out.
+#
+# AN ARRAY'S LENGTH IS NOT A PART. It is part of the type and not a type, so it takes no arm
+# here — two arrays of different lengths bind their element the same way, and the mismatch is
+# reported by the ordinary argument rule against the specialization's own signature.
 fn gen_parts(t: ast.Ty) -> list[ast.Ty] {
 	return match t {
 		Ty.TList(e) => [e]
@@ -132,6 +143,10 @@ fn gen_parts(t: ast.Ty) -> list[ast.Ty] {
 		Ty.TMap(k, v) => [k, v]
 		Ty.TTuple(es) => es
 		Ty.TEither(x, y) => [x, y]
+		Ty.TArr(e, n) => [e]
+		Ty.TRef(e) => [e]
+		Ty.TPtr(e) => [e]
+		Ty.TUnsafe(e) => [e]
 		Ty.TFn(ps, r) => gen_fn_parts(ps, r)
 		_ => []
 	}
@@ -175,11 +190,169 @@ fn gen_match_all(tparams: list[str], mut &sol: list[ast.Ty], ds: list[ast.Ty], a
 struct TySubst {
 	pub names: list[str]
 	pub args: list[ast.Ty]
+
+	# keys/vals are the OTHER substitution this walk performs: an array length that names a
+	# constant, replaced by its number (GRAMMAR#array-type derives a const-expr there). It rides
+	# on the same struct because it is the same traversal — every place a type is written — and
+	# a second walk over the same tree is the shape this file exists to avoid.
+	pub keys: list[str]
+	pub vals: list[str]
 	pub at: str
 }
 
+# --- array lengths, resolved over the whole program ------------------------------------------
+#
+# GRAMMAR#array-type derives a CONST-EXPR for a length, so `[byte; WIDTH]` is a form — and the
+# length is part of the TYPE, which means `[byte; WIDTH]` and `[byte; 4]` have to be ONE type
+# everywhere two types meet. The parser cannot do that: it reads one file top to bottom, the
+# constant may be declared below the use or in another module, and a parser that consults a
+# table it has built is a parser with a symbol table (`layering` says so, and refused the first
+# attempt at this for exactly that).
+#
+# SO THE PARSER CARRIES THE NAME AND THIS RESOLVES IT, once, over the merged program — before
+# any type is compared, which is what makes the key safe to carry that far and no further.
+#
+# THE TABLE IS A FIXPOINT AND NOT A SCAN IN ORDER. `const B = A * 2` may be written above
+# `const A = 2`, and a single pass would answer for one order and not the other — which would
+# make where a constant sits decide whether a type resolves.
+pub fn gen_resolve_lens(f: ast.File) -> ast.File {
+	mut keys: list[str] = []
+	mut vals: list[str] = []
+	gen_len_table(f, keys, vals)
+	su := TySubst([], [], keys, vals, "")
+
+	mut structs: list[ast.StructDecl] = []
+	for sd in f.structs {
+		structs.append(ast.StructDecl(sd.name, gen_len_fields(su, sd.fields), sd.is_pub, sd.path, sd.line, sd.col))
+	}
+	mut enums: list[ast.EnumDecl] = []
+	for ed in f.enums {
+		enums.append(ast.EnumDecl(ed.name, gen_len_variants(su, ed.variants), ed.is_pub, ed.path, ed.line, ed.col))
+	}
+	mut types: list[ast.TypeDecl] = []
+	for td in f.types {
+		types.append(ast.TypeDecl(td.name, subst_ty(su, td.under), td.is_pub, td.path, td.line, td.col))
+	}
+	mut consts: list[ast.ConstDecl] = []
+	for cd in f.consts {
+		consts.append(ast.ConstDecl(cd.name, cd.recv, subst_ty(su, cd.ty), cd.has_ty, cd.is_mut, cd.is_const, cd.is_pub, cd.in_unsafe, subst_expr(su, cd.value), cd.path, cd.line, cd.col))
+	}
+	mut fns: list[ast.FnDecl] = []
+	for fd in f.fns {
+		fns.append(gen_len_fn(su, fd))
+	}
+	mut specs: list[ast.SpecDecl] = []
+	for sp in f.specs {
+		specs.append(ast.SpecDecl(sp.name, sp.params, sp.supers, sp.super_args, gen_len_fns(su, sp.reqs), sp.is_pub, sp.path, sp.line, sp.col))
+	}
+	return ast.File(f.imports, structs, enums, specs, f.impls, fns, types, consts, f.derive_on, f.derive_spec, f.stmts, f.ty_quals)
+}
+
+# gen_len_table folds every module-level constant an array length may name. A `mut` binding is
+# not one however it was initialised — GRAMMAR#array-type wants a const-expr, and a name that
+# can be assigned to is not a compile-time value.
+fn gen_len_table(f: ast.File, mut &keys: list[str], mut &vals: list[str]) {
+	mut again := true
+	for again {
+		again = false
+		for cd in f.consts {
+			continue if cd.is_mut or cd.recv != "" or gen_len_known(keys, cd.name)
+
+			v := gen_len_fold(keys, vals, cd.value)
+			continue if v < 0
+
+			keys.append(cd.name)
+			vals.append(strconv.to_string(v, 10))
+			again = true
+		}
+	}
+}
+
+fn gen_len_known(keys: list[str], name: str) -> bool {
+	for k in keys {
+		return true if k == name
+	}
+	return false
+}
+
+# gen_len_fold is the const-expr arithmetic a length may be written with — a literal, a name the
+# table already holds, and the four operators over them. Anything else answers -1, which is the
+# table declining to hold it rather than a finding: what a length may be is decided where the
+# length is read.
+fn gen_len_fold(keys: list[str], vals: list[str], e: ast.Expr) -> int {
+	return match e {
+		Expr.EInt(lex, _, _) => gen_len_int(lex)
+		Expr.EIdent(n) => gen_len_named(keys, vals, n)
+		Expr.EBinary(o, a, b) => gen_len_binary(keys, vals, o, a, b)
+		_ => 0 - 1
+	}
+}
+
+fn gen_len_int(lex: str) -> int {
+	return 0 - 1 if not lexer.int_fits(lex)
+
+	v := lexer.int_value(lex)
+	return 0 - 1 if v < 0
+
+	return v
+}
+
+fn gen_len_named(keys: list[str], vals: list[str], n: str) -> int {
+	mut i := 0
+	for i < keys.len() {
+		return strconv.parse_int(vals[i], 10) if keys[i] == n and i < vals.len()
+
+		i = i + 1
+	}
+	return 0 - 1
+}
+
+fn gen_len_binary(keys: list[str], vals: list[str], o: str, a: ast.Expr, b: ast.Expr) -> int {
+	x := gen_len_fold(keys, vals, a)
+	y := gen_len_fold(keys, vals, b)
+
+	return 0 - 1 if x < 0 or y < 0
+
+	return x + y if o == "+"
+	return x - y if o == "-" and x >= y
+	return x * y if o == "*"
+	return x / y if o == "/" and y != 0
+
+	return 0 - 1
+}
+
+fn gen_len_fields(su: TySubst, fs: list[ast.FieldDef]) -> list[ast.FieldDef] {
+	mut out: list[ast.FieldDef] = []
+	for fd in fs {
+		out.append(ast.FieldDef(fd.name, subst_ty(su, fd.ty), fd.is_pub, fd.has_def, subst_expr(su, fd.def), fd.line, fd.col))
+	}
+	return out
+}
+
+fn gen_len_variants(su: TySubst, vs: list[ast.VariantDef]) -> list[ast.VariantDef] {
+	mut out: list[ast.VariantDef] = []
+	for v in vs {
+		out.append(ast.VariantDef(v.name, subst_tys(su, v.fields), v.has_discr, v.discr, v.line, v.col))
+	}
+	return out
+}
+
+fn gen_len_fns(su: TySubst, fs: list[ast.FnDecl]) -> list[ast.FnDecl] {
+	mut out: list[ast.FnDecl] = []
+	for fd in fs {
+		out.append(gen_len_fn(su, fd))
+	}
+	return out
+}
+
+# gen_len_fn is subst_fn without the mangling: the same walk over a declaration, for a
+# substitution that renames nothing.
+fn gen_len_fn(su: TySubst, fd: ast.FnDecl) -> ast.FnDecl {
+	return ast.FnDecl(fd.name, fd.recv, subst_params(su, fd.params), fd.has_ret, subst_ty(su, fd.ret), subst_block(su, fd.body), fd.is_pub, fd.path, fd.line, fd.col, fd.tparams, fd.tbounds, fd.in_unsafe, fd.is_test, fd.is_fixture, fd.has_body, fd.is_assoc)
+}
+
 pub fn subst_fn(tpl: ast.FnDecl, args: list[ast.Ty], at: str) -> ast.FnDecl {
-	su := TySubst(tpl.tparams, args, at)
+	su := TySubst(tpl.tparams, args, [], [], at)
 	return ast.FnDecl(gen_mangle(tpl.name, args), tpl.recv, subst_params(su, tpl.params), tpl.has_ret, subst_ty(su, tpl.ret), subst_block(su, tpl.body), tpl.is_pub, tpl.path, tpl.line, tpl.col, [], [], tpl.in_unsafe, tpl.is_test, tpl.is_fixture, tpl.has_body, false)
 }
 
@@ -194,6 +367,11 @@ fn subst_ty(su: TySubst, t: ast.Ty) -> ast.Ty {
 		}
 		return t
 	}
+
+	# THE SAME FOUR `gen_parts` WAS MISSING, and the same consequence one shape over: a
+	# specialization that did not rewrite through an array left `[T; 2]` in the signature it
+	# built, so the parameter the solver had just decided was still a name in the type it was
+	# decided for.
 	return match t {
 		Ty.TList(e) => ast.Ty.TList(subst_ty(su, e))
 		Ty.TOpt(e) => ast.Ty.TOpt(subst_ty(su, e))
@@ -201,7 +379,10 @@ fn subst_ty(su: TySubst, t: ast.Ty) -> ast.Ty {
 		Ty.TMap(k, v) => ast.Ty.TMap(subst_ty(su, k), subst_ty(su, v))
 		Ty.TTuple(es) => ast.Ty.TTuple(subst_tys(su, es))
 		Ty.TEither(x, y) => ast.Ty.TEither(subst_ty(su, x), subst_ty(su, y))
-		Ty.TFn(ps, r) => ast.Ty.TFn(subst_tys(su, ps), subst_ty(su, r))
+		Ty.TArr(e, n) => ast.Ty.TArr(subst_ty(su, e), subst_key(su, n))
+		Ty.TRef(e) => ast.Ty.TRef(subst_ty(su, e))
+		Ty.TPtr(e) => ast.Ty.TPtr(subst_ty(su, e))
+		Ty.TUnsafe(e) => ast.Ty.TUnsafe(subst_ty(su, e))
 		_ => t
 	}
 }
@@ -221,6 +402,19 @@ fn subst_chan_elem(su: TySubst, e: ast.Ty) -> ast.Ty {
 	el := subst_ty(su, e)
 	ast.ty_chan_elem_check(el, su.at)
 	return el
+}
+
+# subst_key resolves an array length that names a constant. A key that is already digits — or
+# a name the table has not got — comes back unchanged, and what refuses the second kind is the
+# rule that owns the question, once, where the whole program is in hand.
+fn subst_key(su: TySubst, k: str) -> str {
+	mut i := 0
+	for i < su.keys.len() {
+		return su.vals[i] if su.keys[i] == k and i < su.vals.len()
+
+		i = i + 1
+	}
+	return k
 }
 
 fn subst_tys(su: TySubst, ts: list[ast.Ty]) -> list[ast.Ty] {
@@ -270,7 +464,7 @@ fn subst_stmt(su: TySubst, s: ast.Stmt) -> ast.Stmt {
 		# inside a template kept its `T` and the specialization was refused with
 		# _E4056 no type named `T`_ — a legal program, turned away with a reason that is not
 		# true, which sends the reader looking for a declaration they wrote in the signature.
-		Stmt.SScope(b) => ast.Stmt.SScope(subst_block(su, b))
+		Stmt.SScope(b, u) => ast.Stmt.SScope(subst_block(su, b), u)
 
 		# AND THE CATCH-ALL IS GONE. Twice now a form that carries something has been left
 		# unsubstituted by `_ => s` — the `assert` above and the block above that — and each

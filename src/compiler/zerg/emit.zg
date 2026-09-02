@@ -5857,6 +5857,20 @@ fn c_block_expr(mut &em: Emitter, body: list[ast.Stmt], sb: Subst) -> str {
 	return out + "})"
 }
 
+# c_scope lowers a block STATEMENT. `unsafe` is the same block with the trust boundary open for
+# the statements inside it, and the flag is saved and restored for c_unsafe_expr's reason: a
+# scope is lowered in the middle of an enclosing function, so leaving it set would make the rest
+# of that function unsafe by accident.
+fn c_scope(mut &em: Emitter, body: list[ast.Stmt], is_unsafe: bool, ind: str) -> str {
+	return c_block(em, body, ind) if not is_unsafe
+
+	saved := em.in_unsafe_fn
+	em.in_unsafe_fn = true
+	out := c_block(em, body, ind)
+	em.in_unsafe_fn = saved
+	return out
+}
+
 # c_unsafe_expr lowers `unsafe { … }` in expression position (GRAMMAR#unsafe-expr). It IS the
 # block expression, with the trust boundary open for the statements inside it — which is the
 # whole of what the keyword does here: `unsafe` marks a region the author vouches for, and what
@@ -6132,7 +6146,7 @@ fn c_guard_no_jump(mut &em: Emitter, body: list[ast.Stmt], in_loop: bool) {
 			# E9043 that names the form never fired, and what the reader got instead was
 			# _E3032 this function's answer is int, and this gives Result[int]_ — a true
 			# sentence about a consequence, pointing nowhere near the `return` that caused it
-			Stmt.SScope(body_b) => c_guard_no_jump(em, body_b, in_loop)
+			Stmt.SScope(body_b, _) => c_guard_no_jump(em, body_b, in_loop)
 			_ => c_skip()
 		}
 	}
@@ -10966,7 +10980,7 @@ fn c_stmt(mut &em: Emitter, s: ast.Stmt, ind: str) -> str {
 		Stmt.SForIn(var, iter, body) => c_forin(em, var, iter, body, ind)
 		Stmt.SRaise(x, hc, c) => c_raise(em, x, hc, c, ind)
 		Stmt.SAssert(body) => c_assert(em, body, ind)
-		Stmt.SScope(body) => c_block(em, body, ind)
+		Stmt.SScope(body, is_unsafe) => c_scope(em, body, is_unsafe, ind)
 		Stmt.SDefer(x) => c_defer(em, x, ind)
 		Stmt.SSpawn(x) => c_spawn(em, x, ind)
 		Stmt.SSend(ch, v) => c_send(em, ch, v, ind)
@@ -13828,7 +13842,7 @@ fn c_tuple_helpers(mut &em: Emitter, name: str, tys: list[ast.Ty]) -> str {
 # part of its type, so an out-of-range constant is a mistake the type already knows about.
 fn c_arr_index(mut &em: Emitter, target: ast.Expr, idx: ast.Expr, tty: ast.Ty, sb: Subst) -> str {
 	c_list_index_int(em, idx)
-	n := c_arr_len(tty)
+	n := c_arr_len(em, tty)
 
 	k := check.chk_const_eval(em, idx)
 	if k.ok and (k.value < 0 or k.value >= n) {
@@ -13851,7 +13865,7 @@ fn c_arr_index(mut &em: Emitter, target: ast.Expr, idx: ast.Expr, tty: ast.Ty, s
 # also why an array has no `append`: the size is in the type and a method cannot change one.
 fn c_arr_method(mut &em: Emitter, meth: str, tty: ast.Ty) -> str {
 	c_arr_method_ret(em, meth)
-	return strconv.to_string(c_arr_len(tty), 10)
+	return strconv.to_string(c_arr_len(em, tty), 10)
 }
 
 fn c_arr_method_ret(mut &em: Emitter, meth: str) -> ast.Ty {
@@ -13873,7 +13887,7 @@ fn c_forarr(mut &em: Emitter, var: str, iter: ast.Expr, ct: ast.Ty, body: list[a
 	elem := c_arr_elem(ct)
 	et := c_type(elem)
 	at := c_type(ct)
-	n := strconv.to_string(c_arr_len(ct), 10)
+	n := strconv.to_string(c_arr_len(em, ct), 10)
 	outer_scope := c_scope_open(em)
 	c_add_var(em, var, elem, false, false)
 
@@ -14034,7 +14048,7 @@ fn c_render_list_body(mut &em: Emitter, t: ast.Ty) -> str {
 	mut n := "zrt_list_len(&v)"
 	mut slot := f"(*({c_type(et)}*)zrt_list_at_ref(&v, i))"
 	if arr {
-		n = strconv.to_string(c_arr_len(t), 10)
+		n = strconv.to_string(c_arr_len(em, t), 10)
 		slot = "v.v[i]"
 	}
 
@@ -14281,7 +14295,7 @@ fn c_into_says(want: ast.Ty) -> str {
 fn c_arr_lit(mut &em: Emitter, where: str, want: ast.Ty, e: ast.Expr) -> str {
 	et := c_arr_elem(want)
 	elems := c_elem_exprs(em, e, et)
-	n := c_arr_len(want)
+	n := c_arr_len(em, want)
 	if elems.len() != n {
 		check.chk_at(em, rule.Rule.ArrayLitLen, f"{where} takes {strconv.to_string(n, 10)} element(s) and this literal has {strconv.to_string(elems.len(), 10)} — an array's length is part of its type, so the two have to agree")
 		return "{0}"
@@ -14380,11 +14394,21 @@ pub fn c_arr_key(t: ast.Ty) -> str {
 	}
 }
 
-# c_arr_len is an array's length as a number. Every key this compiler builds is decimal digits
-# — a name is refused at the type (E9111) — so the fold cannot fail, and -1 would be a shape
-# nothing constructs rather than a length to guard against.
-pub fn c_arr_len(t: ast.Ty) -> int {
-	return ast.ty_arr_len(c_arr_key(t))
+# c_arr_len is an array's length as a number, and the ONE place a key that never resolved is
+# turned away. The parser carries a NAME (GRAMMAR#array-type derives a const-expr) and
+# `gen_resolve_lens` replaces every one it can fold over the whole program — so a key that is
+# still a name here is a name no compile-time constant in the program answers to.
+#
+# IT USED TO SAY THE FOLD COULD NOT FAIL, which was true while a name was refused at the type
+# and stopped being true the day one was carried. What leaked out was the sentinel: `[int; NOPE]`
+# reported *a slot takes -1 element(s)*, a number no reader can act on.
+pub fn c_arr_len(mut &em: Emitter, t: ast.Ty) -> int {
+	key := c_arr_key(t)
+	n := ast.ty_arr_len(key)
+
+	raise c_diag(em, rule.Rule.ArrayLenUnresolved, f"an array length names `{key}`, and no compile-time constant this build can FOLD answers to it — GRAMMAR#array-type derives a const-expr there, so a length that names one is a literal, or arithmetic over names that are. A constant this program does not declare and one whose value is a call are both absent for that reason") if n < 0
+
+	return n
 }
 
 fn c_tuple_cname(tys: list[ast.Ty]) -> str {
@@ -16010,7 +16034,7 @@ fn c_check_loop_jump(mut &em: Emitter, body: list[ast.Stmt], in_loop: bool) {
 			# refusal a reader got was cc's: _'break' statement not in loop or switch
 			# statement_, against generated code, about a rule this compiler has and did not
 			# apply. `break` on its own at the same place has always been E4001.
-			Stmt.SScope(body_b) => c_check_loop_jump(em, body_b, in_loop)
+			Stmt.SScope(body_b, _) => c_check_loop_jump(em, body_b, in_loop)
 			_ => c_skip()
 		}
 	}
@@ -16187,7 +16211,7 @@ fn c_stmt_diverges(s: ast.Stmt) -> bool {
 		# a bare block diverges when its body does, and nothing else about it matters here.
 		# Without this arm `fn f() -> int { { return 3 } }` was _E4023 its body falls off the
 		# end_ — a function whose only exit is a `return`, told it has none.
-		Stmt.SScope(b) => c_body_diverges(b)
+		Stmt.SScope(b, _) => c_body_diverges(b)
 		_ => false
 	}
 }
@@ -16426,7 +16450,13 @@ pub fn merge_asts(fs: list[ast.File]) -> ast.File {
 			i = i + 1
 		}
 	}
-	return ast.File(imports, structs, enums, specs, impls, fns, types, consts, derive_on, derive_spec, stmts, ty_quals)
+
+	# AND THE ARRAY LENGTHS, resolved here because here is where the whole program is. A length
+	# may name a constant (GRAMMAR#array-type derives a const-expr), the parser carries the name
+	# because it reads one file at a time, and the length is part of the TYPE — so it has to
+	# become a number before anything compares two types, and this is the one door every path
+	# into the emitter goes through.
+	return generic.gen_resolve_lens(ast.File(imports, structs, enums, specs, impls, fns, types, consts, derive_on, derive_spec, stmts, ty_quals))
 }
 
 fn c_emit_file_at(f: ast.File, ms: Mods, mut &diags: list[ast.Diag]) -> str {

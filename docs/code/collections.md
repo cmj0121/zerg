@@ -252,14 +252,25 @@ of the rules already stated for `list`:
 - **In a signature** — a function is generic over the length through a **value generic**,
   `fn sum[N: int](xs: [int; N])`, with `N` inferred from the argument and never written at the call site.
 
-  > **[not yet]** A length that NAMES a constant is refused — _E9111 NotImplemented: an array length that
-  > names a constant_. The length is part of the type, so it has to be a number before any two types are
-  > compared, and the parser that reads the type has no constant table to fold a name with. Write the
-  > number, or use a `list[T]`.
-  >
   > **[not yet]** A value parameter is refused — _E9029 NotImplemented: a value generic parameter `N: int`_ — so a
   > function today takes one concrete length (`[int; 4]`) and nothing else, and a routine over arbitrary
   > lengths takes a `list[T]` instead.
+
+- **A named length** — `N` in `[T; N]` is a **const-expr**, so it may be a name: `const W: int = 4` and
+  then `[byte; W]`, or arithmetic over such names. It is resolved **over the whole program** before any
+  two types are compared, which is what makes `[byte; W]` and `[byte; 4]` **one type** rather than two —
+  the length is part of the type, and two types meet long before anything with a constant table runs.
+  Declaration **order does not matter**: the table is a fixpoint, so `const B = A * 2` may sit above
+  `const A = 2`.
+
+  What a name may be is exactly what the build can **fold**: a literal, or arithmetic over names that are.
+  A name nothing declares, and one whose value is a call, are both _E3153 an array length names `…`, and
+  no compile-time constant this build can FOLD answers to it_.
+
+  > **[not yet]** A constant reached through an **import** is the one const-expr a name cannot answer —
+  > _E9111 NotImplemented: an array length reached through an import_. Lengths resolve by NAME over the
+  > merged program, so two modules declaring `WIDTH` would be one key; telling them apart is module
+  > identity, which this compiler settles for a call and not for a length.
 
 - **Iterate / derive / slice** — it implements `Iterator` / `Iterable` (`for x in a`; **`for mut x in a` is
   [not yet]**, _E9025_, for every element type, POD included), and derives **element-wise**: an array derives `Eq` / `Ord`

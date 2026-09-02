@@ -1,0 +1,5 @@
+# The TYPE lives in its own module, so the `impl` next door is written on a target the
+# file it sits in did not declare.
+pub struct P {
+	pub x: int
+}

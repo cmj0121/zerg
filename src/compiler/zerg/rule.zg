@@ -481,7 +481,6 @@ pub enum Rule {
 	NotYetValueUnnameableType = 9069
 	NotYetRebindMatchBinding = 9070
 	NotYetDefaultReadsField = 9071
-	NotYetImplDottedTarget = 9074
 	NotYetGenericTypedef = 9075
 	NotYetSubPatternInPayload = 9076
 	NotYetRangeAsValue = 9077

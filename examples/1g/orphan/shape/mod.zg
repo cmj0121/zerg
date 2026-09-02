@@ -1,0 +1,4 @@
+# The type lives here, so the `impl` next door is on a type its own module did not declare.
+pub struct P {
+	pub x: int
+}

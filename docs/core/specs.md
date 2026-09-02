@@ -114,12 +114,20 @@ implement `Iterator`.
 > generic `fn` is the only thing this compiler monomorphizes. The form that works is an `impl` on a
 > `struct` or an `enum` the program declares.
 >
-> The three shapes beside it are refused by name for the same reason — an implementation is keyed by a
+> The two shapes beside it are refused by name for the same reason — an implementation is keyed by a
 > declared type's bare name. The `impl`'s OWN type parameters are _E9037 NotImplemented: an `impl`
-> carrying its own type parameters `[T]` — GRAMMAR#impl-decl puts them there_; a target that is not a
+> carrying its own type parameters `[T]` — GRAMMAR#impl-decl puts them there_; and a target that is not a
 > declared type is _E9047 NotImplemented: an `impl` on the built-in type `int` — this compiler gives a
-> method a declared struct or enum receiver_; and a target reached through a module is _E9074
-> NotImplemented: an `impl` on `mod.Type` — a dotted target_.
+> method a declared struct or enum receiver_.
+
+A target reached **through a module** — `impl Show for shape.P` — is the ordinary way to make a foreign
+type satisfy an interface you own, and the orphan rule above is what allows it: the impl is in the spec's
+module. The name it resolves to is the **bare** one, because every module flattens into one namespace and
+two modules declaring one type name is refused; the qualifier is a separate claim about where the type came
+from, and it is checked the way every other type position's is — an invented one is `undefined name`.
+
+An **inherent** `impl` on such a type is not allowed, and that is the orphan rule with one of its two
+owners missing: there is no spec whose module could own it, so it belongs with the type.
 
 A **blanket implementation** conditioned on a bound — one covering every type that satisfies some spec — is
 not offered, keeping resolution decidable; and there is **no "every type" implementation** either, the

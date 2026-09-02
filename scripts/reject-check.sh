@@ -988,6 +988,39 @@ fn main() {
 }
 EOF
 
+# --- an `impl` on a type reached through an import (GRAMMAR#impl-decl) ---------------
+#
+# The target is a `type` and GRAMMAR#base-type derives a dotted name, so `impl Show for
+# shape.P` is a form — and the name it resolves to is the BARE one, because every module of a
+# program flattens into one namespace here and two modules declaring one type name is E3078.
+#
+# WHAT THAT LEAVES IS TWO QUESTIONS THE REFUSAL WAS HIDING. The qualifier is a claim about
+# which module the type came from, and it joins the list every other type position's qualifier
+# joins — so an invented one is `undefined name`, the same sentence a type position gives. And
+# an INHERENT impl has no spec whose module could own it, so it belongs with the type: that is
+# the orphan rule with one of its two owners missing, and it was unreachable while the dotted
+# target was refused.
+
+reject an-impl-target-through-a-module-that-is-not-imported E3069 'undefined name `bogus`' seed-gap <<'EOF'
+struct P {
+	pub x: int
+}
+
+spec Show {
+	fn show() -> int
+}
+
+impl Show for bogus.P {
+	fn show() -> int {
+		return this.x
+	}
+}
+
+fn main() {
+	print 1
+}
+EOF
+
 # --- a top-level annotation is honoured --------------------------------------------
 #
 # `answer: bool = 42` used to compile: the top level inferred from the value and silently

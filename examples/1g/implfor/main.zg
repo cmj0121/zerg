@@ -1,0 +1,34 @@
+# 1g/implfor — a spec of THIS module, supplied for a type from another.
+#
+# GRAMMAR#impl-decl's target is a `type` and GRAMMAR#base-type derives a dotted name, so
+# `impl Show for shape.P` is a form — and it is the ordinary way to make a foreign type
+# satisfy an interface you own. The orphan rule allows exactly this: an impl belongs to the
+# spec's module or the type's, and here it is the spec's.
+#
+# THE NAME IT RESOLVES TO IS THE BARE ONE. Every module of a program flattens into one
+# namespace, and two modules declaring one type name is refused (E3078) — so `shape.P` is `P`,
+# uniquely. The qualifier is a separate claim, about which module it came from, and it joins
+# the list every other type position's qualifier joins: an invented one is `undefined name`.
+#
+# The SEED builds this and runs it, which is worth saying: it drops the qualifier and reads the
+# bare name, and for a program whose qualifier is TRUE that is the same answer. What it cannot
+# do is the other half — `impl Show for bogus.P` builds there too, which is its gap and not this
+# file's business.
+import "./shape"
+
+spec Show {
+	fn show() -> int
+}
+
+impl Show for shape.P {
+	fn show() -> int {
+		return this.x * 2
+	}
+}
+
+fn main() {
+	p := shape.P(21)
+	raise "impl on an imported type" if p.show() != 42
+
+	print "implfor: ok"
+}

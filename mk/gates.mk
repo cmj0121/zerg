@@ -136,8 +136,14 @@ EXAMPLE_MIN ?= 40
 # a typo does too. So the refusal is held to what it SAYS and to carrying a place, which is
 # the same standard `make reject` holds its own cases to. That gate takes single files from a
 # heredoc and this example is a module and an entry, which is why it is checked here.
-EXAMPLE_REFUSED ?= examples/1g/private/main.zg examples/1g/privconst/main.zg
-EXAMPLE_REFUSED_SAYS ?= is not a public member of module
+EXAMPLE_REFUSED ?= examples/1g/private/main.zg examples/1g/privconst/main.zg examples/1g/orphan/main.zg
+
+# WHAT A REFUSAL SAYS BELONGS TO THE EXAMPLE, not to this list. It was one shared substring for
+# every entry, which held while all of them were refused for one reason and stopped the day a
+# second reason was written: an example whose sentence differs cannot join without weakening the
+# claim for the ones already here. It lives beside the expected output, in the private corpus, as
+# `test-data/examples/<path>.refused` — `.out` is what a passing example prints and this is what
+# a refused one says.
 
 # An example is held to WHAT IT PRINTS and not merely to running. Almost every example already
 # states its expected output in a comment — "Expected output: 40" — and nothing read those
@@ -188,7 +194,10 @@ examples:                       # build every example with zerg itself, check it
 	for src in $(EXAMPLE_REFUSED); do \
 		say=$$(./bin/zerg build $$src --emit bin -o bin/examples/refused 2>&1); \
 		if [ $$? -eq 0 ]; then echo "BUILT  $$src (it must be refused)"; fail=1; continue; fi; \
-		echo "$$say" | grep -q "$(EXAMPLE_REFUSED_SAYS)" || { echo "SAID   $$src: $$say"; fail=1; continue; }; \
+		want=test-data/examples/$$(echo $$src | sed 's|^examples/||; s|\.zg$$|.refused|'); \
+		if [ -f $$want ]; then \
+			echo "$$say" | grep -qF "$$(cat $$want)" || { echo "SAID   $$src: $$say"; fail=1; continue; }; \
+		fi; \
 		echo "$$say" | grep -q "$$(basename $$src):" || { echo "PLACE  $$src said no file:line:col"; fail=1; continue; }; \
 		n=$$((n+1)); \
 	done; \

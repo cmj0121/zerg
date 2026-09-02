@@ -1065,7 +1065,16 @@ fn chk_impl_local(mut &em: emit.Emitter, f: ast.File, ip: ast.ImplDecl, sp: ast.
 	type_mod := chk_type_mod(em, f, ip.target)
 	return if here == spec_mod or here == type_mod or spec_mod == "" or type_mod == ""
 
-	chk_at_place(em, ip.path, ip.line, ip.col, rule.Rule.ImplOrphan, f"`impl {ip.on} for {ip.target}` is in neither's module — a spec and a type belong to whoever declared them, and an impl belongs with one of the two (docs/core/specs.md)")
+	chk_impl_owner(em, ip.path, ip.line, ip.col, f"impl {ip.on} for {ip.target}", "a spec and a type belong to whoever declared them, and an impl belongs with one of the two")
+}
+
+# chk_impl_owner is the orphan rule's ONE raise. The two callers ask it about different owner
+# sets — a spec impl may live with its spec or with its type, an inherent one has only the type
+# — and that is the same rule with one owner fewer rather than two rules: an `impl` belongs to a
+# module that declared something it names. A code is an identity, so it is raised once and the
+# clause that differs is passed in.
+fn chk_impl_owner(mut &em: emit.Emitter, path: str, line: int, col: int, what: str, why: str) {
+	chk_at_place(em, path, line, col, rule.Rule.ImplOrphan, f"`{what}` is in no module that declared what it names — {why} (docs/core/specs.md)")
 }
 
 # chk_type_mod is the module a declared type was written in, or "" for one this program does
@@ -1083,7 +1092,45 @@ fn chk_type_mod(mut &em: emit.Emitter, f: ast.File, name: str) -> str {
 	return ""
 }
 
+# chk_inherent_local is the ORPHAN RULE for the form that has no spec. `impl shape.P { … }`
+# adds a method to another module's type, and there is no spec whose module could own it — so
+# it belongs to the type's module and nowhere else, which is `chk_impl_local`'s argument with
+# one of its two owners missing.
+#
+# IT WAS UNREACHABLE UNTIL THE DOTTED TARGET WAS BUILT, which is why it is written now: the
+# parser refused `impl shape.P` by name, so the only way to write an inherent impl was on a
+# type this module declares, and the rule had nothing to catch.
+#
+# IT ASKS THE METHODS AND NOT AN `ImplDecl`. Only a SPEC impl becomes one — nine walks over
+# `f.impls` read it that way — so what an inherent block leaves behind is its methods, each
+# carrying the receiver and the file it was written in. A method is legitimate in a module that
+# is not its type's exactly when a spec impl there covers the same type, which is the pair
+# `chk_impl_local` has already allowed.
+fn chk_inherent_local(mut &em: emit.Emitter, f: ast.File) {
+	for fn_i in f.fns {
+		continue if fn_i.recv == ""
+
+		here := c_mod_of(em, fn_i.path)
+		continue if here == ""
+
+		type_mod := chk_type_mod(em, f, fn_i.recv)
+		continue if type_mod == "" or type_mod == here or chk_spec_impl_here(em, f, fn_i.recv, here)
+
+		chk_impl_owner(em, fn_i.path, fn_i.line, fn_i.col, f"impl {fn_i.recv} {{ … }}", "an inherent `impl` has no spec whose module could own it, so it belongs with the type")
+	}
+}
+
+# chk_spec_impl_here is whether this module supplies a SPEC impl for the type — the one thing
+# that makes a method on a foreign type legitimate where it is written.
+fn chk_spec_impl_here(mut &em: emit.Emitter, f: ast.File, target: str, here: str) -> bool {
+	for ip in f.impls {
+		return true if ip.target == target and c_mod_of(em, ip.path) == here
+	}
+	return false
+}
+
 pub fn chk_spec_impls(mut &em: emit.Emitter, f: ast.File) {
+	chk_inherent_local(em, f)
 	for ip in f.impls {
 		si := chk_spec_index(f, ip.on)
 		if si < 0 {

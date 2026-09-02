@@ -16440,7 +16440,13 @@ pub fn merge_asts(fs: list[ast.File]) -> ast.File {
 			i = i + 1
 		}
 	}
-	return ast.File(imports, structs, enums, specs, impls, fns, types, consts, derive_on, derive_spec, stmts, ty_quals)
+
+	# AND THE ARRAY LENGTHS, resolved here because here is where the whole program is. A length
+	# may name a constant (GRAMMAR#array-type derives a const-expr), the parser carries the name
+	# because it reads one file at a time, and the length is part of the TYPE — so it has to
+	# become a number before anything compares two types, and this is the one door every path
+	# into the emitter goes through.
+	return generic.gen_resolve_lens(ast.File(imports, structs, enums, specs, impls, fns, types, consts, derive_on, derive_spec, stmts, ty_quals))
 }
 
 fn c_emit_file_at(f: ast.File, ms: Mods, mut &diags: list[ast.Diag]) -> str {

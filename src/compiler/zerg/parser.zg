@@ -748,13 +748,32 @@ fn p_arr_len_key(mut &p: Parser) -> str {
 	v := p_fold_len(e)
 	return strconv.to_string(v, 10) if v >= 0
 
-	# A NAME IS THE HALF THAT NEEDS THE CONSTANT TABLE, and the parser has not got one. The
-	# length is part of the TYPE — two types are compared long before the emitter is reached —
-	# so carrying the name instead of the number would make `[byte; WIDTH]` and `[byte; 4]` two
-	# types whatever WIDTH is, which is worse than saying the form is not built.
-	raise p_diag_at(p, at.line, at.col, rule.Rule.NotYetArrayLenNamed, f"NotImplemented: an array length that names a constant — `{p_name_of(e)}` is a const-expr GRAMMAR#array-type derives, and the length is part of the TYPE, so it has to be a number before any two types are compared. Write the number, or use a `list[T]`") if p_name_of(e) != ""
+	# A NAME IS CARRIED AS THE KEY, and resolved before any two types are compared. The parser
+	# has no constant table and must not grow one — it reads a file at a time, and the constant
+	# may be declared below the use or in another module — so what it records here is the name
+	# the reader wrote, and `gen_resolve_lens` turns every one of them into its number over the
+	# whole program (`[byte; WIDTH]` and `[byte; 4]` are one type, which is what makes the key
+	# safe to carry this far and no further).
+	nm := p_name_of(e)
+	return nm if nm != ""
+
+	# A QUALIFIED NAME IS A FORM AND NOT A MISTAKE. GRAMMAR#const-expr is an `expr` with a
+	# SEMANTIC restriction, so `sizes.WIDTH` derives — and it is the one const-expr the resolver
+	# cannot answer: the merged program holds every module's constants under the names they were
+	# declared with, so two modules declaring `WIDTH` would be one key. Telling them apart is
+	# module identity, which this compiler settles for a call and not for a length.
+	raise p_diag_at(p, at.line, at.col, rule.Rule.NotYetArrayLenImported, f"NotImplemented: an array length reached through an import — GRAMMAR#array-type derives a const-expr and GRAMMAR#const-expr derives any expression, so `{ast.expr_kind(e)}` is a form; the length is resolved over the whole program by NAME, and a qualified one needs the module identity a length is not given. Declare the length in this module, or write the number") if p_is_qualified(e)
 
 	raise p_diag_at(p, at.line, at.col, rule.Rule.ArrayLenNotConst, f"an array length is a compile-time constant (GRAMMAR#array-type derives a const-expr there), and {ast.expr_kind(e)} is not one")
+}
+
+# p_is_qualified reports whether an expression is a name reached through a dot — the shape a
+# constant from another module has, and the one an array length cannot resolve.
+fn p_is_qualified(e: ast.Expr) -> bool {
+	return match e {
+		Expr.EField(x, _) => p_name_of(x) != ""
+		_ => false
+	}
 }
 
 fn p_fold_len(e: ast.Expr) -> int {

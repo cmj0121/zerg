@@ -526,7 +526,7 @@ pub enum Rule {
 	# from the other side, and both retire when a release can be taken out of the middle.
 	NotYetDelOwning = 9108
 	NotYetListPatternRestBinding = 9110
-	NotYetArrayLenNamed = 9111
+	NotYetArrayLenImported = 9111
 	NotYetArrayMethod = 9112
 }
 

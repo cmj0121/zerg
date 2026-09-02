@@ -3,6 +3,10 @@
 # A `list` grows (`append`) only when the binding is `mut`. A `map` is keyed by
 # `int` or `str` in this phase. An array's length is part of its type, so it
 # neither grows nor shrinks. `set` is refused by name (E9064) and is not here.
+#
+# beyond-the-seed: `map.has` and a collection method's result type. The bootstrap
+# seed does not type those, so this example is built by `zerg` — which is what
+# `make examples` uses.
 fn main() {
 	mut xs := [1, 2]
 	xs.append(3)

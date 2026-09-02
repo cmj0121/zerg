@@ -4,6 +4,10 @@
 # error. `?` unwraps the left or early-returns the right; `??` supplies a
 # default; `raise` is an abort; `guard { … }` demotes an abort back to a
 # `Result`. Absence (`T?`) is example 14 — this one is the error kind.
+#
+# beyond-the-seed: `Result[T]` / `Either`. The bootstrap seed does not supply
+# those names, so this example is built by `zerg` — which is what `make examples`
+# uses.
 fn parse_pos(n: int) -> Result[int] {
 	return Either.Right(ValueError("negative")) if n < 0
 

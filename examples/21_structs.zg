@@ -4,6 +4,10 @@
 # name (`Point{x: 3, y: 4}`). An inherent `impl` holds two kinds of `fn`, and the
 # BODY is what tells them apart: no `this` is an associated fn, called on the type;
 # a `this` is a method, called on a value.
+#
+# beyond-the-seed: an associated fn (`Point.origin`) is reached through the type.
+# The bootstrap seed does not lower one, so this example is built by `zerg` —
+# which is what `make examples` uses.
 struct Point {
 	pub x: int
 	pub y: int

@@ -1,0 +1,20 @@
+# 1g/orphan — an INHERENT `impl` on a type from another module, which must be refused.
+#
+# The orphan rule says an `impl` belongs to a module that declared something it names: a spec
+# impl may live with its spec or with its type, and an inherent one names only the type — so it
+# belongs with the type and nowhere else. This is that rule with one of its two owners missing.
+#
+# IT WAS UNREACHABLE UNTIL A DOTTED TARGET WAS BUILT. While `impl shape.P { … }` was refused by
+# name, the only `impl` a module could write was on a type it declared itself, so the rule had
+# nothing to catch and no case could be written for it.
+import "./shape"
+
+impl shape.P {
+	fn twice() -> int {
+		return this.x * 2
+	}
+}
+
+fn main() {
+	print shape.P(3).twice()
+}

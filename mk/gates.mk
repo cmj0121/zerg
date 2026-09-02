@@ -22,7 +22,7 @@
 .PHONY: suites test-runner stdlib-test install-check examples corpus fixpoint sanitize-conc \
 	mem-check refuse reject oracle lsp editor-align treesitter desugar gates reject-fuzz \
 	check-equal fmt-corpus fmt-self fmt-tokens fmt-roundtrip docs-links docs-mirror docs-zerg \
-	grammar-cites grammar-cited grammar-keywords grammar-mirror refusal-cites sha256 layering conformance productions \
+	grammar-cites grammar-cited grammar-keywords grammar-mirror refusal-cites docs-repeat sha256 layering conformance productions \
 	counterexamples behaviour version-check cache-key-check error-codes-check seed-gaps lint-check \
 	deviation-check marker-codes \
 	chapter-codes method-gaps \
@@ -476,7 +476,7 @@ gates:                          # every gate is on the board, and the board is r
 	./scripts/gates-check.sh
 
 # `version-check` sits straight after `build` because it reads bin/ rather than filling it.
-LINUX_GATES ?= build version-check suites test-runner stdlib-test examples corpus desugar lsp editor-align treesitter install-check refuse reject oracle reject-fuzz check-equal fmt-corpus fmt-tokens fmt-roundtrip fmt-self lint lint-check doc-check fixpoint docs-links docs-mirror docs-zerg grammar-cites grammar-cited grammar-keywords grammar-mirror refusal-cites layering stmt-walk entry-path examples-index conformance productions counterexamples behaviour error-codes-check seed-gaps deviation-check marker-codes chapter-codes method-gaps build-deps-check cache-key-check sha256 gates mem-check mem-peak release-notes sanitize-conc
+LINUX_GATES ?= build version-check suites test-runner stdlib-test examples corpus desugar lsp editor-align treesitter install-check refuse reject oracle reject-fuzz check-equal fmt-corpus fmt-tokens fmt-roundtrip fmt-self lint lint-check doc-check fixpoint docs-links docs-mirror docs-repeat docs-zerg grammar-cites grammar-cited grammar-keywords grammar-mirror refusal-cites layering stmt-walk entry-path examples-index conformance productions counterexamples behaviour error-codes-check seed-gaps deviation-check marker-codes chapter-codes method-gaps build-deps-check cache-key-check sha256 gates mem-check mem-peak release-notes sanitize-conc
 
 # `reject` holds the mistakes somebody thought of; this holds the ones nobody did. It takes
 # the corpus's WELL-FORMED programs, breaks each in a way the language has a rule about,
@@ -527,6 +527,12 @@ grammar-cites:                  # every GRAMMAR citation the repo makes must res
 # nothing. What keeps it honest is the rule the pass follows, which is written in the script.
 grammar-cited:                  # every production a reader writes is named by a chapter
 	./scripts/grammar-cited-check.sh
+
+# `docs-mirror` holds a page to its translation by SHAPE, and a paragraph is the unit that shape
+# cannot see: repeated inside a section, it changes no count the mirror compares. This asks the
+# narrower question that needs no translation to survive anything — a paragraph against itself.
+docs-repeat:                    # no paragraph of prose is written twice in one document
+	./scripts/docs-repeat.sh
 
 # The third direction, and the one neither of the two above could ask. `grammar-cites` holds a
 # citation to a real production and `grammar-cited` holds a production to being cited; both read

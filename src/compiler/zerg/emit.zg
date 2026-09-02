@@ -16290,8 +16290,8 @@ fn c_main_params_check(mut &em: Emitter, f: ast.File) {
 fn c_main_params_says(mut &em: Emitter, fn_d: ast.FnDecl) {
 	return if fn_d.params.len() == 0
 
-	shape := "the entry takes either nothing or the command-line arguments, `fn main(args: list[str])` (docs/runtime/package.md)"
 	mut why := ""
+	shape := "the entry takes either nothing or the command-line arguments, `fn main(args: list[str])` (docs/runtime/package.md)"
 	if fn_d.params.len() > 1 {
 		why = f"`fn main` takes {strconv.to_string(fn_d.params.len(), 10)} parameters, and {shape}"
 	} else if fn_d.params[0].is_ref {

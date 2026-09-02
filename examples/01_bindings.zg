@@ -1,18 +1,22 @@
 # 01 — Values and bindings.
 #
-#   name := expr        infer the type from the value
-#   mut name := expr    a binding you may reassign later
-#   name: T = expr      fix the type explicitly
 #   const name := expr  a shadow-proof constant
+#   mut name := expr    a binding you may reassign later
+#   name := expr        infer the type from the value
+#   name: T = expr      fix the type explicitly
+#
+# That order is `zerg fmt`'s (F410): a run of bindings is sorted by what each one SAYS about its
+# name — the strongest claim first — so a reader learns which names can change without reading
+# the first word of every line.
 #
 # A numeric literal is untyped and ADOPTS the type its position needs, so `ratio: float = 2`
 # is legal and means 2.0. `zerg lint` asks for the second spelling anyway (L502): the type
 # should be visible to a reader, not only to the compiler.
 fn main() {
-	greeting := "welcome" # inferred as str
-	mut count := 3        # a mutable int
-	ratio: float = 2.0    # typed float, and the literal written as one
 	const limit := 10     # a constant
+	mut count := 3        # a mutable int
+	greeting := "welcome" # inferred as str
+	ratio: float = 2.0    # typed float, and the literal written as one
 
 	count = count + 1 # only a `mut` binding may be reassigned
 

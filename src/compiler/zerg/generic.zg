@@ -368,10 +368,13 @@ fn subst_ty(su: TySubst, t: ast.Ty) -> ast.Ty {
 		return t
 	}
 
-	# THE SAME FOUR `gen_parts` WAS MISSING, and the same consequence one shape over: a
-	# specialization that did not rewrite through an array left `[T; 2]` in the signature it
-	# built, so the parameter the solver had just decided was still a name in the type it was
-	# decided for.
+	# EVERY SHAPE `gen_parts` TAKES APART, THIS ONE PUTS BACK. The two are one question asked in
+	# two directions — what a type is built out of, and how to rebuild it with a parameter
+	# replaced — so a shape either walk does not name is a specialization that keeps a type
+	# PARAMETER in the signature it just decided. `fn(T) -> T` was the last of them: the solver
+	# read `T` out of it and this left it there, so `apply(twice, 21)` was told _argument 1 is
+	# fn(T) -> T, and this gives fn(int) -> int_ — a sentence naming the type parameter it had
+	# already solved.
 	return match t {
 		Ty.TList(e) => ast.Ty.TList(subst_ty(su, e))
 		Ty.TOpt(e) => ast.Ty.TOpt(subst_ty(su, e))
@@ -383,6 +386,7 @@ fn subst_ty(su: TySubst, t: ast.Ty) -> ast.Ty {
 		Ty.TRef(e) => ast.Ty.TRef(subst_ty(su, e))
 		Ty.TPtr(e) => ast.Ty.TPtr(subst_ty(su, e))
 		Ty.TUnsafe(e) => ast.Ty.TUnsafe(subst_ty(su, e))
+		Ty.TFn(ps, r) => ast.Ty.TFn(subst_tys(su, ps), subst_ty(su, r))
 		_ => t
 	}
 }

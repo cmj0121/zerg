@@ -962,6 +962,32 @@ fn main() {
 }
 EOF
 
+# --- an array length that names a constant (GRAMMAR#array-type) ----------------------
+#
+# The length is part of the TYPE, so `[int; N]` and `[int; 4]` have to be ONE type wherever two
+# types meet — which is why the name is resolved over the whole program before anything compares
+# them, and why what a name may be is exactly what this build can FOLD.
+
+reject an-array-length-naming-nothing E3153 'no compile-time constant this build can FOLD' <<'EOF'
+fn main() {
+	xs: [int; NOPE] = [0; 2]
+	print xs.len()
+}
+EOF
+
+reject an-array-length-naming-a-constant-that-is-a-call E3153 'no compile-time constant this build can FOLD' <<'EOF'
+fn g() -> int {
+	return 2
+}
+
+const N: int = g()
+
+fn main() {
+	xs: [int; N] = [0; 2]
+	print xs.len()
+}
+EOF
+
 # --- a top-level annotation is honoured --------------------------------------------
 #
 # `answer: bool = 42` used to compile: the top level inferred from the value and silently

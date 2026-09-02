@@ -1900,11 +1900,15 @@ EOF
 # is not built" from "you made a typo", which is the whole of the implemented-or-named
 # contract — every one of these is in GRAMMAR and none of them was being turned away by
 # the name GRAMMAR gives it.
-expect "$ZERG" array-length-that-names-a-constant E9111 <<'EOF'
-WIDTH := 4
+# WHAT IS LEFT OF THAT FORM. A length naming a constant is RESOLVED, over the whole program and
+# by NAME — so what stays refused is the one const-expr a name cannot answer: a constant reached
+# through an import. Two modules declaring `WIDTH` would be one key, and telling them apart is
+# module identity, which this compiler settles for a call and not for a length.
+expect "$ZERG" array-length-reached-through-an-import E9111 <<'EOF'
+import "./sizes"
 
 fn main() {
-	xs: [int; WIDTH] = [1, 2, 3, 4]
+	xs: [int; sizes.WIDTH] = [1, 2, 3, 4]
 	print xs[0]
 }
 EOF

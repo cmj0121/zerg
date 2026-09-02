@@ -18,3 +18,7 @@ examples/11_coroutines.zg	the bootstrap seed does not lower a send `ch <- v`: co
 examples/12_actor.zg	the bootstrap seed does not lower a send `ch <- v`: concurrency belongs to the self-hosting compiler, which implements the whole chapter
 examples/13_cancel.zg	the bootstrap seed does not lower a send `ch <- v`: concurrency belongs to the self-hosting compiler, which implements the whole chapter
 examples/14_optional.zg	the bootstrap seed does not supply the implicit `nil` for an omitted `T?` field; pass it explicitly
+examples/21_structs.zg	undefined name "Point"
+examples/23_collections.zg	a map has no method "has"
+examples/24_closures.zg	a closure used as a value is not yet supported
+examples/25_errors.zg	undefined name "Either"

@@ -1,0 +1,31 @@
+# 25 — Recoverable failure is a value: `Result[T]`, `?`, `??`, and `guard`.
+#
+# `Result[T]` is `Either[T, Err]`. The left is the value, the right is the
+# error. `?` unwraps the left or early-returns the right; `??` supplies a
+# default; `raise` is an abort; `guard { … }` demotes an abort back to a
+# `Result`. Absence (`T?`) is example 14 — this one is the error kind.
+fn parse_pos(n: int) -> Result[int] {
+	return Either.Right(ValueError("negative")) if n < 0
+
+	return Either.Left(n)
+}
+
+fn twice(n: int) -> Result[int] {
+	v := parse_pos(n)?
+	return Either.Left(v * 2)
+}
+
+fn main() {
+	print parse_pos(3) ?? 0
+	print parse_pos(0 - 1) ?? 0
+
+	print twice(5) ?? 0
+	print twice(0 - 5) ?? 0
+
+	print guard {
+		parse_pos(4)!
+	} ?? 0
+	print guard {
+		parse_pos(0 - 4)!
+	} ?? 0
+}

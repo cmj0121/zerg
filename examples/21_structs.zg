@@ -1,0 +1,31 @@
+# 21 — A `struct` is a product, and an associated fn is reached through the type.
+#
+# Fields are private until `pub`. Construction is positional (`Point(3, 4)`) or by
+# name (`Point{x: 3, y: 4}`). An inherent `impl` holds two kinds of `fn`, and the
+# BODY is what tells them apart: no `this` is an associated fn, called on the type;
+# a `this` is a method, called on a value.
+struct Point {
+	pub x: int
+	pub y: int
+}
+
+impl Point {
+	fn origin() -> Point {
+		return Point(0, 0)
+	}
+
+	fn manhattan() -> int {
+		return this.x + this.y
+	}
+}
+
+fn main() {
+	p := Point(3, 4)
+	print p.x
+	print p.y
+	print p.manhattan()
+
+	o := Point.origin()
+	print o.x
+	print o.y
+}

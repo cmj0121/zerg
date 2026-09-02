@@ -128,7 +128,7 @@ install-check:                  # the installed toolchain works, and uninstall t
 # copy the next directory is not added to.
 EXAMPLE_SRCS := examples/[0-9][0-9]_*.zg examples/*/main.zg examples/1g/*/main.zg
 
-EXAMPLE_MIN ?= 20
+EXAMPLE_MIN ?= 40
 
 # The examples that must be REFUSED, and the sentence they must be refused with. An example
 # is a claim about the language, and a NEGATIVE one — this program is not Zerg — is a claim
@@ -161,7 +161,7 @@ EXAMPLE_REFUSED_SAYS ?= is not a public member of module
 # renamed directory or a moved corpus turns the whole assertion off and leaves a target that
 # reports "39 examples built and run" having compared none of them. `EXAMPLE_OUT_MIN` is what
 # tells that apart from the concurrent examples legitimately having no file.
-EXAMPLE_OUT_MIN ?= 30
+EXAMPLE_OUT_MIN ?= 36
 
 # CHECKED AS WELL AS BUILT, because they are not the same walk. `--emit bin` loads the program
 # unit by unit (cmd/unit.zg) and every other stage loads it whole (cmd/source.zg), so a rule
@@ -560,7 +560,7 @@ stmt-walk:                      # a walk that reaches into a block reaches into 
 	./scripts/stmt-walk-check.sh
 
 # Thirty-three example programs sat here and no document linked to any of them; `examples/README.md`
-# is the door now, and an index of thirty-three names is a list written twice. This is the direction
+# is the door now, and an index of forty-six names is a list written twice. This is the direction
 # the drift goes — somebody adds an example, the glob starts building it, and nothing reminds them
 # to write a line about it. `docs-links` cannot see it: an example nobody cites is invisible to a
 # gate that asks whether a citation resolves.

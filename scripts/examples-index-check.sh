@@ -7,7 +7,7 @@
 # link to one. They were reached by `ls` and by nothing else. `examples/README.md` is the door, and
 # a door is only as good as the day somebody last updated it.
 #
-# AN INDEX OF THIRTY-THREE NAMES IS A LIST WRITTEN TWICE, which is the hazard `mk/gates.mk` already
+# AN INDEX OF FORTY-SIX NAMES IS A LIST WRITTEN TWICE, which is the hazard `mk/gates.mk` already
 # names about `SELF_SRCS` and `EXAMPLE_SRCS`: *a scope written twice goes stale on whichever copy the
 # next directory is not added to*. `make examples` globs the programs; this asks whether the index
 # names what that glob found. The check is ONE DIRECTION and cheap — an example the index never
@@ -30,9 +30,9 @@ cd "$ROOT" || exit 2
 
 INDEX=${INDEX:-examples/README.md}
 
-# 33 today. Far enough below that adding one is not a chore here, far enough above that a glob
+# 46 today. Far enough below that adding one is not a chore here, far enough above that a glob
 # which stopped matching cannot pass.
-MIN_EXAMPLES=${MIN_EXAMPLES:-25}
+MIN_EXAMPLES=${MIN_EXAMPLES:-40}
 
 [ -f "$INDEX" ] || {
 	echo "examples-index: $INDEX is not there — the examples have no door" >&2

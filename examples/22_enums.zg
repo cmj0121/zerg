@@ -1,0 +1,23 @@
+# 22 — An `enum` is a sum: one of several variants, some with a payload.
+#
+# A variant is named through the type (`Shape.Dot`). `match` is exhaustive —
+# every variant is an arm, and an arm that carries a payload binds it.
+enum Shape {
+	Dot
+	Line(int)
+	Rect(int, int)
+}
+
+fn area(s: Shape) -> int {
+	return match s {
+		Shape.Dot        => 0
+		Shape.Line(n)    => n
+		Shape.Rect(w, h) => w * h
+	}
+}
+
+fn main() {
+	print area(Shape.Dot)
+	print area(Shape.Line(7))
+	print area(Shape.Rect(3, 4))
+}

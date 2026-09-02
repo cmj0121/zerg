@@ -9,7 +9,7 @@
 
 - **[Getting started](getting-started.zh-TW.md)** —— 從 `hello, world` 到一支多檔案的程式。如果你還
   沒寫過任何 Zerg，先讀這一篇：底下全部是參考資料，而參考資料是很差的第一頁。
-- **[Zerg by example](../examples/README.zh-TW.md)** —— 三十三支附閱讀順序的程式，每一支都由
+- **[Zerg by example](../examples/README.zh-TW.md)** —— 四十六支附閱讀順序的程式，每一支都由
   `make examples` 建起來並執行。
 - **[語言參考](language.zh-TW.md)** —— 索引。所有章節、已分組，各附一行說明涵蓋什麼。
   如果你還不知道要看哪一章，從這裡開始。

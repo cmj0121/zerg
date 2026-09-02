@@ -217,9 +217,8 @@ module 的用途。
 > 是 float 自己的。`type` 字母對每一種渲染都是封閉集合
 > ([文字與格式化](runtime/format.zh-TW.md))；落在集合外的字母以同樣的方式被拒。
 >
-> 這些今天全都搆不到。唯一會要求 width 或 precision 的表面形式是 **f-string hole 裡的 format spec**,而它是
-> `[not yet]`:每一個 `{x:…}`(包含 `{x:.2f}`)都回報 _E9012 NotImplemented: an f-string ':spec' format spec_。
-> 三個上限實作在 runtime 裡,而出貨的編譯器不會發出任何抵達它們的呼叫,所以這一段記載的是一份程式還觀察不到的契約。
+> 會要求 width 或 precision 的表面形式是 **f-string hole 裡的 format spec**。落在集合外的字母在寫下它的地方被
+> 拒絕（_E3142_）。超過上限的 width 或 precision 是渲染時的 `ValueError`。三個上限因此是一份程式觀察得到的契約。
 
 ## Runtime abort 契約
 

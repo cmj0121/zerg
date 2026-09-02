@@ -270,11 +270,9 @@ same source to an object file, which is what a module is for.
 > on digits rather than on a field and so is the float's own. The `type` letter is a closed set per rendering
 > ([Text & Formatting](runtime/format.md)); a letter outside it is refused the same way.
 >
-> None of it is reachable yet. The only surface that asks for a width or a precision is a **format spec in
-> an f-string hole**, and that is `[not yet]` — every `{x:…}`, `{x:.2f}` included, reports _E9012
-> NotImplemented: an f-string ':spec' format spec_. The three bounds are implemented in the runtime and the
-> shipping compiler emits no call that reaches them, so this paragraph documents a contract a program
-> cannot yet observe.
+> The surface that asks for a width or a precision is a **format spec in an f-string hole**. A letter
+> outside the set is refused where it is written (_E3142_). A width or precision past the bound is a
+> `ValueError` when the rendering runs. The three bounds are therefore a contract a program can observe.
 
 ## Runtime abort contract
 

@@ -98,9 +98,14 @@ cc 對著產生的 C。
 | `e in ValueError`——錯誤 taxonomy 的**子樹**測試                       | docs/code/errors 的 `in` |
 
 `e is ValueError` 種子建得起來，沒有讀法的是 `in`。這兩個是不同的關係（identity 與 subtree，見
-docs/code/errors.zh-TW.md），而只有其中一個在這裡——這件事值得寫下來，因為它決定了一個 corpus 案例
-該怎麼寫：問 `is` 的案例兩個編譯器都能被檢驗，問 `in` 的案例只有 `zerg` 回答得了。有五條 oracle skip
-就架在這一個缺口上（`error_tree`、`err_kind_subtree` 及其同類），見 `test-data/oracle-skips.txt`。
+docs/code/errors.zh-TW.md），而只有其中一個在這裡。有五條 oracle skip 就架在這一個缺口上
+（`error_tree`、`err_kind_subtree` 及其同類），見 `test-data/oracle-skips.txt`。
+
+**`is` 後來分家了。** 那一段原本結尾寫著「問 `is` 的案例兩個編譯器都能被檢驗」，而在 `p is P` 兩邊
+都拒收的時候,那是真的。現在不是了:出貨的編譯器把對**型別名字**的測試折成編譯期常數（見
+docs/core/specs.zh-TW.md），而種子指名拒絕它——`the ``is`` type test is not yet supported`，它自己的
+句子,這也是上面那一列寫的是**錯誤種類**而不是 `is` 的原因。問 `is` 於一個錯誤種類的案例，兩個編譯器
+仍然都能被檢驗;問它於一個型別名字的案例，是 `zerg` 獨有的。
 
 它同時也是一個**用錯句子的拒絕**。`e in ValueError` 對種子而言讀成「對一個叫 `ValueError` 的值做成員
 測試」，於是那個名字以一般運算式解析、答案是 `undefined name "ValueError"`——拼錯字會拿到的那句話，

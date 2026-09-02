@@ -36,6 +36,8 @@
 #   F406  a blank line where one is load-bearing — guard runs, declaration runs, comments
 #   F407  a discarded receive binder drops — `_ := <-ch => …` is `<-ch => …`
 #   F408  an or-pattern over consecutive integers becomes the range it is — `1 | 2` is `1..=2`
+#   F409  a bare block that opens with a binding becomes the `with` it is sugar for
+#   F410  a run of bindings is ordered by what each one says — `const`, `mut`, then the rest
 #
 # F1xx-F3xx are not negotiable: they are what "canonical" means, and a formatter with
 # options for them is a formatter two people configure differently. F4xx is different —
@@ -114,6 +116,15 @@ pub fn fmt_src_off(src: str, off: list[str]) -> str {
 	}
 	if not fmt_is_off(off, "F406") {
 		toks = fmt_blank(toks)
+	}
+
+	# F410 IS LAST, and that is a fact about what it does rather than a preference. It permutes
+	# whole STATEMENTS, so every rule that reads a run's shape — F406's leading edge on a
+	# declaration run, F403's widths — has to see the order the author wrote, not an
+	# intermediate one. Run before them it produced a shape F406 was not written for, and the
+	# blank it inserted landed inside a binding rather than in front of the run.
+	if not fmt_is_off(off, "F410") {
+		toks = fmt_binds(toks)
 	}
 	return fmt_toks(toks, fmt_is_off(off, "F105"))
 }
@@ -348,6 +359,223 @@ pub fn fmt_stmt_start(mut &toks: list[token.Token], at: int) -> bool {
 	return true if at == 0
 	k := toks[at - 1].kind
 	return is_semi(k) or is_lbrace(k) or is_rbrace(k) or is_comment(k)
+}
+
+# --- rule F410: a run of bindings is ordered by what a binding IS -------------------------
+#
+# Four spellings say four different things about a name — `const` is shadow-proof, `mut` may be
+# reassigned, and the other two may not — and a run of them says nothing about which is which
+# until a reader has read the first word of every line. The trailing comments are already in one
+# column (F107); the word that decides whether a name can change is in no order at all.
+#
+# So the run is sorted by the STRENGTH of the claim: `const`, then `mut`, then the immutable
+# ones. Within each kind the written order is kept, which makes this a stable sort and therefore
+# idempotent by construction rather than by a fixpoint argument.
+#
+# WHAT IT MAY MOVE IS THE WHOLE OF THE RULE. Reordering a binding moves WHEN it is evaluated,
+# and a binding may depend on the one above it — `const n := greeting.len()` under
+# `greeting := "welcome"` is a program this would break rather than reformat. This file works
+# from TOKENS and says so at the top: no scopes, no types, nothing to ask what a binding depends
+# on. So a run is moved only when every initializer in it is a LITERAL and no name repeats: a
+# literal depends on nothing and does nothing, and a repeated name is a shadow, where order IS
+# meaning. Both are answerable from tokens alone, which is what keeps the rule inside this
+# file's contract instead of needing a pass this file is not.
+#
+# A BLANK LINE ENDS A RUN, the boundary F106 and F107 already use — somebody wrote it to
+# separate two groups, and a rule that reached across it would be undoing that.
+fn fmt_binds(mut &toks: list[token.Token]) -> list[token.Token] {
+	mut out: list[token.Token] = []
+	mut i := 0
+	for i < toks.len() {
+		n := fmt_bind_run(toks, i)
+		if n < 0 {
+			out.append(toks[i])
+			i = i + 1
+		} else {
+			fmt_bind_emit(toks, i, n, out)
+			i = i + n
+		}
+	}
+	return out
+}
+
+# fmt_bind_run answers how many TOKENS a reorderable run spans, or -1. Every reason to decline
+# is here, in one place: not a run, not all literals, a repeated name, or already in order —
+# the last one so that a run this rule agrees with is left byte-for-byte alone.
+fn fmt_bind_run(mut &toks: list[token.Token], at: int) -> int {
+	return 0 - 1 if not fmt_stmt_start(toks, at) or fmt_bind_kind(toks, at) < 0
+
+	mut ends: list[int] = []
+	mut kinds: list[int] = []
+	mut names: list[str] = []
+	mut i := at
+	for true {
+		k := fmt_bind_kind(toks, i)
+		break if k < 0
+
+		e := fmt_bind_end(toks, i)
+		break if e < 0 or not fmt_bind_is_literal(toks, i, e)
+
+		nm := fmt_bind_name(toks, i)
+		break if nm == "" or fmt_name_seen(names, nm)
+
+		# a blank line between two of them is a boundary somebody wrote
+		break if ends.len() > 0 and toks[i].line > toks[ends[ends.len() - 1] - 1].line + 1
+
+		ends.append(e)
+		kinds.append(k)
+		names.append(nm)
+		i = e
+	}
+	return 0 - 1 if ends.len() < 2 or fmt_kinds_sorted(kinds)
+
+	return ends[ends.len() - 1] - at
+}
+
+# fmt_bind_emit writes the run back in order, each binding RE-LINED onto the line the binding
+# that now stands in its place came from. The printer decides where a line break goes from the
+# tokens' own lines, so a slice moved without re-lining would print on its old line and take the
+# gap that implies with it.
+fn fmt_bind_emit(mut &toks: list[token.Token], at: int, n: int, mut &out: list[token.Token]) {
+	mut starts: list[int] = []
+	mut ends: list[int] = []
+	mut lines: list[int] = []
+	mut i := at
+	for i < at + n {
+		e := fmt_bind_end(toks, i)
+		starts.append(i)
+		ends.append(e)
+		lines.append(toks[i].line)
+		i = e
+	}
+
+	mut slot := 0
+	mut k := 0
+	for k < 3 {
+		mut j := 0
+		for j < starts.len() {
+			if fmt_bind_kind(toks, starts[j]) == k {
+				fmt_bind_copy(toks, starts[j], ends[j], lines[slot], out)
+				slot = slot + 1
+			}
+			j = j + 1
+		}
+		k = k + 1
+	}
+}
+
+fn fmt_bind_copy(mut &toks: list[token.Token], lo: int, hi: int, ln: int, mut &out: list[token.Token]) {
+	mut i := lo
+	for i < hi {
+		out.append(fmt_on_line(toks[i], ln))
+		i = i + 1
+	}
+}
+
+# fmt_bind_kind is which of the three a binding at `at` is — 0 `const`, 1 `mut`, 2 immutable —
+# or -1 for anything that is not a binding. GRAMMAR#binding puts the qualifier before the name
+# and allows both the inferred `:=` and the annotated `: T =`, so all four spellings are here.
+fn fmt_bind_kind(mut &toks: list[token.Token], at: int) -> int {
+	return 0 - 1 if at + 2 >= toks.len()
+
+	k := toks[at].kind
+	if k == token.Kind.Const or k == token.Kind.Mut {
+		return 0 - 1 if toks[at + 1].kind != token.Kind.Ident or not fmt_bind_op(toks[at + 2].kind)
+		return 0 if k == token.Kind.Const
+
+		return 1
+	}
+	return 0 - 1 if k != token.Kind.Ident or not fmt_bind_op(toks[at + 1].kind)
+
+	return 2
+}
+
+# fmt_bind_op is what follows the NAME in either spelling: `:=` binds and infers, `:` opens the
+# written type of the annotated form.
+fn fmt_bind_op(k: token.Kind) -> bool {
+	return k == token.Kind.Walrus or k == token.Kind.Colon
+}
+
+fn fmt_bind_name(mut &toks: list[token.Token], at: int) -> str {
+	k := toks[at].kind
+	return toks[at + 1].lexeme if k == token.Kind.Const or k == token.Kind.Mut
+
+	return toks[at].lexeme
+}
+
+# fmt_bind_end is the index just past the binding that starts at `at`, or -1.
+#
+# WHAT ENDS ONE IS THE LINE, not the `;`. The lexer inserts a separator after a token that can
+# END a statement, and a trailing comment cannot — so `a := 1 # why` carries no `;` at all in the
+# stream this file reads, and a walk that looked for one ran past the whole run and found the
+# block's `}`. Every binding with a comment on it was invisible to this rule for that reason,
+# which is most of the bindings anybody writes.
+#
+# A `{` inside means this is not the shape: a literal initializer holds no braces.
+fn fmt_bind_end(mut &toks: list[token.Token], at: int) -> int {
+	ln := toks[at].line
+	mut i := at
+	for i < toks.len() {
+		k := toks[i].kind
+
+		return 0 - 1 if is_lbrace(k) or is_rbrace(k)
+		return i if toks[i].line != ln
+
+		i = i + 1
+	}
+	return 0 - 1
+}
+
+# fmt_bind_is_literal is the whole safety condition in one question: after the `:=` or the `=`,
+# is there exactly ONE literal token before the `;`? A literal depends on nothing and does
+# nothing, which is what makes moving the binding a reformat rather than a change. A trailing
+# comment rides along — it belongs to the line, not to the value.
+fn fmt_bind_is_literal(mut &toks: list[token.Token], at: int, end: int) -> bool {
+	mut op := 0 - 1
+	mut i := at
+	for i < end {
+		k := toks[i].kind
+		if k == token.Kind.Walrus or k == token.Kind.Assign {
+			op = i
+		}
+		i = i + 1
+	}
+
+	return false if op < 0 or op + 1 >= end
+
+	return false if not fmt_is_literal_tok(toks[op + 1].kind)
+
+	mut j := op + 2
+	for j < end {
+		k := toks[j].kind
+		return false if not is_comment(k) and not is_semi(k)
+
+		j = j + 1
+	}
+	return true
+}
+
+fn fmt_is_literal_tok(k: token.Kind) -> bool {
+	return true if k == token.Kind.Int or k == token.Kind.Float or k == token.Kind.Str or k == token.Kind.RawStr
+
+	return k == token.Kind.Rune or k == token.Kind.Byte or k == token.Kind.True or k == token.Kind.False
+}
+
+fn fmt_name_seen(names: list[str], nm: str) -> bool {
+	for n in names {
+		return true if n == nm
+	}
+	return false
+}
+
+fn fmt_kinds_sorted(kinds: list[int]) -> bool {
+	mut i := 1
+	for i < kinds.len() {
+		return false if kinds[i] < kinds[i - 1]
+
+		i = i + 1
+	}
+	return true
 }
 
 # --- rule F409: a bare block that opens with a binding is a `with` ------------------------
@@ -777,7 +1005,13 @@ fn fmt_decl_min() -> int {
 # is a statement with a shape of its own and not part of any preamble.
 fn fmt_decl_end(mut &toks: list[token.Token], at: int) -> int {
 	mut i := at
-	if toks[i].kind == token.Kind.Mut {
+
+	# BOTH QUALIFIERS, and `const` was missing. GRAMMAR#binding puts either in front of the name,
+	# and a reader that knew only `mut` did not see a declaration at a `const` — so the run was
+	# detected one token late, starting at the NAME, and F406's leading edge went in between the
+	# keyword and the name it qualifies. `const a := 1` came back as two lines, and running
+	# `zerg fmt` again added a blank between them.
+	if toks[i].kind == token.Kind.Mut or toks[i].kind == token.Kind.Const {
 		i = i + 1
 	}
 	return -1 if toks[i].kind != token.Kind.Ident

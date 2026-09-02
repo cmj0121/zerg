@@ -21,6 +21,7 @@ import (
 	"./ignore"
 	"./layout"
 )
+
 const KIND_MISSING := 0
 const KIND_FILE := 1
 const KIND_DIR := 2

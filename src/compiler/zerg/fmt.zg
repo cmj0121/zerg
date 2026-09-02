@@ -36,6 +36,7 @@
 #   F406  a blank line where one is load-bearing — guard runs, declaration runs, comments
 #   F407  a discarded receive binder drops — `_ := <-ch => …` is `<-ch => …`
 #   F408  an or-pattern over consecutive integers becomes the range it is — `1 | 2` is `1..=2`
+#   F409  a bare block that opens with a binding becomes the `with` it is sugar for
 #
 # F1xx-F3xx are not negotiable: they are what "canonical" means, and a formatter with
 # options for them is a formatter two people configure differently. F4xx is different —
@@ -115,6 +116,7 @@ pub fn fmt_src_off(src: str, off: list[str]) -> str {
 	if not fmt_is_off(off, "F406") {
 		toks = fmt_blank(toks)
 	}
+
 	return fmt_toks(toks, fmt_is_off(off, "F105"))
 }
 
@@ -777,7 +779,13 @@ fn fmt_decl_min() -> int {
 # is a statement with a shape of its own and not part of any preamble.
 fn fmt_decl_end(mut &toks: list[token.Token], at: int) -> int {
 	mut i := at
-	if toks[i].kind == token.Kind.Mut {
+
+	# BOTH QUALIFIERS, and `const` was missing. GRAMMAR#binding puts either in front of the name,
+	# and a reader that knew only `mut` did not see a declaration at a `const` — so the run was
+	# detected one token late, starting at the NAME, and F406's leading edge went in between the
+	# keyword and the name it qualifies. `const a := 1` came back as two lines, and running
+	# `zerg fmt` again added a blank between them.
+	if toks[i].kind == token.Kind.Mut or toks[i].kind == token.Kind.Const {
 		i = i + 1
 	}
 	return -1 if toks[i].kind != token.Kind.Ident

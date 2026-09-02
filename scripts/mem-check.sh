@@ -894,6 +894,53 @@ fn main() {
 }
 ZG
 
+# --- the operand of a folded `is` -----------------------------------------------------
+# `x is T` on a known concrete type is a compile-time constant (docs/core/specs.md), and the
+# constant is the only part that is decided early: the operand is still a call the program
+# made, and a value that call BUILT has nobody else to give it back. Nothing else can see
+# this. The answer is right whether or not the drop is there, `make corpus` compares output,
+# and macOS has no LeakSanitizer — so a fold that dropped the operand on the floor would have
+# been green everywhere.
+#
+# Three shapes, because c_drop_fn answers for them in two calling conventions: a `str` by its
+# own value, a `list` and a `map` by address.
+case_run is_folded_operand no no <<'ZG'
+struct P {
+	pub a: int
+}
+
+fn mkstr(n: int) -> str {
+	return f"{n}abcdefghijklmnop"
+}
+
+fn mklist(n: int) -> list[int] {
+	return [n, n + 1, n + 2]
+}
+
+fn mkmap(n: int) -> map[str, int] {
+	return {"a": n, "b": n + 1}
+}
+
+fn main() {
+	mut n := 0
+	mut i := 0
+	r := rounds()
+	for i < r {
+		if mkstr(i) is P {
+			n = n + 1
+		}
+		if mklist(i) is P {
+			n = n + 2
+		}
+		if mkmap(i) is P {
+			n = n + 4
+		}
+		i = i + 1
+	}
+	print n
+}
+ZG
+
 if [ "$fail" -ne 0 ]; then
 	printf '\nmem-check: a value outlives the scope that made it\n' >&2
 	printf 'mem-check: the sources, the C and the binaries are kept in %s\n' "$WORK" >&2

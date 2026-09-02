@@ -946,14 +946,36 @@ fn main() {
 }
 EOF
 
-expect "$ZERG" is-a-struct E9078 'is P' <<'EOF'
-struct P {
-	pub a: int
+# A `spec` IS THE EXISTENTIAL HALF — the one `docs/core/specs.md` marks **[not yet]**. It is
+# unreachable from the other direction too (E9048: a spec cannot be used as a type), so this
+# is the test asked of a concrete value against a name that is not a type here.
+expect "$ZERG" is-a-spec-name E9078 'is Greet' <<'EOF'
+spec Greet {
+	fn hello() -> str
 }
 
 fn main() {
-	p := P(1)
-	print p is P
+	x := 3
+	print x is Greet
+}
+EOF
+
+# A NAME THAT NEEDS ARGUMENTS. `list` denotes no complete type, so there is nothing to put on
+# the right of the comparison — and a fold would have answered `false` for a value that IS a
+# list, which is the one wrong answer this refusal exists to prevent.
+expect "$ZERG" is-an-incomplete-type E9078 'is list' <<'EOF'
+fn main() {
+	xs := [1, 2]
+	print xs is list
+}
+EOF
+
+# AN ALIAS IS THE SAME TRAP ONE STEP ALONG: `bytearray` is `list[byte]`, which renders as a
+# spelling the bare name can never equal.
+expect "$ZERG" is-a-builtin-alias E9078 'is bytearray' <<'EOF'
+fn main() {
+	xs := [1, 2]
+	print xs is bytearray
 }
 EOF
 
@@ -3331,13 +3353,6 @@ struct P {
 
 fn main() {
 	print 1
-}
-EOF
-
-expect "$ZERG" an-is-test-on-a-non-error-type E9078 <<'EOF'
-fn main() {
-	x := 3
-	print x is int
 }
 EOF
 

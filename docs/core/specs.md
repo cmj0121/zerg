@@ -153,9 +153,11 @@ per-type opt-in `Eq` above included.
 
 ## `#[obj]` — a spec's methods, held as values
 
-A **`spec` is a bound, never a type** (above), so a value cannot be typed by one. `#[obj]` is what you
-write when you want a heterogeneous collection anyway: on a spec, it generates a companion **struct of
-function values** — one field per method — and a **generic wrap** that turns any implementer into one.
+`#[obj]` is what you write when you want a **heterogeneous collection**: on a spec, it generates a companion
+**struct of function values** — one field per method — and a **generic wrap** that turns any implementer into
+one. That struct is the **open encoding** of an existential (above), so a `spec` used **as a type** is this
+same thing with the compiler doing the writing — which is not built here (_E9048_, above). Until it is, the
+hand-written form is the one a program has, and no value can be typed by a spec.
 
 ```zerg
 #[obj]

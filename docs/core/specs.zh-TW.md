@@ -294,8 +294,8 @@ _E4089 `P` has no associated value `NOPE`_,而那句話取代的是一次外漏:
 每個內建行為都是一個 spec、**靠實作（或 derive）它才取得**——沒有自動實作的頂層 spec、也沒有隱式的。通用的結構性
 操作（`copy`、`del`、傳參、存起來、送進 channel）屬於**記憶體模型**、不屬於任何 spec bound（見
 [值與記憶體](memory.zh-TW.md)）;其中 `copy` 對每個型別都被強制、永不缺席。`debug` / `display`——開發者取向與給人看
-的文字渲染,`display` 預設為 `debug`——屬於 [Formatting & Text](../runtime/format.zh-TW.md);它們的**結構化 auto-derive** 是
-**[not yet]**。其餘一切都是型別 **opt-in** 的 spec、由泛型 bound 把關:
+的文字渲染,`display` 預設為 `debug`——屬於 [Formatting & Text](../runtime/format.zh-TW.md);複合值結構化渲染,identity
+則被指名拒絕。其餘一切都是型別 **opt-in** 的 spec、由泛型 bound 把關:
 
 - **`Eq`**——結構化相等,驅動 `==` / `!=`,靠 `#[derive(Eq)]` 或手寫 `impl Eq` 取得;channel 或 `fn` 欄位以 identity
   比較。它**同時要求** `eq` 與 `ne`——只給其中一個的 impl 會得到

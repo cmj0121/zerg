@@ -382,8 +382,8 @@ auto-implemented top spec, and none is implicit. The universal structural operat
 store, send over a channel) belong to the **memory model**, not to any spec bound
 ([Values & Memory](memory.md)); `copy` in particular is forced for every type and is never absent.
 `debug` / `display` — the developer-facing and human-facing text renderings, `display` defaulting to
-`debug` — belong to [Format](../runtime/format.md); their **structural auto-derivation** is **[not yet]**. Everything
-else is a spec a type **opts into**, a generic bound gating on it:
+`debug` — belong to [Format](../runtime/format.md); a composite is rendered structurally, and an identity
+is refused by name. Everything else is a spec a type **opts into**, a generic bound gating on it:
 
 - **`Eq`** — structural equality, driving `==` / `!=`, gained by `#[derive(Eq)]` or a hand-written
   `impl Eq`; a channel or `fn` field compares by identity. It requires **both** `eq` and `ne` — an impl

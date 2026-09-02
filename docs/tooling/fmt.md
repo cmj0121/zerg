@@ -297,6 +297,27 @@ with no way to tell them apart by looking.
 | `F407` | a discarded receive binder drops — `_ := <-ch => …` is `<-ch => …`             | on      |
 | `F408` | an or-pattern over consecutive integers becomes the range it is                | on      |
 | `F409` | a bare block that opens with a binding becomes the `with` it is sugar for      | on      |
+| `F410` | a run of bindings is ordered `const`, then `mut`, then the immutable ones      | on      |
+
+**`F410`** sorts a run of bindings by what each one SAYS about its name — `const` first, then
+`mut`, then the immutable ones — because four spellings say four different things and a reader
+otherwise learns which is which by reading the first word of every line. Within a kind the
+written order is kept, so the rule is a **stable sort** and idempotent by construction.
+
+What it may move is the whole of the rule. Reordering a binding moves **when** it is evaluated,
+and a binding may depend on the one above it — `const n := greeting.len()` under
+`greeting := "welcome"` is a program this would break rather than reformat. This formatter works
+from **tokens**: no scopes, no types, nothing to ask what a binding depends on. So a binding
+moves only when its initializer is a **literal** and its name is not written twice in the run: a
+literal depends on nothing and does nothing, and a repeated name is a shadow, where order **is**
+meaning. A binding it declines is a **boundary** rather than a veto — the run restarts after it,
+so nothing crosses the line it draws. A blank line ends a run, the boundary `F106` and `F107`
+already use.
+
+On this tree the rule moves **two** runs. Sixty-seven of the sixty-nine that qualify are already
+in that order, and one of the two reads arguably worse afterwards — an accumulator initialised
+empty rising above the subject it belongs to. That is the cost, and it is why a rule that moves
+code belongs in the group `--off` exists for.
 
 `GRAMMAR` defines `return x if c`, `break if c`, `continue if c` and `raise e if c` **as** sugar
 for `if c { … }` around the same jump — one postfix `if`, every **diverge**. So the two forms say the

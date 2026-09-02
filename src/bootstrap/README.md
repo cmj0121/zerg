@@ -110,10 +110,16 @@ Measured against `zerg0` on 2026-07-31.
 
 `e is ValueError` the seed does build; it is `in` it has no reading for. The two are
 different relations (identity and subtree, docs/code/errors.md) and only one of them is
-here, which is worth saying because it decides how a corpus case is written: a case asking
-`is` is one both compilers can be held to, and a case asking `in` is one only `zerg` answers.
-Five oracle skips rest on this single gap (`error_tree`, `err_kind_subtree`, and their
+here. Five oracle skips rest on this single gap (`error_tree`, `err_kind_subtree`, and their
 kin) — see `test-data/oracle-skips.txt`.
+
+**`is` SPLIT SINCE.** That paragraph used to end "a case asking `is` is one both compilers
+can be held to", and it was true while `p is P` was refused by both. It is not any more: the
+shipping compiler folds a test against a TYPE name to a compile-time constant
+(docs/core/specs.md), and the seed refuses it by name — `the ``is`` type test is not yet
+supported`, its own sentence, which is why the row above says the ERROR KIND and not `is`.
+A case asking `is` on an error kind is still one both can be held to; one asking it on a type
+name is `zerg`'s alone.
 
 It is also a SECOND refusal with the wrong sentence. `e in ValueError` reads to the seed as
 a membership test against a value called `ValueError`, so the name resolves as an ordinary

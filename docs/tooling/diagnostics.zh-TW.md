@@ -467,7 +467,7 @@ seed 全程維持句子比對:代碼是語言的契約,而 seed 是建置正式�
 | `E9075` | 泛型的 `type …[…] = …`                                                                                |
 | `E9076` | variant payload 裡的子 pattern                                                                        |
 | `E9077` | 把 range 當成值使用                                                                                   |
-| `E9078` | `is …` 指名了一個內建的 error kind                                                                    |
+| `E9078` | `is …` 指名的名字不是可比對的型別                                                                     |
 | `E9079` | decorator `#[sealed]` — 保留                                                                          |
 | `E9097` | 在用到並行的程式裡寫 main(args)                                                                       |
 | `E9099` | 對內建接收者上的方法 `…` 做 … — thunk 到不了那條 dispatch                                             |

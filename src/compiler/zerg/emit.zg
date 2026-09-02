@@ -6756,13 +6756,24 @@ fn c_neg_call(t: ast.Ty, inner: str) -> str {
 	return f"zrt_neg_i64((int64_t)({inner}))"
 }
 
-# c_is_test lowers `x is Name`. An Err is the one value in the language carrying a runtime
-# type tag — its `kind` — so an error-kind test is a comparison of that tag, exactly as the
-# seed lowers it. Every other `x is T` is a general runtime type test, which needs tags no
-# value carries this phase; it is refused BY NAME here rather than lowered to something
-# that reads as a bool. Both refusals matter more than they look: until this function
-# existed the `is` token was consumed by nobody and dropped, so a test emitted a stray `0;`
-# and an undeclared `zg_<Name>` — C that cannot be traced back to the Zerg that meant it.
+# c_is_test lowers `x is Name`. TWO QUESTIONS WEAR ONE OPERATOR and the NAME settles which is
+# asked. An error kind is a tag an `Err` carries at runtime — the one value in the language
+# that carries its own type — so that test is a comparison of the tag, exactly as the seed
+# lowers it. Every other name asks whether the operand's type IS that type, and
+# `docs/core/specs.md` settles that one: "on a value whose concrete type is **already known**
+# (not an existential) the answer is a compile-time constant". This compiler has no
+# existentials at all — a `spec` cannot be used as a type (E9048) — so every operand reaching
+# here has a known concrete type, and the test folds.
+#
+# IT USED TO REFUSE THE WHOLE SECOND HALF. E9078 implements a **[not yet]** the chapter writes
+# for "the general existential test", and it was raised for every non-error name — so `p is P`,
+# which the same chapter decides in the sentence above, was told to wait for a feature it does
+# not need. The refusal that remains is the one the marker actually covers, plus the names that
+# denote no type to compare against.
+#
+# The refusal matters more than it looks either way: until this function existed the `is` token
+# was consumed by nobody and dropped, so a test emitted a stray `0;` and an undeclared
+# `zg_<Name>` — C that cannot be traced back to the Zerg that meant it.
 fn c_is_test(mut &em: Emitter, x: ast.Expr, name: str, sb: Subst) -> str {
 	t := c_infer(em, x)
 	kind := c_err_kind(name)
@@ -6779,14 +6790,59 @@ fn c_is_test(mut &em: Emitter, x: ast.Expr, name: str, sb: Subst) -> str {
 		c_check_type_name(em, name, Site(ast.Ty.TNamed(name), f"the `is` test", [], em.at_path, 0, 0, false))
 	}
 
-	raise c_diag(em, rule.Rule.NotYetIsErrorKind, f"NotImplemented: `is {name}` — an `is` test names one of the built-in error kinds here, and `{name}` is not one; GRAMMAR#cmp-expr takes any `type-name`, so this is a narrower test than the grammar writes") if kind == 0
-	raise c_diag(em, rule.Rule.IsWantsErr, f"`is {name}` wants an Err on its left, found a {ast.ty_name(t)}") if not c_is_err_ty(t)
+	if kind != 0 {
+		raise c_diag(em, rule.Rule.IsWantsErr, f"`is {name}` wants an Err on its left, found a {ast.ty_name(t)}") if not c_is_err_ty(t)
 
-	# EXACTLY THIS KIND. `is` asks what a value IS, and the built-in taxonomy is not part of
-	# that question — `e in ValueError` is, and it is a different operator at the same
-	# precedence. Asking one of them both ways is how `is` stopped being able to tell an
-	# IOError from something an IOError was raised from.
-	return f"(({c_expr(em, x, sb)}).kind == {kind})"
+		# EXACTLY THIS KIND. `is` asks what a value IS, and the built-in taxonomy is not part of
+		# that question — `e in ValueError` is, and it is a different operator at the same
+		# precedence. Asking one of them both ways is how `is` stopped being able to tell an
+		# IOError from something an IOError was raised from.
+		return f"(({c_expr(em, x, sb)}).kind == {kind})"
+	}
+
+	raise c_diag(em, rule.Rule.NotYetIsErrorKind, f"NotImplemented: `is {name}` — an `is` test compares the operand's own type against a named one here, and `{name}` names no type to put on the right of it; GRAMMAR#cmp-expr takes any `type-name`, so this is a narrower test than the grammar writes") if not c_is_foldable(em, name, t)
+
+	return c_is_folded(em, x, t, ast.ty_name(t) == name, sb)
+}
+
+# c_is_foldable reports whether `x is Name` has an answer this compiler can work out. It asks
+# TWO SIDES of one comparison, because that is what the fold is: `ast.ty_name` of the operand's
+# type against the name, so both have to be spellings the other can meet.
+#
+# THE NAME must denote a COMPLETE type spelled by itself — a scalar, `Err`, or a struct, enum
+# or typedef the program declares. `list` and `Result` need arguments and `bytearray` is an
+# alias for `list[byte]`, so each renders as something the bare name can never equal and
+# folding one would answer `false` for a value that IS one; `Left` and `Right` name
+# constructors and not types at all. A `spec` is the existential half — the one the chapter's
+# **[not yet]** is actually about — and `UnwrapError` and its two are kinds the taxonomy has
+# and this compiler cannot name, which must not read as "no, it is not one of those".
+#
+# THE OPERAND's type must be one this compiler worked out. TUnknown renders as `?`, which
+# equals no name, so an un-inferred operand would fold to a confident `false`.
+fn c_is_foldable(mut &em: Emitter, nm: str, t: ast.Ty) -> bool {
+	return false if ast.ty_name(t) == "?"
+
+	return true if nm == "Err" or parser.is_conv(nm)
+
+	return c_is_type_name(em, nm)
+}
+
+# c_is_folded is the answer, with the operand still evaluated. A test whose answer does not
+# depend on the value is still written around an expression, and folding the expression away
+# with it would delete a call the program made — so the value is computed, given back if this
+# expression is what owns it, and the constant is what the result reads as. That pair is the
+# one c_force settles for `!`, asked here for the same reason.
+fn c_is_folded(mut &em: Emitter, x: ast.Expr, t: ast.Ty, ans: bool, sb: Subst) -> str {
+	rendered := c_expr(em, x, sb)
+	lit := c_bool(ans)
+
+	return f"((void)({rendered}), {lit})" if not c_owns_value(x) or not c_needs_copy(em, t)
+
+	# THROUGH c_drop_arg, because `c_drop_fn` answers with two calling conventions — a list,
+	# a map and a struct by address, a str by value — and the first spelling of this passed
+	# `&` to `zrt_str_release`, which cc took as a `const char **`.
+	tn := c_tmp(em, "zgt_i")
+	return f"({{ {c_type(t)} {tn} = {rendered}; {c_drop_fn(em, t)}({c_drop_arg(em, t, tn)}); {lit}; }})"
 }
 
 # c_in_container lowers `x in xs` and `k in m` — the two sets whose members are VALUES rather

@@ -123,8 +123,10 @@ UTF-8 的 `str` 橋接是 `EncodingError`、越界索引是 `IndexError`、缺�
 東西**會 raise 它。這份獨佔性正是種類勝過訊息之處:`zerg test` 把不成立的主張報成**失敗**、把其他抵達測試本體頂端
 的東西報成**崩潰**,而它分辨兩者的方法就是問 `e is AssertionError`。其餘在語言表面還**叫不出名字**:`UnwrapError`、
 `MatchError` 與 `AliasError` 是 **[not yet]**——`err is AliasError` 在**兩個編譯器**裡都是
-_E9078 NotImplemented: `is AliasError` — an `is` test names one of the built-in error kinds here, and
-`AliasError` is not one_——而它們的 abort 也不帶獨立具現化種類、只有一般訊息。
+_E9078 NotImplemented: `is AliasError` — an `is` test compares the operand's own type against a named one
+here, and `AliasError` names no type to put on the right of it_——而它們的 abort 也不帶獨立具現化種類、只有一般
+訊息。這道拒收正是把它們擋在下面那個折疊之外的東西:一個分類**有**、而這個編譯器叫不出名字的種類,不可以讀成
+一句自信的「不,它不是那些之一」。
 
 **`StopIteration` 可測試，卻無法建構。** 它是唯一一個程式可以放在 `is` 右邊、卻**不可以**呼叫的名字:
 `raise StopIteration("…")` 在**兩個編譯器**裡都是
@@ -212,9 +214,10 @@ match guard { work() } {
 ```
 
 `is` 只產出 `bool`，所以一個分支能用 **`Error` 介面**（`message` / `code` / `unwrap`）、但**碰不到具體型別自己的欄位**
-——值已被抹除、永不重新建構。這個階段 `is` 實作**於錯誤分類**——上面那十一個具現化種類、別無其他,這也是為什麼
-範圍外的名字得到的是 `E9078`、而不是一個回答 `false` 的測試;對**非錯誤**型別的一般存在性測試 `x is T` 是
-**[not yet]**。這裡可達的錯誤集合在覆蓋上被
+——值已被抹除、永不重新建構。在一個錯誤上,那正是 `is` 的用途:上面那十一個具現化種類,是它唯一會從 runtime tag
+回答的名字,而分類範圍外的名字得到的是 `E9078`、而不是一個回答 `false` 的測試。其他每一個名字都是從運算元自己的
+型別回答的編譯期常數,那由 [Spec 與 Generics](../core/specs.zh-TW.md#型別測試type-testsis) 決定;仍然
+**[not yet]** 的是 **existential** 測試,而它等的是「`spec` 可以當型別」(_E9048_)。這裡可達的錯誤集合在覆蓋上被
 視為**開放**,所以 `is` 串永遠無法窮盡:**catch-all 必備**。未命中的錯誤會像任何未覆蓋的 `match` 一樣 abort——但
 `MatchError` 是 **[not yet]** 的具現化種類,且因為最後一個 `match` arm 一律無條件,compiler 今天永不 emit 一個(catch-all
 的要求是靜態規則、不是 runtime `MatchError`)。

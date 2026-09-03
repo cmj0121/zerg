@@ -2307,13 +2307,11 @@ EOF
 
 # --- a second `Into` on one type ------------------------------------------------
 #
-# The language means for a type to have several: the built-in matrix has four out of `int`
-# alone. This compiler keys a method by its NAME, so one type carries one `into` — and the
-# collision reported itself as two methods sharing a namespace, which is true and about the
-# wrong thing. Named here until a spec method is keyed by (spec, arguments), which is also
-# what would let a written-out `x.into()` say which one is meant.
-
-expect "$ZERG" a-second-into-on-one-type E9060 <<'EOF'
+# A TYPE MAY NOW CARRY SEVERAL, and what is refused is the CALL that says which by nothing.
+# docs/core/types.md fixes the target by the bound — `fn f[T: Into[Kelvin]](x: T)` — so a bare
+# `x.into()` on a type with two has no fact to read, and answering it by declaration order
+# would make the result depend on which file was loaded first.
+expect "$ZERG" a-bare-into-with-two-impls E3154 'says which by nothing' <<'EOF'
 struct Celsius {
 	pub deg: int
 }
@@ -2335,9 +2333,7 @@ impl Into[Kelvin] for Celsius {
 }
 
 fn main() {
-	c := Celsius(20)
-	n: int = c
-	print n
+	print Celsius(20).into()
 }
 EOF
 

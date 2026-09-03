@@ -169,13 +169,24 @@ reaches_into "$ZG/parser.zg"
 # append that records one — a read is the parser consulting what it has seen, which is the
 # symbol table this whole section exists to deny it. The `File` constructor's hand-off is the
 # one exception, and it is a hand-off rather than a consultation.
-quals=$(grep -oE '\bp\.ty_quals\b[^)]*' "$ZG/parser.zg" | grep -vE '^p\.ty_quals\.append\(' | grep -v '^p\.ty_quals$')
-[ -z "$quals" ] || note "zerg's parser READS p.ty_quals ($(printf '%s' "$quals" | tr '\n' ' ')) — an accumulator it consults is a symbol table"
+# THE RULE IS PER-ACCUMULATOR, because a second one inherits the claim and not the check: the
+# grep below used to name `ty_quals` alone, and `ty_apps` — added for generic type applications
+# — matched its `[^)]*` tail and was reported as a READ of the first. One loop, one name at a
+# time, so a third accumulator is one word here rather than a rule written twice.
+for acc in ty_quals ty_apps; do
+	# THE MATCH STOPS AT A COMMA as well as at a `)`. The exemption below is for the `File`
+	# constructor's hand-off, and it used to rest on the accumulator being that call's LAST
+	# argument: `[^)]*` swallowed `p.ty_quals, p.ty_apps` whole and reported the pair as a read
+	# of the first. What the grep is for — `p.<acc>.len()`, `p.<acc>[i]` — holds no comma before
+	# the part that gives it away.
+	reads=$(grep -oE "\\bp\\.$acc\\b[^,)]*" "$ZG/parser.zg" | grep -vE "^p\\.$acc\\.append\\(" | grep -v "^p\\.$acc$")
+	[ -z "$reads" ] || note "zerg's parser READS p.$acc ($(printf '%s' "$reads" | tr '\n' ' ')) — an accumulator it consults is a symbol table"
 
-# and the floor under that grep: a rename would empty it and satisfy the claim by matching
-# nothing at all, which is this file's standing failure mode.
-n_quals=$(grep -cE '\bp\.ty_quals\b' "$ZG/parser.zg")
-[ "$n_quals" -ge 2 ] || note "p.ty_quals is mentioned $n_quals time(s) in the parser — the write-only claim above measured nothing"
+	# and the floor under that grep: a rename would empty it and satisfy the claim by matching
+	# nothing at all, which is this file's standing failure mode.
+	n_acc=$(grep -cE "\\bp\\.$acc\\b" "$ZG/parser.zg")
+	[ "$n_acc" -ge 2 ] || note "p.$acc is mentioned $n_acc time(s) in the parser — the write-only claim above measured nothing"
+done
 
 # `ty_quals` is on this list as an OUTPUT ACCUMULATOR, which is a different kind of field
 # from the rest and the reason the claim below it exists. Everything else the parser
@@ -196,7 +207,7 @@ n_quals=$(grep -cE '\bp\.ty_quals\b' "$ZG/parser.zg")
 # carried the few statements from where the keyword is consumed to where the declaration is
 # built. What would break the claim is a field holding what the parser has DECLARED; this holds
 # what it has READ, which is the difference between a symbol table and a cursor.
-ZPARSER_FIELDS="toks pos impl_ty path saw_this depth edepth ty_quals"
+ZPARSER_FIELDS="toks pos impl_ty path saw_this depth edepth ty_quals ty_apps"
 zf=$(zg_fields "$ZG/parser.zg" Parser)
 if [ -z "$zf" ]; then
 	note "the zerg parser's fields did not extract"

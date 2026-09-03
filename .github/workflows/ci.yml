@@ -318,9 +318,18 @@ jobs:
       # counting some — so cloc has to BE here. It is installed rather than checked for
       # because the check it would replace is a skip, and a skipped assertion is green on
       # exactly the machine where the definition was never read.
+      #
+      # `apt-get update` IS NOT THE ASSERTION, and chaining it with `&&` made it one. The
+      # runner image ships third-party apt sources this project does not use and cannot fix;
+      # one of them answered 403 and `update` exited 100, which took the step, the job and
+      # the run with it — a red board about neither `cloc` nor Zerg. What has to hold is that
+      # `cloc` ENDS UP INSTALLED, so only the install decides, and a refreshed index is the
+      # thing it was given a chance to have.
       - name: Install cloc (linux)
         if: runner.os == 'Linux'
-        run: sudo apt-get update && sudo apt-get install -y cloc
+        run: |
+          sudo apt-get update || echo "apt-get update did not complete; installing from the index as it stands"
+          sudo apt-get install -y cloc
 
       - name: Install cloc (macos)
         if: runner.os == 'macOS'

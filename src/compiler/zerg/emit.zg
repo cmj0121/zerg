@@ -7927,6 +7927,23 @@ fn c_str_bridges_list(t: ast.Ty) -> bool {
 	return c_is_rune(c_list_elem(t)) or c_is_byte(c_list_elem(t))
 }
 
+# c_str_give is whether a bridge out of a `str` owes the source back, and c_str_bridge is the
+# bridge with that give-back in it. They are the same polarity every other temporary uses
+# (c_owns_value): a NAMED str is somebody else's and is read in place, and one this expression
+# built — a call's result, a concatenation — is nobody's once the list is out.
+fn c_str_give(mut &em: Emitter, x: ast.Expr) -> bool {
+	return c_owns_value(x)
+}
+
+fn c_str_bridge(mut &em: Emitter, fn_name: str, inner: str, give: bool) -> str {
+	return f"{fn_name}({inner})" if not give
+
+	em.used_rt = true
+	sn := c_tmp(em, "zgt_sb")
+	ln := c_tmp(em, "zgt_sb")
+	return f"({{ const char* {sn} = {inner}; zrt_list {ln} = {fn_name}({sn}); zrt_str_release({sn}); {ln}; }})"
+}
+
 fn c_conv(mut &em: Emitter, ty: ast.Ty, x: ast.Expr, nm: str, sb: Subst) -> str {
 	# the operand is rendered by the paths that emit it — the identity, bridge and
 	# override returns above them answer through c_copied or a method call instead, so a
@@ -8017,10 +8034,17 @@ fn c_conv(mut &em: Emitter, ty: ast.Ty, x: ast.Expr, nm: str, sb: Subst) -> str 
 		# the language spells both rather than picking one.
 		inner := c_expr(em, x, sb)
 
-		return f"zrt_str_runes({inner})" if c_is_rune(c_list_elem(ty))
+		# THE STR IS READ AND NOT TAKEN. `zrt_str_bytes` and `zrt_str_runes` both walk the
+		# source and build a fresh list — neither consumes it, which is the opposite of
+		# `zrt_str_from_bytes` next door — so a source this expression OWNS has nobody to give
+		# it back: `bytearray(f())` leaked the string on every call. c_str_give is "" for a str
+		# that names storage somebody else holds, which is read in place as it always was.
+		give := c_str_give(em, x)
+
+		return c_str_bridge(em, "zrt_str_runes", inner, give) if c_is_rune(c_list_elem(ty))
 		raise c_diag(em, rule.Rule.ListConvElementType, f"`list[{ast.ty_name(c_list_elem(ty))}](…)` — a `str` bridges to its bytes as `list[byte]` or its code points as `list[rune]`") if not c_is_byte(c_list_elem(ty))
 
-		return f"zrt_str_bytes({inner})"
+		return c_str_bridge(em, "zrt_str_bytes", inner, give)
 	}
 
 	# `int(v)` over an enum reads its DISCRIMINANT (GRAMMAR#variant), which is the tag field —

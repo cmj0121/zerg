@@ -451,6 +451,11 @@ pub struct Emitter {
 	pub gen_structs: list[ast.StructDecl]
 	pub inst_tys: list[str]
 
+	# ty_apps is what every APPLIED name is made of, and it is on the emitter because two
+	# passes need it: substitution, which cannot see arguments carried inside a name, and the
+	# on-demand instantiation of one a specialization produced that nobody wrote.
+	pub ty_apps: list[ast.TyApp]
+
 	pub bnd_fn: list[str]
 	pub bnd_ty: list[str]
 	pub bnd_of: list[str]
@@ -1501,7 +1506,32 @@ fn c_spelled_pre(mut &em: Emitter, t: ast.Ty) -> str {
 	return c_arr_decl(em, t) if c_is_arr(t)
 	return c_carrier_emit(em, t) if c_is_carrier(t)
 
+	# THE THIRD KIND THIS FUNCTION'S COMMENT PROMISED. A generic type's specialization is
+	# spelled like any other type and is a declaration somebody has to write: one a signature
+	# named was built before the checks ran, and one a SPECIALIZATION produced — `Box[T]`
+	# rewritten to `Box[int]` when `get[T]` was instantiated — is written nowhere at all, so
+	# it registers the first time it is met, exactly as a tuple and a carrier do.
+	c_gen_inst_pre(em, t)
+
 	return ""
+}
+
+# c_gen_inst_pre builds the specialization a name asks for, if it is one and it is new. The
+# text goes into the on-demand stream through c_gen_type_on_demand rather than being returned,
+# because a struct needs a typedef AND its three helpers and they are placed together.
+fn c_gen_inst_pre(mut &em: Emitter, t: ast.Ty) {
+	nm := c_named_of(t)
+	return if nm == "" or not c_is_applied(nm) or c_name_in(em.inst_tys, nm)
+
+	r := c_gen_struct_row(em, c_app_base(nm))
+	return if r < 0
+
+	for a in em.ty_apps {
+		if a.name == nm {
+			c_gen_type_on_demand(em, em.gen_structs[r], nm, a.args)
+			return
+		}
+	}
 }
 
 # c_carrier_decl writes ONE carrier: a tag, the Left, and — unless it is an optional, whose
@@ -2539,21 +2569,44 @@ fn c_with_type_insts(mut &em: Emitter, f: ast.File) -> ast.File {
 	}
 
 	for a in f.ty_apps {
-		r := c_gen_struct_row(em, a.base)
+		em.ty_apps.append(a)
+	}
 
-		# A NAME THAT DECLARES A TYPE AND TAKES NO PARAMETERS is the arity question from the
-		# other side, and it is the same rule: `impl Box[int]` on a plain `struct Box` gives
-		# one argument to a declaration that has none. Answering it here keeps the count in
-		# one place; left to resolution it came out as `no type named Box[int]`, which is true
-		# and says nothing about the `[int]` that made it so.
-		if r < 0 and c_file_declares_ty(f, a.base) {
-			c_type_arity(a, 0)
+	# A FIXPOINT OVER THE TABLE, because a specialization can NAME another one: `Wrap[T]` with
+	# a field of type `Box[T]` gives `Wrap[int]` a field of type `Box[int]`, which no source
+	# wrote and which has to be a declared type by the time the field is spelled. Its typedef
+	# belongs HERE and not in the on-demand stream: a declared struct's typedef is emitted in
+	# the types section, ahead of that stream, so a nested one placed there would be used
+	# before it was declared.
+	#
+	# `c_subst_apps` is what grows the table, and the loop ends when a pass adds nothing.
+	mut again := true
+	for again {
+		again = false
+		mut i := 0
+		for i < em.ty_apps.len() {
+			a := em.ty_apps[i]
+			i = i + 1
+			r := c_gen_struct_row(em, a.base)
+
+			# A NAME THAT DECLARES A TYPE AND TAKES NO PARAMETERS is the arity question from
+			# the other side, and it is the same rule: `impl Box[int]` on a plain `struct Box`
+			# gives one argument to a declaration that has none. Answering it here keeps the
+			# count in one place; left to resolution it came out as `no type named Box[int]`,
+			# which is true and says nothing about the `[int]` that made it so.
+			if r < 0 and c_file_declares_ty(f, a.base) {
+				c_type_arity(a, 0)
+			}
+
+			continue if r < 0 or c_name_in(em.inst_tys, a.name)
+
+			sd := c_type_inst(em, f, em.gen_structs[r], a)
+			continue if sd.name == ""
+
+			em.inst_tys.append(a.name)
+			keep.append(sd)
+			again = true
 		}
-
-		continue if r < 0 or c_name_in(em.inst_tys, a.name)
-
-		em.inst_tys.append(a.name)
-		keep.append(c_type_inst(em, f, em.gen_structs[r], a))
 	}
 
 	mut out := f
@@ -2576,20 +2629,22 @@ fn c_gen_struct_row(mut &em: Emitter, nm: str) -> int {
 fn c_type_inst(mut &em: Emitter, f: ast.File, tpl: ast.StructDecl, a: ast.TyApp) -> ast.StructDecl {
 	c_type_arity(a, tpl.tparams.len())
 
-	# ONE CAUSE, TWO SHAPES, ONE RAISE. A type's arguments live inside its NAME here, which is
-	# what let every walk over `Ty` keep working without learning a shape — and it is also what
-	# substitution cannot see through. So neither an argument that is itself a type parameter
-	# (`Box[T]` inside `fn get[T]`) nor a field that names another application (`Pair[T, int]`)
-	# is rewritten, and both would reach the type table as a name nothing declares. Refused at
-	# the APPLICATION, where a reader can see what asked for it, rather than at the field it
-	# eventually breaks — which is the message this used to give, two steps away
-	# (`no type named T (field Box[T].v)`).
-	why := c_app_unresolved(f, tpl, a)
-	raise c_diag_at(a.path, a.line, a.col, rule.Rule.NotYetNestedTypeApp, f"NotImplemented: `{a.name}` — {why}, and this compiler carries a type's arguments inside its name, so substitution does not reach them (GRAMMAR#struct-decl)") if why != ""
+	# AN ARGUMENT THAT IS ITSELF A TYPE PARAMETER means this application is the TEMPLATE's own
+	# — `Box[T]` written inside `fn get[T]` or in a field of `Wrap[T]` — and there is nothing to
+	# build yet: it becomes a real type when the enclosing template is specialized, and the
+	# specialization that produces it registers it then (c_spelled_pre). Skipped rather than
+	# refused, which is what it used to be.
+	return c_no_inst() if c_app_is_open(f, a)
 
 	mut nokeys: list[str] = []
 	mut novals: list[str] = []
-	su := generic.TySubst(tpl.tparams, a.args, nokeys, novals, f"{a.path}:{strconv.to_string(a.line, 10)}")
+	su := generic.TySubst(tpl.tparams, a.args, nokeys, novals, em.ty_apps, f"{a.path}:{strconv.to_string(a.line, 10)}")
+
+	# THE ROWS THIS SUBSTITUTION PRODUCES, before the fields are built from it: a field of type
+	# `Box[T]` becomes one of type `Box[int]`, a name whose parts live in the table and nowhere
+	# else. The loop above sees the new row on its next pass and builds it.
+	c_subst_apps(em, su)
+
 	return ast.StructDecl(a.name, generic.subst_fields(su, tpl.fields), tpl.is_pub, tpl.path, tpl.line, tpl.col, [])
 }
 
@@ -2602,15 +2657,53 @@ fn c_type_arity(a: ast.TyApp, want: int) {
 
 # c_app_unresolved is why an application cannot be built, or "" when it can. Both answers name
 # the thing a reader wrote rather than the consequence.
-fn c_app_unresolved(f: ast.File, tpl: ast.StructDecl, a: ast.TyApp) -> str {
+# c_app_is_open reports whether an application still names a type PARAMETER — `Box[T]` rather
+# than `Box[int]`. An open one is not a type yet and has nothing to instantiate; it becomes one
+# when whatever declared `T` is specialized.
+#
+# It asks the PROGRAM rather than the type table, because this runs before the table is filled:
+# the instantiation has to happen before anything can register it.
+fn c_app_is_open(f: ast.File, a: ast.TyApp) -> bool {
 	for arg in a.args {
-		nm := c_named_of(arg)
-		return f"the type argument `{nm}` names no type this program declares — a type PARAMETER here, or a name spelled wrong" if nm != "" and not c_file_declares_ty(f, nm)
+		return true if c_ty_names_undeclared(f, arg)
 	}
-	for fd in tpl.fields {
-		return f"`{tpl.name}.{fd.name}` names another generic type (`{ast.ty_name(fd.ty)}`)" if c_ty_has_app(fd.ty)
+	return false
+}
+
+fn c_ty_names_undeclared(f: ast.File, t: ast.Ty) -> bool {
+	nm := c_named_of(t)
+	if nm != "" {
+		return false if c_is_applied(nm)
+
+		return not c_file_declares_ty(f, nm)
 	}
-	return ""
+
+	return match t {
+		Ty.TList(e) => c_ty_names_undeclared(f, e)
+		Ty.TOpt(e) => c_ty_names_undeclared(f, e)
+		Ty.TChan(e, _) => c_ty_names_undeclared(f, e)
+		Ty.TArr(e, _) => c_ty_names_undeclared(f, e)
+		Ty.TRef(e) => c_ty_names_undeclared(f, e)
+		Ty.TPtr(e) => c_ty_names_undeclared(f, e)
+		Ty.TUnsafe(e) => c_ty_names_undeclared(f, e)
+		Ty.TMap(k, v) => c_ty_names_undeclared(f, k) or c_ty_names_undeclared(f, v)
+		Ty.TEither(l, r) => c_ty_names_undeclared(f, l) or c_ty_names_undeclared(f, r)
+		Ty.TTuple(es) => c_tys_name_undeclared(f, es)
+		_ => false
+	}
+}
+
+fn c_tys_name_undeclared(f: ast.File, ts: list[ast.Ty]) -> bool {
+	for t in ts {
+		return true if c_ty_names_undeclared(f, t)
+	}
+	return false
+}
+
+# c_no_inst is the StructDecl an open application does not produce — a declaration with no
+# name, which the caller drops. It is a function so the reason has somewhere to live.
+fn c_no_inst() -> ast.StructDecl {
+	return ast.StructDecl("", [], false, "", 0, 0, [])
 }
 
 # c_file_declares_ty asks the PROGRAM rather than the type table, because this runs before the
@@ -2727,7 +2820,7 @@ fn c_instantiate(mut &em: Emitter, name: str, args: list[ast.Expr]) -> str {
 	for pm in tpl.params {
 		decls.append(pm.ty)
 	}
-	sol := generic.gen_solve(tpl.tparams, decls, actuals)
+	sol := generic.gen_solve(tpl.tparams, decls, actuals, em.ty_apps)
 	return c_instantiate_at(em, name, sol)
 }
 
@@ -2764,7 +2857,10 @@ fn c_instantiate_at(mut &em: Emitter, name: str, sol: list[ast.Ty]) -> str {
 	c_check_solved(em, tpl, sol)
 	c_check_bounds(em, tpl, sol)
 	c_check_inst_budget(em, name)
-	inst := generic.subst_fn(tpl, sol, c_place(em))
+	mut nk: list[str] = []
+	mut nv: list[str] = []
+	c_record_apps(em, generic.TySubst(tpl.tparams, sol, nk, nv, em.ty_apps, c_place(em)))
+	inst := generic.subst_fn(tpl, sol, c_place(em), em.ty_apps)
 	c_record_bounds(em, inst.name, tpl, sol)
 	em.inst_names.append(key)
 	em.inst_fns.append(inst)
@@ -9288,7 +9384,7 @@ fn c_gen_applied(mut &em: Emitter, base: str, args: list[ast.Expr]) -> str {
 		actuals.append(c_infer(em, a))
 	}
 
-	sol := generic.gen_solve(tpl.tparams, decls, actuals)
+	sol := generic.gen_solve(tpl.tparams, decls, actuals, em.ty_apps)
 	mut i := 0
 	for i < sol.len() {
 		raise c_diag(em, rule.Rule.TypeArgUndecided, f"the type parameter `{tpl.tparams[i]}` of `{base}` is not decided by this construction — no field's type mentions it, so there is nothing to solve it from") if c_is_unknown(sol[i])
@@ -9303,14 +9399,90 @@ fn c_gen_applied(mut &em: Emitter, base: str, args: list[ast.Expr]) -> str {
 # c_gen_type_on_demand registers a specialization the declaration sweep never saw and places
 # its declaration text where a body-discovered type's goes. Guarded by the same list the
 # written applications use, so a type reached both ways is built once.
+# c_record_apps closes the app table under a substitution. `subst_app` MAKES a name —
+# `Pair[B, A]` becomes `Pair[str, int]` — and cannot write down what it is made of, having no
+# emitter; so every open row is put through the same substitution here, beside the code that
+# built it. Without this the name existed and its PARTS did not: `Pair[str, int]` was the
+# binding's C type, from the signature, and had no row in the field table — so `s.a` inferred
+# as nothing and `print` fell to the number it prints for a type it does not know.
+#
+# The loop is because a substituted row can name another application. It stops when a pass adds
+# nothing, which is what a fixpoint over a finite table does.
+fn c_record_apps(mut &em: Emitter, su: generic.TySubst) {
+	c_subst_apps(em, su)
+
+	# AND BUILT, because a row is what a name is MADE of and not the type itself. The two go
+	# together here: a specialization's signature names `Pair[str, int]` and nothing else will
+	# ever ask for it — no source wrote it — so its declaration, its field rows and its helpers
+	# are placed now, or its fields are a table nobody filled.
+	mut j := 0
+	for j < em.ty_apps.len() {
+		b := em.ty_apps[j]
+		r := c_gen_struct_row(em, b.base)
+		if r >= 0 and not c_name_in(em.inst_tys, b.name) and not c_args_open(em, b.args) {
+			c_gen_type_on_demand(em, em.gen_structs[r], b.name, b.args)
+		}
+		j = j + 1
+	}
+}
+
+# c_args_open is whether an application still names a type PARAMETER, asked of the TABLE this
+# time rather than of the program: a row made by substitution is closed exactly when every
+# argument resolves, and one that does not is a template's own row waiting for its own
+# instantiation.
+fn c_args_open(mut &em: Emitter, args: list[ast.Ty]) -> bool {
+	for t in args {
+		nm := c_named_of(t)
+		return true if nm != "" and not c_is_applied(nm) and c_ty_kind(em, nm) == TK_NONE and not parser.is_conv(nm) and nm != "Err"
+	}
+	return false
+}
+
+# c_subst_apps is the recording half on its own: every row put through the substitution, and
+# the answers kept. Both callers need it and only one of them can build what it finds — the
+# declaration sweep places a nested specialization in the types section, and a specialization
+# discovered later places it in the on-demand stream.
+fn c_subst_apps(mut &em: Emitter, su: generic.TySubst) {
+	mut again := true
+	for again {
+		again = false
+		mut i := 0
+		n := em.ty_apps.len()
+		for i < n {
+			a := em.ty_apps[i]
+			args := generic.subst_tys(su, a.args)
+			nm := ast.spec_key(a.base, args)
+			if nm != a.name and not c_app_recorded(em, nm) {
+				em.ty_apps.append(ast.TyApp(nm, a.base, args, a.path, a.line, a.col))
+				again = true
+			}
+			i = i + 1
+		}
+	}
+}
+
+fn c_app_recorded(mut &em: Emitter, nm: str) -> bool {
+	for a in em.ty_apps {
+		return true if a.name == nm
+	}
+	return false
+}
+
 fn c_gen_type_on_demand(mut &em: Emitter, tpl: ast.StructDecl, applied: str, sol: list[ast.Ty]) {
 	return if c_name_in(em.inst_tys, applied)
 
 	em.inst_tys.append(applied)
 
+	# AND THE ROW, because a name minted here is one nothing wrote: `Box[int]` from `Box(8)`
+	# exists only as a solved answer, and both walks that take an applied name apart read this
+	# table — the one that solves a type parameter FROM it and the one that substitutes INTO
+	# it. Without the row, `get(Box(8))` could not solve `T`: the parts of `Box[int]` were
+	# nowhere to be found and the call reported deciding nothing.
+	em.ty_apps.append(ast.TyApp(applied, c_app_base(applied), sol, em.at_path, em.at_line, em.at_col))
+
 	mut nokeys: list[str] = []
 	mut novals: list[str] = []
-	su := generic.TySubst(tpl.tparams, sol, nokeys, novals, c_place(em))
+	su := generic.TySubst(tpl.tparams, sol, nokeys, novals, em.ty_apps, c_place(em))
 	sd := ast.StructDecl(applied, generic.subst_fields(su, tpl.fields), tpl.is_pub, tpl.path, tpl.line, tpl.col, [])
 
 	c_register_struct(em, sd)
@@ -17694,7 +17866,7 @@ fn c_emit_unit(prog0: ast.File, own0: ast.File, ms: Mods, whole: bool, want_lint
 	# is what makes that invariant hold for a multi-unit program, at the place it already lives,
 	# and it is what lets the declaration passes below go back to reading the WHOLE program.
 	seen := diags.len()
-	mut em := Emitter([], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], false, false, false, [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], 0, [], 0, [], [], false, "", "", [], [], ast.Ty.TVoid, 0, "", 0, 0, diags, 0, 0, [], [], [], [], [], false, 0, false, "", 0, false, false, [], [], [], [], [], "", want_lints, [], [], [], [], [], [], [], [], [], [], [], [], false, 0, [], [], "", c_nosub(), [], [], [], [], [], [], [], [], [])
+	mut em := Emitter([], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], false, false, false, [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], 0, [], 0, [], [], false, "", "", [], [], ast.Ty.TVoid, 0, "", 0, 0, diags, 0, 0, [], [], [], [], [], false, 0, false, "", 0, false, false, [], [], [], [], [], [], "", want_lints, [], [], [], [], [], [], [], [], [], [], [], [], false, 0, [], [], "", c_nosub(), [], [], [], [], [], [], [], [], [])
 
 	# ASSIGNED, NOT PASSED. Every argument above is a zero value, and `layering` asserts that
 	# — it lines the call up with the fields by KIND, which only works while nothing in it

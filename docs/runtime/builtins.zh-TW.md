@@ -26,10 +26,8 @@
 共享的值（複製時 retain、最後一個持有者釋放一次）；它讓值得以超出定義它的 scope、或跨 `spawn` 共享。見
 [值與記憶體](../core/memory.zh-TW.md)。
 
-> **[not yet]** 本編譯器沒有 `Ref[T]` 型別，所以這兩個內建都不存在，兩者都被具名拒絕——
-> _E9058 NotImplemented: a refcounted box `Ref(x)` / `deref(r)` — this compiler has no `Ref[T]` type_。真正有
-> reference count 的是 `chan`、`str` 與遞迴型別，各由編譯器自行管理、而非透過這個 box；`atomic` 模組與
-> `Reader` 表面都在等這一項。
+兩個都建好了。那個 cell 就是編譯器早已把 `chan`、`str` 與遞迴型別裝進去的同一個;`Ref` 只是給它一個名字,讓程式
+能像那三者一樣共享一個值。等這一項的是 `atomic` 模組,而 `import "atomic"` 現在可用。
 
 ## `deref`
 

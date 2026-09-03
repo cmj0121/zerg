@@ -300,21 +300,19 @@ emoji——以及根本不佔欄的結合附標與零寬連接符，還有要好
 
 ## 這個編譯器剖析不了的 module
 
-`src/stdlib/atomic.zg` 的 `Atomic[T]` 持有一個 `Ref[T]`，而這個編譯器沒有這個型別（`E9058`）——而且那個拒收是 **parser** 丟的，所以它
-的宣告根本列不出來。讀者拿到的是誠實的那份文件：
+一個停在 **parse** 錯誤的檔案,無法列出它的宣告。今天每一個 stdlib 模組都 parse 得過——`atomic` 是最後一個過不了
+的——所以下面是任何這種檔案(包括讀者自己的)會拿到的東西:
 
 ```text
-atomic — the safe shared-mutable primitive (Phase 1f, bundle MVP).
+mymod — 檔頭註解,完整地,然後 …
 
-  … 這個檔案檔頭的其餘部分，完整地，然後 …
-
-note: `atomic.zg` does not parse under this compiler; its declarations are not
-listed (see docs/runtime/stdlib.md)
+note: `mymod.zg` does not parse under this compiler; its declarations are not
+listed
 ```
 
 檔頭活下來了，因為它是從 token 串流出來的，不需要樹。那行 `note:` 是讓「缺席的章節」不至於讀起來像「空的章節」——一
-個宣告都沒有、也什麼都不說的 module，是在把自己記錄成沒有表面。它的離開碼是 0：沒有東西失敗，而一個沒有人能 import
-的 module，它的文件就是它僅有的文件。
+個宣告都沒有、也什麼都不說的 module，是在把自己記錄成沒有表面。它的離開碼是 0：沒有東西失敗，而檔頭就是這種檔案
+唯一給得出的文件。
 
 **任何**剖析不過的檔案都會印出同一行 note，並指名那個檔案；指向標準函式庫章節的那半句，只有在檔案真的在標準函式庫
 裡時才會加上去。

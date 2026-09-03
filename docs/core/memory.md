@@ -226,14 +226,15 @@ captures back would mean unwinding a stack the language says is abandoned where 
 
 ## `Ref[T]` — a resource that outlives its scope
 
-> **[not yet]** There is no `Ref[T]` in this compiler. `Ref(5)` is refused by name —
-> _E9058 NotImplemented: a refcounted box `Ref(x)` / `deref(r)` — this compiler has no `Ref[T]` type_ — so this
-> section, the `mut`-versus-effect distinction under it, and every mention of a `Ref[T]` elsewhere on this
-> page describe a type nothing can construct. The **machinery** is built and works: the `Ref` spec has one
-> implementer, the built-in `chan`, which is shared by reference, counted, and closed at the last holder's
-> scope exit exactly as specified. What is missing is the second implementer — the stdlib box that carries an
-> arbitrary value together with a user-written `drop` — so a resource that must escape its scope has, today,
-> no answer at all rather than the one this section gives.
+`Ref[T]` is built. `Ref(x)` allocates the cell, `deref(r)` reads the payload back as a value, a copy retains
+and the last holder releases — the same counted cell a `chan`, a `str` and a recursive type are already
+held in. What a release runs is the PAYLOAD's own give-back: a `Ref[str]` releases its string, a `Ref[int]`
+owes nothing.
+
+> **[not yet]** What the box does not carry is a **user-written `drop`** — _E9114 NotImplemented: `Ref` with
+> 2 arguments — the box carries the VALUE and this compiler runs the payload's own give-back when the last
+> holder lets go; a user-written `drop` beside it is not built_. A resource that escapes its scope is held by
+> this box; one whose closing is a user action still waits.
 
 Most cleanup is just memory, which scope exit frees automatically. A **resource whose release is not that
 automatic free** — a foreign handle (see [FFI](../runtime/ffi.md)), anything that must be closed **exactly once** — and
@@ -295,11 +296,10 @@ the storage.
 | captured value, inside a closure body | no   | ends **this invocation's** access only; next call still has it  |
 | channel, `Ref[T]`                     | ref  | revokes the name, drops a holder (refcount--); last one `drop`s |
 
-> **Status.** The last row of the table is the one `zerg` does not reach at all. `del` of a `Ref` value is
-> **[not yet]** in both of its halves: `del ch` on a channel is refused by name (_E9066 NotImplemented:
-> `del ch` on a CHANNEL_, which says to write `close(ch)` instead), and there is no `Ref[T]` type here to
-> `del` in the first place — naming `Ref` refuses too (`E9058`). What the compiler does with a channel is
-> release it where its binding's scope ends, so the holder is dropped and `drop` still runs at the last
+> **Status.** The last row of the table is `del` of a `Ref` value, and it is **[not yet]**: `del ch` on a
+> channel is refused by name (_E9066 NotImplemented: `del ch` on a CHANNEL_, which says to write `close(ch)`
+> instead), and a `Ref[T]` — which is a type now — has no `del` either. What the compiler does with both is
+> release them where the binding's scope ends, so the holder is dropped and `drop` still runs at the last
 > one; what is missing is the ability to say so **early**, by name.
 >
 > ---

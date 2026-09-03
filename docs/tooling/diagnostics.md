@@ -437,6 +437,7 @@ shipping compiler rather than a part of it (the line
 | `E4093` | a type application gives the wrong number of arguments                                                |
 | `E4094` | a generic type named without its arguments                                                            |
 | `E4095` | a type parameter no field mentions, so a construction cannot solve it                                 |
+| `E4096` | `deref` on something that is not a `Ref[T]`                                                           |
 | `E5001` | this entry file declares no `fn main`                                                                 |
 | `E5002` | cannot resolve import `…`, and where it was looked for                                                |
 | `E5007` | `…` is a module this build compiles and this module did not import                                    |
@@ -479,7 +480,6 @@ shipping compiler rather than a part of it (the line
 | `E9055` | `#[derive(Eq)]` on `…`                                                                                |
 | `E9056` | the list method `…`                                                                                   |
 | `E9057` | structural equality over a container                                                                  |
-| `E9058` | a refcounted box `Ref(x)` / `deref(r)`                                                                |
 | `E9061` | `in` over … — its elements are compared with `==`, and this compiler does not write that comparison   |
 | `E9062` | `in` over … — a range's members are found by comparing its bounds                                     |
 | `E9063` | `…` is part of the fixed-width ladder                                                                 |
@@ -499,7 +499,6 @@ shipping compiler rather than a part of it (the line
 | `E9099` | … of the method `…` on a built-in receiver, which a thunk does not reach                              |
 | `E9100` | the map method `…`                                                                                    |
 | `E9103` | a `spawn`/`defer` of `…`, a binding that HOLDS a function                                             |
-| `E9104` | the module `atomic` ships and cannot be imported                                                      |
 | `E9105` | a remote package — the path names a host, and resolving one needs a package layer                     |
 | `E9106` | module `…` declares the function `…`, and a module's function is not a value here                     |
 | `E9107` | the method `…` on a … — `display`, `debug`, `format`; `next` on a channel; `iter` on what `for` walks |
@@ -507,6 +506,7 @@ shipping compiler rather than a part of it (the line
 | `E9110` | a NAMED rest in a list pattern                                                                        |
 | `E9111` | an array length reached through an import                                                             |
 | `E9112` | the array method `…`                                                                                  |
+| `E9114` | `Ref` with a user-written `drop` beside the value                                                     |
 
 They are reported the moment a file is **read**, before its imports are scanned — scanning
 them parses, and a parser handed unreadable text can only say something untrue about it.
@@ -582,6 +582,12 @@ questions behind it — which is why the first four were found by reading codes 
 **One more retired because its form was BUILT.** `E9004` refused a generic `struct`. The declaration is a
 template now, an application is an ordinary type under its applied name, and what a use can still get
 wrong has codes of its own — `E4093`, `E4094` and `E4095`.
+
+**Two more, and the second is what the first was for.** `E9058` refused `Ref(x)` / `deref(r)`; the counted
+cell it names is the one a `chan`, a `str` and a recursive type were already held in, and `Ref` puts a name
+on it. `E9104` refused `import "atomic"` because the module could not be built — it waited on a generic
+struct, then on an `impl` on its application, then on `Ref[T]`, and with the last of them the module
+imports and its operations run.
 
 **And one more, the same day.** `E9113` said a type argument that is itself a type parameter could not be
 built. A type's arguments are carried inside its name and substitution cannot see through one — which was
@@ -685,6 +691,8 @@ name now is the prelude rule (`E2061`), which is about the name rather than abou
 | `E9060` | —       | the form was built: a method is keyed by its spec and arguments    |
 | `E9004` | —       | the form was built: a template, and an application is a type       |
 | `E9113` | —       | the form was built: a parameter passes through an application      |
+| `E9058` | —       | the form was built: `Ref[T]` is the counted cell, named            |
+| `E9104` | —       | the form was built: `atomic` imports and runs                      |
 
 **One of them moved nowhere**, and it is the only row whose second column is empty. `E3047`
 reported a prefix operator on a `type X = Y` — _operator `not` has no meaning on `Flag`_ — on

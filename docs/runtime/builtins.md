@@ -27,10 +27,9 @@ Not listed here, because they are **not** built-in functions: `print` / `raise` 
 is the one value shared **by reference** (copies retain, the last holder frees it once); it is how a value
 outlives its defining scope or is shared across a `spawn`. See [Values & Memory](../core/memory.md).
 
-> **[not yet]** There is no `Ref[T]` type in this compiler, so neither built-in exists. Both are refused by
-> name — _E9058 NotImplemented: a refcounted box `Ref(x)` / `deref(r)` — this compiler has no `Ref[T]` type_. What
-> IS reference-counted is `chan`, a `str` and a recursive type, each managed by the compiler rather than
-> through this box; the `atomic` module and the `Reader` surface both wait on this one.
+Both are built. The cell is the one the compiler already boxes a `chan`, a `str` and a recursive type in;
+`Ref` puts a name on it, so a program can share a value the way those three are shared. The `atomic` module
+is what waited on it, and `import "atomic"` works.
 
 ## `deref`
 

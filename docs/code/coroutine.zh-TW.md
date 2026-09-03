@@ -429,11 +429,12 @@ inbox 是個 `Ref` 值，所以**分享 actor 就是分享 inbox**（refcount-bu
 [Module 與 Program](../runtime/package.zh-TW.md)）。它提供 lock-free 的 `load` / `store` / `swap` /
 `fetch_add` / `compare_swap`。
 
-> **[not yet]** 原因與 atomic 本身無關：`Atomic[int]` **就是**一個 `Ref[int]`，而還沒有 `Ref[T]`（`E9058`）。
-> 被拒絕的是 **import**，而不是讓一個沒人宣告的型別走到 emitter——_E9104 the module `atomic` ships and cannot be
-> imported — it declares `Atomic[T]`, and a generic struct is a form this compiler has not built. Share state
-> across coroutines with a channel until it has_——所以上面的 actor 才是今天成立的做法。
-> 顯式的**記憶體順序引數**與 generic 的 **`Atomic[T]`** 在語言層面同樣是 **[not yet]**。
+這個模組可以 import,而且它的運算真的會跑:`Atomic[int]` **就是**一個 `Ref[int]`,那已經建好了,四個 coroutine
+各自往同一個 cell 加,總數是對的。上面的 actor 仍然是優先該伸手拿的做法——channel 說出什麼被共享、以及何時——而
+這個,是共享的東西就是一個計數器時該用的。
+
+顯式的**記憶體順序引數**與 generic 的 **`Atomic[T]`**,走在前面的是那個**模組**而不是編譯器:它的運算是循序
+一致的、cell 是 `int` 型的,那是[標準函式庫](../runtime/stdlib.zh-TW.md)所記載的 MVP 表面。
 
 ## producer——generator pattern
 

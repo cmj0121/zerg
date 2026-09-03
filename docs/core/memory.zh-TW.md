@@ -185,12 +185,14 @@ teardown 一起交給 runtime,而 scheduler 在每個 worker 都停下之後跑�
 
 ## `Ref[T]`——逃出自身 scope 的資源
 
-> **[not yet]** 這個編譯器裡沒有 `Ref[T]`。`Ref(5)` 會被指名拒絕——
-> _NotImplemented: a refcounted box `Ref(x)` / `deref(r)` — this compiler has no `Ref[T]` type_——所以本節、它底下
-> 那個 `mut` 與 effect 的區分、以及本頁其他每一處提到的 `Ref[T]`,講的都是一個沒有東西建得出來的型別。**機制**是建
-> 好而且可用的:`Ref` spec 有一個實作者,也就是內建的 `chan`,它以參照共享、被計數、並在最後一個持有者的 scope 退出
-> 時關閉,完全如規範所述。缺的是第二個實作者——那個承載任意值與一段使用者所寫 `drop` 的 stdlib 盒子——所以一個必須
-> 逃出自身 scope 的資源,今天得到的不是本節給的答案,而是根本沒有答案。
+`Ref[T]` 建好了。`Ref(x)` 配置那個 cell,`deref(r)` 把 payload 當成值讀回來,複製時 retain、最後一個持有者釋放——
+與 `chan`、`str` 和遞迴型別被裝進去的是同一個計數 cell。釋放時跑的是 **payload 自己的**歸還:`Ref[str]` 會釋放它的
+字串,`Ref[int]` 什麼都不欠。
+
+> **[not yet]** 這個盒子還不承載**使用者所寫的 `drop`**——_E9114 NotImplemented: `Ref` with 2 arguments — the
+> box carries the VALUE and this compiler runs the payload's own give-back when the last holder lets go; a
+> user-written `drop` beside it is not built_。逃出自身 scope 的資源由這個盒子持有;而關閉需要一段使用者動作的
+> 那種,仍在等。
 
 多數清理只是記憶體，離開 scope 時就自動釋放。若一個**資源的釋放不屬於這種自動釋放**——foreign handle（見
 [FFI](../runtime/ffi.zh-TW.md)）、任何必須**恰好關閉一次**者——且它必須**逃出開啟它的 scope**（被 return、存進欄位、送過
@@ -243,10 +245,10 @@ mut x := x           # 再次遮蔽——這次可變，並以前一份 copy 為
 | closure body 內的捕獲值        | 否           | 結束**本次 invocation** 的存取 → 不釋放；下次呼叫仍有              |
 | channel、`Ref[T]`              | refcounted   | 撤銷名字**並**放掉這個 holder（refcount--）；最後一個跑 **`drop`** |
 
-> **狀態。** 上表最後一列正是 `zerg` 完全走不到的那一列。`del` 一個 `Ref` 值在兩半上都是 **[not yet]**：對
-> channel 做 `del ch` 會被具名拒絕（_E9066 NotImplemented: `del ch` on a CHANNEL_，訊息要你改寫 `close(ch)`），
-> 而這裡根本沒有 `Ref[T]` 型別可 `del`——光是提到 `Ref` 就被拒絕（`E9058`）。編譯器對 channel 做的事是在其 binding
-> 的 scope 結束處歸還它，所以 holder 仍會被放掉、最後一個仍會跑 `drop`；缺的是**提早**具名說出這件事的能力。
+> **狀態。** 上表最後一列是 `del` 一個 `Ref` 值,而它是 **[not yet]**:對 channel 做 `del ch` 會被具名拒絕
+> (_E9066 NotImplemented: `del ch` on a CHANNEL_,訊息要你改寫 `close(ch)`),而 `Ref[T]`——現在是一個型別了——
+> 也沒有 `del`。編譯器對兩者做的事,是在 binding 的 scope 結束處歸還它們,所以 holder 仍會被放掉、最後一個仍會跑
+> `drop`;缺的是**提早**具名說出這件事的能力。
 >
 > ---
 >

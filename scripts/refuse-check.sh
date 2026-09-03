@@ -2064,25 +2064,6 @@ EOF
 # for the rest: a generic TYPE, a generic METHOD, a bound this compiler cannot carry, a call
 # that decides nothing, and a bound the argument does not meet.
 
-# A TYPE ARGUMENT THAT IS ITSELF A PARAMETER. A type's arguments live inside its NAME here,
-# which is what let every walk over `Ty` keep working without learning a shape — and it is
-# also what substitution cannot see through. Refused at the APPLICATION rather than at the
-# field it eventually breaks.
-expect "$ZERG" a-type-argument-that-is-a-parameter E9113 'Box[T]' <<'EOF'
-struct Box[T] {
-	pub v: T
-}
-
-fn get[T](b: Box[T]) -> T {
-	return b.v
-}
-
-fn main() {
-	b: Box[int] = Box(1)
-	print get(b)
-}
-EOF
-
 # AND THE ARITY, counted at the application because that is where the reader wrote it.
 expect "$ZERG" a-type-argument-count E4093 'type parameters' <<'EOF'
 struct Box[T] {

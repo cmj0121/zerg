@@ -131,13 +131,6 @@ pub fn chk_test_import(im: zerg.ImportDecl) {
 	raise zerg.rule_msg(zerg.Rule.TestFileImported, f"`{im.path}` names a test file, and a normal build compiles none — a `*_test.zg` is included only in a test build (docs/runtime/package.md), so nothing it declares is on any module's surface\n{place}")
 }
 
-pub fn chk_unbuilt_module(im: zerg.ImportDecl) {
-	return if path_tail(im.path) != "atomic"
-
-	place := zerg.place_line(im.at, im.line, im.col)
-	raise zerg.rule_msg(zerg.Rule.NotYetAtomicImport, f"the module `atomic` ships and cannot be imported — its `Atomic[T]` holds a `Ref[T]`, and this compiler has no `Ref[T]` type (E9058, docs/runtime/stdlib.md). Share state across coroutines with a channel until it has\n{place}")
-}
-
 # --- a program's sources, entry first ------------------------------------------------------
 
 # load_sources loads every named entry with its imports, keeping one copy of a module
@@ -896,7 +889,6 @@ fn load_with(file: str, mod: str, own: list[str], root_dir: str, mut &seen: list
 	# no file — the loader is the first parse a source meets
 	for imd in zerg.import_decls_at(src, file) {
 		chk_test_import(imd)
-		chk_unbuilt_module(imd)
 
 		# THE IMPORTER'S OWN DIRECTORY, not the one threaded through: `./` is relative to the
 		# file that wrote it, and the root travels beside it for `/`. Threading one directory

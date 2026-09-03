@@ -861,7 +861,7 @@ fn dsg_assert_at(mut &toks: list[token.Token], at: int, base: str, mut &out: lis
 	# THE CONDITION HAS TO PARSE, and here it may simply not: `zerg desugar` runs over a file
 	# nobody has compiled, and a pass that raised would refuse a source rather than decline a
 	# rule. The compiler is the one that reports a malformed condition.
-	mut p := parser.Parser(toks, 0, "", "", false, 0, 0, [])
+	mut p := parser.Parser(toks, 0, "", "", false, 0, 0, [], [])
 	mut cls: list[parser.AClaim] = []
 	guard {
 		cls = parser.p_assert_claims(p, at + 1, end)

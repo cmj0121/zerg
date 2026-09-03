@@ -441,6 +441,16 @@ pub struct Emitter {
 	# THEY ARE RECORDED HERE rather than carried on the specialization, because a `FnDecl` with
 	# non-empty `tparams` is a TEMPLATE to `c_is_template` and would be removed from the
 	# program again. The specialization's name is the key, and it is unique by construction.
+	# gen_structs are the generic STRUCT templates — `struct Box[T]` — recorded and removed
+	# from the program before any pass sees it, exactly as a generic `fn` is. A template is
+	# not a type, and this is the honest way to say so: from the removal down, `f.structs`
+	# holds types only.
+	#
+	# inst_tys is the applied name of every specialization already made, so a type written
+	# twice is built once.
+	pub gen_structs: list[ast.StructDecl]
+	pub inst_tys: list[str]
+
 	pub bnd_fn: list[str]
 	pub bnd_ty: list[str]
 	pub bnd_of: list[str]
@@ -688,7 +698,7 @@ fn c_type(t: ast.Ty) -> str {
 		Ty.TByte      => "uint8_t"
 		Ty.TUint      => "uint64_t"
 		Ty.TRune      => "int32_t"
-		Ty.TNamed(nm) => "zg_" + nm
+		Ty.TNamed(nm) => c_ty_cname(nm)
 		Ty.TList(_)   => "zrt_list"
 		Ty.TFn(_, _)  => "zg_fnptr"
 
@@ -2303,6 +2313,23 @@ fn c_fn_cname(recv: str, name: str) -> str {
 	return f"zg_{recv}_{name}"
 }
 
+# c_ty_cname is a declared type's C name, and c_ty_helper the C name of a function generated
+# FOR one — its drop, its copy. Both are here because an APPLIED name (`Box[int]`) holds
+# characters C has no place for, and every site that spelled `"zg_" + name` by hand would
+# otherwise have had to learn that separately or write a name nobody declared. cc caught the
+# first one, as `} zg_Box[int];`.
+pub fn c_ty_cname(nm: str) -> str {
+	return c_spec_cname(nm) if c_is_applied(nm)
+
+	return "zg_" + nm
+}
+
+fn c_ty_helper(what: str, nm: str) -> str {
+	return c_spec_cname(f"{what}${nm}") if c_is_applied(nm)
+
+	return f"zg_{what}_{nm}"
+}
+
 # c_is_mangled / c_spec_cname are the SPECIALIZATION's C name. A mangled name carries `$`,
 # which no Zerg identifier may hold — that is what makes it unforgeable — and which is not a
 # C identifier character either: clang and gcc accept it as an extension, and `-std=c11
@@ -2483,6 +2510,152 @@ pub fn c_spec_base(name: str) -> str {
 		out = out + str([b])
 	}
 	return out
+}
+
+# c_with_type_insts does for a generic TYPE what c_build_generics and c_without_templates do
+# for a generic fn, and in one pass because the two halves answer each other: a template is
+# recorded and removed, and every APPLICATION a reader wrote becomes an ordinary struct under
+# its applied name (`Box[int]`). Nothing past this pass knows a template existed — the type
+# table, the field table, the typedef sweep and every diagnostic see a declared struct whose
+# name happens to have brackets in it.
+#
+# THE POPULATION IS `f.ty_apps`, the parser's record of where arguments were written. It is
+# the one fact the parser holds that nothing downstream can recover: by the time the type is
+# a `TNamed` the arguments are inside its name, and only a rule that split the string apart
+# again could find them.
+fn c_with_type_insts(mut &em: Emitter, f: ast.File) -> ast.File {
+	mut keep: list[ast.StructDecl] = []
+	for sd in f.structs {
+		if sd.tparams.len() > 0 {
+			em.gen_structs.append(sd)
+		} else {
+			keep.append(sd)
+		}
+	}
+
+	for a in f.ty_apps {
+		r := c_gen_struct_row(em, a.base)
+		continue if r < 0 or c_name_in(em.inst_tys, a.name)
+
+		em.inst_tys.append(a.name)
+		keep.append(c_type_inst(em, f, em.gen_structs[r], a))
+	}
+
+	mut out := f
+	out.structs = keep
+	return out
+}
+
+fn c_gen_struct_row(mut &em: Emitter, nm: str) -> int {
+	mut i := 0
+	for i < em.gen_structs.len() {
+		return i if em.gen_structs[i].name == nm
+		i = i + 1
+	}
+	return -1
+}
+
+# c_type_inst is one specialization: the template's fields with its parameters replaced, under
+# the applied name. It is an ordinary `StructDecl` with no parameters of its own, which is what
+# lets every pass below treat it as a type somebody declared.
+fn c_type_inst(mut &em: Emitter, f: ast.File, tpl: ast.StructDecl, a: ast.TyApp) -> ast.StructDecl {
+	raise c_diag_at(a.path, a.line, a.col, rule.Rule.TypeArgCount, f"`{tpl.name}` has {strconv.to_string(tpl.tparams.len(), 10)} type parameters and `{a.name}` gives {strconv.to_string(a.args.len(), 10)}") if a.args.len() != tpl.tparams.len()
+
+	# ONE CAUSE, TWO SHAPES, ONE RAISE. A type's arguments live inside its NAME here, which is
+	# what let every walk over `Ty` keep working without learning a shape — and it is also what
+	# substitution cannot see through. So neither an argument that is itself a type parameter
+	# (`Box[T]` inside `fn get[T]`) nor a field that names another application (`Pair[T, int]`)
+	# is rewritten, and both would reach the type table as a name nothing declares. Refused at
+	# the APPLICATION, where a reader can see what asked for it, rather than at the field it
+	# eventually breaks — which is the message this used to give, two steps away
+	# (`no type named T (field Box[T].v)`).
+	why := c_app_unresolved(f, tpl, a)
+	raise c_diag_at(a.path, a.line, a.col, rule.Rule.NotYetNestedTypeApp, f"NotImplemented: `{a.name}` — {why}, and this compiler carries a type's arguments inside its name, so substitution does not reach them (GRAMMAR#struct-decl)") if why != ""
+
+	mut nokeys: list[str] = []
+	mut novals: list[str] = []
+	su := generic.TySubst(tpl.tparams, a.args, nokeys, novals, f"{a.path}:{strconv.to_string(a.line, 10)}")
+	return ast.StructDecl(a.name, generic.subst_fields(su, tpl.fields), tpl.is_pub, tpl.path, tpl.line, tpl.col, [])
+}
+
+# c_app_unresolved is why an application cannot be built, or "" when it can. Both answers name
+# the thing a reader wrote rather than the consequence.
+fn c_app_unresolved(f: ast.File, tpl: ast.StructDecl, a: ast.TyApp) -> str {
+	for arg in a.args {
+		nm := c_named_of(arg)
+		return f"the type argument `{nm}` names no type this program declares — a type PARAMETER here, or a name spelled wrong" if nm != "" and not c_file_declares_ty(f, nm)
+	}
+	for fd in tpl.fields {
+		return f"`{tpl.name}.{fd.name}` names another generic type (`{ast.ty_name(fd.ty)}`)" if c_ty_has_app(fd.ty)
+	}
+	return ""
+}
+
+# c_file_declares_ty asks the PROGRAM rather than the type table, because this runs before the
+# table is filled — the instantiation has to happen before anything can register it.
+fn c_file_declares_ty(f: ast.File, nm: str) -> bool {
+	return true if parser.is_conv(nm) or nm == "Err"
+
+	for sd in f.structs {
+		return true if sd.name == nm
+	}
+	for ed in f.enums {
+		return true if ed.name == nm
+	}
+	for td in f.types {
+		return true if td.name == nm
+	}
+	return false
+}
+
+# c_ty_has_app reports whether a type spells an APPLIED name anywhere in it. A built-in
+# container is transparent — `list[Box[int]]` names one — and a function type is opaque for
+# c_decl_collect's reason: nothing it mentions is ever spelled in the C.
+fn c_ty_has_app(t: ast.Ty) -> bool {
+	nm := c_named_of(t)
+	return c_is_applied(nm) if nm != ""
+
+	return match t {
+		Ty.TList(e) => c_ty_has_app(e)
+		Ty.TOpt(e) => c_ty_has_app(e)
+		Ty.TChan(e, _) => c_ty_has_app(e)
+		Ty.TArr(e, _) => c_ty_has_app(e)
+		Ty.TRef(e) => c_ty_has_app(e)
+		Ty.TPtr(e) => c_ty_has_app(e)
+		Ty.TUnsafe(e) => c_ty_has_app(e)
+		Ty.TMap(k, v) => c_ty_has_app(k) or c_ty_has_app(v)
+		Ty.TEither(l, r) => c_ty_has_app(l) or c_ty_has_app(r)
+		Ty.TTuple(es) => c_tys_have_app(es)
+		_ => false
+	}
+}
+
+fn c_tys_have_app(ts: list[ast.Ty]) -> bool {
+	for t in ts {
+		return true if c_ty_has_app(t)
+	}
+	return false
+}
+
+# c_app_base is an applied name with its arguments taken off — `Box[int]` is `Box` — and the
+# whole name when there are none, so a caller never has to ask which it has.
+pub fn c_app_base(nm: str) -> str {
+	mut out := ""
+	for b in bytearray(nm) {
+		return out if b == b'['
+
+		out = out + str([b])
+	}
+	return out
+}
+
+# c_is_applied is the one test for "this name carries type arguments", asked of the spelling
+# because the spelling is where they are.
+pub fn c_is_applied(nm: str) -> bool {
+	for b in bytearray(nm) {
+		return true if b == b'['
+	}
+	return false
 }
 
 # c_is_template names the concept ONCE. It was `tparams.len() > 0` at four sites, which is
@@ -3014,7 +3187,13 @@ fn c_is_free_fn(mut &em: Emitter, n: str) -> bool {
 # reader was told `ptr` is not built and left to find which of their signatures said it. The
 # trailer is appended once by the channel (c_diag) rather than at each raise, for the reason
 # the sentences are written once here: a seventh caller inherits it instead of forgetting it.
-pub fn c_builtin_check(mut &em: Emitter, n: str) {
+pub fn c_builtin_check(mut &em: Emitter, n0: str) {
+	# THE BASE, because a type's arguments are part of its NAME now: `Ref[int]` and `set[int]`
+	# are what a reader writes, and each of these rules is about the name in front of the
+	# brackets. Asked here rather than at the six call sites, which is the same reason the
+	# sentences are written here.
+	n := c_app_base(n0)
+
 	c_fixed_width_check(em, n)
 
 	raise c_diag(em, rule.Rule.NotYetRefBox, "NotImplemented: a refcounted box `Ref(x)` / `deref(r)` — this compiler has no `Ref[T]` type (docs/runtime/builtins.md)") if n == "Ref" or n == "deref"
@@ -3119,8 +3298,8 @@ fn c_type_decls(mut &em: Emitter, f: ast.File, carriers: list[ast.Ty], tuples: l
 				# just written, which keeps that order from deciding whether the C compiles —
 				# and an enum whose payload is another enum is the same problem one level in.
 				if c_needs_copy(em, ast.Ty.TNamed(ed.name)) {
-					out = out + f"static zg_{ed.name} zg_copy_{ed.name}(zg_{ed.name} v);\n"
-					out = out + f"static void zg_drop_{ed.name}(zg_{ed.name} *v);\n"
+					out = out + "static " + c_ty_cname(ed.name) + " " + c_ty_helper("copy", ed.name) + "(" + c_ty_cname(ed.name) + " v);\n"
+					out = out + "static void " + c_ty_helper("drop", ed.name) + "(" + c_ty_cname(ed.name) + " *v);\n"
 				}
 				done.append(ed.name)
 			} else {
@@ -3140,8 +3319,8 @@ fn c_type_decls(mut &em: Emitter, f: ast.File, carriers: list[ast.Ty], tuples: l
 				# struct's helper is. A prototype needs only the typedef just written, and
 				# it is what keeps that order from deciding whether the C compiles.
 				if c_needs_copy(em, ast.Ty.TNamed(sd.name)) {
-					out = out + f"static zg_{sd.name} zg_copy_{sd.name}(zg_{sd.name} v);\n"
-					out = out + f"static void zg_drop_{sd.name}(zg_{sd.name} *v);\n"
+					out = out + "static " + c_ty_cname(sd.name) + " " + c_ty_helper("copy", sd.name) + "(" + c_ty_cname(sd.name) + " v);\n"
+					out = out + "static void " + c_ty_helper("drop", sd.name) + "(" + c_ty_cname(sd.name) + " *v);\n"
 				}
 				done.append(sd.name)
 			} else {
@@ -3619,6 +3798,11 @@ fn c_check_type_name(mut &em: Emitter, nm: str, s: Site) {
 	# `ptr`" while `ptr(x)` in a CALL had been named all along — one name, two positions, and
 	# only one of them told the reader what it was looking at.
 	c_builtin_check(em, nm)
+
+	# A TEMPLATE NAMED WITHOUT ITS ARGUMENTS is not an unknown type: `Box` is declared, and
+	# what is missing is the thing that makes it one. Saying no type named `Box` eight lines
+	# under `struct Box[T]` sends a reader to declare what they already have.
+	raise c_diag(em, rule.Rule.TypeArgsMissing, f"`{nm}` is a generic type and this names it without arguments — a type is `{nm}[…]`, one argument per parameter ({site})") if c_gen_struct_row(em, nm) >= 0
 
 	raise c_diag(em, rule.Rule.NoSuchType, f"no type named `{nm}` ({site})")
 }
@@ -4138,22 +4322,23 @@ fn c_build_typedefs(mut &em: Emitter, f: ast.File) {
 }
 
 fn c_build_structs(mut &em: Emitter, f: ast.File) {
-	mut i := 0
-	for i < f.structs.len() {
-		sd := f.structs[i]
-		c_ty_register(em, sd.name, TK_STRUCT, ast.Ty.TUnknown, sd.path, sd.is_pub)
-		mut j := 0
-		for j < sd.fields.len() {
-			fd := sd.fields[j]
-			em.fld_struct.append(sd.name)
-			em.fld_name.append(fd.name)
-			em.fld_ty.append(fd.ty)
-			em.fld_pub.append(fd.is_pub)
-			em.fld_hasdef.append(fd.has_def)
-			em.fld_def.append(fd.def)
-			j = j + 1
-		}
-		i = i + 1
+	for sd in f.structs {
+		c_register_struct(em, sd)
+	}
+}
+
+# c_register_struct is ONE struct entering the tables, and it is a function because a
+# specialization minted on demand has to enter them the same way a declared type does — two
+# spellings of this walk would be two answers to "what does the program declare".
+fn c_register_struct(mut &em: Emitter, sd: ast.StructDecl) {
+	c_ty_register(em, sd.name, TK_STRUCT, ast.Ty.TUnknown, sd.path, sd.is_pub)
+	for fd in sd.fields {
+		em.fld_struct.append(sd.name)
+		em.fld_name.append(fd.name)
+		em.fld_ty.append(fd.ty)
+		em.fld_pub.append(fd.is_pub)
+		em.fld_hasdef.append(fd.has_def)
+		em.fld_def.append(fd.def)
 	}
 }
 
@@ -4362,7 +4547,7 @@ fn c_copy_of(mut &em: Emitter, t: ast.Ty, x: str) -> str {
 	# and a function's is the one global pair, for the reason c_fnptr_helpers gives
 	return f"zg_copy_fnptr({x})" if c_is_fn(t)
 
-	return f"zg_copy_{c_named_of(t)}({x})"
+	return c_ty_helper("copy", c_named_of(t)) + "(" + x + ")"
 }
 
 # c_copy_helpers emits one `zg_copy_<T>` per struct that holds a list, after the typedefs
@@ -4393,8 +4578,8 @@ fn c_copy_helpers(mut &em: Emitter, f: ast.File) -> str {
 # that is what makes a recursive value refcount-shared rather than deep-cloned, and it is
 # the sentence docs/core/memory.md writes about copying one.
 fn c_enum_copy_helper(mut &em: Emitter, ed: ast.EnumDecl) -> str {
-	nm := "zg_" + ed.name
-	mut out := "static " + nm + " zg_copy_" + ed.name + "(" + nm + " v) {\n"
+	nm := c_ty_cname(ed.name)
+	mut out := "static " + nm + " " + c_ty_helper("copy", ed.name) + "(" + nm + " v) {\n"
 	out = out + "    " + nm + " r = v;\n    switch (v.tag) {\n"
 	for vd in ed.variants {
 		body := c_enum_variant_copy(em, ed.name, vd)
@@ -4426,8 +4611,8 @@ fn c_enum_variant_copy(mut &em: Emitter, en: str, vd: ast.VariantDef) -> str {
 # fields FORWARD, which the same page pins the other way; that is a gap of c_drop_helper's
 # and not a second reading of the rule.)
 fn c_enum_drop_helper(mut &em: Emitter, ed: ast.EnumDecl) -> str {
-	nm := "zg_" + ed.name
-	mut out := "static void zg_drop_" + ed.name + "(" + nm + " *v) {\n    switch (v->tag) {\n"
+	nm := c_ty_cname(ed.name)
+	mut out := "static void " + c_ty_helper("drop", ed.name) + "(" + nm + " *v) {\n    switch (v->tag) {\n"
 	for vd in ed.variants {
 		body := c_enum_variant_drop(em, ed.name, vd)
 		if body != "" {
@@ -4470,7 +4655,7 @@ fn c_elem_vt(mut &em: Emitter, t: ast.Ty) -> str {
 
 	return "zg_listvt" if k == ""
 
-	return "zg_listvt_" + k
+	return c_ty_helper("listvt", k)
 }
 
 # c_elem_copy_fn is the thunk itself, for a table that takes one rather than a whole
@@ -4482,7 +4667,7 @@ fn c_elem_copy_fn(mut &em: Emitter, t: ast.Ty) -> str {
 
 	return "NULL" if k == ""
 
-	return "zg_elemcopy_" + k
+	return c_ty_helper("elemcopy", k)
 }
 
 # c_elem_kind is the one dispatch behind both: which FAMILY of thunk a type needs, or ""
@@ -4531,10 +4716,10 @@ fn c_elem_vt_helper(mut &em: Emitter, t: ast.Ty) -> str {
 	ct := c_type(t)
 	cp := c_copy_of(em, t, f"*(const {ct}*)src")
 	dr := c_drop_fn(em, t)
-	mut out := "static void zg_elemcopy_" + k + "(void *dst, const void *src) {\n"
+	mut out := "static void " + c_ty_helper("elemcopy", k) + "(void *dst, const void *src) {\n"
 	out = out + "    *(" + ct + "*)dst = " + cp + ";\n}\n"
-	out = out + "static void zg_elemdrop_" + k + "(void *elem) { " + dr + "((" + ct + "*)elem); }\n"
-	return out + "static const zrt_elem_vt zg_listvt_" + k + " = {zg_elemcopy_" + k + ", zg_elemdrop_" + k + "};\n\n"
+	out = out + "static void " + c_ty_helper("elemdrop", k) + "(void *elem) { " + dr + "((" + ct + "*)elem); }\n"
+	return out + "static const zrt_elem_vt " + c_ty_helper("listvt", k) + " = {" + c_ty_helper("elemcopy", k) + ", " + c_ty_helper("elemdrop", k) + "};\n\n"
 }
 
 # c_drop_helper is c_copy_helper read backwards, and the two are written next to each other
@@ -4545,8 +4730,8 @@ fn c_elem_vt_helper(mut &em: Emitter, t: ast.Ty) -> str {
 # It takes the value BY POINTER — a drop is a statement about storage, not about a value —
 # and it does not clear what it drops. Every caller is at the end of that storage's life.
 fn c_drop_helper(mut &em: Emitter, sd: ast.StructDecl) -> str {
-	nm := "zg_" + sd.name
-	mut out := "static void zg_drop_" + sd.name + "(" + nm + " *v) {\n"
+	nm := c_ty_cname(sd.name)
+	mut out := "static void " + c_ty_helper("drop", sd.name) + "(" + nm + " *v) {\n"
 	for fd in sd.fields {
 		if c_needs_copy(em, fd.ty) {
 			out = out + "    " + c_drop_stmt(em, fd.ty, "v->zg_" + fd.name) + "\n"
@@ -4606,7 +4791,7 @@ fn c_drop_fn(mut &em: Emitter, t: ast.Ty) -> str {
 	return "" if nm == "" or (not c_is_struct_name(em, nm) and not c_is_enum_name(em, nm))
 	return "" if not c_needs_copy(em, t)
 
-	return "zg_drop_" + nm
+	return c_ty_helper("drop", nm)
 }
 
 # c_drop_arg spells what the give-back is handed: a list, a map and a struct are all given
@@ -4617,8 +4802,8 @@ fn c_drop_arg(mut &em: Emitter, t: ast.Ty, place: str) -> str {
 }
 
 fn c_copy_helper(mut &em: Emitter, sd: ast.StructDecl) -> str {
-	nm := "zg_" + sd.name
-	mut out := "static " + nm + " zg_copy_" + sd.name + "(" + nm + " v) {\n"
+	nm := c_ty_cname(sd.name)
+	mut out := "static " + nm + " " + c_ty_helper("copy", sd.name) + "(" + nm + " v) {\n"
 	out = out + "    " + nm + " r = v;\n"
 	for fd in sd.fields {
 		if c_needs_copy(em, fd.ty) {
@@ -4637,7 +4822,7 @@ fn c_struct_typedef(sd: ast.StructDecl) -> str {
 		out = out + "    " + c_type(fd.ty) + " zg_" + fd.name + ";\n"
 		i = i + 1
 	}
-	return out + "} zg_" + sd.name + ";\n\n"
+	return out + "} " + c_ty_cname(sd.name) + ";\n\n"
 }
 
 # c_named_of returns the struct name of a TNamed type, or "" otherwise.
@@ -5456,7 +5641,7 @@ fn c_enum_typedef(ed: ast.EnumDecl) -> str {
 		}
 		out = out + "    } u;\n"
 	}
-	return out + "} zg_" + ed.name + ";\n\n"
+	return out + "} " + c_ty_cname(ed.name) + ";\n\n"
 }
 
 # c_refbox_helpers emits, for an enum with self-recursive fields, the cell's drop and a
@@ -5488,9 +5673,9 @@ fn c_refbox_helpers(ed: ast.EnumDecl) -> str {
 	}
 	return "" if not anybox
 	nm := ed.name
-	mut out := "static void zg_dropbox_" + nm + "(void* p) { zg_drop_" + nm + "((zg_" + nm + "*)p); }\n"
+	mut out := "static void " + c_ty_helper("dropbox", nm) + "(void* p) { " + c_ty_helper("drop", nm) + "((" + c_ty_cname(nm) + "*)p); }\n"
 	out = out + "static void* zg_refnew_" + nm + "(zg_" + nm + " v) {\n"
-	out = out + "    void* r = zrt_ref_alloc(sizeof(zg_" + nm + "), &zg_dropbox_" + nm + ");\n"
+	out = out + "    void* r = zrt_ref_alloc(sizeof(" + c_ty_cname(nm) + "), &" + c_ty_helper("dropbox", nm) + ");\n"
 	out = out + "    *(zg_" + nm + "*)zrt_ref_payload(r) = v;\n"
 	out = out + "    return r;\n}\n\n"
 	return out
@@ -8928,7 +9113,7 @@ fn c_call(mut &em: Emitter, name: str, args: list[ast.Expr], sb: Subst) -> str {
 		# spells the same name with none of them involved.
 		check.chk_ty_visible(em, name)
 
-		return "(zg_" + name + "){" + c_struct_args(em, name, args, sb) + "}"
+		return "(" + c_ty_cname(name) + "){" + c_struct_args(em, name, args, sb) + "}"
 	}
 
 	# A GENERIC CALL. The template is not a function and has no C symbol; the SPECIALIZATION
@@ -8936,6 +9121,19 @@ fn c_call(mut &em: Emitter, name: str, args: list[ast.Expr], sb: Subst) -> str {
 	# then finds an ordinary free function and applies the argument rules to a signature with
 	# real types in it. Nothing below this line knows a generic was involved.
 	return c_call(em, c_instantiate(em, name, args), args, sb) if c_is_generic(em, name)
+
+	# A GENERIC TYPE'S CONSTRUCTOR SOLVES ITS OWN PARAMETERS, from the ARGUMENTS and never from
+	# where the answer lands — docs/core/type-system.md states it for a call, and a construction
+	# is one: "`T` comes from the arguments, never from where the answer lands". `Box(7)` is a
+	# `Box[int]` wherever it is written, and `b: Box[str] = Box(1)` solves `Box[int]` and is
+	# then refused at the BINDING, exactly as `x: float = id(5)` is.
+	#
+	# BESIDE THE GENERIC FN, because it is the same rule about the same thing: a template named
+	# at a call, solved from what the call gives it. It sits here rather than with the struct
+	# constructions below because a template is not a type — it was removed from the program
+	# with the other templates — so the branch that asks "is this name a type" never sees it,
+	# and what it reached instead was `undefined function`.
+	return c_gen_construct(em, name, args, sb) if c_gen_struct_row(em, name) >= 0
 
 	# NOTHING DECLARES THIS FUNCTION. It used to be spelled `zg_<name>(…)` and handed to
 	# cc, which reported a call to an undeclared function against a file under .zerg-cache
@@ -9039,6 +9237,74 @@ fn c_k_idx(mut &em: Emitter, name: str) -> int {
 
 # c_struct_args emits a struct constructor's arguments, giving each field's type as
 # context so an empty-list argument is initialised correctly.
+# c_gen_construct builds a generic type from a call, solving the template's parameters against
+# what the arguments are. The FIELDS are the parameter list — a construction binds by position
+# (docs/core/types.md) — so this is `gen_solve` asked the same question a generic `fn` call
+# asks, with the field types where a signature's would be.
+#
+# THE SPECIALIZATION IS MINTED HERE if this is the first call that needs it. A type written in
+# a signature was instantiated by c_with_type_insts before any check ran; one that exists only
+# because a body constructed it has no written application to be found by, so it registers on
+# demand — which is the path a tuple and a carrier already take (c_spelled_register).
+fn c_gen_construct(mut &em: Emitter, base: str, args: list[ast.Expr], sb: Subst) -> str {
+	applied := c_gen_applied(em, base, args)
+	return "(" + c_ty_cname(applied) + "){" + c_struct_args(em, applied, args, sb) + "}"
+}
+
+# c_gen_applied is the specialization a construction NAMES, solved and registered — the half
+# both ends share, so the type a body is emitted as and the type inference reports cannot be
+# two different answers.
+fn c_gen_applied(mut &em: Emitter, base: str, args: list[ast.Expr]) -> str {
+	tpl := em.gen_structs[c_gen_struct_row(em, base)]
+
+	mut decls: list[ast.Ty] = []
+	for fd in tpl.fields {
+		decls.append(fd.ty)
+	}
+	mut actuals: list[ast.Ty] = []
+	for a in args {
+		actuals.append(c_infer(em, a))
+	}
+
+	sol := generic.gen_solve(tpl.tparams, decls, actuals)
+	mut i := 0
+	for i < sol.len() {
+		raise c_diag(em, rule.Rule.TypeArgUndecided, f"the type parameter `{tpl.tparams[i]}` of `{base}` is not decided by this construction — no field's type mentions it, so there is nothing to solve it from") if c_is_unknown(sol[i])
+		i = i + 1
+	}
+
+	applied := ast.spec_key(base, sol)
+	c_gen_type_on_demand(em, tpl, applied, sol)
+	return applied
+}
+
+# c_gen_type_on_demand registers a specialization the declaration sweep never saw and places
+# its declaration text where a body-discovered type's goes. Guarded by the same list the
+# written applications use, so a type reached both ways is built once.
+fn c_gen_type_on_demand(mut &em: Emitter, tpl: ast.StructDecl, applied: str, sol: list[ast.Ty]) {
+	return if c_name_in(em.inst_tys, applied)
+
+	em.inst_tys.append(applied)
+
+	mut nokeys: list[str] = []
+	mut novals: list[str] = []
+	su := generic.TySubst(tpl.tparams, sol, nokeys, novals, c_place(em))
+	sd := ast.StructDecl(applied, generic.subst_fields(su, tpl.fields), tpl.is_pub, tpl.path, tpl.line, tpl.col, [])
+
+	c_register_struct(em, sd)
+	em.res_decls.append(c_struct_typedef(sd))
+
+	# THE SAME THREE THE DECLARATION SWEEP EMITS, under the same condition — a struct that
+	# owns nothing needs none of them, and one that does needs all three: the copy, the drop,
+	# and the element vtable a container of it reads. Emitting two of the three left
+	# `Pair[int, str]` naming a `zgg_elemdrop_…` nobody wrote, which cc reported.
+	return if not c_needs_copy(em, ast.Ty.TNamed(applied))
+
+	em.res_decls.append(c_copy_helper(em, sd))
+	em.res_decls.append(c_drop_helper(em, sd))
+	em.res_decls.append(c_elem_vt_helper(em, ast.Ty.TNamed(applied)))
+}
+
 fn c_struct_args(mut &em: Emitter, sname: str, args: list[ast.Expr], sb: Subst) -> str {
 	# MORE arguments than the struct has fields reached cc as an "excess elements in struct
 	# initializer" WARNING, so it compiled and the extra values were dropped. Too few has
@@ -11023,6 +11289,13 @@ fn c_infer_call(mut &em: Emitter, name: str, args: list[ast.Expr]) -> ast.Ty {
 	# and showed a pointer. Instantiating is keyed by the mangled name and idempotent, so
 	# asking here costs the first ask and nothing after it.
 	return c_lookup_sig_ret(em, c_instantiate(em, name, args)) if c_is_generic(em, name)
+
+	# AND THE GENERIC TYPE'S CONSTRUCTOR, beside the generic fn for the same reason it sits
+	# beside it on the emission path: both are a template named at a call and solved from what
+	# the call gives them. Asked at BOTH ends or the two disagree — with only the emission half
+	# in place, `a := Box(7)` was emitted as a `Box[int]` and inferred as nothing, so the
+	# binding took the field's type and cc was handed the mismatch.
+	return ast.Ty.TNamed(c_gen_applied(em, name, args)) if c_gen_struct_row(em, name) >= 0
 
 	return c_intrinsic_ret(name) if c_is_intrinsic(em, name)
 	return ast.Ty.TNamed(c_variant_enum(em, name)) if c_is_variant(em, name)
@@ -15493,7 +15766,7 @@ fn c_drop_thunk(mut &em: Emitter, t: ast.Ty) -> str {
 
 	return "" if k == ""
 
-	return "zg_elemdrop_" + k
+	return c_ty_helper("elemdrop", k)
 }
 
 # c_scope_forget drops the pending-release ENTRIES for a scope that has ended. Nothing is
@@ -16664,9 +16937,13 @@ pub fn merge_asts(fs: list[ast.File]) -> ast.File {
 	mut derive_spec: list[str] = []
 	mut stmts: list[ast.TopStmt] = []
 	mut ty_quals: list[ast.TyQual] = []
+	mut ty_apps: list[ast.TyApp] = []
 	for f in fs {
 		for q in f.ty_quals {
 			ty_quals.append(q)
+		}
+		for a in f.ty_apps {
+			ty_apps.append(a)
 		}
 		for c in f.consts {
 			consts.append(c)
@@ -16711,7 +16988,7 @@ pub fn merge_asts(fs: list[ast.File]) -> ast.File {
 	# because it reads one file at a time, and the length is part of the TYPE — so it has to
 	# become a number before anything compares two types, and this is the one door every path
 	# into the emitter goes through.
-	return generic.gen_resolve_lens(ast.File(imports, structs, enums, specs, impls, fns, types, consts, derive_on, derive_spec, stmts, ty_quals))
+	return generic.gen_resolve_lens(ast.File(imports, structs, enums, specs, impls, fns, types, consts, derive_on, derive_spec, stmts, ty_quals, ty_apps))
 }
 
 fn c_emit_file_at(f: ast.File, ms: Mods, mut &diags: list[ast.Diag]) -> str {
@@ -17395,7 +17672,7 @@ fn c_emit_unit(prog0: ast.File, own0: ast.File, ms: Mods, whole: bool, want_lint
 	# is what makes that invariant hold for a multi-unit program, at the place it already lives,
 	# and it is what lets the declaration passes below go back to reading the WHOLE program.
 	seen := diags.len()
-	mut em := Emitter([], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], false, false, false, [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], 0, [], 0, [], [], false, "", "", [], [], ast.Ty.TVoid, 0, "", 0, 0, diags, 0, 0, [], [], [], [], [], false, 0, false, "", 0, false, false, [], [], [], "", want_lints, [], [], [], [], [], [], [], [], [], [], [], [], false, 0, [], [], "", c_nosub(), [], [], [], [], [], [], [], [], [])
+	mut em := Emitter([], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], false, false, false, [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], 0, [], 0, [], [], false, "", "", [], [], ast.Ty.TVoid, 0, "", 0, 0, diags, 0, 0, [], [], [], [], [], false, 0, false, "", 0, false, false, [], [], [], [], [], "", want_lints, [], [], [], [], [], [], [], [], [], [], [], [], false, 0, [], [], "", c_nosub(), [], [], [], [], [], [], [], [], [])
 
 	# ASSIGNED, NOT PASSED. Every argument above is a zero value, and `layering` asserts that
 	# — it lines the call up with the fields by KIND, which only works while nothing in it
@@ -17411,7 +17688,7 @@ fn c_emit_unit(prog0: ast.File, own0: ast.File, ms: Mods, whole: bool, want_lint
 	# A template is not a function, and this is the honest way to say so: from here down —
 	# in these passes and in any added later — `f.fns` holds functions only.
 	c_build_generics(em, f0)
-	f := c_with_spec_keys(c_without_templates(f0))
+	f := c_with_type_insts(em, c_with_spec_keys(c_without_templates(f0)))
 	own := c_with_spec_keys(c_without_templates(c_with_spec_defaults(f0, c_with_derived(own0))))
 
 	# OVER `f0`, THE PROGRAM WITH ITS TEMPLATES STILL IN IT. A template is not a function

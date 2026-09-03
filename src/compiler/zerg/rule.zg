@@ -397,6 +397,13 @@ pub enum Rule {
 	DeriveFromNotEnum = 4090
 	DeriveFromTwice = 4091
 	DeriveFromNoPayload = 4092
+
+	# A TYPE'S ARGUMENTS ARE COUNTED AT THE APPLICATION, which is where the reader wrote them.
+	# The template's own arity is a fact about the declaration and is never in doubt; what can
+	# disagree with it is one use, and that use is what the message names.
+	TypeArgCount = 4093
+	TypeArgsMissing = 4094
+	TypeArgUndecided = 4095
 	ListPatternNotAList = 4084
 	MutateAValueNotAPlace = 4081
 
@@ -448,7 +455,6 @@ pub enum Rule {
 	# keeping that churn out of the five stage ranges is what keeps them dense
 	NotYetParameterizedSpec = 9001
 	NotYetGenericEnum = 9003
-	NotYetGenericStruct = 9004
 	NotYetDecoratorLayout = 9005
 	NotYetCallee = 9009
 	NotYetNamedArgument = 9010
@@ -534,6 +540,7 @@ pub enum Rule {
 	NotYetListPatternRestBinding = 9110
 	NotYetArrayLenImported = 9111
 	NotYetArrayMethod = 9112
+	NotYetNestedTypeApp = 9113
 }
 
 # rule_code is the text a rule is reported under — the `E2004` a gate pins and a reader looks

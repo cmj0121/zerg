@@ -719,6 +719,13 @@ pub struct StructDecl {
 	# symbol a reader cannot jump to is a name in a list.
 	pub line: int
 	pub col: int
+
+	# tparams are the type parameters a GENERIC struct declares — the `T` of `struct Box[T]`
+	# — and empty for every other struct, which is what makes this declaration a template
+	# rather than a type. A specialization is an ordinary StructDecl with them substituted and
+	# an APPLIED name (`Box[int]`, spelled by `spec_key`), so nothing downstream has to know
+	# a template existed.
+	pub tparams: list[str]
 }
 
 # TypeDecl is `type X = Y` — a NEW, DISTINCT type, not a transparent alias
@@ -981,9 +988,32 @@ pub struct File {
 	# TYPED, which is a fact about the text. Whether the name it wrote is a namespace this
 	# module may write is the checker's question, asked later, over the whole program.
 	pub ty_quals: list[TyQual]
+
+	# ty_apps are the GENERIC TYPE APPLICATIONS this file wrote, in the order they were
+	# written. The instantiation pass needs a population and this is it: every place a reader
+	# spelled arguments after a type name, which is the one fact the parser holds and nothing
+	# downstream can recover — by the time the type is a `TNamed` the arguments are inside its
+	# name and only a rule that split the string back apart could find them.
+	pub ty_apps: list[TyApp]
 }
 
 # TyQual is one such occurrence: the qualifier as written, and where.
+# TyApp is a GENERIC TYPE APPLIED, written down where it was written: `Box[int]` in any type
+# position. It rides beside `ty_quals` and under the same discipline — the parser APPENDS to
+# it and never reads it, which is what keeps an accumulator from being a symbol table
+# (`layering-check`). What the parser cannot answer is whether `Box` names a template at all;
+# what only the parser knows is that a reader wrote arguments here, and that is the fact kept.
+pub struct TyApp {
+	# the applied spelling, `spec_key`'s — `Box[int]` — which is also the name the type
+	# carries from here on, so a row and a `TNamed` are two views of one string.
+	pub name: str
+	pub base: str
+	pub args: list[Ty]
+	pub path: str
+	pub line: int
+	pub col: int
+}
+
 pub struct TyQual {
 	pub ns: str
 

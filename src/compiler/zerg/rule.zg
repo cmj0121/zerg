@@ -540,7 +540,6 @@ pub enum Rule {
 	NotYetListPatternRestBinding = 9110
 	NotYetArrayLenImported = 9111
 	NotYetArrayMethod = 9112
-	NotYetNestedTypeApp = 9113
 }
 
 # rule_code is the text a rule is reported under — the `E2004` a gate pins and a reader looks

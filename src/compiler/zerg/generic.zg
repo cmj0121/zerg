@@ -72,14 +72,14 @@ pub fn gen_mangle(name: str, args: list[ast.Ty]) -> str {
 # An unsolved parameter answers TUnknown, and the caller reports it: a type argument that
 # cannot be worked out is a call that has not said what it means, and guessing `int` would
 # make the program compile as something nobody wrote.
-pub fn gen_solve(tparams: list[str], decls: list[ast.Ty], actuals: list[ast.Ty]) -> list[ast.Ty] {
+pub fn gen_solve(tparams: list[str], decls: list[ast.Ty], actuals: list[ast.Ty], apps: list[ast.TyApp]) -> list[ast.Ty] {
 	mut sol: list[ast.Ty] = []
 	for n in tparams {
 		sol.append(ast.Ty.TUnknown)
 	}
 	mut i := 0
 	for i < decls.len() and i < actuals.len() {
-		gen_match(tparams, sol, decls[i], actuals[i])
+		gen_match(tparams, sol, decls[i], actuals[i], apps)
 		i = i + 1
 	}
 	return sol
@@ -89,7 +89,7 @@ pub fn gen_solve(tparams: list[str], decls: list[ast.Ty], actuals: list[ast.Ty])
 # the declared side is a type parameter. The FIRST binding wins: `f(a: T, b: T)` given an
 # int and a str takes int, and the mismatch is then reported by the ordinary argument rule
 # against the specialization's own signature — which says `b: int` and means it.
-fn gen_match(tparams: list[str], mut &sol: list[ast.Ty], decl: ast.Ty, actual: ast.Ty) {
+fn gen_match(tparams: list[str], mut &sol: list[ast.Ty], decl: ast.Ty, actual: ast.Ty, apps: list[ast.TyApp]) {
 	nm := emit.c_named_of(decl)
 	if nm != "" and emit.c_name_in(tparams, nm) {
 		mut i := 0
@@ -102,7 +102,7 @@ fn gen_match(tparams: list[str], mut &sol: list[ast.Ty], decl: ast.Ty, actual: a
 		}
 		return
 	}
-	gen_match_inner(tparams, sol, decl, actual)
+	gen_match_inner(tparams, sol, decl, actual, apps)
 }
 
 # gen_match_inner is the structural half: a container's element, a carrier's payload, a
@@ -117,8 +117,8 @@ fn gen_match(tparams: list[str], mut &sol: list[ast.Ty], decl: ast.Ty, actual: a
 # A shape that does not line up simply binds nothing, because two part lists of different
 # lengths stop at the shorter — which is what the argument rule downstream is there to
 # report, against a signature that by then has real types in it.
-fn gen_match_inner(tparams: list[str], mut &sol: list[ast.Ty], decl: ast.Ty, actual: ast.Ty) {
-	gen_match_all(tparams, sol, gen_parts(decl), gen_parts(actual))
+fn gen_match_inner(tparams: list[str], mut &sol: list[ast.Ty], decl: ast.Ty, actual: ast.Ty, apps: list[ast.TyApp]) {
+	gen_match_all(tparams, sol, gen_parts(apps, decl), gen_parts(apps, actual), apps)
 }
 
 # gen_parts is a type's SUB-TYPES, in written order — the one place this file knows how a
@@ -135,7 +135,19 @@ fn gen_match_inner(tparams: list[str], mut &sol: list[ast.Ty], decl: ast.Ty, act
 # AN ARRAY'S LENGTH IS NOT A PART. It is part of the type and not a type, so it takes no arm
 # here — two arrays of different lengths bind their element the same way, and the mismatch is
 # reported by the ordinary argument rule against the specialization's own signature.
-fn gen_parts(t: ast.Ty) -> list[ast.Ty] {
+fn gen_parts(apps: list[ast.TyApp], t: ast.Ty) -> list[ast.Ty] {
+	# AN APPLIED NAME'S PARTS ARE ITS ARGUMENTS, and they are not in the tree — the name holds
+	# them. This is the reading half of what `subst_app` writes, and the two are held to each
+	# other by `generic-walks` for exactly this reason: `Box[T]` against `Box[int]` solves `T`
+	# only if both sides come apart the same way.
+	nm := emit.c_named_of(t)
+	if nm != "" {
+		for a in apps {
+			return a.args if a.name == nm
+		}
+		return []
+	}
+
 	return match t {
 		Ty.TList(e) => [e]
 		Ty.TOpt(e) => [e]
@@ -160,10 +172,10 @@ fn gen_fn_parts(ps: list[ast.Ty], r: ast.Ty) -> list[ast.Ty] {
 	return out
 }
 
-fn gen_match_all(tparams: list[str], mut &sol: list[ast.Ty], ds: list[ast.Ty], as_: list[ast.Ty]) {
+fn gen_match_all(tparams: list[str], mut &sol: list[ast.Ty], ds: list[ast.Ty], as_: list[ast.Ty], apps: list[ast.TyApp]) {
 	mut i := 0
 	for i < ds.len() and i < as_.len() {
-		gen_match(tparams, sol, ds[i], as_[i])
+		gen_match(tparams, sol, ds[i], as_[i], apps)
 		i = i + 1
 	}
 }
@@ -197,6 +209,16 @@ pub struct TySubst {
 	# a second walk over the same tree is the shape this file exists to avoid.
 	pub keys: list[str]
 	pub vals: list[str]
+
+	# apps is the THIRD, and the one the name-carried representation of a generic type makes
+	# necessary: `Box[T]` is a `TNamed` whose arguments are inside its NAME, so this walk cannot
+	# see them and a specialization left `T` sitting in the middle of one. The rows say what a
+	# written application is made of, and rebuilding the name from substituted parts is what
+	# turns `Box[T]` into `Box[int]`.
+	#
+	# It is a table rather than surgery on the string because a nested argument is a type and
+	# not a token: `Box[list[T]]` has no element equal to `T` to replace.
+	pub apps: list[ast.TyApp]
 	pub at: str
 }
 
@@ -219,7 +241,9 @@ pub fn gen_resolve_lens(f: ast.File) -> ast.File {
 	mut keys: list[str] = []
 	mut vals: list[str] = []
 	gen_len_table(f, keys, vals)
-	su := TySubst([], [], keys, vals, "")
+
+	mut noapps: list[ast.TyApp] = []
+	su := TySubst([], [], keys, vals, noapps, "")
 
 	mut structs: list[ast.StructDecl] = []
 	for sd in f.structs {
@@ -355,8 +379,8 @@ fn gen_len_fn(su: TySubst, fd: ast.FnDecl) -> ast.FnDecl {
 	return ast.FnDecl(fd.name, fd.recv, subst_params(su, fd.params), fd.has_ret, subst_ty(su, fd.ret), subst_block(su, fd.body), fd.is_pub, fd.path, fd.line, fd.col, fd.tparams, fd.tbounds, fd.in_unsafe, fd.is_test, fd.is_fixture, fd.has_body, fd.is_assoc, fd.spec_of)
 }
 
-pub fn subst_fn(tpl: ast.FnDecl, args: list[ast.Ty], at: str) -> ast.FnDecl {
-	su := TySubst(tpl.tparams, args, [], [], at)
+pub fn subst_fn(tpl: ast.FnDecl, args: list[ast.Ty], at: str, apps: list[ast.TyApp]) -> ast.FnDecl {
+	su := TySubst(tpl.tparams, args, [], [], apps, at)
 	return ast.FnDecl(gen_mangle(tpl.name, args), tpl.recv, subst_params(su, tpl.params), tpl.has_ret, subst_ty(su, tpl.ret), subst_block(su, tpl.body), tpl.is_pub, tpl.path, tpl.line, tpl.col, [], [], tpl.in_unsafe, tpl.is_test, tpl.is_fixture, tpl.has_body, false, tpl.spec_of)
 }
 
@@ -369,7 +393,7 @@ fn subst_ty(su: TySubst, t: ast.Ty) -> ast.Ty {
 			return su.args[i] if su.names[i] == nm and i < su.args.len()
 			i = i + 1
 		}
-		return t
+		return subst_app(su, nm, t)
 	}
 
 	# EVERY SHAPE `gen_parts` TAKES APART, THIS ONE PUTS BACK. The two are one question asked in
@@ -393,6 +417,20 @@ fn subst_ty(su: TySubst, t: ast.Ty) -> ast.Ty {
 		Ty.TFn(ps, r) => ast.Ty.TFn(subst_tys(su, ps), subst_ty(su, r))
 		_ => t
 	}
+}
+
+# subst_app rewrites an APPLIED name — the one type whose parts are not in the tree. `Box[T]`
+# is a `TNamed` and its argument is inside its name, so the walk above sees a name that matches
+# no parameter and would leave it whole; the row says what it is made of, each argument goes
+# through this same walk, and the name is spelled again from the answers.
+#
+# A name with no row comes back unchanged, which is every ordinary type and also an application
+# this substitution has no business rewriting.
+fn subst_app(su: TySubst, nm: str, t: ast.Ty) -> ast.Ty {
+	for a in su.apps {
+		return ast.Ty.TNamed(ast.spec_key(a.base, subst_tys(su, a.args))) if a.name == nm
+	}
+	return t
 }
 
 # subst_chan_elem is a channel CONSTRUCTOR's element type after substitution, and it is the
@@ -425,7 +463,7 @@ fn subst_key(su: TySubst, k: str) -> str {
 	return k
 }
 
-fn subst_tys(su: TySubst, ts: list[ast.Ty]) -> list[ast.Ty] {
+pub fn subst_tys(su: TySubst, ts: list[ast.Ty]) -> list[ast.Ty] {
 	mut out: list[ast.Ty] = []
 	for t in ts {
 		out.append(subst_ty(su, t))

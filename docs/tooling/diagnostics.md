@@ -507,7 +507,6 @@ shipping compiler rather than a part of it (the line
 | `E9110` | a NAMED rest in a list pattern                                                                        |
 | `E9111` | an array length reached through an import                                                             |
 | `E9112` | the array method `…`                                                                                  |
-| `E9113` | a type argument that is itself a type parameter                                                       |
 
 They are reported the moment a file is **read**, before its imports are scanned — scanning
 them parses, and a parser handed unreadable text can only say something untrue about it.
@@ -582,7 +581,12 @@ questions behind it — which is why the first four were found by reading codes 
 
 **One more retired because its form was BUILT.** `E9004` refused a generic `struct`. The declaration is a
 template now, an application is an ordinary type under its applied name, and what a use can still get
-wrong has codes of its own — `E4093`, `E4094`, `E4095` and `E9113`.
+wrong has codes of its own — `E4093`, `E4094` and `E4095`.
+
+**And one more, the same day.** `E9113` said a type argument that is itself a type parameter could not be
+built. A type's arguments are carried inside its name and substitution cannot see through one — which was
+true, and what was missing was the table saying what an application is made of. With the table, a parameter
+passes through an application.
 
 **One retired because the form it named was BUILT.** `E9060` said a type carries one `Into`. It carried
 one because a method was keyed by its NAME; the key now folds in the parameterized spec its `impl` names,
@@ -680,6 +684,7 @@ name now is the prelude rule (`E2061`), which is about the name rather than abou
 | `E3047` | —       | a strong typedef takes its underlying type's prefix operators      |
 | `E9060` | —       | the form was built: a method is keyed by its spec and arguments    |
 | `E9004` | —       | the form was built: a template, and an application is a type       |
+| `E9113` | —       | the form was built: a parameter passes through an application      |
 
 **One of them moved nowhere**, and it is the only row whose second column is empty. `E3047`
 reported a prefix operator on a `type X = Y` — _operator `not` has no meaning on `Flag`_ — on

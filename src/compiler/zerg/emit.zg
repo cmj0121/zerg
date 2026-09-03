@@ -189,6 +189,15 @@ pub struct Emitter {
 	pub used_fnptr: bool
 	pub ref_names: list[str]
 	pub pr_fn: list[str]
+
+	# pr_mod is the MODULE each parameter row belongs to, parallel to pr_fn — the same fact
+	# `sig_mod` carries for the signature rows, and for the same reason. Two modules may both
+	# declare a private `helper`, and the parameter table was keyed by the bare name alone: a
+	# call in one of them was checked against the OTHER's parameters, so a correct program was
+	# refused and the message named a declaration the reader did not write. The C symbol was
+	# right the whole time (c_fn_cname_in tags a private name by its module), which is what
+	# kept it to a wrong refusal rather than a wrong call.
+	pub pr_mod: list[str]
 	pub pr_idx: list[int]
 	pub pr_ref: list[bool]
 
@@ -3095,6 +3104,7 @@ fn c_add_sig(mut &em: Emitter, fn_i: ast.FnDecl) {
 	mut j := 0
 	for j < fn_i.params.len() {
 		em.pr_fn.append(key)
+		em.pr_mod.append(check.c_mod_of(em, fn_i.path))
 		em.pr_idx.append(j)
 		em.pr_ref.append(fn_i.params[j].is_ref)
 		em.pr_ty.append(fn_i.params[j].ty)
@@ -3164,10 +3174,29 @@ pub fn c_sig_row(mut &em: Emitter, key: str) -> int {
 }
 
 pub fn c_param_row(mut &em: Emitter, fname: str, idx: int) -> int {
+	# THE READER'S OWN MODULE FIRST, which is c_sig_row's rule and was written there alone. A
+	# private name two modules both declare is two BLOCKS of parameter rows, and the scan below
+	# stops at the end of the first one it meets — whichever file was read first. So a call was
+	# measured against the other module's parameters: `helper(1)` in the module that declares
+	# `helper(n: int)` was refused as _argument 1 of `helper` is str_, naming a declaration the
+	# reader cannot see.
+	here := check.c_mod_of(em, em.at_path)
+	if here != "" {
+		r := c_param_row_in(em, fname, idx, here)
+		return r if r >= 0
+	}
+
+	return c_param_row_in(em, fname, idx, "")
+}
+
+# c_param_row_in is that scan with the module fixed, or over every row when it is "". The
+# BLOCK structure is what both need: c_build_sigs appends a function's parameters contiguously
+# in index order, so a row is found by walking to the block and then within it.
+fn c_param_row_in(mut &em: Emitter, fname: str, idx: int, mod: str) -> int {
 	mut i := 0
 	mut seen := false
 	for i < em.pr_fn.len() {
-		if em.pr_fn[i] == fname {
+		if em.pr_fn[i] == fname and (mod == "" or em.pr_mod[i] == mod) {
 			return i if em.pr_idx[i] == idx
 			seen = true
 		} else if seen {
@@ -3188,16 +3217,18 @@ fn c_is_ref_name(mut &em: Emitter, name: str) -> bool {
 	return false
 }
 
+# THROUGH c_sig_row, which is where "the reader's own module first" is written. Reading the
+# table by name alone answered about whichever file was read first: two modules each declaring
+# a private `helper` gave the caller the OTHER one's return type, and `from_b` was refused as
+# _this function's answer is int, and this gives str_ — about a declaration it cannot see.
 fn c_lookup_sig_ret(mut &em: Emitter, name: str) -> ast.Ty {
-	mut i := 0
-	for i < em.sig_names.len() {
-		if em.sig_names[i] == name {
-			return em.sig_rets[i] if em.sig_hasret[i]
-			return ast.Ty.TVoid
-		}
-		i = i + 1
-	}
-	return ast.Ty.TUnknown
+	r := c_sig_row(em, name)
+
+	return ast.Ty.TUnknown if r < 0
+
+	return em.sig_rets[r] if em.sig_hasret[r]
+
+	return ast.Ty.TVoid
 }
 
 # c_has_method reports whether type `recv` declares a method `meth`, and c_is_free_fn
@@ -10097,17 +10128,46 @@ fn c_fnval_thunk(mut &em: Emitter, target: str, t: ast.Ty) -> str {
 	if ast.ty_name(c_fn_ret(t)) == "void" {
 		ret = ""
 	}
-	em.lam_defs.append(f"static {c_type(c_fn_ret(t))} zg_{name}(const void *zg_envp{sig}) {{ (void)zg_envp; {ret}zg_{target}({call}); }}\n")
+
+	# THE CALLEE'S C NAME, not `zg_` plus the source name. A private name two modules both
+	# declare is tagged by its module (c_fn_cname_in), and this wrote the untagged spelling —
+	# so the thunk called a function no unit declares and cc reported it against generated C.
+	callee := c_fn_cname_in(em, check.c_mod_of(em, em.at_path), "", target)
+	em.lam_defs.append(f"static {c_type(c_fn_ret(t))} zg_{name}(const void *zg_envp{sig}) {{ (void)zg_envp; {ret}{callee}({call}); }}\n")
 	return name
+}
+
+# c_fn_ty_mod is which module's block this name means: the reader's own when it declares one,
+# and otherwise the first that does. It answers a module rather than a row because the caller
+# walks the whole table and has to know which rows are the same function's.
+fn c_fn_ty_mod(mut &em: Emitter, n: str, here: str) -> str {
+	mut i := 0
+	for i < em.pr_fn.len() {
+		return here if em.pr_fn[i] == n and em.pr_mod[i] == here
+		i = i + 1
+	}
+
+	mut j := 0
+	for j < em.pr_fn.len() {
+		return em.pr_mod[j] if em.pr_fn[j] == n
+		j = j + 1
+	}
+	return here
 }
 
 fn c_fn_ty_of(mut &em: Emitter, n: str) -> ast.Ty {
 	# one pass: c_build_sigs appends a function's parameters contiguously and in index
 	# order, so collecting the rows that name it collects them already in order
+	# THE MODULE TOO, for c_param_row's reason and with a worse failure than its: this collects
+	# EVERY row that names the function, so two modules' blocks were collected as one and
+	# `f := helper` came out `fn(int, int, int) -> int` — an arity neither declaration has.
+	here := check.c_mod_of(em, em.at_path)
+	mine := c_fn_ty_mod(em, n, here)
+
 	mut ptys: list[ast.Ty] = []
 	mut i := 0
 	for i < em.pr_fn.len() {
-		if em.pr_fn[i] == n {
+		if em.pr_fn[i] == n and em.pr_mod[i] == mine {
 			# THE MARKER RIDES IN THE TYPE. The table keeps `mut &` in a column of its own,
 			# because a declaration has a name to hang it on; a VALUE has not, so what the
 			# call site reads it from is the type — and that is what this builds.
@@ -17866,7 +17926,7 @@ fn c_emit_unit(prog0: ast.File, own0: ast.File, ms: Mods, whole: bool, want_lint
 	# is what makes that invariant hold for a multi-unit program, at the place it already lives,
 	# and it is what lets the declaration passes below go back to reading the WHOLE program.
 	seen := diags.len()
-	mut em := Emitter([], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], false, false, false, [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], 0, [], 0, [], [], false, "", "", [], [], ast.Ty.TVoid, 0, "", 0, 0, diags, 0, 0, [], [], [], [], [], false, 0, false, "", 0, false, false, [], [], [], [], [], [], "", want_lints, [], [], [], [], [], [], [], [], [], [], [], [], false, 0, [], [], "", c_nosub(), [], [], [], [], [], [], [], [], [])
+	mut em := Emitter([], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], false, false, false, [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], 0, [], 0, [], [], false, "", "", [], [], ast.Ty.TVoid, 0, "", 0, 0, diags, 0, 0, [], [], [], [], [], false, 0, false, "", 0, false, false, [], [], [], [], [], [], "", want_lints, [], [], [], [], [], [], [], [], [], [], [], [], false, 0, [], [], "", c_nosub(), [], [], [], [], [], [], [], [], [])
 
 	# ASSIGNED, NOT PASSED. Every argument above is a zero value, and `layering` asserts that
 	# — it lines the call up with the fields by KIND, which only works while nothing in it

@@ -856,6 +856,12 @@ pub struct ImplDecl {
 	pub args: list[Ty]
 	pub target: str
 
+	# tparams are the `impl`'s OWN type parameters — the `[T]` of `impl[T] Show for Box[T]`.
+	# GRAMMAR#impl-decl puts them there so the TARGET may spell them, which is what makes such
+	# an impl one implementation standing for every instantiation of its target: it is
+	# materialized per instantiation, the way a generic `fn` is per call.
+	pub tparams: list[str]
+
 	pub path: str
 	pub line: int
 	pub col: int

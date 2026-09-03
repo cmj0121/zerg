@@ -457,6 +457,11 @@ pub struct Emitter {
 	#
 	# inst_tys is the applied name of every specialization already made, so a type written
 	# twice is built once.
+	# impl_tpls / impl_tpl_fns are the template `impl`s and their methods, recorded and removed
+	# before any pass sees the program — the same shape a generic `fn` and a generic type take.
+	pub impl_tpls: list[ast.ImplDecl]
+	pub impl_tpl_fns: list[ast.FnDecl]
+
 	pub gen_structs: list[ast.StructDecl]
 	pub inst_tys: list[str]
 
@@ -2651,7 +2656,162 @@ fn c_with_type_insts(mut &em: Emitter, f: ast.File) -> ast.File {
 
 	mut out := f
 	out.structs = keep
+
+	# AND THE TEMPLATE IMPLS, once every instantiation the declarations reach is known. An
+	# `impl[T] Show for Box[T]` is ONE implementation standing for every instantiation of its
+	# target, which is what GRAMMAR#impl-decl puts the parameters there for — so it is
+	# materialized per instantiation, the way a generic `fn` is per call.
+	return c_with_impl_insts(em, out, true)
+}
+
+# c_with_impl_insts replaces each template `impl` with one ordinary impl per instantiation of
+# its target, and its methods with one set each. Nothing past this pass knows a template impl
+# existed: `c_impls` answers about `Box[int]`, and a method's receiver is a type.
+fn c_with_impl_insts(mut &em: Emitter, f: ast.File, record: bool) -> ast.File {
+	# RECORDED ONCE AND APPLIED TWICE. The whole program is transformed and so is the ENTRY
+	# file, which carries the same declarations and is what the bodies are emitted from — but
+	# the templates are the same templates, so the second pass reads what the first wrote.
+	mut impls: list[ast.ImplDecl] = []
+	mut tpls: list[ast.ImplDecl] = []
+	for ip in f.impls {
+		if ip.tparams.len() > 0 {
+			tpls.append(ip)
+			if record {
+				em.impl_tpls.append(ip)
+			}
+		} else {
+			impls.append(ip)
+		}
+	}
+
+	# THE METHODS COME OUT WITH THEM. A body written against `Box[T]` names a receiver that is
+	# not a type — `no type named Box[T]`, at the method rather than at the impl — so the
+	# template's own methods are removed here and the materialized ones put in their place.
+	mut fns: list[ast.FnDecl] = []
+	for fn_i in f.fns {
+		if c_is_tpl_method(em, f, fn_i) {
+			if record {
+				em.impl_tpl_fns.append(fn_i)
+			}
+		} else {
+			fns.append(fn_i)
+		}
+	}
+
+	for ip in tpls {
+		for applied in em.inst_tys {
+			continue if c_app_base(applied) != c_app_base(ip.target)
+
+			impls.append(ast.ImplDecl(ip.on, ip.args, applied, [], ip.path, ip.line, ip.col))
+		}
+	}
+
+	for m in em.impl_tpl_fns {
+		for applied in em.inst_tys {
+			continue if c_app_base(applied) != c_app_base(m.recv)
+
+			fns.append(c_tpl_method_for(em, f, m, applied))
+		}
+	}
+
+	# AN INHERENT TEMPLATE IMPL RECORDS NO ImplDecl — there is no spec to record — so whether
+	# this pass has anything to do is a question about the METHODS. Asked of the impls it
+	# skipped the whole inherent half, and `impl[T] Box[T]` reached the emitter with a receiver
+	# that is not a type.
+	return f if tpls.len() == 0 and em.impl_tpl_fns.len() == 0
+
+	mut out := f
+	out.impls = impls
+	out.fns = fns
 	return out
+}
+
+# c_tpl_methods_late gives a specialization minted AFTER the declaration sweep its template
+# impl's methods. `Box(3).get()` is the case: `Box[int]` exists only because a constructor
+# asked for it, so the pass that materialized the methods had never seen the type — and the
+# call was refused as a method the receiver does not have.
+#
+# They go where a generic `fn`'s specializations go: the signature table, so a call resolves,
+# and `inst_fns`, the watermark the emitter drains after every body. That list grows while it
+# is walked, which is exactly what a method discovered inside one needs.
+fn c_tpl_methods_late(mut &em: Emitter, applied: str) {
+	for m in em.impl_tpl_fns {
+		continue if c_app_base(applied) != c_app_base(m.recv)
+
+		inst := c_tpl_method_at(em, m, applied)
+		c_add_sig(em, inst)
+		em.inst_fns.append(inst)
+	}
+}
+
+# c_tpl_method_at is c_tpl_method_for asked of the TABLES rather than of the program, because
+# by now they are filled and the File is not in hand. The two answer the same question — which
+# of an application's arguments name no type — and this is the later of the two moments.
+fn c_tpl_method_at(mut &em: Emitter, m: ast.FnDecl, applied: str) -> ast.FnDecl {
+	mut tps: list[str] = []
+	for a in em.ty_apps {
+		if a.name == m.recv {
+			for arg in a.args {
+				nm := c_named_of(arg)
+				if nm != "" and not c_is_applied(nm) and c_ty_kind(em, nm) == TK_NONE and not parser.is_conv(nm) and nm != "Err" {
+					tps.append(nm)
+				}
+			}
+		}
+	}
+
+	mut decls: list[ast.Ty] = [ast.Ty.TNamed(m.recv)]
+	mut actuals: list[ast.Ty] = [ast.Ty.TNamed(applied)]
+	sol := generic.gen_solve(tps, decls, actuals, em.ty_apps)
+	mut nokeys: list[str] = []
+	mut novals: list[str] = []
+	su := generic.TySubst(tps, sol, nokeys, novals, em.ty_apps, c_place(em))
+	return generic.subst_method(su, m, applied)
+}
+
+# c_is_tpl_method asks the RECEIVER and not the impl it was written in: a method whose receiver
+# is an application still naming a type parameter — `Box[T]` — belongs to a template whichever
+# kind of `impl` that was. An INHERENT `impl[T] Box[T]` records no ImplDecl at all (there is no
+# spec to record), so keying on one recognised the spec half and left the inherent half to
+# reach the emitter with a receiver that is not a type.
+fn c_is_tpl_method(mut &em: Emitter, f: ast.File, fn_d: ast.FnDecl) -> bool {
+	return false if fn_d.recv == "" or not c_is_applied(fn_d.recv)
+
+	return c_tpl_params(em, f, fn_d.recv).len() > 0
+}
+
+# c_tpl_params are the parameters an applied name is open in — the arguments that name no type
+# this program declares. They are derived rather than carried because both kinds of `impl` have
+# them in the same place: written on the impl, spelled in the target.
+fn c_tpl_params(mut &em: Emitter, f: ast.File, applied: str) -> list[str] {
+	mut out: list[str] = []
+	for a in em.ty_apps {
+		if a.name == applied {
+			for arg in a.args {
+				nm := c_named_of(arg)
+				if nm != "" and not c_is_applied(nm) and not c_file_declares_ty(f, nm) {
+					out.append(nm)
+				}
+			}
+			return out
+		}
+	}
+	return out
+}
+
+# c_impl_methods is one template impl's methods materialized for one instantiation: the impl's
+# parameters solved by matching its TARGET against that instantiation — `Box[T]` against
+# `Box[int]` — and every method rebuilt with the answer and a receiver that is a type.
+fn c_tpl_method_for(mut &em: Emitter, f: ast.File, m: ast.FnDecl, applied: str) -> ast.FnDecl {
+	tps := c_tpl_params(em, f, m.recv)
+	mut decls: list[ast.Ty] = [ast.Ty.TNamed(m.recv)]
+	mut actuals: list[ast.Ty] = [ast.Ty.TNamed(applied)]
+	sol := generic.gen_solve(tps, decls, actuals, em.ty_apps)
+
+	mut nokeys: list[str] = []
+	mut novals: list[str] = []
+	su := generic.TySubst(tps, sol, nokeys, novals, em.ty_apps, c_place(em))
+	return generic.subst_method(su, m, applied)
 }
 
 fn c_gen_struct_row(mut &em: Emitter, nm: str) -> int {
@@ -9791,6 +9951,7 @@ fn c_gen_type_on_demand(mut &em: Emitter, tpl: ast.StructDecl, applied: str, sol
 	sd := ast.StructDecl(applied, generic.subst_fields(su, tpl.fields), tpl.is_pub, tpl.path, tpl.line, tpl.col, [])
 
 	c_register_struct(em, sd)
+	c_tpl_methods_late(em, applied)
 	em.res_decls.append(c_struct_typedef(sd))
 
 	# THE SAME THREE THE DECLARATION SWEEP EMITS, under the same condition — a struct that
@@ -18205,7 +18366,7 @@ fn c_emit_unit(prog0: ast.File, own0: ast.File, ms: Mods, whole: bool, want_lint
 	# is what makes that invariant hold for a multi-unit program, at the place it already lives,
 	# and it is what lets the declaration passes below go back to reading the WHOLE program.
 	seen := diags.len()
-	mut em := Emitter([], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], false, false, false, [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], 0, [], 0, [], [], false, "", "", [], [], ast.Ty.TVoid, 0, "", 0, 0, diags, 0, 0, [], [], [], [], [], false, 0, false, "", 0, false, false, [], [], [], [], [], [], [], [], "", want_lints, [], [], [], [], [], [], [], [], [], [], [], [], false, 0, [], [], "", c_nosub(), [], [], [], [], [], [], [], [], [], [])
+	mut em := Emitter([], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], false, false, false, [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], 0, [], 0, [], [], false, "", "", [], [], ast.Ty.TVoid, 0, "", 0, 0, diags, 0, 0, [], [], [], [], [], false, 0, false, "", 0, false, false, [], [], [], [], [], [], [], [], [], [], "", want_lints, [], [], [], [], [], [], [], [], [], [], [], [], false, 0, [], [], "", c_nosub(), [], [], [], [], [], [], [], [], [], [])
 
 	# ASSIGNED, NOT PASSED. Every argument above is a zero value, and `layering` asserts that
 	# — it lines the call up with the fields by KIND, which only works while nothing in it
@@ -18222,7 +18383,7 @@ fn c_emit_unit(prog0: ast.File, own0: ast.File, ms: Mods, whole: bool, want_lint
 	# in these passes and in any added later — `f.fns` holds functions only.
 	c_build_generics(em, f0)
 	f := c_with_type_insts(em, c_with_spec_keys(c_without_templates(f0)))
-	own := c_with_spec_keys(c_without_templates(c_with_spec_defaults(f0, c_with_derived(own0))))
+	own := c_with_impl_insts(em, c_with_spec_keys(c_without_templates(c_with_spec_defaults(f0, c_with_derived(own0)))), false)
 
 	# OVER `f0`, THE PROGRAM WITH ITS TEMPLATES STILL IN IT. A template is not a function
 	# to lower, which is what the removal above says, but it IS a name at the top level:

@@ -1276,7 +1276,7 @@ fn chk_super_impl(sp: ast.SpecDecl, ip: ast.ImplDecl, args: list[ast.Ty]) -> ast
 	for a in args {
 		out.append(emit.c_spec_subst(a, sp, ip))
 	}
-	return ast.ImplDecl(ip.on, out, ip.target, ip.path, ip.line, ip.col)
+	return ast.ImplDecl(ip.on, out, ip.target, ip.tparams, ip.path, ip.line, ip.col)
 }
 
 # chk_impl_member finds what the impl supplies for one required member, and compares it.

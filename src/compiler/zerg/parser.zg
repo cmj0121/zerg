@@ -2097,7 +2097,7 @@ fn parse_spec(mut &p: Parser, is_pub: bool) -> ast.SpecDecl {
 			# method that does nothing and a signature is a requirement — two different things
 			# with the same body.
 			if p_at(p, token.Kind.LBrace) {
-				reqs.append(ast.FnDecl(sig.name, sig.recv, sig.params, sig.has_ret, sig.ret, parse_block(p), sig.is_pub, sig.path, sig.line, sig.col, sig.tparams, sig.tbounds, sig.in_unsafe, false, false, true, false))
+				reqs.append(ast.FnDecl(sig.name, sig.recv, sig.params, sig.has_ret, sig.ret, parse_block(p), sig.is_pub, sig.path, sig.line, sig.col, sig.tparams, sig.tbounds, sig.in_unsafe, false, false, true, false, ""))
 			} else {
 				reqs.append(sig)
 			}
@@ -2168,7 +2168,7 @@ fn parse_init(mut &p: Parser, at: int) -> ast.FnDecl {
 	expect(p, token.Kind.RParen)
 	mut params: list[ast.Param] = []
 	body := parse_block(p)
-	return ast.FnDecl(init_name(at), "", params, false, ast.Ty.TVoid, body, false, p.path, kw.line, kw.col, [], [], false, false, false, true, false)
+	return ast.FnDecl(init_name(at), "", params, false, ast.Ty.TVoid, body, false, p.path, kw.line, kw.col, [], [], false, false, false, true, false, "")
 }
 
 # with_name is the binding a NAMELESS `with` gets, and is_with_name is how a rule that reads
@@ -2787,7 +2787,7 @@ fn parse_impl(mut &p: Parser, mut &fns: list[ast.FnDecl], mut &impls: list[ast.I
 			recv_mut = true
 		}
 		if p_at(p, token.Kind.Fn) {
-			fns.append(parse_fn_at(p, is_pub, target, recv_mut, fn_unsafe, false, false, sp == ""))
+			fns.append(parse_fn_at(p, is_pub, target, recv_mut, fn_unsafe, false, false, sp == "", p_impl_spec_of(sp, args)))
 		} else if p_at(p, token.Kind.Ident) and peek_kind(p, 1) == token.Kind.Walrus {
 			# `LIMIT := 5` — an associated VALUE (GRAMMAR#val-bind). It is a module constant that
 			# belongs to a TYPE: the same declaration in every way but its name, so it is read by
@@ -2814,7 +2814,7 @@ fn parse_impl(mut &p: Parser, mut &fns: list[ast.FnDecl], mut &impls: list[ast.I
 # its own top-level item — it is read before the `fn` under it exists — and only the arm that
 # dispatched to this one has the list in hand.
 fn parse_fn(mut &p: Parser, is_pub: bool, recv: str, recv_mut: bool, in_unsafe: bool, is_test: bool, is_fixture: bool) -> ast.FnDecl {
-	return parse_fn_at(p, is_pub, recv, recv_mut, in_unsafe, is_test, is_fixture, false)
+	return parse_fn_at(p, is_pub, recv, recv_mut, in_unsafe, is_test, is_fixture, false, "")
 }
 
 # parse_fn_at is parse_fn with the one question an INHERENT `impl` adds: is this a method or an
@@ -2830,7 +2830,17 @@ fn parse_fn(mut &p: Parser, is_pub: bool, recv: str, recv_mut: bool, in_unsafe: 
 # A SPEC IMPL NEVER ASKS. `impl Show for P` implements members the spec DECLARED as methods, so
 # what the body happens to read decides nothing there — which is also why `assoc_ok` is a
 # parameter rather than a test on `recv`.
-fn parse_fn_at(mut &p: Parser, is_pub: bool, recv: str, recv_mut: bool, in_unsafe: bool, is_test: bool, is_fixture: bool, assoc_ok: bool) -> ast.FnDecl {
+# p_impl_spec_of is the key a method inherits from the `impl` it was written in, and it is
+# EMPTY for an unparameterized spec: the coherence rule gives a type one implementation of
+# such a spec, so its method name alone is already unique and folding a key in would rename
+# every existing method for nothing.
+fn p_impl_spec_of(sp: str, args: list[ast.Ty]) -> str {
+	return "" if sp == "" or args.len() == 0
+
+	return ast.spec_key(sp, args)
+}
+
+fn parse_fn_at(mut &p: Parser, is_pub: bool, recv: str, recv_mut: bool, in_unsafe: bool, is_test: bool, is_fixture: bool, assoc_ok: bool, spec_of: str) -> ast.FnDecl {
 	head := parse_fn_head_at(p, is_pub, recv, recv_mut, in_unsafe, not assoc_ok)
 
 	# SAVED AND RESTORED around the body, the discipline every parser flag here follows: a `fn`
@@ -2846,7 +2856,7 @@ fn parse_fn_at(mut &p: Parser, is_pub: bool, recv: str, recv_mut: bool, in_unsaf
 	if assoc_ok and not is_assoc {
 		params = p_with_receiver(recv, recv_mut, head.params)
 	}
-	return ast.FnDecl(head.name, head.recv, params, head.has_ret, head.ret, body, head.is_pub, head.path, head.line, head.col, head.tparams, head.tbounds, head.in_unsafe, is_test, is_fixture, true, is_assoc)
+	return ast.FnDecl(head.name, head.recv, params, head.has_ret, head.ret, body, head.is_pub, head.path, head.line, head.col, head.tparams, head.tbounds, head.in_unsafe, is_test, is_fixture, true, is_assoc, spec_of)
 }
 
 # p_is_rendering names the two methods the LANGUAGE declares rather than the author:
@@ -2996,7 +3006,7 @@ fn parse_fn_head_at(mut &p: Parser, is_pub: bool, recv: str, recv_mut: bool, in_
 		has_ret = true
 	}
 	mut none: list[ast.Stmt] = []
-	return ast.FnDecl(name, recv, params, has_ret, ret, none, is_pub, p.path, kw.line, kw.col, tparams, tbounds, in_unsafe, false, false, false, false)
+	return ast.FnDecl(name, recv, params, has_ret, ret, none, is_pub, p.path, kw.line, kw.col, tparams, tbounds, in_unsafe, false, false, false, false, "")
 }
 
 # parse_block counts a nesting level per block, since statements nest through blocks and

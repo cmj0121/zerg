@@ -348,12 +348,12 @@ fn gen_len_fns(su: TySubst, fs: list[ast.FnDecl]) -> list[ast.FnDecl] {
 # gen_len_fn is subst_fn without the mangling: the same walk over a declaration, for a
 # substitution that renames nothing.
 fn gen_len_fn(su: TySubst, fd: ast.FnDecl) -> ast.FnDecl {
-	return ast.FnDecl(fd.name, fd.recv, subst_params(su, fd.params), fd.has_ret, subst_ty(su, fd.ret), subst_block(su, fd.body), fd.is_pub, fd.path, fd.line, fd.col, fd.tparams, fd.tbounds, fd.in_unsafe, fd.is_test, fd.is_fixture, fd.has_body, fd.is_assoc)
+	return ast.FnDecl(fd.name, fd.recv, subst_params(su, fd.params), fd.has_ret, subst_ty(su, fd.ret), subst_block(su, fd.body), fd.is_pub, fd.path, fd.line, fd.col, fd.tparams, fd.tbounds, fd.in_unsafe, fd.is_test, fd.is_fixture, fd.has_body, fd.is_assoc, fd.spec_of)
 }
 
 pub fn subst_fn(tpl: ast.FnDecl, args: list[ast.Ty], at: str) -> ast.FnDecl {
 	su := TySubst(tpl.tparams, args, [], [], at)
-	return ast.FnDecl(gen_mangle(tpl.name, args), tpl.recv, subst_params(su, tpl.params), tpl.has_ret, subst_ty(su, tpl.ret), subst_block(su, tpl.body), tpl.is_pub, tpl.path, tpl.line, tpl.col, [], [], tpl.in_unsafe, tpl.is_test, tpl.is_fixture, tpl.has_body, false)
+	return ast.FnDecl(gen_mangle(tpl.name, args), tpl.recv, subst_params(su, tpl.params), tpl.has_ret, subst_ty(su, tpl.ret), subst_block(su, tpl.body), tpl.is_pub, tpl.path, tpl.line, tpl.col, [], [], tpl.in_unsafe, tpl.is_test, tpl.is_fixture, tpl.has_body, false, tpl.spec_of)
 }
 
 # subst_ty replaces a type parameter wherever a type is written, at any depth.

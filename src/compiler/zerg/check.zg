@@ -1282,7 +1282,14 @@ fn chk_super_impl(sp: ast.SpecDecl, ip: ast.ImplDecl, args: list[ast.Ty]) -> ast
 # chk_impl_member finds what the impl supplies for one required member, and compares it.
 fn chk_impl_member(mut &em: emit.Emitter, f: ast.File, ip: ast.ImplDecl, sp: ast.SpecDecl, req: ast.FnDecl) {
 	for sup in f.fns {
-		if sup.recv == ip.target and sup.name == req.name {
+		# BY THE KEY, NOT THE NAME. A parameterized spec's arguments are folded into its
+		# method's name (emit.c_spec_key), so `into` supplied by `impl Into[Meters]` arrives
+		# here as `into$Meters` — and a type may now carry several. The base name is what the
+		# spec required; the arguments are what says WHICH of them this impl is being asked
+		# about. A member supplied through a SUPER-spec carries none, because the impl it was
+		# written in is the outer spec's, and that clause is what leaves `spec Keyed: Into[str]`
+		# behaving exactly as it did.
+		if sup.recv == ip.target and emit.c_spec_base(sup.name) == req.name and (sup.spec_of == "" or sup.spec_of == ast.spec_key(ip.on, ip.args)) {
 			why := chk_sig_differs(sp, ip, req, sup)
 			if why != "" {
 				chk_at_place(em, sup.path, sup.line, sup.col, rule.Rule.SpecMethodMismatch, f"`{ip.target}.{req.name}` does not match what `{sp.name}` requires: {why}")

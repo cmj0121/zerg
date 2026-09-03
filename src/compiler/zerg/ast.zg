@@ -596,6 +596,21 @@ pub struct FnDecl {
 	# function has — and a walk over the body would be the parser's decision made a second time,
 	# somewhere it could disagree.
 	pub is_assoc: bool
+
+	# spec_of is the PARAMETERIZED SPEC this method implements, spelled by `spec_key` —
+	# `Into[Meters]` for a `fn into()` inside `impl Into[Meters] for Feet` — and empty for an
+	# inherent method or an unparameterized spec's.
+	#
+	# IT IS PART OF THE METHOD'S IDENTITY. docs/core/specs.md folds a parameterized spec's
+	# arguments into the (type, spec) identity, and docs/core/types.md says the same from the
+	# other side: "a type implementing `Into[Feet]` does not meet `Into[Meters]`". So two
+	# `impl Into[…] for Feet` are two canonical implementations rather than one type declaring
+	# `into` twice — and without this field the two arrive here indistinguishable, which is
+	# why the second used to be refused (E9060) instead of being told apart.
+	#
+	# EMPTY IS THE COMMON CASE and it changes nothing: an unparameterized spec can be
+	# implemented once per type by the coherence rule, so its name alone is already a key.
+	pub spec_of: str
 }
 
 # Diag is one finding about an ill-formed program: what is wrong, and where. It is a

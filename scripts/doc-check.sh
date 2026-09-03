@@ -259,7 +259,8 @@ fi
 
 # --- 3. a module that does not parse says so ------------------------------------------
 #
-# `atomic` declares a generic struct this compiler refuses (E9004), so its declarations
+# `atomic` writes `impl Atomic[int]`, an `impl` on a type ARGUMENT this compiler refuses
+# (E9038) and refuses in the PARSER, so its declarations
 # cannot be listed. The honest answer is the one thing that must not go missing: the header
 # still reads, and a `note:` line says the rest is absent. Silence here would be a module
 # that documents itself as empty.

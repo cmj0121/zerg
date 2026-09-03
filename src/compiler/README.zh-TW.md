@@ -142,10 +142,10 @@ make reject     # 每一支不是 Zerg 的程式都被拒絕——由編譯器�
 今天做對的那一組，而且是**閘門**：一個案例掉出這組就是 regression，會讓 target 失敗。其餘的由
 `CORPUS_SKIP` 擋著，而把一個名字從裡面刪掉，**就是**那個名字所等的功能的閘門。
 
-還在等的有六個，每一個都是**指名**拒絕、不是誤譯——`gen_struct` 回答的是
-_E9004 NotImplemented: a generic struct `Box[…]` — this compiler erases type parameters, and a
-field names one_——它們等的是泛型的 `struct` 或 `enum`、`#[dyn]`，以及「無欄位 enum 的 `Eq`」以外
-的 `derive`。另外兩個，`spec_bound` 與 `gen_identity`，今天建得起來、也印得出該印的東西：是這份
+還在等的有五個，每一個都是**指名**拒絕、不是誤譯——`gen_enum` 回答的是
+_E9003 NotImplemented: a generic enum `Either[…]` — this compiler erases type parameters, and a
+variant's payload names one_——它們等的是泛型的 `enum`、`#[dyn]`，以及「無欄位 enum 的 `Eq`」以外
+的 `derive`。泛型 `struct` 本來是第六個，已經建好了。另外兩個，`spec_bound` 與 `gen_identity`，今天建得起來、也印得出該印的東西：是這份
 清單還沒跟上。
 
 ## 一支程式必須是什麼，以及誰說了算
@@ -294,9 +294,9 @@ optional 時會壓平）、`!`，以及 `?`（把缺席從一個結果載得住�
 desugar 成這個形式本來被定義成的那條 `+` 鏈——這既是 AST 與 emitter 對 f-string 一無所知的原因，
 也是種子只要能 lex 與 parse 它就建得出 stage 1 的原因。
 
-仍然缺少的，而且每一個都是**指名**拒絕、不是誤譯：`Ref[T]`（`E9058`）、泛型的 `struct` 或
-`enum`——也就是被欄位或 payload 指名的型別參數（`E9004` / `E9003`；而讓 `import "atomic"` 變成
-`E9104` 的正是 `Atomic[T]`）、具名引數的建構 `T(a: 1)`（`E9010`），以及 command literal
+仍然缺少的，而且每一個都是**指名**拒絕、不是誤譯：`Ref[T]`（`E9058`）、泛型的
+`enum`——也就是被 payload 指名的型別參數（`E9003`；泛型 `struct` 已經建好，而讓 `import "atomic"`
+變成 `E9104` 的是它旁邊的 `impl Atomic[int]`）、具名引數的建構 `T(a: 1)`（`E9010`），以及 command literal
 （`E9020`）。
 
 ## 效能還剩下什麼

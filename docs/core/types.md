@@ -256,10 +256,24 @@ enum Either[X, Y] {         # generic sum type
 }
 ```
 
-> **[not yet]** Neither declaration in that block compiles. A recursive `struct` is `E4026` (below), and the
-> **generic `enum`** is _E9003 NotImplemented: a generic enum `Either[…]` — this compiler erases type
-> parameters, and a variant's payload names one_. A generic `struct` is `E9004` for the same reason. The
-> block shows the specified shapes; both of them wait on generic types.
+> **[not yet]** The **generic `enum`** in that block does not compile: it is _E9003 NotImplemented: a generic
+> enum `Either[…]` — this compiler erases type parameters, and a variant's payload names one_. A recursive
+> `struct` is `E4026` (below).
+>
+> A generic **`struct`** is built. The declaration is a **template**, and an application (`Box[int]`) is an
+> ordinary type under that name. A construction **solves its own parameters from the arguments**, which is
+> [Type System](type-system.md)'s rule for a call and a construction is one: `Box(7)` is a `Box[int]`
+> wherever it is written, and `b: Box[str] = Box(1)` solves `Box[int]` and is refused at the **binding** —
+> the same two steps `x: float = id(5)` takes. What a use can still get wrong is refused on its own terms:
+> the wrong number of arguments (`E4093`), the template named without them (`E4094`), and a parameter no
+> field's type mentions, so nothing can solve it (`E4095`).
+>
+> **[not yet]** A type's arguments are carried inside its **name** here, which is what lets every walk over a
+> type keep working — and it is also what substitution cannot see through. So a type ARGUMENT that is itself
+> a type parameter is _E9113 NotImplemented: `Box[T]` — the type argument `T` names no type this program
+> declares — a type PARAMETER here, or a name spelled wrong, and this compiler carries a type's arguments
+> inside its name, so substitution does not reach them_. `fn get[T](b: Box[T])` and a template field that
+> names another application are the two shapes of it.
 
 **Recursive and self-referential types** work directly — a `struct Node { next: Node? }`, an
 `enum Expr { Num(int); Add(Expr, Expr) }` — with **no pointer**: the compiler auto-boxes the self-referential

@@ -59,6 +59,10 @@ pub struct Parser {
 	# parser rather than being threaded through parse_type's dozen returns: a type is parsed
 	# from six positions and each would otherwise have to hand a list down and collect it back.
 	pub ty_quals: list[ast.TyQual]
+
+	# ty_apps rides the same way and under the same rule: appended to, never read. What it
+	# collects is a reader having written type ARGUMENTS after a name (File.ty_apps).
+	pub ty_apps: list[ast.TyApp]
 }
 
 fn cur(mut &p: Parser) -> token.Token {
@@ -1045,10 +1049,18 @@ fn parse_base_type(mut &p: Parser) -> ast.Ty {
 	# mismatch, so none of that was reported — the first complaint came from cc, about a
 	# generated file.
 	#
-	# The arguments are READ AND DROPPED, which is what this compiler already does with
-	# `Result[T]`: it erases generics, so a type's identity is its name. What matters is
-	# that the brackets are CONSUMED.
-	skip_ty_args(p)
+	# THE ARGUMENTS ARE PART OF THE NAME. `Box[int]` and `Box[str]` were one type while they
+	# were read and dropped — the identity was the bare name — and both are `spec_key`'s
+	# spelling now, which is the same string the impl table and a bound are written in. The
+	# type stays a `TNamed`, so no walk over `Ty` has to learn a shape: 72 of this compiler's
+	# 73 matches over one carry a `_` arm, and a variant would fall into every one of them in
+	# silence.
+	targs := parse_ty_args(p)
+	if targs.len() > 0 {
+		applied := ast.spec_key(name, targs)
+		p.ty_apps.append(ast.TyApp(applied, name, targs, p.path, kw.line, kw.col))
+		return ast.Ty.TNamed(applied)
+	}
 
 	# A BARE NAMED TYPE IS WRITTEN DOWN TOO, with an empty `ns`. #57 makes the file the unit
 	# of naming, so "no qualifier was typed" is a fact a rule needs just as much as "this one
@@ -1156,8 +1168,9 @@ fn parse_bound(mut &p: Parser, whose: str, allow_args: bool) -> list[str] {
 }
 
 # parse_ty_args reads a `[ T, … ]` type-argument list into the types it names, leaving the
-# stream on the token after the `]`. skip_ty_args below consumes the same shape and answers
-# nothing, which is right where the arguments are erased; an `impl`'s are not.
+# stream on the token after the `]`. It had a sibling, `skip_ty_args`, that consumed the same
+# shape and answered nothing — right while a type's arguments were erased, and dead the moment
+# they became part of its name.
 fn parse_ty_args(mut &p: Parser) -> list[ast.Ty] {
 	mut out: list[ast.Ty] = []
 	return out if not p_at(p, token.Kind.LBrack)
@@ -1168,24 +1181,6 @@ fn parse_ty_args(mut &p: Parser) -> list[ast.Ty] {
 	}
 	expect(p, token.Kind.RBrack)
 	return out
-}
-
-# skip_ty_args consumes a balanced `[ … ]` type-argument list, if one is next. Nesting is
-# counted rather than assumed one deep, so `Pair[list[int], B[T]]` leaves the stream on the
-# token after the outer `]`.
-fn skip_ty_args(mut &p: Parser) {
-	return if not p_at(p, token.Kind.LBrack)
-	p_advance(p) # '['
-	mut depth := 1
-	for depth > 0 and not p_at(p, token.Kind.Eof) {
-		if p_at(p, token.Kind.LBrack) {
-			depth = depth + 1
-		}
-		if p_at(p, token.Kind.RBrack) {
-			depth = depth - 1
-		}
-		p_advance(p)
-	}
 }
 
 # is_conv reports whether a callee name is a scalar type conversion.
@@ -1223,7 +1218,7 @@ fn conv_ty(name: str) -> ast.Ty {
 # than a second door that says it by default.
 pub fn parse_at(src: str, path: str) -> ast.File {
 	toks := lexer.tokenize(src)
-	mut p := Parser(toks, 0, "", path, false, 0, 0, [])
+	mut p := Parser(toks, 0, "", path, false, 0, 0, [], [])
 	mut imports: list[ast.ImportDecl] = []
 	mut structs: list[ast.StructDecl] = []
 	mut enums: list[ast.EnumDecl] = []
@@ -1507,7 +1502,7 @@ pub fn parse_at(src: str, path: str) -> ast.File {
 	# not the end of the file, because that is where the reader has to go.
 	raise p_diag_at(p, unsafe_line, unsafe_col, rule.Rule.UnsafeGroupUnterminated, "this module-level `unsafe { … }` group is never closed — a group marks a context and the context has to end, or every declaration after it is read as being inside") if in_unsafe
 
-	return ast.File(imports, structs, enums, specs, impls, fns, types, consts, derive_on, derive_spec, stmts, p.ty_quals)
+	return ast.File(imports, structs, enums, specs, impls, fns, types, consts, derive_on, derive_spec, stmts, p.ty_quals, p.ty_apps)
 }
 
 # p_take_top_stmt records a top-level statement for the build to refuse, and is the one
@@ -2141,12 +2136,13 @@ fn parse_typedecl(mut &p: Parser, is_pub: bool) -> ast.TypeDecl {
 	# `impl` still meant the implementing type — one word, two meanings, in one program.
 	name := p_type_name(p, "a type alias")
 
-	# A code and a place, which this one refusal did without while its two siblings — E9003
-	# for a generic `enum` and E9004 for a generic `struct` — carry both. Three declarations
-	# refused for one reason, and the alias was the one a gate could not pin.
+	# A code and a place, which this one refusal did without while its sibling — E9003 for a
+	# generic `enum` — carried one. A generic `struct` was the third and is built now, so what
+	# is left is two declarations refused for one reason, and the alias was the one a gate
+	# could not pin.
 	if p_at(p, token.Kind.LBrack) {
 		b := cur(p)
-		raise p_diag_at(p, b.line, b.col, rule.Rule.NotYetGenericTypedef, f"NotImplemented: a generic `type {name}[…] = …` — a parameterized alias is one instantiation per argument, and this compiler erases type parameters (the reason a generic `enum` is E9003 and a generic `struct` E9004) (GRAMMAR#type-decl)")
+		raise p_diag_at(p, b.line, b.col, rule.Rule.NotYetGenericTypedef, f"NotImplemented: a generic `type {name}[…] = …` — a parameterized alias is one instantiation per argument, and this compiler erases type parameters (the reason a generic `enum` is E9003) (GRAMMAR#type-decl)")
 	}
 
 	expect(p, token.Kind.Assign)
@@ -2428,11 +2424,15 @@ fn parse_struct(mut &p: Parser, is_pub: bool) -> ast.StructDecl {
 	p_advance(p) # 'struct'
 	name := p_type_name(p, "a struct")
 
-	# `struct B[T] { … }` — READ AND DROPPED, so a field of type `T` then reported
-	# `no type named T`: a message about the consequence, from two steps away, for a form
-	# the compiler had already decided not to support. A generic ENUM has been refused by
-	# name since it was written; this is the same refusal for the other declaration.
-	raise p_diag(p, rule.Rule.NotYetGenericStruct, f"NotImplemented: a generic struct `{name}[…]` — this compiler erases type parameters, and a field names one (GRAMMAR#struct-decl)") if p_at(p, token.Kind.LBrack)
+	# `struct Box[T] { … }` — the TEMPLATE's parameters, read where GRAMMAR#struct-decl puts
+	# them. They are the whole of what makes this declaration a template: a specialization is
+	# an ordinary StructDecl with them substituted and an applied NAME, so nothing past the
+	# instantiation has to know one existed.
+	mut tparams: list[str] = []
+	mut tbounds: list[str] = []
+	if p_at(p, token.Kind.LBrack) {
+		p_type_params(p, tparams, tbounds)
+	}
 	expect(p, token.Kind.LBrace)
 	skip_semis(p)
 	mut fields: list[ast.FieldDef] = []
@@ -2471,7 +2471,7 @@ fn parse_struct(mut &p: Parser, is_pub: bool) -> ast.StructDecl {
 		p_stmt_sep(p, token.Kind.RBrace)
 	}
 	expect(p, token.Kind.RBrace)
-	return ast.StructDecl(name, fields, is_pub, p.path, kw.line, kw.col)
+	return ast.StructDecl(name, fields, is_pub, p.path, kw.line, kw.col, tparams)
 }
 
 # parse_decorator reads `#[ … ]` (GRAMMAR#decorator). It used to reach the top-level fallback,
@@ -3555,7 +3555,7 @@ fn parse_assert(mut &p: Parser) -> ast.Stmt {
 # token list: `p` and `p.toks` cannot both be `mut &` in one call — they alias — and a list is
 # copy-on-write, so the value here is a refcount and not the file.
 fn p_scratch(mut &p: Parser, toks: list[token.Token], pos: int) -> Parser {
-	return Parser(toks, pos, p.impl_ty, p.path, p.saw_this, p.depth, p.edepth, [])
+	return Parser(toks, pos, p.impl_ty, p.path, p.saw_this, p.depth, p.edepth, [], [])
 }
 
 # p_assert_claims is the split: one claim per conjunct of a top-level `and` chain, and ONE

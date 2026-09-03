@@ -611,14 +611,37 @@ fn load(a: Ref[int]) -> int {
 fn main() { print "x" }
 EOF
 
-# A generic ENUM has been refused by name since it was written; a generic STRUCT was read
-# and dropped, so a field of type `T` reported `no type named T` — a message about the
-# consequence, two steps from the form the compiler had already decided not to support.
-expect "$ZERG" generic-struct E9004 <<'EOF'
+# A GENERIC STRUCT IS BUILT, so what is refused is what a use of one can still get wrong. A
+# TEMPLATE NAMED WITHOUT ITS ARGUMENTS is not an unknown type — `B` is declared, and what is
+# missing is the thing that makes it one, which is what the sentence has to say.
+expect "$ZERG" a-template-without-arguments E4094 'without arguments' <<'EOF'
 struct B[T] {
 	pub n: T
 }
-fn main() { print "x" }
+
+fn main() {
+	b: B = B(1)
+	print b.n
+}
+EOF
+
+# AND A PARAMETER NO ARGUMENT CAN SOLVE. A construction solves its own parameters from the
+# ARGUMENTS — docs/core/type-system.md, "`T` comes from the arguments, never from where the
+# answer lands" — so what is refused is a parameter no field's type mentions, which is the
+# same shape a generic `fn` call is refused for and the same sentence.
+#
+# IT REFUSED THE WRONG THING FIRST. This case read `b := B(1)` and expected the CONSTRUCTION
+# to be refused for having no position to read, which is exactly the rule that sentence says
+# does not exist. `oracle` found it, over a corpus case the seed had right.
+expect "$ZERG" a-type-parameter-no-field-mentions E4095 'not decided by this construction' <<'EOF'
+struct B[T] {
+	pub n: int
+}
+
+fn main() {
+	b := B(1)
+	print b.n
+}
 EOF
 
 # A `spec` is read and DROPPED — it is not a type and nothing dispatches on it — so this
@@ -2040,12 +2063,35 @@ EOF
 # for the rest: a generic TYPE, a generic METHOD, a bound this compiler cannot carry, a call
 # that decides nothing, and a bound the argument does not meet.
 
-expect "$ZERG" generic-struct E9004 <<'EOF'
+# A TYPE ARGUMENT THAT IS ITSELF A PARAMETER. A type's arguments live inside its NAME here,
+# which is what let every walk over `Ty` keep working without learning a shape — and it is
+# also what substitution cannot see through. Refused at the APPLICATION rather than at the
+# field it eventually breaks.
+expect "$ZERG" a-type-argument-that-is-a-parameter E9113 'Box[T]' <<'EOF'
 struct Box[T] {
 	pub v: T
 }
 
-fn main() { print 1 }
+fn get[T](b: Box[T]) -> T {
+	return b.v
+}
+
+fn main() {
+	b: Box[int] = Box(1)
+	print get(b)
+}
+EOF
+
+# AND THE ARITY, counted at the application because that is where the reader wrote it.
+expect "$ZERG" a-type-argument-count E4093 'type parameters' <<'EOF'
+struct Box[T] {
+	pub v: T
+}
+
+fn main() {
+	b: Box[int, str] = Box(1)
+	print b.v
+}
 EOF
 
 expect "$ZERG" generic-enum E9003 <<'EOF'
@@ -3461,9 +3507,9 @@ fn main() {
 }
 EOF
 
-# A MODULE THAT SHIPS AND CANNOT BE IMPORTED. `atomic` declares `Atomic[T]`, and a generic
-# struct is a form this compiler has not built, so the import used to fail with `E9004
-# NotImplemented: a generic struct` pointing INTO src/stdlib/atomic.zg — a real error against
+# A MODULE THAT SHIPS AND CANNOT BE IMPORTED. `atomic` writes `impl Atomic[int]`, and an
+# `impl` on a type ARGUMENT is a form this compiler has not built, so the import used to fail
+# with that refusal pointing INTO src/stdlib/atomic.zg — a real error against
 # a file the reader did not write and cannot fix, which is this script's whole subject wearing
 # a stdlib path instead of a cache one.
 #

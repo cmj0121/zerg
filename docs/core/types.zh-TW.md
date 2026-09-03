@@ -218,9 +218,20 @@ enum Either[X, Y] {         # 泛型 sum type
 }
 ```
 
-> **[not yet]** 上面那一段的兩個宣告都編不過。遞迴 `struct` 是 `E4026`(見下),而**泛型 `enum`** 是
-> _E9003 NotImplemented: a generic enum `Either[…]` — this compiler erases type parameters, and a variant's
-> payload names one_;泛型 `struct` 因同樣的理由是 `E9004`。這段顯示的是規範中的形狀,兩者都在等泛型型別。
+> **[not yet]** 上面那一段裡的**泛型 `enum`** 編不過:它是 _E9003 NotImplemented: a generic enum `Either[…]`
+> — this compiler erases type parameters, and a variant's payload names one_。遞迴 `struct` 是 `E4026`(見下)。
+>
+> 泛型 **`struct`** 建好了。宣告是一個 **template**,一次應用(`Box[int]`)是一個以那個名字存在的普通型別。
+> 一次建構**從它自己的引數解出參數**,那是[型別系統](type-system.zh-TW.md)對一次呼叫定的規則,而建構就是一次
+> 呼叫:`Box(7)` 不論寫在哪裡都是 `Box[int]`,而 `b: Box[str] = Box(1)` 解出 `Box[int]` 之後在**繫結處**被拒——
+> 與 `x: float = id(5)` 走的是同樣兩步。一次使用還可能寫錯的東西各自被拒收:引數個數不對(`E4093`)、指名
+> template 卻沒寫引數(`E4094`),以及一個沒有任何欄位型別提到的參數,因此無從解起(`E4095`)。
+>
+> **[not yet]** 一個型別的引數在這裡被帶在它的**名字**裡,那正是讓每一個對型別的 walk 都能繼續運作的原因——
+> 而那也正是代換看不進去的東西。所以一個本身是型別參數的型別**引數**是 _E9113 NotImplemented: `Box[T]` — the
+> type argument `T` names no type this program declares — a type PARAMETER here, or a name spelled wrong, and
+> this compiler carries a type's arguments inside its name, so substitution does not reach them_。
+> `fn get[T](b: Box[T])`,以及一個 template 的欄位再指名另一個應用,是它的兩種形狀。
 
 **遞迴與自我參照型別**可直接運作——一個 `struct Node { next: Node? }`、一個 `enum Expr { Num(int); Add(Expr,
 Expr) }`——**不需 pointer**:編譯器把那個自我參照的槽自動裝箱在一個 refcounted cell 之後,所以這種值的複製是**按

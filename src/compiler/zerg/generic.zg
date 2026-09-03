@@ -187,7 +187,7 @@ fn gen_match_all(tparams: list[str], mut &sol: list[ast.Ty], ds: list[ast.Ty], a
 # The honest place is not the type, it is the CALL that chose the argument: not *this type is
 # a `chan[int?]`* but *this call makes `chan[T]` a `chan[int?]`*, which is a line the reader
 # wrote (#55).
-struct TySubst {
+pub struct TySubst {
 	pub names: list[str]
 	pub args: list[ast.Ty]
 
@@ -223,7 +223,7 @@ pub fn gen_resolve_lens(f: ast.File) -> ast.File {
 
 	mut structs: list[ast.StructDecl] = []
 	for sd in f.structs {
-		structs.append(ast.StructDecl(sd.name, gen_len_fields(su, sd.fields), sd.is_pub, sd.path, sd.line, sd.col))
+		structs.append(ast.StructDecl(sd.name, subst_fields(su, sd.fields), sd.is_pub, sd.path, sd.line, sd.col, sd.tparams))
 	}
 	mut enums: list[ast.EnumDecl] = []
 	for ed in f.enums {
@@ -245,7 +245,7 @@ pub fn gen_resolve_lens(f: ast.File) -> ast.File {
 	for sp in f.specs {
 		specs.append(ast.SpecDecl(sp.name, sp.params, sp.supers, sp.super_args, gen_len_fns(su, sp.reqs), sp.is_pub, sp.path, sp.line, sp.col))
 	}
-	return ast.File(f.imports, structs, enums, specs, f.impls, fns, types, consts, f.derive_on, f.derive_spec, f.stmts, f.ty_quals)
+	return ast.File(f.imports, structs, enums, specs, f.impls, fns, types, consts, f.derive_on, f.derive_spec, f.stmts, f.ty_quals, f.ty_apps)
 }
 
 # gen_len_table folds every module-level constant an array length may name. A `mut` binding is
@@ -321,7 +321,11 @@ fn gen_len_binary(keys: list[str], vals: list[str], o: str, a: ast.Expr, b: ast.
 	return 0 - 1
 }
 
-fn gen_len_fields(su: TySubst, fs: list[ast.FieldDef]) -> list[ast.FieldDef] {
+# subst_fields is a field list with a substitution applied — general, despite where its first
+# caller was: the length pass reaches it with a table of array-length keys and a generic type's
+# instantiation reaches it with a table of type parameters, and it is the SAME walk either way.
+# `subst_ty` is what decides which, from what the table holds.
+pub fn subst_fields(su: TySubst, fs: list[ast.FieldDef]) -> list[ast.FieldDef] {
 	mut out: list[ast.FieldDef] = []
 	for fd in fs {
 		out.append(ast.FieldDef(fd.name, subst_ty(su, fd.ty), fd.is_pub, fd.has_def, subst_expr(su, fd.def), fd.line, fd.col))

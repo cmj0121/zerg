@@ -301,7 +301,7 @@ fn run_pkg(root: str, p: test_pkg.Pkg, only: str, secs: int, mut &passed: int, m
 	# not a return is a raise, which the guard has.
 	#
 	# It used to be the last thing run_pkg did, which meant every path that did NOT reach the
-	# end left the driver behind: `zerg test src/stdlib` stopped at an `E9004` inside
+	# end left the driver behind: `zerg test src/stdlib` stopped at an `E9038` inside
 	# `atomic.zg` and left a `zerg_test_driver_test.zg` full of absolute cache paths in the
 	# standard library — a directory the compiler resolves imports by LISTING.
 	# WHAT THIS UNIT ALREADY IS, handed to the loader so nothing loads it a second time. A

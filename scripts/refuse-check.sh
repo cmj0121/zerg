@@ -1310,14 +1310,12 @@ fn main() {
 }
 EOF
 
-# The concrete half of the same gap, and the worse of the two: the target's type arguments
-# were SKIPPED, so `impl Size for list[int]` reached the emitter as an `impl` on a type
-# named `list` and was refused with "no type named `list`" — a sentence that is false about
-# a language whose grammar spells `list[T]`. An inherent `impl Box[int] { … }` went the
-# other way and was accepted with its `[int]` silently erased. Reading the arguments makes
-# both of them one refusal, about the form that was written and at the place it was.
+# A TARGET WITH TYPE ARGUMENTS NAMES A SPECIALIZATION, and an `impl` on one is built: the
+# applied name is a type. What is left of the gap is the BUILT-IN container, which is not a
+# declared type at all — a `list[int]` is `TList(TInt)` — so there is no name to key an
+# implementation by.
 
-expect "$ZERG" impl-on-a-target-with-type-arguments E9038 'on `list[int]`' <<'EOF'
+expect "$ZERG" impl-on-a-builtin-container E9038 'on `list[int]`' <<'EOF'
 spec Size {
 	fn size() -> int
 }
@@ -1333,7 +1331,10 @@ fn main() {
 }
 EOF
 
-expect "$ZERG" inherent-impl-on-a-target-with-type-arguments E9038 'on `Box[int]`' <<'EOF'
+# AND THE ARITY, from the side a declaration that takes NO parameters is on. It used to be
+# accepted with the `[int]` silently erased, then refused as `no type named Box[int]` — true,
+# and silent about the `[int]` that made it so.
+expect "$ZERG" an-application-of-a-plain-type E4093 'has 0 type parameters' <<'EOF'
 struct Box {
 	pub v: int
 }

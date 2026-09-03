@@ -259,16 +259,32 @@ fi
 
 # --- 3. a module that does not parse says so ------------------------------------------
 #
-# `atomic` writes `impl Atomic[int]`, an `impl` on a type ARGUMENT this compiler refuses
-# (E9038) and refuses in the PARSER, so its declarations
-# cannot be listed. The honest answer is the one thing that must not go missing: the header
-# still reads, and a `note:` line says the rest is absent. Silence here would be a module
-# that documents itself as empty.
-"$ZERG" doc atomic >"$tmp/atomic.out" 2>&1
-grep -q '^note: ' "$tmp/atomic.out" ||
-	note "\`zerg doc atomic\` lists no declarations and says nothing about why — a module that does not parse must be reported, not rendered empty"
-grep -q '^atomic — ' "$tmp/atomic.out" ||
-	note "\`zerg doc atomic\` lost the module header of a file it could not parse; the header comes from the trivia and does not need the AST"
+# The honest answer is the one thing that must not go missing: the header still reads — it
+# comes from the trivia and needs no AST — and a `note:` line says the rest is absent. Silence
+# here would be a module that documents itself as empty.
+#
+# THE FIXTURE IS WRITTEN HERE rather than pointed at a stdlib module. It used to name
+# `atomic`, on the standing fact that a generic struct did not parse; a generic struct is
+# built now and `zerg doc atomic` lists its declarations, so the case was asserting something
+# about a module that had stopped being an example of it. A gate anchored to which module
+# happens to be broken this month measures the month.
+# THE BLANK LINE AFTER THE HEADER IS THE FIXTURE'S OWN CONTENT. Without it the block attaches
+# to the declaration under it — the comment-attachment rule case 4 below is about — and the
+# module has no header at all, which is what this case would then be asserting the absence of.
+mkdir -p "$tmp/unparseable"
+cat >"$tmp/unparseable/mod.zg" <<'ZG'
+# unparseable — a module whose declarations cannot be listed.
+#
+# The header above is trivia and reads without an AST; the line below is not a declaration
+# this or any parser can finish.
+
+pub fn (
+ZG
+"$ZERG" doc "$tmp/unparseable" >"$tmp/unparseable.out" 2>&1
+grep -q '^note: ' "$tmp/unparseable.out" ||
+	note "\`zerg doc\` on a module that does not parse lists no declarations and says nothing about why — it must be reported, not rendered empty"
+grep -q '^unparseable — ' "$tmp/unparseable.out" ||
+	note "\`zerg doc\` lost the module header of a file it could not parse; the header comes from the trivia and does not need the AST"
 checks=$((checks + 2))
 
 # --- 4. the comment-attachment rules, one case each ------------------------------------
@@ -786,12 +802,16 @@ refused() {
 refused "$ROOT" 'the current directory is not a module name' '.' 'the modules it can see:'
 refused "$tmp/proj/sub" 'the parent directory is not a module name' '..' 'the modules it can see:'
 refused "$ROOT" 'a directory with no source in it' "$tmp/empty/" 'holds no source'
-refused "$ROOT" 'a declaration of a module that did not parse' 'atomic.load' 'does not parse under this compiler'
+# THE FIXTURE AGAIN, and for §3's reason: this named `atomic.load` while `atomic` was a module
+# that did not parse. It parses now — a generic struct is built — so `zerg doc atomic.load`
+# answers, correctly, and the case was asserting a refusal of a module that had stopped being
+# an example of one.
+refused "$tmp" 'a declaration of a module that did not parse' 'unparseable.thing' 'does not parse under this compiler'
 
 # and that refusal does not go on to head an empty list, which is the claim the note corrects
-"$ZERG" doc atomic.load >"$tmp/decl.out" 2>&1
+(cd "$tmp" && "$ZERG_ABS" doc unparseable.thing) >"$tmp/decl.out" 2>&1
 grep -q '^what it does declare:' "$tmp/decl.out" &&
-	note '`zerg doc atomic.load` heads a list of what the module declares and then lists nothing — the module did not parse, which the note above it has just said'
+	note '`zerg doc` on a declaration of a module that does not parse heads a list of what the module declares and then lists nothing — the note above it has just said the module did not parse'
 checks=$((checks + 1))
 
 # A FILE WITH NOTHING TO DOCUMENT SAYS SO. `zerg doc examples` was twelve headings with

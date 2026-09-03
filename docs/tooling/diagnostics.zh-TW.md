@@ -440,7 +440,7 @@ seed 全程維持句子比對:代碼是語言的契約,而 seed 是建置正式�
 | `E9034` | closure 參數上的預設值                                                                                |
 | `E9036` | `spec` 裡的 `unsafe` 簽章                                                                             |
 | `E9037` | `impl` 自己帶著型別參數 `[…]`                                                                         |
-| `E9038` | 標在 `…[…]` 上的 `impl` —— 目標帶了型別引數                                                           |
+| `E9038` | 標在內建容器目標上的 `impl`                                                                           |
 | `E9041` | match arm 的 body 是 expression,而這個是 statement                                                    |
 | `E9042` | 對非純量做 `type … = …`                                                                               |
 | `E9043` | 跳出 `guard` block                                                                                    |

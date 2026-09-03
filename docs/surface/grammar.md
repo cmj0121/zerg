@@ -870,10 +870,10 @@ asm-operand ::= 'in' '(' str-lit ')' expr | 'out' '(' str-lit ')' lvalue
   **`Atomic[T]`** — which shares mutable global state across cores with no `unsafe` (the binding is
   immutable; the `Atomic`'s interior is not). **Atomics are stdlib, not grammar**: `Atomic[T]` with `load` /
   `store` / `swap` / `fetch_add` / `compare_swap` and a memory-ordering argument. **[not yet]** in full: the
-  bundled `atomic` module writes `impl Atomic[int]`, an `impl` on a type ARGUMENT is unbuilt, and the
+  bundled `atomic` module's `Atomic[T]` holds a `Ref[T]`, that type is unbuilt, and the
   **import** is what is refused — `import "atomic"` on its own reports _E9104 the module `atomic` ships and
   cannot be imported_, rather than letting the refusal surface against a file the reader did not write (a
-  generic `struct` is built; the `impl` on its application is `E9038`). Neither `Atomic[int]`,
+  generic `struct` and the `impl` on its application are both built; the `Ref[T]` its field holds is `E9058`). Neither `Atomic[int]`,
   the **memory-ordering argument**, nor a generic `Atomic[T]` is reachable, and `Ref[T]` — which the
   intended `Atomic[int]` with sequential consistency rests on — is `E9058`.
 - **Raw pointers ([`GRAMMAR#ptr-type`](../../GRAMMAR), `ptr` / `ptr[T]`).** `ptr` is a platform-width raw

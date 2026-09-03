@@ -746,10 +746,10 @@ asm-operand ::= 'in' '(' str-lit ')' expr | 'out' '(' str-lit ')' lvalue
   **module-private**（不可 `pub`）。優先用**安全**替代——不可變 `:=` 持有 stdlib **`Atomic[T]`**——跨核共享
   可變全域而無需 `unsafe`（綁定不可變、Atomic 內部可變）。
   **atomics 是 stdlib、非文法**：`Atomic[T]` 提供 `load` / `store` / `swap` / `fetch_add` / `compare_swap` 與
-  memory-ordering 參數。整片都是 **[not yet]**:隨附的 `atomic` 模組寫了 `impl Atomic[int]`,而對型別**引數**的
-  `impl` 尚未建置,被拒絕的是那次 **import**——光是 `import "atomic"` 就會回報 _E9104 the module `atomic` ships and
-  cannot be imported_,而不是讓拒收落在一個讀者沒寫過的檔案上（泛型 `struct` 已經建好;對它的應用做 `impl` 是
-  `E9038`）。
+  memory-ordering 參數。整片都是 **[not yet]**:隨附的 `atomic` 模組的 `Atomic[T]` 持有一個 `Ref[T]`,而這個型別
+  尚未建置,被拒絕的是那次 **import**——光是 `import "atomic"` 就會回報 _E9104 the module `atomic` ships and
+  cannot be imported_,而不是讓拒收落在一個讀者沒寫過的檔案上(泛型 `struct` 與對它的應用做的 `impl` 都建好了;
+  剩下的是 `Ref[T]`,`E9058`)。
   `Atomic[int]`、**memory-ordering 引數**與泛型 **`Atomic[T]`** 都搆不到,而預期中的 `Atomic[int]`（循序一致）
   所倚賴的 `Ref[T]` 是 `E9058`。
 - **Raw pointer（[`GRAMMAR#ptr-type`](../../GRAMMAR)，`ptr` / `ptr[T]`）。** `ptr` 是平台字寬的原始**位址**（C 的 `void*` /

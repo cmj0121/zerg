@@ -300,7 +300,7 @@ emoji——以及根本不佔欄的結合附標與零寬連接符，還有要好
 
 ## 這個編譯器剖析不了的 module
 
-`src/stdlib/atomic.zg` 寫了 `impl Atomic[int]`，一個對型別**引數**的 `impl`，而這個編譯器拒收它（`E9038`）——而且那個拒收是 **parser** 丟的，所以它
+`src/stdlib/atomic.zg` 的 `Atomic[T]` 持有一個 `Ref[T]`，而這個編譯器沒有這個型別（`E9058`）——而且那個拒收是 **parser** 丟的，所以它
 的宣告根本列不出來。讀者拿到的是誠實的那份文件：
 
 ```text

@@ -76,13 +76,19 @@ concrete bound 的 generic 會在產出的 C 裡 **monomorphize**——編譯器
 因此實作既不能被藏、也不能被複製——它的作用範圍恰好是「型別與 spec 同時可見之處」。實作是為**具體或泛型型別**寫的
 ——`list[T]` 可以實作 `Iterator`。
 
-> **[not yet]** 目標**帶著型別引數**的 `impl` 是 _E9038 NotImplemented: an `impl` on `list[int]` — a type
-> ARGUMENT on the target: this compiler keys an implementation by the target's bare name, so every
-> instantiation of `list` would share one_,而且 `GRAMMAR#impl-decl` 為它推導的兩種形狀都是:帶參數的
-> `impl[T] Spec for list[T]` 以及完全具體的
-> `impl Spec for list[int]`。所以沒有任何實作能掛到容器型別上,上一行說的「`list[T]` 可以實作 `Iterator`」是規範,
-> 而不是 `zerg` 已經建好的東西。它需要的是「目標每個實例化各自 monomorphize 出一個實作」,而這個編譯器唯一會
-> monomorphize 的是泛型 `fn`。可用的形狀,是標在本程式宣告的 `struct` 或 `enum` 上的 `impl`。
+目標帶著型別引數的 `impl`,在那個目標是**已宣告的**泛型型別時是可用的:`impl Atomic[int]` 與
+`impl Show for Box[int]` 就是對那些特化的實作,以型別自己帶著的應用名字為鍵。同一個 template 上的兩個,是兩個
+實作、不是一個——那正是「以裸名字為鍵」原本讓它不可能的事。
+
+> **[not yet]** **內建容器**目標則不是:_E9038 NotImplemented: an `impl` on `list[int]` — a built-in
+> container is not a declared type, so there is no name to key an implementation by_。一個 `list[int]`
+> 根本沒有名字——它是一個容器加上元素型別——所以上一行說的「`list[T]` 可以實作 `Iterator`」是規範,而不是
+> `zerg` 已經建好的東西。
+>
+> 它旁邊那兩種形狀因同一個理由被指名拒收——一個實作是以「已宣告型別的裸名字」為鍵。`impl` **自己的**型別參數是
+> _E9037 NotImplemented: an `impl` carrying its own type parameters `[T]` — GRAMMAR#impl-decl puts them
+> there_;而一個不是已宣告型別的目標是 _E9047 NotImplemented: an `impl` on the built-in type `int` — this
+> compiler gives a method a declared struct or enum receiver_。
 
 以 bound 為條件、涵蓋「所有滿足某 spec 的型別」的 **blanket 實作不提供**,以保持解析可判定;也**沒有「所有型別都
 有」的實作**,包含上面那個 per-type opt-in 的 `Eq`。

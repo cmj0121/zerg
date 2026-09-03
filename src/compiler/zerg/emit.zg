@@ -2742,6 +2742,18 @@ fn c_tpl_methods_late(mut &em: Emitter, applied: str) {
 		c_add_sig(em, inst)
 		em.inst_fns.append(inst)
 	}
+
+	# AND THE IMPL REGISTRY, which is a different question from the methods: `c_impls` is what
+	# a type parameter's BOUND is checked against, and it is filled from the impls the
+	# declaration sweep knew. A specialization minted by a constructor is not among them — so
+	# `use(Box("s"))` was refused as `Box[str]` not implementing `Show` while its `show` was
+	# sitting in the signature table.
+	for ip in em.impl_tpls {
+		continue if c_app_base(applied) != c_app_base(ip.target) or c_impls(em, applied, ast.spec_key(ip.on, ip.args))
+
+		em.impl_on.append(ast.spec_key(ip.on, ip.args))
+		em.impl_target.append(applied)
+	}
 }
 
 # c_tpl_method_at is c_tpl_method_for asked of the TABLES rather than of the program, because

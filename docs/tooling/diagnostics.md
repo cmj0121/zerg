@@ -434,6 +434,9 @@ shipping compiler rather than a part of it (the line
 | `E4090` | cannot derive `From` for `…`: it is not an enum                                                       |
 | `E4091` | cannot derive `From` for `…`: two variants carry one payload type                                     |
 | `E4092` | cannot derive `From` for `…`: no variant carries exactly one payload                                  |
+| `E4093` | a type application gives the wrong number of arguments                                                |
+| `E4094` | a generic type named without its arguments                                                            |
+| `E4095` | a type parameter no field mentions, so a construction cannot solve it                                 |
 | `E5001` | this entry file declares no `fn main`                                                                 |
 | `E5002` | cannot resolve import `…`, and where it was looked for                                                |
 | `E5007` | `…` is a module this build compiles and this module did not import                                    |
@@ -449,7 +452,6 @@ shipping compiler rather than a part of it (the line
 | `E5017` | an import reaches past a folder that declares a surface                                               |
 | `E9001` | a parameterized `…[…]` as …                                                                           |
 | `E9003` | a generic enum `…[…]`                                                                                 |
-| `E9004` | a generic struct `…[…]`                                                                               |
 | `E9005` | the decorator `#[…]`                                                                                  |
 | `E9009` | calling …                                                                                             |
 | `E9010` | the named argument `…:`                                                                               |
@@ -505,6 +507,7 @@ shipping compiler rather than a part of it (the line
 | `E9110` | a NAMED rest in a list pattern                                                                        |
 | `E9111` | an array length reached through an import                                                             |
 | `E9112` | the array method `…`                                                                                  |
+| `E9113` | a type argument that is itself a type parameter                                                       |
 
 They are reported the moment a file is **read**, before its imports are scanned — scanning
 them parses, and a parser handed unreadable text can only say something untrue about it.
@@ -576,6 +579,10 @@ coming, which is the whole of #74, alive inside #74. The eight names the chapter
 `E9056` and retire as each is built; every other name takes **`E3137`**. A split is a property of a
 FALLBACK rather than of a code, and every fallback that cannot hold a declaration has these two
 questions behind it — which is why the first four were found by reading codes and this one was not.
+
+**One more retired because its form was BUILT.** `E9004` refused a generic `struct`. The declaration is a
+template now, an application is an ordinary type under its applied name, and what a use can still get
+wrong has codes of its own — `E4093`, `E4094`, `E4095` and `E9113`.
 
 **One retired because the form it named was BUILT.** `E9060` said a type carries one `Into`. It carried
 one because a method was keyed by its NAME; the key now folds in the parameterized spec its `impl` names,
@@ -672,6 +679,7 @@ name now is the prelude rule (`E2061`), which is about the name rather than abou
 | `E9074` | —       | an `impl` on a dotted target is built; the name resolves bare      |
 | `E3047` | —       | a strong typedef takes its underlying type's prefix operators      |
 | `E9060` | —       | the form was built: a method is keyed by its spec and arguments    |
+| `E9004` | —       | the form was built: a template, and an application is a type       |
 
 **One of them moved nowhere**, and it is the only row whose second column is empty. `E3047`
 reported a prefix operator on a `type X = Y` — _operator `not` has no meaning on `Flag`_ — on

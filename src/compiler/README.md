@@ -157,11 +157,11 @@ Each case is a `.zg` program beside the stdout it must produce. `mk/gates.mk`'s
 is a regression and fails the target. `CORPUS_SKIP` holds back the rest, and deleting a name
 from it **is** the gate for the feature that name waits on.
 
-Six are waiting, each refused **by name** rather than mis-emitted — `gen_struct` answers
-_E9004 NotImplemented: a generic struct `Box[…]` — this compiler erases type parameters, and
-a field names one_ — on a generic `struct` or `enum`, `#[dyn]`, or `derive` beyond `Eq` on a
-fieldless enum. Two more, `spec_bound` and `gen_identity`, build and print what they must
-today: the list has not caught up with them.
+Five are waiting, each refused **by name** rather than mis-emitted — `gen_enum` answers
+_E9003 NotImplemented: a generic enum `Either[…]` — this compiler erases type parameters, and
+a variant's payload names one_ — on a generic `enum`, `#[dyn]`, or `derive` beyond `Eq` on a
+fieldless enum. A generic `struct` was the sixth and is built. Two more, `spec_bound` and
+`gen_identity`, build and print what they must today: the list has not caught up with them.
 
 ## What a program has to be, and who says so
 
@@ -331,8 +331,9 @@ chain the form is defined to be, which is why the AST and the emitter know nothi
 f-strings at all — and why the seed only has to lex and parse one to build stage 1.
 
 Still missing, and each refused by name rather than mis-emitted: `Ref[T]` (`E9058`), a
-generic `struct` or `enum` — a type parameter that a field or a payload names (`E9004` /
-`E9003`, and it is `Atomic[T]` that makes `import "atomic"` an `E9104`), named-argument
+generic `enum` — a type parameter that a payload names (`E9003`; a generic `struct` is built,
+and it is the `impl Atomic[int]` beside it that makes `import "atomic"` an `E9104`),
+named-argument
 construction `T(a: 1)` (`E9010`), and the command literal (`E9020`).
 
 ## What performance work is left

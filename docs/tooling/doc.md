@@ -353,7 +353,7 @@ diffing the result against the piped run byte for byte.
 
 ## A module this compiler cannot parse
 
-`src/stdlib/atomic.zg` declares a generic struct, which this compiler refuses (`E9004`) — and
+`src/stdlib/atomic.zg` writes `impl Atomic[int]`, an `impl` on a type ARGUMENT this compiler refuses (`E9038`) — and
 that refusal comes from the **parser**, so its declarations cannot be listed at all. The
 document a reader gets is the honest one:
 

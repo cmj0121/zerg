@@ -24,7 +24,7 @@ import (
 #
 # A test build used to know only the second shape, and that made a white-box test of a
 # stdlib module IMPOSSIBLE: a `strings_test.zg` dropped beside `strings.zg` made every other
-# file in the directory a source of the same unit, which stopped at `atomic.zg` (`E9004`, a
+# file in the directory a source of the same unit, which stopped at `atomic.zg` (`E9038`, a
 # generic struct) and then at the `pub` names two modules share (`E9081 is_digit`, in `ascii`
 # and `strconv`) — pointing at files the author did not write, before one test had run.
 #

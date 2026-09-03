@@ -59,7 +59,7 @@
 #     is `--check`'s job, and re-writing one for a reader is issue #18's.
 #   - silent about what it could not read. A file whose parse RAISES still yields its header —
 #     the header rule needs no AST — and the failure is recorded as `DocFile.ok` for the
-#     renderer to speak about. `src/stdlib/atomic.zg` is the live case: E9004 comes from the
+#     renderer to speak about. `src/stdlib/atomic.zg` is the live case: E9038 comes from the
 #     PARSER (a generic struct), so a doc tool that let the raise through would drop a whole
 #     module, and one that swallowed it would drop the module's declarations without saying so.
 #   - the author of that sentence. What could not be read is a FACT and its wording is not: the

@@ -102,7 +102,8 @@ pub fn chk_import_cycle(imd: zerg.ImportDecl, stack: list[str], im: str) {
 #
 # `atomic` is the whole list, and it earns the entry the hard way: the module is written, it
 # is formatted and checked with the rest of the stdlib, and it declares `Atomic[T]`, a generic
-# struct — a form this compiler refuses. So `import "atomic"` used to fail with `E9004
+# struct — a form this compiler now builds; what it still refuses is the `impl Atomic[int]`
+# beside it (E9038). So `import "atomic"` used to fail with `E9004
 # NotImplemented: a generic struct` pointing INTO `src/stdlib/atomic.zg`, a file the reader
 # did not write and cannot fix. That is the same shape as a cc error against generated C, and
 # it is the shape this repo's gates exist to turn away.
@@ -134,7 +135,7 @@ pub fn chk_unbuilt_module(im: zerg.ImportDecl) {
 	return if path_tail(im.path) != "atomic"
 
 	place := zerg.place_line(im.at, im.line, im.col)
-	raise zerg.rule_msg(zerg.Rule.NotYetAtomicImport, f"the module `atomic` ships and cannot be imported — it declares `Atomic[T]`, and a generic struct is a form this compiler has not built (docs/runtime/stdlib.md). Share state across coroutines with a channel until it has\n{place}")
+	raise zerg.rule_msg(zerg.Rule.NotYetAtomicImport, f"the module `atomic` ships and cannot be imported — it writes `impl Atomic[int]`, and an `impl` on a type ARGUMENT is a form this compiler has not built (E9038, docs/runtime/stdlib.md). Share state across coroutines with a channel until it has\n{place}")
 }
 
 # --- a program's sources, entry first ------------------------------------------------------

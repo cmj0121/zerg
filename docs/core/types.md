@@ -580,12 +580,16 @@ it is checked where it runs.
 the constant rule runs, not after it. The type argument is what makes the range question askable, and it
 is known by then.
 
-> **[not yet]** A type carries **one** `Into`, not several — _E9060 NotImplemented: a second
-> `impl Into[…] for Feet` — this compiler keys a method by its NAME, so one type carries one `into`; the
-> language allows several, and reaching that needs the method keyed by the spec and its arguments_. It is
-> the same missing key as the coherence rule's, stated once in
-> [Specs & Generics](specs.md): a method keyed by the spec that declared
-> it, which is also what would let a written `x.into()` say which one it means.
+A type may carry **several**, and that follows from the identity rather than being a rule of its own: a
+parameterized spec's arguments are folded into the (type, spec) pair ([Specs & Generics](specs.md)), so
+`impl Into[Meters] for Feet` and `impl Into[Yards] for Feet` are two canonical implementations and not one
+type declaring `into` twice.
+
+What a bare `x.into()` then means is fixed by the **bound**, exactly as the third bullet above says: inside
+`fn f[T: Into[Meters]](x: T)` the call resolves to that impl. Outside one there is no such fact to read, and
+a call on a type carrying several is _E3154 `into` on a Feet is declared by more than one parameterized spec
+implementation, and this call says which by nothing_ — refused rather than answered by declaration order,
+which would make the result depend on which file was loaded first.
 
 A value, an `Err`, or `nil` entering an `Either` at a typed position is the **wrap** rule at work, not a
 conversion (see [Null-safety & Errors](../code/errors.md)): the carrier is built around the value, which

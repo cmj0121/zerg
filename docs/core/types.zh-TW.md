@@ -482,11 +482,14 @@ spec Into[T] {
 以 `byte` 呼叫時會被拒絕,而且會指名那個 byte——因為代換發生在常數規則之前,不是之後。型別引數正是讓範圍這個問題
 問得出口的東西,而到那時它已經是已知的。
 
-> **[not yet]** 一個型別只帶**一個** `Into`,不能有好幾個——_E9060 NotImplemented: a second
-> `impl Into[…] for Feet` — this compiler keys a method by its NAME, so one type carries one `into`; the
-> language allows several, and reaching that needs the method keyed by the spec and its arguments_。這與
-> coherence 規則缺的是同一把鍵,在 [Spec 與 Generics](specs.zh-TW.md) 裡說過一次:一個以「宣告它的 spec」為鍵的
-> 方法——那也正是能讓手寫的 `x.into()` 說出它指的是哪一個的東西。
+一個型別可以帶**好幾個**,而那是身分的結果、不是另立的規則:一個帶參數的 spec,它的引數被摺進 (type, spec) 這一對
+裡(見 [Spec 與 Generics](specs.zh-TW.md)),所以 `impl Into[Meters] for Feet` 與 `impl Into[Yards] for Feet`
+是兩個各自標準的實作,而不是一個型別把 `into` 宣告了兩次。
+
+那麼一句裸的 `x.into()` 指的是哪一個,由 **bound** 決定,正如上面第三點所說:在 `fn f[T: Into[Meters]](x: T)`
+裡面,那個呼叫解析到那個 impl。在它外面沒有這個事實可讀,而對一個帶著好幾個的型別呼叫,得到的是
+_E3154 `into` on a Feet is declared by more than one parameterized spec implementation, and this call says
+which by nothing_ ——拒收,而不是依宣告順序回答;依順序回答會讓結果取決於哪個檔案先被載入。
 
 一個值、一個 `Err` 或 `nil` 在有型別的位置進入 `Either`,是**包裹**規則在運作、不是轉換
 （見 [Null-safety 與錯誤處理](../code/errors.zh-TW.md)):carrier 建在值的外面,值在裡面保持自己的型別——仍然是

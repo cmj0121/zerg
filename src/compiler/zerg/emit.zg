@@ -431,12 +431,24 @@ pub struct Emitter {
 	# they are not a substitution table either, because the whole point is that `Celsius` and
 	# `int` stay different types everywhere the program can see.
 
-	# into_src is the TARGET name of every `impl Into[T] for S` the program declares. It used
-	# to be a pair, with the type argument beside it, so that a typed position could find a
-	# user conversion from the two types alone — a position converts nothing now, so what is
-	# left of the registry is the one question that survives it: has this type an `into`
-	# already (c_into_user_from), which is the "one Into per type" refusal.
-	pub into_src: list[str]
+	# bnd_fn / bnd_ty / bnd_of are the BOUNDS A SPECIALIZATION WAS BUILT UNDER, one row per
+	# bounded type parameter: the specialization's name, the concrete type that stood in for
+	# the parameter, and the bound spelled as `ast.spec_key` writes it. They exist for one
+	# question — which of a type's several parameterized-spec methods a call inside that
+	# specialization means — and docs/core/types.md is what makes them the answer: "the target
+	# fixed by the bound".
+	#
+	# THEY ARE RECORDED HERE rather than carried on the specialization, because a `FnDecl` with
+	# non-empty `tparams` is a TEMPLATE to `c_is_template` and would be removed from the
+	# program again. The specialization's name is the key, and it is unique by construction.
+	pub bnd_fn: list[str]
+	pub bnd_ty: list[str]
+	pub bnd_of: list[str]
+
+	# cur_fn is the name of the function being lowered, so the rows above can be asked about
+	# THIS body. It is saved and restored around a lambda for the reason every other
+	# per-function book here is.
+	pub cur_fn: str
 
 	# want_lints is whether anybody asked for the L5xx findings. A build does not — it passes a
 	# list it discards — and the dedupe below them is quadratic, so asking first is what keeps
@@ -2279,6 +2291,12 @@ fn c_sorted_names(names: list[str]) -> list[str] {
 }
 
 fn c_fn_cname(recv: str, name: str) -> str {
+	# A MANGLED METHOD KEEPS ITS RECEIVER. The mangled branch was written for a free
+	# function's specialization, which has none — and a parameterized spec's method is
+	# mangled too, so `Feet.into$Into[int]` and `Celsius.into$Into[int]` both came out as
+	# `zgg_into_Into_int_`. cc caught it, as two declarations of one name with different
+	# parameter types, in a file under `.zerg-cache`.
+	return c_spec_cname(f"{recv}${name}") if c_is_mangled(name) and recv != ""
 	return c_spec_cname(name) if c_is_mangled(name)
 	return "zg_" + name if recv == ""
 
@@ -2309,9 +2327,14 @@ fn c_spec_cname(name: str) -> str {
 	return out
 }
 
+# EVERY BYTE A KEY MAY HOLD AND C MAY NOT. `$` came first, from a generic specialization; a
+# parameterized spec's method key adds the four a spec key is spelled with — `into$Into[Meters]`
+# — and a `,` or a space between two arguments. Each becomes `_`, which cannot collide with a
+# Zerg name: the whole result lives under the `zgg_` prefix, off the flat space a program can
+# reach.
 fn c_cname_byte(b: byte) -> str {
 	mut one: list[byte] = []
-	if b == b'$' {
+	if b == b'$' or b == b'[' or b == b']' or b == b',' or b == b' ' {
 		one.append(b'_')
 	} else {
 		one.append(b)
@@ -2393,6 +2416,72 @@ fn c_without_templates(f: ast.File) -> ast.File {
 		}
 	}
 	out.fns = keep
+	return out
+}
+
+# c_with_spec_keys folds a PARAMETERIZED SPEC'S ARGUMENTS INTO ITS METHOD'S NAME, once, before
+# any table is built from that name. `fn into()` inside `impl Into[Meters] for Feet` becomes
+# `into$Meters`, and the sixteen places that key a method by `(recv, name)` need no second
+# argument: the name IS the key, which is the same move a generic specialization already
+# makes (`gen_mangle`), and `$` is unforgeable because no Zerg identifier may hold one.
+#
+# WHY THE ARGUMENTS BELONG IN THE KEY. docs/core/specs.md folds a parameterized spec's
+# parameter into the (type, spec) identity, and docs/core/types.md says it from the other
+# side: "a type implementing `Into[Feet]` does not meet `Into[Meters]`". So two
+# `impl Into[…] for Feet` are two canonical implementations, not one type declaring `into`
+# twice — and until this ran they arrived indistinguishable, which is why the second was
+# refused by name (E9060) rather than told apart.
+#
+# AN UNPARAMETERIZED SPEC IS UNTOUCHED, and that is a derivation rather than a carve-out: the
+# coherence rule gives a type one implementation of such a spec, so its method name alone is
+# already a key. Every existing program's C is therefore byte-identical.
+fn c_with_spec_keys(f: ast.File) -> ast.File {
+	mut out := f
+	mut keep: list[ast.FnDecl] = []
+	for fn_i in f.fns {
+		keep.append(c_spec_keyed(fn_i))
+	}
+	out.fns = keep
+	return out
+}
+
+# c_impl_spec_of is p_impl_spec_of asked of an ImplDecl, for the PROVIDED spec method this
+# compiler materializes: the key has to be the one the impl's own methods carry, or a provided
+# body and an overriding one would sit under two names and both be emitted.
+fn c_impl_spec_of(ip: ast.ImplDecl) -> str {
+	return "" if ip.args.len() == 0
+
+	return ast.spec_key(ip.on, ip.args)
+}
+
+fn c_spec_keyed(fn_d: ast.FnDecl) -> ast.FnDecl {
+	return fn_d if fn_d.spec_of == ""
+
+	mut out := fn_d
+	out.name = c_spec_key(fn_d.name, fn_d.spec_of)
+	return out
+}
+
+# c_spec_key is that key, written once so the pass that MAKES a name and every rule that has
+# to FIND it cannot spell it differently. `spec_of` is `ast.spec_key`'s spelling — the same
+# string the impl table and a type parameter's BOUND are written in — so connecting a bound to
+# the method it fixes needs no parsing at either end: both are built from the same two pieces.
+pub fn c_spec_key(name: str, spec_of: str) -> str {
+	return name if spec_of == ""
+
+	return f"{name}${spec_of}"
+}
+
+# c_spec_base is the method name a reader wrote, back out of the key — everything before the
+# first `$`. A rule that matches on the declared name asks for this; a diagnostic naming the
+# method prints it, because `into$Meters` is not what anybody typed.
+pub fn c_spec_base(name: str) -> str {
+	mut out := ""
+	for b in bytearray(name) {
+		return out if b == b'$'
+
+		out = out + str([b])
+	}
 	return out
 }
 
@@ -2481,6 +2570,7 @@ fn c_instantiate_at(mut &em: Emitter, name: str, sol: list[ast.Ty]) -> str {
 	c_check_bounds(em, tpl, sol)
 	c_check_inst_budget(em, name)
 	inst := generic.subst_fn(tpl, sol, c_place(em))
+	c_record_bounds(em, inst.name, tpl, sol)
 	em.inst_names.append(key)
 	em.inst_fns.append(inst)
 	c_add_sig(em, inst)
@@ -2520,6 +2610,25 @@ fn c_check_solved(mut &em: Emitter, tpl: ast.FnDecl, sol: list[ast.Ty]) {
 # the parameter is bounded by. It is checked HERE, at the instantiation, because that is
 # where a concrete type first exists to check; inside the template `T` implements whatever
 # the bound says and nothing more.
+# c_record_bounds writes down what each type parameter was bounded by, against the concrete
+# type that took its place. It walks the same two lists c_check_bounds does, one line below
+# the call that checks them, so a parameter this compiler ACCEPTED is a parameter this
+# remembers.
+fn c_record_bounds(mut &em: Emitter, iname: str, tpl: ast.FnDecl, sol: list[ast.Ty]) {
+	mut i := 0
+	for i < sol.len() and i < tpl.tbounds.len() {
+		nm := c_named_of(sol[i])
+		if nm != "" {
+			for b in c_split_bounds(tpl.tbounds[i]) {
+				em.bnd_fn.append(iname)
+				em.bnd_ty.append(nm)
+				em.bnd_of.append(b)
+			}
+		}
+		i = i + 1
+	}
+}
+
 fn c_check_bounds(mut &em: Emitter, tpl: ast.FnDecl, sol: list[ast.Ty]) {
 	mut i := 0
 	for i < sol.len() and i < tpl.tbounds.len() {
@@ -2808,6 +2917,72 @@ fn c_lookup_sig_ret(mut &em: Emitter, name: str) -> ast.Ty {
 # function that returns nothing is TVoid, and no declared return type is ever TUnknown, so
 # the two cannot be confused. Deriving them from the one lookup rather than scanning the
 # table again is what keeps them from drifting away from it.
+# c_meth_resolved turns the method name a reader WROTE into the key it was recorded under. A
+# parameterized spec's arguments are folded into that key (c_spec_key), so `x.into()` names
+# `into` while the declaration is `into$Meters`.
+#
+# THE SIGNATURE TABLE IS WHAT IS SCANNED, because it is the one record of what a type
+# declares and its keys are the keys everything downstream looks up by — so a name found here
+# is a name that resolves everywhere. A receiver that already HAS the bare name needs nothing:
+# an unparameterized spec's method and an inherent one are recorded under it.
+fn c_meth_resolved(mut &em: Emitter, recv: str, meth: str) -> str {
+	return meth if recv == "" or c_has_method(em, recv, meth)
+
+	pfx := f"{recv}#{meth}$"
+	mut found := ""
+	mut n := 0
+	for k in em.sig_names {
+		if parser.strings_has_prefix(k, pfx) {
+			found = k
+			n = n + 1
+		}
+	}
+	return meth if n == 0
+
+	# SEVERAL, AND NOTHING HERE SAYS WHICH. docs/core/types.md fixes the target by the BOUND
+	# in generic code — `fn f[T: Into[Meters]](x: T)` — and a bare call outside one has no
+	# such fact to read. Refused by name rather than resolved by declaration order, which is
+	# the shape that would have made the answer depend on file order.
+	if n > 1 {
+		# THE BOUND SAYS WHICH. docs/core/types.md: "Generic code bounds on it — `fn f[T:
+		# Into[Meters]](x: T)` may call `x.into()`, the target fixed by the bound". Inside a
+		# specialization the bound is gone from the signature, so it is read from what the
+		# instantiation was built under — and the key it fixes is spelled from the same two
+		# pieces the declaration's was, so the two cannot drift apart.
+		fixed := c_bound_meth(em, recv, meth)
+		return fixed if fixed != "" and c_has_method(em, recv, fixed)
+
+		raise c_diag(em, rule.Rule.AmbiguousSpecMethod, f"`{meth}` on a {recv} is declared by more than one parameterized spec implementation, and this call says which by nothing — inside generic code the target is fixed by the type parameter's bound, and a call outside one has no bound to read (GRAMMAR#impl-decl)")
+	}
+
+	return c_sig_meth_of(found)
+}
+
+# c_bound_meth is the method key the enclosing specialization's bounds fix for this receiver,
+# or "" when they fix none. A row per bounded parameter is what was recorded; the key is built
+# here exactly as the declaration's was (c_spec_key), from the bound the row carries.
+fn c_bound_meth(mut &em: Emitter, recv: str, meth: str) -> str {
+	mut i := 0
+	for i < em.bnd_fn.len() {
+		return c_spec_key(meth, em.bnd_of[i]) if em.bnd_fn[i] == em.cur_fn and em.bnd_ty[i] == recv
+		i = i + 1
+	}
+	return ""
+}
+
+# c_sig_meth_of is the method half of a signature key — everything after the `#`.
+fn c_sig_meth_of(key: str) -> str {
+	mut out := ""
+	mut seen := false
+	for b in bytearray(key) {
+		if seen {
+			out = out + str([b])
+		}
+		seen = seen or b == b'#'
+	}
+	return out
+}
+
 fn c_has_method(mut &em: Emitter, recv: str, meth: str) -> bool {
 	return false if recv == ""
 	return not c_is_unknown(c_lookup_sig_ret(em, c_sig_key(recv, meth)))
@@ -8097,6 +8272,10 @@ fn c_method(mut &em: Emitter, target: ast.Expr, meth: str, args: list[ast.Expr],
 
 	tty := c_infer(em, target)
 	recv := c_named_of(tty)
+
+	# THE WRITTEN NAME BECOMES THE RECORDED KEY, here, once — before the family is picked and
+	# before anything downstream looks the name up. Every arm below keys by it.
+	meth := c_meth_resolved(em, recv, meth)
 	return match c_meth_kind(em, tty, meth) {
 		MethKind.MRender => c_render_meth(em, target, meth, tty, sb)
 		MethKind.MList => c_list_method(em, target, meth, args, tty, sb)
@@ -10765,6 +10944,12 @@ fn c_infer_methcall(mut &em: Emitter, target: ast.Expr, meth: str, args: list[as
 
 	tty := c_infer(em, target)
 	recv := c_named_of(tty)
+
+	# THE SAME RESOLUTION THE EMISSION PATH MAKES, because it is the same question: the name a
+	# reader wrote against the key it was recorded under. Applied at both ends or the two
+	# disagree — a provided method of a parameterized spec was EMITTED under its key and
+	# INFERRED under the bare name, so `same` answered `?` and a `bool` printed as `1`.
+	meth := c_meth_resolved(em, recv, meth)
 	return match c_meth_kind(em, tty, meth) {
 		MethKind.MRender  => ast.Ty.TStr
 		MethKind.MList    => c_list_method_ret(em, meth)
@@ -12969,7 +13154,7 @@ fn c_lambda(mut &em: Emitter, ps: list[ast.Param], has_ret: bool, ret: ast.Ty, b
 	# the substitution still in force.
 	saved_sub := em.sub
 	em.sub = c_nosub()
-	em.lam_defs.append(c_fn(em, ast.FnDecl(name, "", allps, has_ret, ret, body, false, em.at_path, em.at_line, em.at_col, [], [], em.in_unsafe_fn, false, false, true, false)))
+	em.lam_defs.append(c_fn(em, ast.FnDecl(name, "", allps, has_ret, ret, body, false, em.at_path, em.at_line, em.at_col, [], [], em.in_unsafe_fn, false, false, true, false, "")))
 	em.sub = saved_sub
 	c_env_restore(em, saved_env)
 	em.open_scopes = saved_open
@@ -16131,6 +16316,8 @@ fn c_fn(mut &em: Emitter, fn_d: ast.FnDecl) -> str {
 	em.at_path = fn_d.path
 	em.at_line = fn_d.line
 	em.at_col = fn_d.col
+	outer_fn := em.cur_fn
+	em.cur_fn = fn_d.name
 
 	# THE ENCLOSING FUNCTION'S BOOKS, saved BEFORE the reset wipes them. A lambda re-enters
 	# c_fn in the middle of the function being emitted — after its `return` has already
@@ -16258,6 +16445,7 @@ fn c_fn(mut &em: Emitter, fn_d: ast.FnDecl) -> str {
 	out := sig + head + pdefer + rendered + tail + "}\n\n"
 	em.fn_ret = saved_ret
 	em.in_unsafe_fn = saved_unsafe
+	em.cur_fn = outer_fn
 	return out
 }
 
@@ -16690,7 +16878,7 @@ fn c_default_method(sp: ast.SpecDecl, ip: ast.ImplDecl, req: ast.FnDecl) -> ast.
 	for pm in req.params {
 		ps.append(ast.Param(pm.name, c_spec_subst(pm.ty, sp, ip), pm.is_ref, pm.has_def, pm.def))
 	}
-	return ast.FnDecl(req.name, ip.target, ps, req.has_ret, c_spec_subst(req.ret, sp, ip), req.body, req.is_pub, req.path, req.line, req.col, req.tparams, req.tbounds, req.in_unsafe, false, false, true, false)
+	return ast.FnDecl(req.name, ip.target, ps, req.has_ret, c_spec_subst(req.ret, sp, ip), req.body, req.is_pub, req.path, req.line, req.col, req.tparams, req.tbounds, req.in_unsafe, false, false, true, false, c_impl_spec_of(ip))
 }
 
 # c_with_derived expands every `#[derive(…)]` into the impl it stands for.
@@ -17037,10 +17225,6 @@ fn c_derive_variants(ed: ast.EnumDecl, target: str) -> str {
 	return "int(this) == int(o)"
 }
 
-# c_build_intos records every `impl Into[T] for S`. It is a pass of its own rather than a scan
-# at each use, for the reason every other table here exists: a typed position asks this
-# question once per value, and answering it by walking the program's impls would make the cost
-# of a conversion the size of the program.
 # c_build_impls records every `impl <Spec> for <Type>`. It is the same shape as the Into
 # registry and for the same reason: `==` asks this question at every use and a generic asks
 # it at every instantiation, and answering either by walking the program's impls would make
@@ -17073,31 +17257,6 @@ fn c_has_eq(mut &em: Emitter, t: ast.Ty) -> bool {
 	return false if nm == ""
 
 	return c_impls(em, nm, "Eq")
-}
-
-fn c_build_intos(mut &em: Emitter, f: ast.File) {
-	for ip in f.impls {
-		if ip.on == "Into" and ip.args.len() == 1 {
-			# ONE `Into` PER TYPE, and it is a limit of this compiler rather than of the
-			# language: `into` is one method name, and every method on a type shares one
-			# namespace, so a second `impl Into[…] for X` collides with the first. The spec
-			# means for there to be several — the built-in matrix has four out of `int` alone
-			# — and reaching that needs a spec method to be keyed by (spec, arguments) rather
-			# than by name, which is also what would let `x.into()` written by hand say which
-			# one is meant. Named here, where the pair is in hand, rather than reported later
-			# as two methods with one name.
-			raise c_diag_at(ip.path, ip.line, ip.col, rule.Rule.NotYetSecondIntoImpl, f"NotImplemented: a second `impl Into[…] for {ip.target}` — this compiler keys a method by its NAME, so one type carries one `into`; the language allows several, and reaching that needs the method keyed by the spec and its arguments (GRAMMAR#impl-decl)") if c_into_user_from(em, ip.target)
-			em.into_src.append(ip.target)
-		}
-	}
-}
-
-# c_into_user_from is whether the type already has an `Into` recorded, whatever its target.
-fn c_into_user_from(mut &em: Emitter, src: str) -> bool {
-	for n in em.into_src {
-		return true if n == src
-	}
-	return false
 }
 
 # c_lowered is the C a step produced — or NOTHING, when this walk is checking rather than
@@ -17236,7 +17395,7 @@ fn c_emit_unit(prog0: ast.File, own0: ast.File, ms: Mods, whole: bool, want_lint
 	# is what makes that invariant hold for a multi-unit program, at the place it already lives,
 	# and it is what lets the declaration passes below go back to reading the WHOLE program.
 	seen := diags.len()
-	mut em := Emitter([], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], false, false, false, [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], 0, [], 0, [], [], false, "", "", [], [], ast.Ty.TVoid, 0, "", 0, 0, diags, 0, 0, [], [], [], [], [], false, 0, false, "", 0, false, false, [], want_lints, [], [], [], [], [], [], [], [], [], [], [], [], false, 0, [], [], "", c_nosub(), [], [], [], [], [], [], [], [], [])
+	mut em := Emitter([], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], false, false, false, [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], 0, [], 0, [], [], false, "", "", [], [], ast.Ty.TVoid, 0, "", 0, 0, diags, 0, 0, [], [], [], [], [], false, 0, false, "", 0, false, false, [], [], [], "", want_lints, [], [], [], [], [], [], [], [], [], [], [], [], false, 0, [], [], "", c_nosub(), [], [], [], [], [], [], [], [], [])
 
 	# ASSIGNED, NOT PASSED. Every argument above is a zero value, and `layering` asserts that
 	# — it lines the call up with the fields by KIND, which only works while nothing in it
@@ -17252,8 +17411,8 @@ fn c_emit_unit(prog0: ast.File, own0: ast.File, ms: Mods, whole: bool, want_lint
 	# A template is not a function, and this is the honest way to say so: from here down —
 	# in these passes and in any added later — `f.fns` holds functions only.
 	c_build_generics(em, f0)
-	f := c_without_templates(f0)
-	own := c_without_templates(c_with_spec_defaults(f0, c_with_derived(own0)))
+	f := c_with_spec_keys(c_without_templates(f0))
+	own := c_with_spec_keys(c_without_templates(c_with_spec_defaults(f0, c_with_derived(own0))))
 
 	# OVER `f0`, THE PROGRAM WITH ITS TEMPLATES STILL IN IT. A template is not a function
 	# to lower, which is what the removal above says, but it IS a name at the top level:
@@ -17266,10 +17425,6 @@ fn c_emit_unit(prog0: ast.File, own0: ast.File, ms: Mods, whole: bool, want_lint
 	# discriminant, and a discriminant may name a module constant.
 	c_build_const_vals(em, f)
 
-	# AHEAD of c_build_sigs, which raises on two methods of one name: a second `impl Into[…]`
-	# is exactly that collision, and the sentence about method namespaces is true and about
-	# the wrong thing. The pass that knows what the pair was gets to say it first.
-	c_build_intos(em, f)
 	c_build_impls(em, f)
 
 	# BEFORE THE SIGNATURES, because a signature is where a projection is written and

@@ -350,6 +350,7 @@ shipping compiler rather than a part of it (the line
 | `E3151` | `…` is a METHOD of `…`, reached through an instance                                                   |
 | `E3152` | `…` is an ASSOCIATED FN of `…`, reached through the type                                              |
 | `E3153` | an array length names `…`, and no compile-time constant this build can fold answers to it             |
+| `E3154` | `into` on a type with several impls says which by nothing                                             |
 | `E4001` | `…` outside of a loop: it belongs to a `for`, and a `select` arm is not one                           |
 | `E4002` | a `from` cause is an `Err`, and … is not one                                                          |
 | `E4004` | `…(…)` names one side of an `Either`, which holds exactly one value                                   |
@@ -477,7 +478,6 @@ shipping compiler rather than a part of it (the line
 | `E9056` | the list method `…`                                                                                   |
 | `E9057` | structural equality over a container                                                                  |
 | `E9058` | a refcounted box `Ref(x)` / `deref(r)`                                                                |
-| `E9060` | a second `impl Into[…] for …`                                                                         |
 | `E9061` | `in` over … — its elements are compared with `==`, and this compiler does not write that comparison   |
 | `E9062` | `in` over … — a range's members are found by comparing its bounds                                     |
 | `E9063` | `…` is part of the fixed-width ladder                                                                 |
@@ -577,6 +577,11 @@ coming, which is the whole of #74, alive inside #74. The eight names the chapter
 FALLBACK rather than of a code, and every fallback that cannot hold a declaration has these two
 questions behind it — which is why the first four were found by reading codes and this one was not.
 
+**One retired because the form it named was BUILT.** `E9060` said a type carries one `Into`. It carried
+one because a method was keyed by its NAME; the key now folds in the parameterized spec its `impl` names,
+which is what `docs/core/specs.md` already made the implementation's identity. A code in `E9xxx` retires the
+day its form is built, and this is that day.
+
 **One retired with its rule rather than to another range.** `E2060` refused a declared type whose
 name did not begin with a capital, and that rule was the whole of how the language separated its
 two namespaces — a capitalised name was a type, a lower-case one a value. The rule is gone: a name
@@ -666,6 +671,7 @@ name now is the prelude rule (`E2061`), which is about the name rather than abou
 | `E9051` | —       | the associated fn is built; the body decides which it is           |
 | `E9074` | —       | an `impl` on a dotted target is built; the name resolves bare      |
 | `E3047` | —       | a strong typedef takes its underlying type's prefix operators      |
+| `E9060` | —       | the form was built: a method is keyed by its spec and arguments    |
 
 **One of them moved nowhere**, and it is the only row whose second column is empty. `E3047`
 reported a prefix operator on a `type X = Y` — _operator `not` has no meaning on `Flag`_ — on

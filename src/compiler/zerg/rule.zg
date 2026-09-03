@@ -306,6 +306,13 @@ pub enum Rule {
 	MethodThroughItsType = 3151
 	AssocFnThroughAnInstance = 3152
 	ArrayLenUnresolved = 3153
+
+	# A CALL THAT SAYS WHICH BY NOTHING. A parameterized spec's arguments are part of the
+	# implementation's identity (docs/core/specs.md), so a type may carry several `into` —
+	# and docs/core/types.md fixes the target by the BOUND. A bare call outside one has no
+	# bound to read, and answering it by declaration order would make the result depend on
+	# which file was loaded first.
+	AmbiguousSpecMethod = 3154
 	SpecDefaultReadsField = 3138
 
 	# emitting — a form this compiler will not lower
@@ -470,7 +477,6 @@ pub enum Rule {
 	NotYetListMethod = 9056
 	NotYetContainerEquality = 9057
 	NotYetRefBox = 9058
-	NotYetSecondIntoImpl = 9060
 	NotYetInOverNoEq = 9061
 	NotYetInOverType = 9062
 	NotYetFixedWidthLadder = 9063

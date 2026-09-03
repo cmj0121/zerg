@@ -465,6 +465,14 @@ pub struct Emitter {
 	# on-demand instantiation of one a specialization produced that nobody wrote.
 	pub ty_apps: list[ast.TyApp]
 
+	# refnew_done is the payload types a Ref allocator has been emitted for, so one is written
+	# once however many `Ref(x)` a program has.
+	pub refnew_done: list[str]
+
+	# refvt_done is the same for a Ref's own element trio — the copy, the drop and the vtable a
+	# container of one reads.
+	pub refvt_done: list[str]
+
 	pub bnd_fn: list[str]
 	pub bnd_ty: list[str]
 	pub bnd_of: list[str]
@@ -598,6 +606,7 @@ pub struct Emitter {
 	# could not see.
 	pub top_names: list[str]
 	pub top_kinds: list[str]
+	pub top_paths: list[str]
 
 	# frz_idxs are the collections FROZEN by the `for … in` loops enclosing the statement
 	# being emitted — pushed as each body opens and popped as it closes.
@@ -712,7 +721,7 @@ fn c_type(t: ast.Ty) -> str {
 		Ty.TByte      => "uint8_t"
 		Ty.TUint      => "uint64_t"
 		Ty.TRune      => "int32_t"
-		Ty.TNamed(nm) => c_ty_cname(nm)
+		Ty.TNamed(nm) => c_named_ctype(nm)
 		Ty.TList(_)   => "zrt_list"
 		Ty.TFn(_, _)  => "zg_fnptr"
 
@@ -1522,7 +1531,21 @@ fn c_spelled_pre(mut &em: Emitter, t: ast.Ty) -> str {
 	# it registers the first time it is met, exactly as a tuple and a carrier do.
 	c_gen_inst_pre(em, t)
 
+	# AND A `Ref[T]`, which is spelled like a declared type and is not one: it needs the element
+	# trio a container of it reads, and the scope that holds one needs the drop thunk by name.
+	return c_ref_vt_pre(em, t) if c_is_ref_box(t)
+
 	return ""
+}
+
+# c_ref_vt_pre is a Ref's element trio, once. It goes through the same registry every other
+# kind's does, so a `Ref[int]` met twice is written once whichever path reached it first.
+fn c_ref_vt_pre(mut &em: Emitter, t: ast.Ty) -> str {
+	k := c_elem_kind(em, t)
+	return "" if k == "" or c_name_in(em.refvt_done, k)
+
+	em.refvt_done.append(k)
+	return c_elem_vt_helper(em, t)
 }
 
 # c_gen_inst_pre builds the specialization a name asks for, if it is one and it is new. The
@@ -2362,6 +2385,14 @@ fn c_fn_cname(recv: str, name: str) -> str {
 # characters C has no place for, and every site that spelled `"zg_" + name` by hand would
 # otherwise have had to learn that separately or write a name nobody declared. cc caught the
 # first one, as `} zg_Box[int];`.
+# c_named_ctype is a named type's C type. A `Ref[T]` is the runtime's reference cell, which is
+# a `void*` whatever it holds — the payload's own type appears only where the box is read.
+fn c_named_ctype(nm: str) -> str {
+	return "void*" if c_is_applied(nm) and c_app_base(nm) == "Ref"
+
+	return c_ty_cname(nm)
+}
+
 pub fn c_ty_cname(nm: str) -> str {
 	return c_spec_cname(nm) if c_is_applied(nm)
 
@@ -2780,6 +2811,173 @@ pub fn c_is_applied(nm: str) -> bool {
 		return true if b == b'['
 	}
 	return false
+}
+
+# --- Ref[T], the one value shared by reference ---------------------------------------
+#
+# `Ref(x)` allocates a reference-counted heap box holding `x`, and a `Ref[T]` copies by
+# RETAINING it: the last holder frees it once (docs/runtime/builtins.md). It is the only value
+# in the language whose copy is not a copy, which is why it is the way a value outlives its
+# defining scope or crosses a `spawn`.
+#
+# ITS TYPE IS AN APPLIED NAME, like a user generic's — `Ref[int]` is a `TNamed` and the
+# argument is inside it — so nothing that walks a type has to learn a shape. What IS special is
+# the handful of DECISIONS below: its C type, whether it needs a copy, how the copy and the
+# give-back are spelled. The runtime cell is the one the compiler already boxes a recursive
+# type in; this puts a name on it.
+pub fn c_is_ref_box(t: ast.Ty) -> bool {
+	nm := c_named_of(t)
+	return c_is_applied(nm) and c_app_base(nm) == "Ref"
+}
+
+# c_ref_elem is the payload's type, read from the table that says what an application is made
+# of — the same table a user generic's arguments come from.
+fn c_ref_elem(mut &em: Emitter, t: ast.Ty) -> ast.Ty {
+	nm := c_named_of(t)
+	for a in em.ty_apps {
+		return a.args[0] if a.name == nm and a.args.len() == 1
+	}
+	return ast.Ty.TUnknown
+}
+
+# c_ref_new is the allocation, and the helper it names is emitted once per payload type. The
+# drop handed to the cell is the payload's own, through the elemdrop thunk every container
+# already uses — so a `Ref[str]` releases its string when the last holder lets go, and a
+# `Ref[int]` hands the cell a NULL and pays nothing.
+fn c_ref_new(mut &em: Emitter, el: ast.Ty, x: str) -> str {
+	em.used_rt = true
+
+	# THE KEY IS THE PAYLOAD'S TYPE, not its element KIND. `c_elem_kind` answers "" for a type
+	# that owns nothing — it is about what a container owes, not about identity — so a
+	# `Ref[int]` and a `Ref[P]` were one helper named `zg_refnew_`, and cc was handed a `P`
+	# where an `int64_t` was declared.
+	nm := c_spec_cname(f"refnew${ast.ty_name(el)}")
+	if not c_name_in(em.refnew_done, nm) {
+		em.refnew_done.append(nm)
+		ct := c_type(el)
+
+		# THE THUNK IS ASKED FOR, NOT WRITTEN. `c_drop_thunk` answers the name and "" for a
+		# payload that owes nothing, and the three the prelude already carries — a list, a map,
+		# a str — are named there rather than defined again. Writing one here redefined
+		# `zg_elemcopy_str`, which cc reported against a file nobody wrote.
+		mut d := c_drop_thunk(em, el)
+		if d == "" {
+			d = "NULL"
+		} else {
+			c_spelled_register(em, el)
+			d = "&" + d
+		}
+		mut out := "static void* " + nm + "(" + ct + " v) {\n"
+		out = out + "    void* r = zrt_ref_alloc(sizeof(" + ct + "), " + d + ");\n"
+		out = out + "    *(" + ct + "*)zrt_ref_payload(r) = v;\n"
+		out = out + "    return r;\n}\n\n"
+		em.res_decls.append(out)
+	}
+	return f"{nm}({x})"
+}
+
+# c_ref_call is `Ref(x)`: one argument, whose type is the payload. The APPLIED NAME is minted
+# and recorded here the way a generic type's constructor mints one — a `Ref[int]` written
+# nowhere in the source still has to be a type by the time anything asks what it is.
+# c_ref_written is a `Ref[T]` a reader SPELLED — in a signature, a binding, a container. The
+# value side mints its own (c_ref_record); this is the other door, and both end at the same
+# registry so a type reached either way is written once.
+fn c_ref_written(mut &em: Emitter, nm: str, s: Site) {
+	for a in em.ty_apps {
+		if a.name == nm {
+			c_type_arity(a, 1)
+			en := c_named_of(a.args[0])
+			if en != "" {
+				c_check_type_name(em, en, s)
+			}
+			c_spelled_register(em, ast.Ty.TNamed(nm))
+			return
+		}
+	}
+}
+
+# c_intrinsic_args is c_args with one rule added, and it is the rule the runtime's own
+# signatures state: an intrinsic is written in terms of the VALUE, so a box is handed the
+# address of what it holds and never the cell.
+fn c_intrinsic_args(mut &em: Emitter, args: list[ast.Expr], sb: Subst) -> str {
+	mut out := ""
+	mut i := 0
+	for i < args.len() {
+		if i > 0 {
+			out = out + ", "
+		}
+		x := c_expr(em, args[i], sb)
+		t := c_infer(em, args[i])
+		if c_is_ref_box(t) {
+			out = out + "(" + c_type(c_ref_elem(em, t)) + "*)zrt_ref_payload(" + x + ")"
+		} else {
+			out = out + x
+		}
+		i = i + 1
+	}
+	return out
+}
+
+fn c_ref_call(mut &em: Emitter, args: list[ast.Expr], sb: Subst) -> str {
+	c_ref_arity(em, args)
+
+	el := c_infer(em, args[0])
+	c_ref_record(em, el)
+	return c_ref_new(em, el, c_copied(em, el, args[0], sb))
+}
+
+# c_ref_ty_of is that call's type, and c_ref_record is the half both ends share — the mint has
+# to happen whichever asks first, or one of them names a type the other has never heard of.
+fn c_ref_ty_of(mut &em: Emitter, args: list[ast.Expr]) -> ast.Ty {
+	c_ref_arity(em, args)
+	return ast.Ty.TUnknown if args.len() != 1
+
+	el := c_infer(em, args[0])
+	c_ref_record(em, el)
+	return ast.Ty.TNamed(ast.spec_key("Ref", [el]))
+}
+
+# c_ref_arity is `Ref`'s one argument, and the SECOND one is a form rather than a miscount:
+# docs/core/memory.md gives the box "the value and a `drop` action", and this one carries the
+# value alone — a payload's own give-back is what a release runs. A foreign handle whose
+# closing is a user action has nothing to say it with, and is told so by name.
+#
+# ASKED FROM BOTH ENDS, because inference runs first and answered `?` for a miscounted call —
+# so the complaint a reader got was the next rule's, about a `?`.
+fn c_ref_arity(mut &em: Emitter, args: list[ast.Expr]) {
+	raise c_diag(em, rule.Rule.NotYetRefDrop, f"NotImplemented: `Ref` with {strconv.to_string(args.len(), 10)} arguments — the box carries the VALUE and this compiler runs the payload's own give-back when the last holder lets go; a user-written `drop` beside it is not built (docs/core/memory.md)") if args.len() > 1
+
+	chk_call_arity_exact(em, "Ref", args.len())
+}
+
+fn c_ref_record(mut &em: Emitter, el: ast.Ty) {
+	nm := ast.spec_key("Ref", [el])
+	return if c_app_recorded(em, nm)
+
+	em.ty_apps.append(ast.TyApp(nm, "Ref", [el], em.at_path, em.at_line, em.at_col))
+	c_spelled_register(em, ast.Ty.TNamed(nm))
+}
+
+# c_deref_call is `deref(r)`: the payload read out, as a VALUE — a copy for a payload that owns
+# something, so the box is unaffected by what the reader does with it.
+fn c_deref_call(mut &em: Emitter, args: list[ast.Expr], sb: Subst) -> str {
+	chk_call_arity_exact(em, "deref", args.len())
+
+	t := c_infer(em, args[0])
+	raise c_diag(em, rule.Rule.DerefNotARef, f"`deref` reads a `Ref[T]`, and this gives a {ast.ty_name(t)}") if not c_is_ref_box(t)
+
+	el := c_ref_elem(em, t)
+	em.used_rt = true
+	read := f"(*({c_type(el)}*)zrt_ref_payload({c_expr(em, args[0], sb)}))"
+	return c_copy_of(em, el, read) if c_needs_copy(em, el)
+
+	return read
+}
+
+fn c_deref_ty_of(mut &em: Emitter, args: list[ast.Expr]) -> ast.Ty {
+	return ast.Ty.TUnknown if args.len() != 1
+
+	return c_ref_elem(em, c_infer(em, args[0]))
 }
 
 # c_is_template names the concept ONCE. It was `tparams.len() > 0` at four sites, which is
@@ -3345,7 +3543,6 @@ pub fn c_builtin_check(mut &em: Emitter, n0: str) {
 
 	c_fixed_width_check(em, n)
 
-	raise c_diag(em, rule.Rule.NotYetRefBox, "NotImplemented: a refcounted box `Ref(x)` / `deref(r)` — this compiler has no `Ref[T]` type (docs/runtime/builtins.md)") if n == "Ref" or n == "deref"
 	raise c_diag(em, rule.Rule.NotYetCompileTimeBuiltin, f"NotImplemented: the compile-time built-in `{n}[T]` — this compiler does not compute a type's layout (docs/runtime/builtins.md)") if n == "sizeof" or n == "alignof"
 
 	# `set([1, 2])` read as "undefined function `set`", the message a misspelled call gets.
@@ -3911,6 +4108,15 @@ fn c_check_named_fn(mut &em: Emitter, ps: list[ast.Ty], r: ast.Ty, s: Site) {
 
 fn c_check_type_name(mut &em: Emitter, nm: str, s: Site) {
 	site := s.place
+
+	# A `Ref[T]` IS A TYPE and no declaration introduces it, which is the same shape `int` has
+	# — c_ty_kind answers TK_NONE for both. Its element is checked like any other written type,
+	# so `Ref[Nope]` is still a name nothing declares, at the place it was written.
+	if c_is_ref_box(ast.Ty.TNamed(nm)) {
+		c_ref_written(em, nm, s)
+		return
+	}
+
 	if c_is_type_name(em, nm) {
 		# THE NAME RESOLVES, AND THAT IS ONLY HALF THE QUESTION. A type flattens into one
 		# program-wide space here, so resolving says the declaration EXISTS and says nothing
@@ -4255,6 +4461,13 @@ fn c_build_top_names(mut &em: Emitter, f: ast.File) {
 	em.top_names = seen
 	em.top_kinds = kind
 
+	# AND THE FILE EACH WAS WRITTEN IN, which the duplicate check already collects for its own
+	# message. An import's name check reads this table, and the question it asks is about THIS
+	# FILE — #57's rule — not about the merged program: a module whose own member shares its
+	# name (`atomic.atomic`, the spelling its documentation gives) is reached through the
+	# namespace and never as a bare name from outside.
+	em.top_paths = wpath
+
 	# and one level down, where the same question has the same answer and three more ways
 	# of going wrong: a repeated FIELD and a repeated PARAMETER both reached cc as a C
 	# redefinition against .zerg-cache, and a repeated VARIANT was accepted — the second
@@ -4578,6 +4791,10 @@ fn c_field_init(mut &em: Emitter, where: str, fty: ast.Ty, arg: ast.Expr, sb: Su
 
 # c_needs_copy reports whether copying a value of this type has to do more than a C `=`.
 fn c_needs_copy(mut &em: Emitter, t: ast.Ty) -> bool {
+	# A Ref IS THE COPY RULE ITSELF: copying one retains the cell, which is what makes the
+	# holders' releases balance (docs/runtime/builtins.md).
+	return true if c_is_ref_box(t)
+
 	return true if c_is_list(t) or c_is_map(t)
 
 	# A str is a refcounted cell (c_str_cell), so giving one a second name is a COPY like
@@ -4663,6 +4880,15 @@ fn c_copied(mut &em: Emitter, t: ast.Ty, e: ast.Expr, sb: Subst) -> str {
 # what a deep copy IS lives in one function, and a second kind of type that needs one is
 # added here alone.
 fn c_copy_of(mut &em: Emitter, t: ast.Ty, x: str) -> str {
+	if c_is_ref_box(t) {
+		em.used_rt = true
+
+		# THE CAST IS ON THE READ, because a copy is also spelled into an element thunk where
+		# the source is a `const void*`: `zrt_retain` takes the cell and does not read through
+		# it, so dropping the qualifier here is the honest spelling and cc says so otherwise.
+		return "({ void* zgt_rr = (void*)(" + x + "); zrt_retain(zgt_rr); zgt_rr; })"
+	}
+
 	# the source is BOUND before its address is taken, because `&(x)` needs x to be a place
 	# and not everything copied is one. `m[k]` lowers to a statement expression, so reading
 	# a list out of a map — `v := c["k"]` — reached cc as "cannot take the address of an
@@ -4867,7 +5093,17 @@ fn c_elem_vt_helper(mut &em: Emitter, t: ast.Ty) -> str {
 	dr := c_drop_fn(em, t)
 	mut out := "static void " + c_ty_helper("elemcopy", k) + "(void *dst, const void *src) {\n"
 	out = out + "    *(" + ct + "*)dst = " + cp + ";\n}\n"
-	out = out + "static void " + c_ty_helper("elemdrop", k) + "(void *elem) { " + dr + "((" + ct + "*)elem); }\n"
+
+	# THROUGH c_drop_arg's CONVENTION, which this wrote by hand and got right only for the
+	# by-address droppers. A `Ref` is given back by VALUE — `zrt_release` takes the cell — and
+	# the thunk handed it the address of the variable instead, so every box in a scope leaked.
+	# The prelude's own `str` thunk has the deref because it was written out; this is the same
+	# fact asked of the one function that answers it.
+	mut arg := f"({ct}*)elem"
+	if c_drop_arg(em, t, "x") == "x" {
+		arg = f"*({ct}*)elem"
+	}
+	out = out + "static void " + c_ty_helper("elemdrop", k) + "(void *elem) { " + dr + "(" + arg + "); }\n"
 	return out + "static const zrt_elem_vt " + c_ty_helper("listvt", k) + " = {" + c_ty_helper("elemcopy", k) + ", " + c_ty_helper("elemdrop", k) + "};\n\n"
 }
 
@@ -4918,6 +5154,8 @@ fn c_drop_stmt(mut &em: Emitter, t: ast.Ty, place: str) -> str {
 # nowhere else, which is why a recursive chain had a boxed cell nobody released — the
 # registration points were all in place and this dispatch turned every one of them away.
 fn c_drop_fn(mut &em: Emitter, t: ast.Ty) -> str {
+	return "zrt_release" if c_is_ref_box(t)
+
 	return "zrt_list_drop" if c_is_list(t)
 	return "zrt_map_drop" if c_is_map(t)
 	return "zrt_str_release" if c_is_str(t)
@@ -4946,7 +5184,7 @@ fn c_drop_fn(mut &em: Emitter, t: ast.Ty) -> str {
 # c_drop_arg spells what the give-back is handed: a list, a map and a struct are all given
 # back through the address of their storage, a str by its own value.
 fn c_drop_arg(mut &em: Emitter, t: ast.Ty, place: str) -> str {
-	return place if c_is_str(t)
+	return place if c_is_str(t) or c_is_ref_box(t)
 	return "&" + place
 }
 
@@ -9180,10 +9418,22 @@ fn c_call(mut &em: Emitter, name: str, args: list[ast.Expr], sb: Subst) -> str {
 	# operation that has no other spelling.
 	return c_addr(em, args, sb) if name == "addr"
 
+	# `Ref(x)` AND `deref(r)` ARE INTRINSICS, not functions — the first allocates the cell and
+	# the second reads it, and neither is anything a program can spell for itself. They are
+	# answered above the name lookup for `addr`'s reason: a program declaring its own `Ref`
+	# would otherwise shadow the one operation that has no other spelling.
+	return c_ref_call(em, args, sb) if name == "Ref"
+	return c_deref_call(em, args, sb) if name == "deref"
+
 	if c_is_intrinsic(em, name) {
 		check.chk_intrinsic_call(em, name, args)
 		em.used_rt = true
-		return f"{c_intrinsic(name)}({c_args(em, args, sb)})"
+
+		# A `Ref[T]` REACHES AN INTRINSIC AS ITS PAYLOAD. The runtime's signatures are about the
+		# value — `zrt_atomic_load(int64_t *p)` — and a `Ref[int]` is a pointer to the CELL,
+		# whose first words are the refcount header. Passed whole, `atomic.load` read the header
+		# and answered a number that was neither the value nor an error.
+		return f"{c_intrinsic(name)}({c_intrinsic_args(em, args, sb)})"
 	}
 
 	# a built-in error constructor, `ValueError("bad input")`. It is PascalCase, so without
@@ -11536,6 +11786,11 @@ fn c_infer_call(mut &em: Emitter, name: str, args: list[ast.Expr]) -> ast.Ty {
 	# rather than a bare address: `p.load()` reads the pointee back, and something has to have
 	# said what a pointee is.
 	return ast.Ty.TPtr(c_addr_elem(em, args)) if name == "addr"
+
+	# and the two Ref intrinsics, at the same place and for the same reason: neither is a
+	# declared function, so the signature table answers nothing about either.
+	return c_ref_ty_of(em, args) if name == "Ref"
+	return c_deref_ty_of(em, args) if name == "deref"
 
 	# A GENERIC CALL answers the SPECIALIZATION's result, never the template's. The template
 	# says `T`, which is not a type — so the answer used to fall through to the signature
@@ -17926,7 +18181,7 @@ fn c_emit_unit(prog0: ast.File, own0: ast.File, ms: Mods, whole: bool, want_lint
 	# is what makes that invariant hold for a multi-unit program, at the place it already lives,
 	# and it is what lets the declaration passes below go back to reading the WHOLE program.
 	seen := diags.len()
-	mut em := Emitter([], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], false, false, false, [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], 0, [], 0, [], [], false, "", "", [], [], ast.Ty.TVoid, 0, "", 0, 0, diags, 0, 0, [], [], [], [], [], false, 0, false, "", 0, false, false, [], [], [], [], [], [], "", want_lints, [], [], [], [], [], [], [], [], [], [], [], [], false, 0, [], [], "", c_nosub(), [], [], [], [], [], [], [], [], [])
+	mut em := Emitter([], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], false, false, false, [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], 0, [], 0, [], [], false, "", "", [], [], ast.Ty.TVoid, 0, "", 0, 0, diags, 0, 0, [], [], [], [], [], false, 0, false, "", 0, false, false, [], [], [], [], [], [], [], [], "", want_lints, [], [], [], [], [], [], [], [], [], [], [], [], false, 0, [], [], "", c_nosub(), [], [], [], [], [], [], [], [], [], [])
 
 	# ASSIGNED, NOT PASSED. Every argument above is a zero value, and `layering` asserts that
 	# — it lines the call up with the fields by KIND, which only works while nothing in it

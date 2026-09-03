@@ -567,13 +567,9 @@ constraints, and `.exclusive(xs, true)` says neither of them at a call site.
 The safe way to share mutable state across coroutines (GRAMMAR group 10): an immutable `:=` binding holds
 an `Atomic[int]` cell whose contents mutate through sequentially-consistent operations. MVP: `int`-typed.
 
-> **[not yet]** The module ships and **cannot be imported**, and it is the one of the fifteen that
-> does not. `Atomic[T]` is a generic struct and a generic struct is a form this compiler has not built,
-> so `import "atomic"` is refused by name at the line that asked for it — _E9104 the module `atomic`
-> ships and cannot be imported_, with a place. The signatures below also name `Ref[T]`, which does not
-> exist either, and the module carries a second, `Atomic[T]`-shaped surface (`new_atomic`) waiting on the
-> same thing. Share state across coroutines with a channel until this lands.
->
+All fifteen modules import, this one included. It waited on three forms in turn — a generic struct, an
+`impl` on its application, and `Ref[T]` — and each of them is built.
+
 > It stays in the table rather than being taken out of the shipped set, because this compiler resolves
 > the standard library by **listing its directory**: a module moved out of `src/stdlib/` also leaves
 > `zerg fmt --check` and the rest of the self-source set, and rots unread until generics arrive. What

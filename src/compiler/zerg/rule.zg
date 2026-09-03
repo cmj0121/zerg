@@ -404,6 +404,7 @@ pub enum Rule {
 	TypeArgCount = 4093
 	TypeArgsMissing = 4094
 	TypeArgUndecided = 4095
+	DerefNotARef = 4096
 	ListPatternNotAList = 4084
 	MutateAValueNotAPlace = 4081
 
@@ -482,7 +483,6 @@ pub enum Rule {
 	NotYetDeriveEq = 9055
 	NotYetListMethod = 9056
 	NotYetContainerEquality = 9057
-	NotYetRefBox = 9058
 	NotYetInOverNoEq = 9061
 	NotYetInOverType = 9062
 	NotYetFixedWidthLadder = 9063
@@ -502,7 +502,6 @@ pub enum Rule {
 	NotYetSpawnOfUnknownName = 9099
 	NotYetMapMethod = 9100
 	NotYetSpawnOfBinding = 9103
-	NotYetAtomicImport = 9104
 
 	# A REMOTE package — a path whose first segment is a host, which a package name can never be
 	# because it may not hold a dot. The syntax is reserved so nothing else takes the shape; what
@@ -540,6 +539,7 @@ pub enum Rule {
 	NotYetListPatternRestBinding = 9110
 	NotYetArrayLenImported = 9111
 	NotYetArrayMethod = 9112
+	NotYetRefDrop = 9114
 }
 
 # rule_code is the text a rule is reported under — the `E2004` a gate pins and a reader looks

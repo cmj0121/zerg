@@ -11,8 +11,9 @@ each reusing an existing model:
 
 - a **stream** is a `Reader` or `Writer` — a byte source/sink, drained with `for`;
 - a **handle** is a `Ref[T]` — a file or socket, scope-owned and closed exactly once;
-  **[not yet]** — there is no `Ref[T]` type in this compiler (`Ref(x)` is refused by name, _E9058_), so no handle
-  type exists and the whole-file leaves below are what reading and writing go through;
+  **[not yet]** — `Ref[T]` is built, but a handle also needs the box to carry a user-written `drop`
+  (`E9114`, [Values & Memory](../core/memory.md)) and it does not, so no handle type exists yet and the
+  whole-file leaves below are what reading and writing go through;
 - **failure is a value** — a fallible call returns `Result[T]`, `?`-propagated; EOF is not one.
 
 > **Status.** The compiler ships a **subset** of this surface, and the subset is the **whole-file and

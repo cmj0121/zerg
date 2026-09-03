@@ -353,24 +353,21 @@ diffing the result against the piped run byte for byte.
 
 ## A module this compiler cannot parse
 
-`src/stdlib/atomic.zg`'s `Atomic[T]` holds a `Ref[T]`, a type this compiler does not have (`E9058`) — and
-that refusal comes from the **parser**, so its declarations cannot be listed at all. The
-document a reader gets is the honest one:
+A file that stops at a **parse** error cannot have its declarations listed. Every stdlib module parses today
+— `atomic` was the last that did not — so what follows is what a reader gets for any such file, their own
+included:
 
 ```text
-atomic — the safe shared-mutable primitive (Phase 1f, bundle MVP).
+mymod — the header comment, in full, and then …
 
-  … the rest of the file's header, in full, and then …
-
-note: `atomic.zg` does not parse under this compiler; its declarations are not
-listed (see docs/runtime/stdlib.md)
+note: `mymod.zg` does not parse under this compiler; its declarations are not
+listed
 ```
 
 The header survives because it comes out of the token stream and needs no tree. The `note:`
 line is what keeps a missing chapter from reading as an empty one — a module rendered with no
 declarations and nothing said is a module documenting itself as having no surface. It exits 0:
-nothing failed, and the document of a module nobody can import is the only documentation that
-module has.
+nothing failed, and the header is the only documentation such a file can give.
 
 The same note is printed for **any** file that will not parse, naming that file; the pointer
 into the standard library's chapter is added only when the file is in the standard library.

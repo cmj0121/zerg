@@ -371,7 +371,6 @@ fn load_unit(files: list[str], name: str, root_dir: str, mut &seen: list[str], s
 	for si < srcs.len() {
 		for imd in zerg.import_decls_at(srcs[si], paths[si]) {
 			source.chk_test_import(imd)
-			source.chk_unbuilt_module(imd)
 			sib := load_import(imd, paths[si], paths, root_dir, seen, stack, units)
 
 			# recorded AFTER the load, so an import that could not resolve has already been

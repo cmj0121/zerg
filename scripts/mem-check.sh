@@ -966,6 +966,34 @@ fn main() {
 }
 ZG
 
+# --- the counted box ------------------------------------------------------------------
+# A `Ref[T]` is the one value shared BY REFERENCE: a copy retains and the last holder releases,
+# so what this measures is that the two BALANCE. Nothing else can: the answers are right
+# whether or not a retain has a release, `corpus` compares output, and a box that is never
+# freed is a leak no assertion about a value would notice.
+#
+# The payload OWNS something, which is the half that has two chances to go wrong — the cell and
+# the string inside it — and the box is copied so the retain is exercised rather than assumed.
+case_run ref_box no no <<'ZG'
+fn mk(n: int) -> Ref[str] {
+	return Ref(f"{n}abcdefghijklmnop")
+}
+
+fn main() {
+	mut n := 0
+	mut i := 0
+	r := rounds()
+	for i < r {
+		a := mk(i)
+		b := a
+		s := deref(b)
+		n = n + bytearray(s).len()
+		i = i + 1
+	}
+	print n
+}
+ZG
+
 if [ "$fail" -ne 0 ]; then
 	printf '\nmem-check: a value outlives the scope that made it\n' >&2
 	printf 'mem-check: the sources, the C and the binaries are kept in %s\n' "$WORK" >&2

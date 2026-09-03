@@ -503,12 +503,13 @@ For a single shared scalar, the lower-level alternative is a stdlib **`Atomic`**
 `:=` (the binding is immutable; the atomic's interior is not — see [Modules & Programs](../runtime/package.md)). It
 provides lock-free `load` / `store` / `swap` / `fetch_add` / `compare_swap`.
 
-> **[not yet]** And not because of anything about atomics: an `Atomic[int]` IS a `Ref[int]`, and there
-> is no `Ref[T]` yet (`E9058`). The **import** is what is refused, rather than a type nothing declares
-> reaching the emitter — _E9104 the module `atomic` ships and cannot be imported — it declares `Atomic[T]`,
-> and a generic struct is a form this compiler has not built. Share state across coroutines with a channel
-> until it has_ — so the actor above is the pattern that works today. The explicit
-> **memory-ordering argument** and a **generic `Atomic[T]`** are **[not yet]** in the language as well.
+The module is importable and its operations run: an `Atomic[int]` IS a `Ref[int]`, which is built, and four
+coroutines each adding to one cell agree on the total. The actor above is still the pattern to reach for
+first — a channel says what is shared and when — and this is what to use when the shared thing is a counter.
+
+The explicit **memory-ordering argument** and a **generic `Atomic[T]`** are ahead of the module rather than
+of the compiler: its operations are sequentially consistent and its cell is `int`-typed, which is the MVP
+surface [the standard library](../runtime/stdlib.md) documents.
 
 ## A producer — the generator pattern
 

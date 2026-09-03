@@ -3694,7 +3694,7 @@ fn chk_import_name(mut &em: emit.Emitter, f: ast.File, i: int) {
 		j = j + 1
 	}
 
-	what := chk_decl_kind(em, im.name)
+	what := chk_decl_kind(em, im.name, im.at)
 	return if what == ""
 
 	chk_import_taken(em, im, what)
@@ -3718,10 +3718,15 @@ fn chk_import_taken(mut &em: emit.Emitter, im: ast.ImportDecl, what: str) {
 # wording for each of the six answers; the order was harmless (a name in two of them is
 # already refused) and the second walk was not, because it ran over the program with its
 # TEMPLATES REMOVED and so could not see `fn foo[T](…)` taking the name an import wanted.
-fn chk_decl_kind(mut &em: emit.Emitter, name: str) -> str {
+# IN THIS FILE, not in the program. An import binds the name into the importing file's value
+# namespace, so what can take it is what THAT file declares — the rule #57 states for every
+# bare name. Asked of the merged program it refused `import "atomic"` because the module's own
+# `pub fn atomic` was in it: a name reached as `atomic.atomic`, which is the spelling the
+# module's documentation gives, and never as a bare `atomic` from outside.
+fn chk_decl_kind(mut &em: emit.Emitter, name: str, at: str) -> str {
 	mut i := 0
 	for i < em.top_names.len() {
-		return em.top_kinds[i] + " in this program" if em.top_names[i] == name
+		return em.top_kinds[i] + " in this file" if em.top_names[i] == name and (i >= em.top_paths.len() or em.top_paths[i] == at)
 		i = i + 1
 	}
 	return ""

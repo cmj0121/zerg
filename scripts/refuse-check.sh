@@ -597,20 +597,6 @@ EOF
 # misspelling message — because a type position asked only about the fixed-width ladder
 # while `Ref(v)` in a CALL had been named all along. They now go through the one built-in
 # namer, so a name is answered the same way wherever it is written.
-expect "$ZERG" ref-type-in-result E9058 <<'EOF'
-fn mk(v: int) -> Ref[int] {
-	return Ref(v)
-}
-fn main() { print "x" }
-EOF
-
-expect "$ZERG" ref-type-in-param E9058 <<'EOF'
-fn load(a: Ref[int]) -> int {
-	return 0
-}
-fn main() { print "x" }
-EOF
-
 # A GENERIC STRUCT IS BUILT, so what is refused is what a use of one can still get wrong. A
 # TEMPLATE NAMED WITHOUT ITS ARGUMENTS is not an unknown type — `B` is declared, and what is
 # missing is the thing that makes it one, which is what the sentence has to say.
@@ -1191,6 +1177,30 @@ fn main() {
 }
 EOF
 
+# THE BOX CARRIES THE VALUE AND NOTHING BESIDE IT. docs/core/memory.md gives a `Ref[T]` "the
+# value and a `drop` action", and what a release runs here is the payload's OWN give-back — so
+# a foreign handle whose closing is a user action has nothing to say it with, and is told so by
+# name rather than by an argument count.
+expect "$ZERG" ref-with-a-drop-action E9114 'a user-written `drop`' <<'EOF'
+fn dr(x: int) {
+	nop
+}
+
+fn main() {
+	r := Ref(5, dr)
+	print deref(r)
+}
+EOF
+
+# `deref` READS A BOX, and what is refused is asking it of something else. `Ref[T]` is built
+# now, so the five cases that pinned its absence are gone; this is the rule that took their
+# place, and it is a wrong program rather than an unbuilt form.
+expect "$ZERG" deref-on-a-non-ref E4096 'reads a `Ref[T]`' <<'EOF'
+fn main() {
+	print deref(5)
+}
+EOF
+
 # THE REMOTE SHAPE IS RESERVED, which is why it is refused HERE and not as an unresolved
 # import: a package name may not hold a dot, so a first segment that holds one can only be a
 # host, and nothing else can ever take the shape. The sentence says the layer is not built and
@@ -1216,19 +1226,6 @@ EOF
 # program naming one of these has not made a typo, and "undefined name `sizeof`" told the
 # reader the language does not have a form the documentation describes and the SEED builds.
 # Every one of these was reported as an unknown name until the emitter learned the list.
-
-expect "$ZERG" refcounted-box-builtin E9058 <<'EOF'
-fn main() {
-	r := Ref(7)
-	print deref(r)
-}
-EOF
-
-expect "$ZERG" deref-builtin E9058 <<'EOF'
-fn main() {
-	print deref(7)
-}
-EOF
 
 expect "$ZERG" sizeof-builtin E9046 <<'EOF'
 fn main() {
@@ -3497,14 +3494,6 @@ EOF
 #
 # It belongs HERE and not in reject-check.sh: `import "atomic"` is a program that will be
 # legal, and this case disappears the day a generic struct is built.
-expect "$ZERG" a-module-that-ships-and-cannot-be-imported E9104 <<'EOF'
-import "atomic"
-
-fn main() {
-	print 1
-}
-EOF
-
 if [ $fail -ne 0 ]; then
 	echo "refuse-check: $fail of $((pass + fail)) cases were not refused as they should be"
 	exit 1

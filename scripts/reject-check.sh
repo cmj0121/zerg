@@ -1465,7 +1465,12 @@ EOF
 # AND THE COLLISION WITH A LOCAL NAME, which is the one GRAMMAR states outright. `text()`
 # and `text.shout()` both worked, and which of the two a reader reached depended on whether
 # they wrote a `(` or a `.`.
-reject an-import-colliding-with-a-function E3085 'is already a function in this program' at=1:8 <<'EOF'
+#
+# IN THIS FILE, and the wording is the rule: an import binds the name into the importing
+# FILE's namespace, so what can take it is what that file declares. Asked of the merged
+# program it refused `import "atomic"` for the module's own `pub fn atomic` — a name reached
+# as `atomic.atomic` and never bare from outside.
+reject an-import-colliding-with-a-function E3085 'is already a function in this file' at=1:8 <<'EOF'
 import "./util/text"
 
 fn text() -> str {
@@ -1487,7 +1492,7 @@ EOF
 # a generic took an import's name in silence — while the identical non-generic pair above
 # was refused. It reads the table c_build_top_names records now, and that walk runs over the
 # whole program, templates and all, for exactly this reason.
-reject an-import-colliding-with-a-generic-function E3085 'is already a function in this program' at=1:8 <<'EOF'
+reject an-import-colliding-with-a-generic-function E3085 'is already a function in this file' at=1:8 <<'EOF'
 import "./util/text"
 
 fn text[T](v: T) -> T {

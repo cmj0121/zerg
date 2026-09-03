@@ -464,7 +464,7 @@ shipping compiler rather than a part of it (the line
 | `E9034` | a default on a closure parameter                                                                      |
 | `E9036` | an `unsafe` `spec` signature                                                                          |
 | `E9037` | an `impl` carrying its own type parameters `[…]`                                                      |
-| `E9038` | an `impl` on `…[…]` — a type ARGUMENT on the target                                                   |
+| `E9038` | an `impl` on a built-in container target                                                              |
 | `E9041` | a match arm's body is an expression, and this one is a statement                                      |
 | `E9042` | `type … = …` over a non-scalar                                                                        |
 | `E9043` | `…` leaving a `guard` block                                                                           |

@@ -2310,6 +2310,11 @@ fn c_fn_cname(recv: str, name: str) -> str {
 	return c_spec_cname(name) if c_is_mangled(name)
 	return "zg_" + name if recv == ""
 
+	# AN APPLIED RECEIVER carries the characters C has no place for, the same way the type
+	# itself does — `impl Atomic[int]` gives its methods that receiver, and `zg_Atomic[int]_new`
+	# is not a name cc can read.
+	return c_spec_cname(f"{recv}${name}") if c_is_applied(recv)
+
 	return f"zg_{recv}_{name}"
 }
 
@@ -2535,6 +2540,16 @@ fn c_with_type_insts(mut &em: Emitter, f: ast.File) -> ast.File {
 
 	for a in f.ty_apps {
 		r := c_gen_struct_row(em, a.base)
+
+		# A NAME THAT DECLARES A TYPE AND TAKES NO PARAMETERS is the arity question from the
+		# other side, and it is the same rule: `impl Box[int]` on a plain `struct Box` gives
+		# one argument to a declaration that has none. Answering it here keeps the count in
+		# one place; left to resolution it came out as `no type named Box[int]`, which is true
+		# and says nothing about the `[int]` that made it so.
+		if r < 0 and c_file_declares_ty(f, a.base) {
+			c_type_arity(a, 0)
+		}
+
 		continue if r < 0 or c_name_in(em.inst_tys, a.name)
 
 		em.inst_tys.append(a.name)
@@ -2559,7 +2574,7 @@ fn c_gen_struct_row(mut &em: Emitter, nm: str) -> int {
 # the applied name. It is an ordinary `StructDecl` with no parameters of its own, which is what
 # lets every pass below treat it as a type somebody declared.
 fn c_type_inst(mut &em: Emitter, f: ast.File, tpl: ast.StructDecl, a: ast.TyApp) -> ast.StructDecl {
-	raise c_diag_at(a.path, a.line, a.col, rule.Rule.TypeArgCount, f"`{tpl.name}` has {strconv.to_string(tpl.tparams.len(), 10)} type parameters and `{a.name}` gives {strconv.to_string(a.args.len(), 10)}") if a.args.len() != tpl.tparams.len()
+	c_type_arity(a, tpl.tparams.len())
 
 	# ONE CAUSE, TWO SHAPES, ONE RAISE. A type's arguments live inside its NAME here, which is
 	# what let every walk over `Ty` keep working without learning a shape — and it is also what
@@ -2576,6 +2591,13 @@ fn c_type_inst(mut &em: Emitter, f: ast.File, tpl: ast.StructDecl, a: ast.TyApp)
 	mut novals: list[str] = []
 	su := generic.TySubst(tpl.tparams, a.args, nokeys, novals, f"{a.path}:{strconv.to_string(a.line, 10)}")
 	return ast.StructDecl(a.name, generic.subst_fields(su, tpl.fields), tpl.is_pub, tpl.path, tpl.line, tpl.col, [])
+}
+
+# c_type_arity is the one place a type application's argument count is judged, whether the
+# name declares a template or an ordinary type: a declaration's arity is never in doubt, and
+# what can disagree with it is one USE, which is what the message names.
+fn c_type_arity(a: ast.TyApp, want: int) {
+	raise c_diag_at(a.path, a.line, a.col, rule.Rule.TypeArgCount, f"`{a.base}` has {strconv.to_string(want, 10)} type parameters and `{a.name}` gives {strconv.to_string(a.args.len(), 10)}") if a.args.len() != want
 }
 
 # c_app_unresolved is why an application cannot be built, or "" when it can. Both answers name

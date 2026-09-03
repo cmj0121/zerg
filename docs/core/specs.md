@@ -104,15 +104,15 @@ so an implementation can be neither hidden nor duplicated — it is in effect ex
 and its spec are visible. Implementations are written for a **concrete or generic type** — `list[T]` may
 implement `Iterator`.
 
-> **[not yet]** An `impl` whose **target carries type arguments** is _E9038 NotImplemented: an `impl` on
-> `list[int]` — a type ARGUMENT on the target: this compiler keys an implementation by the target's bare
-> name, so every instantiation of `list` would share one_ — and it is both of the shapes
-> `GRAMMAR#impl-decl` derives, the parameterized `impl[T] Spec for list[T]` and the fully concrete
-> `impl Spec for list[int]`. So no implementation can be attached to a container type at all, and
-> `list[T]` implementing `Iterator`, the line above, is specification rather than something `zerg`
-> builds. What it needs is one implementation monomorphized per instantiation of its target, and a
-> generic `fn` is the only thing this compiler monomorphizes. The form that works is an `impl` on a
-> `struct` or an `enum` the program declares.
+An `impl` whose target carries type arguments is built when the target is a **declared** generic type:
+`impl Atomic[int]` and `impl Show for Box[int]` are implementations of those specializations, keyed by the
+applied name the type itself carries. Two of them on one template are two implementations, not one — which
+is what the bare-name key used to make impossible.
+
+> **[not yet]** A **built-in container** target is not: _E9038 NotImplemented: an `impl` on `list[int]` — a
+> built-in container is not a declared type, so there is no name to key an implementation by_. A `list[int]`
+> has no name at all — it is a container over an element — so `list[T]` implementing `Iterator`, the line
+> above, is specification rather than something `zerg` builds.
 >
 > The two shapes beside it are refused by name for the same reason — an implementation is keyed by a
 > declared type's bare name. The `impl`'s OWN type parameters are _E9037 NotImplemented: an `impl`

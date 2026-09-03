@@ -227,11 +227,8 @@ enum Either[X, Y] {         # 泛型 sum type
 > 與 `x: float = id(5)` 走的是同樣兩步。一次使用還可能寫錯的東西各自被拒收:引數個數不對(`E4093`)、指名
 > template 卻沒寫引數(`E4094`),以及一個沒有任何欄位型別提到的參數,因此無從解起(`E4095`)。
 >
-> **[not yet]** 一個型別的引數在這裡被帶在它的**名字**裡,那正是讓每一個對型別的 walk 都能繼續運作的原因——
-> 而那也正是代換看不進去的東西。所以一個本身是型別參數的型別**引數**是 _E9113 NotImplemented: `Box[T]` — the
-> type argument `T` names no type this program declares — a type PARAMETER here, or a name spelled wrong, and
-> this compiler carries a type's arguments inside its name, so substitution does not reach them_。
-> `fn get[T](b: Box[T])`,以及一個 template 的欄位再指名另一個應用,是它的兩種形狀。
+> 一個型別參數會**穿過**一次應用被帶下去:`fn get[T](b: Box[T])`,以及一個 template 的欄位再指名另一個應用
+> (`struct Wrap[T] { inner: Box[T] }`),兩者都會特化,而各自產生的型別會被宣告在拼出它的人看得到的地方。
 
 **遞迴與自我參照型別**可直接運作——一個 `struct Node { next: Node? }`、一個 `enum Expr { Num(int); Add(Expr,
 Expr) }`——**不需 pointer**:編譯器把那個自我參照的槽自動裝箱在一個 refcounted cell 之後,所以這種值的複製是**按

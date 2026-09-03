@@ -268,12 +268,9 @@ enum Either[X, Y] {         # generic sum type
 > the wrong number of arguments (`E4093`), the template named without them (`E4094`), and a parameter no
 > field's type mentions, so nothing can solve it (`E4095`).
 >
-> **[not yet]** A type's arguments are carried inside its **name** here, which is what lets every walk over a
-> type keep working — and it is also what substitution cannot see through. So a type ARGUMENT that is itself
-> a type parameter is _E9113 NotImplemented: `Box[T]` — the type argument `T` names no type this program
-> declares — a type PARAMETER here, or a name spelled wrong, and this compiler carries a type's arguments
-> inside its name, so substitution does not reach them_. `fn get[T](b: Box[T])` and a template field that
-> names another application are the two shapes of it.
+> A type parameter is carried **through** an application: `fn get[T](b: Box[T])` and a template whose field
+> names another (`struct Wrap[T] { inner: Box[T] }`) both specialize, and the type each produces is declared
+> where whoever spells it can see it.
 
 **Recursive and self-referential types** work directly — a `struct Node { next: Node? }`, an
 `enum Expr { Num(int); Add(Expr, Expr) }` — with **no pointer**: the compiler auto-boxes the self-referential

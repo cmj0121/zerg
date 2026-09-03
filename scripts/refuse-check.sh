@@ -1291,22 +1291,6 @@ EOF
 # `[` is not one": a complaint about the token under the cursor, for a production the
 # grammar derives in full. The parameters are read now, and the form is named.
 
-expect "$ZERG" impl-with-its-own-type-parameters E9037 <<'EOF'
-spec Size {
-	fn size() -> int
-}
-
-impl[T] Size for list[T] {
-	fn size() -> int {
-		return 1
-	}
-}
-
-fn main() {
-	print 1
-}
-EOF
-
 # A TARGET WITH TYPE ARGUMENTS NAMES A SPECIALIZATION, and an `impl` on one is built: the
 # applied name is a type. What is left of the gap is the BUILT-IN container, which is not a
 # declared type at all — a `list[int]` is `TList(TInt)` — so there is no name to key an

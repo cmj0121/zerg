@@ -114,11 +114,14 @@ is what the bare-name key used to make impossible.
 > has no name at all — it is a container over an element — so `list[T]` implementing `Iterator`, the line
 > above, is specification rather than something `zerg` builds.
 >
-> The two shapes beside it are refused by name for the same reason — an implementation is keyed by a
-> declared type's bare name. The `impl`'s OWN type parameters are _E9037 NotImplemented: an `impl`
-> carrying its own type parameters `[T]` — GRAMMAR#impl-decl puts them there_; and a target that is not a
-> declared type is _E9047 NotImplemented: an `impl` on the built-in type `int` — this compiler gives a
-> method a declared struct or enum receiver_.
+> A target that is not a declared type at all is refused for the same reason — _E9047 NotImplemented: an
+> `impl` on the built-in type `int` — this compiler gives a method a declared struct or enum receiver_.
+
+An `impl` carrying its **own** type parameters is built, which is what `GRAMMAR#impl-decl` puts them there
+for: `impl[T] Show for Box[T]` is ONE implementation standing for every instantiation of its target, and it
+is materialized per instantiation the way a generic `fn` is per call. An inherent `impl[T] Box[T]` is the
+same shape without a spec. A concrete `impl Box[int]` beside it implements what only that instantiation has,
+and the two do not collide: they are implementations of two different types.
 
 A target reached **through a module** — `impl Show for shape.P` — is the ordinary way to make a foreign
 type satisfy an interface you own, and the orphan rule above is what allows it: the impl is in the spec's

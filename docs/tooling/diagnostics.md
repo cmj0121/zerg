@@ -464,7 +464,6 @@ shipping compiler rather than a part of it (the line
 | `E9032` | a binding head in an `if` EXPRESSION                                                                  |
 | `E9034` | a default on a closure parameter                                                                      |
 | `E9036` | an `unsafe` `spec` signature                                                                          |
-| `E9037` | an `impl` carrying its own type parameters `[…]`                                                      |
 | `E9038` | an `impl` on a built-in container target                                                              |
 | `E9041` | a match arm's body is an expression, and this one is a statement                                      |
 | `E9042` | `type … = …` over a non-scalar                                                                        |
@@ -583,6 +582,10 @@ questions behind it — which is why the first four were found by reading codes 
 template now, an application is an ordinary type under its applied name, and what a use can still get
 wrong has codes of its own — `E4093`, `E4094` and `E4095`.
 
+**And the impl that stands for all of them.** `E9037` refused an `impl` carrying its own type parameters,
+on the reasoning that one impl standing for every instantiation of its target needs those instantiations
+monomorphized. They are, so it is materialized per instantiation the way a generic `fn` is per call.
+
 **Two more, and the second is what the first was for.** `E9058` refused `Ref(x)` / `deref(r)`; the counted
 cell it names is the one a `chan`, a `str` and a recursive type were already held in, and `Ref` puts a name
 on it. `E9104` refused `import "atomic"` because the module could not be built — it waited on a generic
@@ -693,6 +696,7 @@ name now is the prelude rule (`E2061`), which is about the name rather than abou
 | `E9113` | —       | the form was built: a parameter passes through an application      |
 | `E9058` | —       | the form was built: `Ref[T]` is the counted cell, named            |
 | `E9104` | —       | the form was built: `atomic` imports and runs                      |
+| `E9037` | —       | the form was built: one impl per instantiation of its target       |
 
 **One of them moved nowhere**, and it is the only row whose second column is empty. `E3047`
 reported a prefix operator on a `type X = Y` — _operator `not` has no meaning on `Flag`_ — on

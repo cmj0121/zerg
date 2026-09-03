@@ -85,10 +85,13 @@ concrete bound 的 generic 會在產出的 C 裡 **monomorphize**——編譯器
 > 根本沒有名字——它是一個容器加上元素型別——所以上一行說的「`list[T]` 可以實作 `Iterator`」是規範,而不是
 > `zerg` 已經建好的東西。
 >
-> 它旁邊那兩種形狀因同一個理由被指名拒收——一個實作是以「已宣告型別的裸名字」為鍵。`impl` **自己的**型別參數是
-> _E9037 NotImplemented: an `impl` carrying its own type parameters `[T]` — GRAMMAR#impl-decl puts them
-> there_;而一個不是已宣告型別的目標是 _E9047 NotImplemented: an `impl` on the built-in type `int` — this
-> compiler gives a method a declared struct or enum receiver_。
+> 一個根本不是已宣告型別的目標,因同一個理由被指名拒收——_E9047 NotImplemented: an `impl` on the built-in type
+> `int` — this compiler gives a method a declared struct or enum receiver_。
+
+帶著**自己**型別參數的 `impl` 建好了,而那正是 `GRAMMAR#impl-decl` 把參數放在那裡的用途:
+`impl[T] Show for Box[T]` 是**一個**實作,代表它的目標的每一次實例化,並且如同泛型 `fn` 依每次呼叫特化那樣、依每次
+實例化被具現出來。inherent 的 `impl[T] Box[T]` 是同一個形狀、只是沒有 spec。旁邊再放一個具體的 `impl Box[int]`,
+實作只有那一個實例化才有的東西,兩者不會相撞:它們是兩個不同型別的實作。
 
 以 bound 為條件、涵蓋「所有滿足某 spec 的型別」的 **blanket 實作不提供**,以保持解析可判定;也**沒有「所有型別都
 有」的實作**,包含上面那個 per-type opt-in 的 `Eq`。

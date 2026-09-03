@@ -941,6 +941,31 @@ fn main() {
 }
 ZG
 
+# --- the receiver of an array's `len` -------------------------------------------------
+# `a.len()` is a compile-time constant, and the receiver is still an expression the program
+# wrote. It used not to be rendered at all — the constant WAS the whole expression — so a
+# receiver that built something had its call deleted rather than leaked, which is the one
+# shape a leak check cannot see. Rendering it makes the give-back this measures necessary:
+# a `[str; N]` handed back by a call is nobody else's, and nothing else would release it.
+#
+# It is the array beside `is_folded_operand` above, and they share one helper for one rule.
+case_run arr_len_receiver no no <<'ZG'
+fn mk(n: int) -> [str; 2] {
+	return [f"{n}abcdefghijklmnop", "b"]
+}
+
+fn main() {
+	mut n := 0
+	mut i := 0
+	r := rounds()
+	for i < r {
+		n = n + mk(i).len()
+		i = i + 1
+	}
+	print n
+}
+ZG
+
 if [ "$fail" -ne 0 ]; then
 	printf '\nmem-check: a value outlives the scope that made it\n' >&2
 	printf 'mem-check: the sources, the C and the binaries are kept in %s\n' "$WORK" >&2

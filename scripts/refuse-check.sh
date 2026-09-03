@@ -3318,6 +3318,19 @@ fn main() {
 }
 EOF
 
+# THE SAME RANGE, IN THE ONE POSITION THAT ESCAPED IT. An array's `len` is answered from the
+# type, and the arm that answers it was the only one of the method dispatch handed no
+# receiver — so `xs[1..3].len()` never rendered `xs[1..3]`, the range never reached the index
+# path, and the answer was the array's own length for ANY range (`xs[2..2].len()` was 4).
+# An array has no `x[a..b]` spelling at all (docs/code/collections.md gives it `a.slice(p, q)`,
+# itself [not yet]), so the refusal above is the right one and this pins that it arrives.
+expect "$ZERG" a-range-index-on-an-array E9077 <<'EOF'
+fn main() {
+	xs: [int; 4] = [1, 2, 3, 4]
+	print xs[1..3].len()
+}
+EOF
+
 # `is` names one of the built-in error kinds here, where GRAMMAR#cmp-expr takes any type-name.
 # ONE CODE, SEVERAL FORMS. `E9054` names four derives and this file cased one of them; the
 # other three were refused correctly and pinned by nothing, so a regression in any of them

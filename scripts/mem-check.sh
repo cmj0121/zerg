@@ -994,6 +994,33 @@ fn main() {
 }
 ZG
 
+# --- the bridge out of a str ----------------------------------------------------------
+# `bytearray(s)` and `runearray(s)` WALK the string and build a fresh list; neither takes it,
+# which is the opposite of `zrt_str_from_bytes` beside them. So a source the expression owns —
+# a call's result, a concatenation — has nobody to give it back, and every one of these leaked
+# a string.
+#
+# THE SOURCE IS A CALL AND NOT A BINDING, because a named str is somebody else's and is read
+# in place: written with a binding the case measures the path that was always right. Both
+# bridges are here, since they are two functions under one rule.
+case_run str_bridge_source no no <<'ZG'
+fn mk(n: int) -> str {
+	return f"{n}abcdefghijklmnop"
+}
+
+fn main() {
+	mut n := 0
+	mut i := 0
+	r := rounds()
+	for i < r {
+		n = n + bytearray(mk(i)).len()
+		n = n + runearray(mk(i)).len()
+		i = i + 1
+	}
+	print n
+}
+ZG
+
 if [ "$fail" -ne 0 ]; then
 	printf '\nmem-check: a value outlives the scope that made it\n' >&2
 	printf 'mem-check: the sources, the C and the binaries are kept in %s\n' "$WORK" >&2

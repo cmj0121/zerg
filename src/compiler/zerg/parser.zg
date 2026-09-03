@@ -2657,7 +2657,6 @@ fn parse_impl(mut &p: Parser, mut &fns: list[ast.FnDecl], mut &impls: list[ast.I
 	mut tp_names: list[str] = []
 	mut tp_bounds: list[str] = []
 	p_type_params(p, tp_names, tp_bounds)
-	raise p_diag_at(p, kw.line, kw.col, rule.Rule.NotYetImplTypeParams, f"NotImplemented: an `impl` carrying its own type parameters `[{join_commas(tp_names)}]` — GRAMMAR#impl-decl puts them there so the target may spell them (`impl[T] Spec for list[T]`), and one impl standing for every instantiation of its target needs those instantiations monomorphized, which this compiler does only for a generic `fn`. Write the `impl` for one concrete target") if tp_names.len() > 0
 
 	# THE HEAD IS PARSED, not scanned. It used to be a loop counting brackets to find the
 	# name that `for` follows, with a second lookahead (`p_for_after_args`) to fake the
@@ -2758,7 +2757,7 @@ fn parse_impl(mut &p: Parser, mut &fns: list[ast.FnDecl], mut &impls: list[ast.I
 	}
 
 	if sp != "" {
-		impls.append(ast.ImplDecl(sp, args, target, p.path, kw.line, kw.col))
+		impls.append(ast.ImplDecl(sp, args, target, tp_names, p.path, kw.line, kw.col))
 	}
 	expect(p, token.Kind.LBrace)
 	skip_semis(p)

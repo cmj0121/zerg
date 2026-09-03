@@ -467,7 +467,6 @@ pub enum Rule {
 	NotYetIfExprBindingHead = 9032
 	NotYetClosureParamDefault = 9034
 	NotYetUnsafeSpecSignature = 9036
-	NotYetImplTypeParams = 9037
 	NotYetImplTypeArgument = 9038
 	NotYetMatchArmStatement = 9041
 	NotYetTypedefNonScalar = 9042

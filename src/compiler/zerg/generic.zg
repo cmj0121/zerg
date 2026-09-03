@@ -379,6 +379,13 @@ fn gen_len_fn(su: TySubst, fd: ast.FnDecl) -> ast.FnDecl {
 	return ast.FnDecl(fd.name, fd.recv, subst_params(su, fd.params), fd.has_ret, subst_ty(su, fd.ret), subst_block(su, fd.body), fd.is_pub, fd.path, fd.line, fd.col, fd.tparams, fd.tbounds, fd.in_unsafe, fd.is_test, fd.is_fixture, fd.has_body, fd.is_assoc, fd.spec_of)
 }
 
+# subst_method is subst_fn for a method of a template `impl`: the same walk, plus the RECEIVER
+# replaced by the instantiation this copy is for. The name is not mangled — a method's namespace
+# is its type's, and the type is what differs between the copies.
+pub fn subst_method(su: TySubst, m: ast.FnDecl, recv: str) -> ast.FnDecl {
+	return ast.FnDecl(m.name, recv, subst_params(su, m.params), m.has_ret, subst_ty(su, m.ret), subst_block(su, m.body), m.is_pub, m.path, m.line, m.col, [], [], m.in_unsafe, m.is_test, m.is_fixture, m.has_body, m.is_assoc, m.spec_of)
+}
+
 pub fn subst_fn(tpl: ast.FnDecl, args: list[ast.Ty], at: str, apps: list[ast.TyApp]) -> ast.FnDecl {
 	su := TySubst(tpl.tparams, args, [], [], apps, at)
 	return ast.FnDecl(gen_mangle(tpl.name, args), tpl.recv, subst_params(su, tpl.params), tpl.has_ret, subst_ty(su, tpl.ret), subst_block(su, tpl.body), tpl.is_pub, tpl.path, tpl.line, tpl.col, [], [], tpl.in_unsafe, tpl.is_test, tpl.is_fixture, tpl.has_body, false, tpl.spec_of)

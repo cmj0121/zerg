@@ -2739,7 +2739,23 @@ fn parse_impl(mut &p: Parser, mut &fns: list[ast.FnDecl], mut &impls: list[ast.I
 	# is FALSE about a language whose grammar spells `list[T]` and whose every program uses
 	# one. Reading the arguments is what lets the refusal be about the form that was
 	# written, at the place it was written.
-	raise p_diag_at(p, ttok.line, ttok.col, rule.Rule.NotYetImplTypeArgument, f"NotImplemented: an `impl` on `{target}[{ast.ty_names(targs)}]` — a type ARGUMENT on the target: this compiler keys an implementation by the target's bare name, so every instantiation of `{target}` would share one, and telling them apart is the same monomorphization a generic target needs. Write the `impl` for a `struct` or an `enum` this program declares (GRAMMAR#impl-decl)") if targs.len() > 0
+	# A TYPE ARGUMENT ON THE TARGET NAMES AN APPLICATION, which is a type: `impl Atomic[int]`
+	# is an impl on `Atomic[int]`, the specialization, and not on every instantiation of
+	# `Atomic` at once. That was the whole of the refusal — an implementation was keyed by the
+	# target's BARE name — and the key is the applied name now, the same string the type itself
+	# carries.
+	#
+	# A BUILT-IN CONTAINER IS STILL REFUSED, and the test is lexical rather than a lookup: a
+	# `list[int]` is not a named type at all — it is `TList(TInt)` — so an applied NAME would
+	# be a type nothing declares. `p_builtin_type_ctor` is the same list that already tells a
+	# type's own brackets from a call's.
+	if targs.len() > 0 {
+		raise p_diag_at(p, ttok.line, ttok.col, rule.Rule.NotYetImplTypeArgument, f"NotImplemented: an `impl` on `{target}[{ast.ty_names(targs)}]` — a built-in container is not a declared type, so there is no name to key an implementation by; this compiler gives a method a declared struct or enum receiver (GRAMMAR#impl-decl)") if p_builtin_type_ctor(target)
+
+		applied := ast.spec_key(target, targs)
+		p.ty_apps.append(ast.TyApp(applied, target, targs, p.path, ttok.line, ttok.col))
+		target = applied
+	}
 
 	if sp != "" {
 		impls.append(ast.ImplDecl(sp, args, target, p.path, kw.line, kw.col))

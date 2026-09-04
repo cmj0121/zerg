@@ -339,6 +339,16 @@ CORPUS_CONC_REPS ?= 10
 # to that. Seven cases aborted with a message no file recorded, so the whole of what a reader
 # sees when a Zerg program dies could have changed in either compiler and every gate on this
 # board would have stayed green.
+#
+# BOTH streams are compared with `diff`, and stdout was not. It went through `$$(...)`, which
+# strips every trailing newline from the command's output AND from the file it is compared
+# with, so a case whose program stopped ending in a newline — or started ending in three —
+# passed unchanged. The two halves of the same recipe disagreed about what "the same output"
+# means, and the byte-exact half was the one written last.
+#
+# Nothing was relying on it: all 199 passing cases already matched byte for byte, so the
+# comparison had been loose without ever being needed, which is the state a loose comparison
+# is usually in.
 corpus:                         # run zerg against the test-data corpus it now owns
 	$(MAKE) build
 	@[ -d test-data/codegen ] || { echo "test-data submodule not initialized (git submodule update --init)"; exit 1; }
@@ -346,13 +356,12 @@ corpus:                         # run zerg against the test-data corpus it now o
 	for name in $(CORPUS_PASS); do \
 		src=test-data/codegen/$$name.zg; \
 		./bin/zerg build --emit bin -o ./bin/corpus-case $$src >/dev/null 2>&1 || { echo "BUILD  $$name"; fail=1; continue; }; \
-		want=$$(cat test-data/codegen/$$name.out); \
 		want_rc=0; [ -f test-data/codegen/$$name.rc ] && want_rc=$$(cat test-data/codegen/$$name.rc); \
 		reps=1; case $$name in conc_*) reps=$(CORPUS_CONC_REPS);; esac; \
 		n=0; \
 		while [ $$n -lt $$reps ]; do \
-			got=$$(./bin/corpus-case 2>./bin/corpus-case.err); rc=$$?; \
-			[ "$$got" = "$$want" ] || { echo "OUTPUT $$name (run $$n)"; fail=1; break; }; \
+			./bin/corpus-case >./bin/corpus-case.out 2>./bin/corpus-case.err; rc=$$?; \
+			diff -q test-data/codegen/$$name.out ./bin/corpus-case.out >/dev/null 2>&1 || { echo "OUTPUT $$name (run $$n)"; fail=1; break; }; \
 			[ "$$rc" = "$$want_rc" ] || { echo "STATUS $$name (run $$n): want $$want_rc, got $$rc"; fail=1; break; }; \
 			if [ -f test-data/codegen/$$name.err ]; then \
 				diff -q test-data/codegen/$$name.err ./bin/corpus-case.err >/dev/null 2>&1 || { echo "STDERR $$name (run $$n): $$(head -1 ./bin/corpus-case.err)"; fail=1; break; }; \
@@ -363,7 +372,7 @@ corpus:                         # run zerg against the test-data corpus it now o
 		done; \
 		if [ $$n -eq $$reps ]; then ran=$$((ran+1)); fi; \
 	done; \
-	rm -f ./bin/corpus-case ./bin/corpus-case.c ./bin/corpus-case.err; \
+	rm -f ./bin/corpus-case ./bin/corpus-case.c ./bin/corpus-case.out ./bin/corpus-case.err; \
 	[ $$fail -eq 0 ] || { echo "corpus: a case that used to pass regressed"; exit 1; }; \
 	[ $$ran -ge $(CORPUS_MIN) ] || { echo "corpus: only $$ran cases were run, and the floor is $(CORPUS_MIN)"; exit 1; }; \
 	held=0; \

@@ -17942,6 +17942,15 @@ pub fn c_with_derived(prog: ast.File) -> ast.File {
 		for sd in gen.structs {
 			out.structs.append(sd)
 		}
+
+		# AND THE TYPE APPLICATIONS IT WROTE. A derive on a generic target writes
+		# `impl[T] Eq for Box[T]`, and `Box[T]` is an application like any other — the table
+		# that says what one is MADE of is what a template impl's parameters are read from.
+		# Dropped, the generated impl named a receiver nothing had heard of: `no type named
+		# Box[T]`, at `<derive>`, a file the reader did not write.
+		for a in gen.ty_apps {
+			out.ty_apps.append(a)
+		}
 		i = i + 1
 	}
 	return out
@@ -18220,9 +18229,42 @@ fn c_derive_method(ed: ast.EnumDecl, target: str, nm: str, req: ast.FnDecl) -> s
 # c_derive_eq is Eq's structural rule: a product compares FIELD BY FIELD, a sum by its
 # variant. `ne` is written over `eq` rather than beside it — one negation cannot disagree
 # with itself, and two generated bodies could.
+# c_derive_params / c_derive_applied spell a derived impl for a GENERIC target. A derive writes
+# SOURCE — `impl Eq for Box { fn eq(o: Box) … }` — and on a generic struct the bare name is a
+# TEMPLATE, not a type: the reader wrote `#[derive(Eq)]` and got `Box is a generic type and this
+# names it without arguments … --> <derive>:2:2`, a message about a file they did not write.
+#
+# Written with its parameters, the derived impl is a TEMPLATE IMPL — `impl[T] Eq for Box[T]` —
+# and the pass that materializes one per instantiation is the pass that already exists.
+fn c_derive_params(prog: ast.File, target: str) -> list[str] {
+	for sd in prog.structs {
+		return sd.tparams if sd.name == target
+	}
+	return []
+}
+
+# c_derive_head is the `impl[T] ` prefix, empty for a target that has no parameters, and
+# c_derive_applied is `Box[T]` where the target is spelled. Both answer plainly for an ordinary
+# type, which is what keeps every existing derive byte-identical.
+fn c_derive_head(prog: ast.File, target: str) -> str {
+	tps := c_derive_params(prog, target)
+	return "impl " if tps.len() == 0
+
+	return f"impl[{parser.join_commas(tps)}] "
+}
+
+fn c_derive_applied(prog: ast.File, target: str) -> str {
+	tps := c_derive_params(prog, target)
+	return target if tps.len() == 0
+
+	return f"{target}[{parser.join_commas(tps)}]"
+}
+
 fn c_derive_eq(prog: ast.File, target: str) -> str {
 	body := c_derive_eq_body(prog, target)
-	return f"impl Eq for {target} {{\n\tfn eq(o: {target}) -> bool {{\n\t\treturn {body}\n\t}}\n\n\tfn ne(o: {target}) -> bool {{\n\t\treturn not this.eq(o)\n\t}}\n}}\n"
+	head := c_derive_head(prog, target)
+	ty := c_derive_applied(prog, target)
+	return f"{head}Eq for {ty} {{\n\tfn eq(o: {ty}) -> bool {{\n\t\treturn {body}\n\t}}\n\n\tfn ne(o: {ty}) -> bool {{\n\t\treturn not this.eq(o)\n\t}}\n}}\n"
 }
 
 fn c_derive_eq_body(prog: ast.File, target: str) -> str {

@@ -31,6 +31,10 @@ Both are built. The cell is the one the compiler already boxes a `chan`, a `str`
 `Ref` puts a name on it, so a program can share a value the way those three are shared. The `atomic` module
 is what waited on it, and `import "atomic"` works.
 
+`Ref(x: T, drop: fn(T))` is the second form: the action the cell runs when the last holder lets go, which is
+how a foreign handle is closed exactly once ([FFI](ffi.md)). It runs instead of the payload's own give-back
+— the box carries one drop action — and it is a NAMED function, the cell having one pointer for it.
+
 ## `deref`
 
 `deref(r: Ref[T]) -> T` — read the payload out of a box. The read is a value (a copy for a non-POD `T`);

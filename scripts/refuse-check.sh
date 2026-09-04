@@ -1177,17 +1177,13 @@ fn main() {
 }
 EOF
 
-# THE BOX CARRIES THE VALUE AND NOTHING BESIDE IT. docs/core/memory.md gives a `Ref[T]` "the
-# value and a `drop` action", and what a release runs here is the payload's OWN give-back — so
-# a foreign handle whose closing is a user action has nothing to say it with, and is told so by
-# name rather than by an argument count.
-expect "$ZERG" ref-with-a-drop-action E9114 'a user-written `drop`' <<'EOF'
-fn dr(x: int) {
-	nop
-}
-
+# THE ACTION IS A NAMED FUNCTION. The cell's drop slot is one `void (*)(void*)`, and a held
+# function value carries an environment beside it that the slot has nowhere to keep — so the
+# second argument is a name that resolves to a function, and anything else is told so.
+expect "$ZERG" ref-drop-that-is-not-a-function E4097 'has to be a NAMED function' <<'EOF'
 fn main() {
-	r := Ref(5, dr)
+	f := 5
+	r := Ref(1, f)
 	print deref(r)
 }
 EOF

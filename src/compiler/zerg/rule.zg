@@ -405,6 +405,7 @@ pub enum Rule {
 	TypeArgsMissing = 4094
 	TypeArgUndecided = 4095
 	DerefNotARef = 4096
+	RefDropNotAFunction = 4097
 	ListPatternNotAList = 4084
 	MutateAValueNotAPlace = 4081
 
@@ -538,7 +539,6 @@ pub enum Rule {
 	NotYetListPatternRestBinding = 9110
 	NotYetArrayLenImported = 9111
 	NotYetArrayMethod = 9112
-	NotYetRefDrop = 9114
 }
 
 # rule_code is the text a rule is reported under — the `E2004` a gate pins and a reader looks

@@ -9,8 +9,9 @@ text）——把一個值寫到 stdout 的免 import 捷徑。三個想法承載
 
 - **串流**是 `Reader` 或 `Writer`——byte 來源／去處，用 `for` 抽乾；
 - **handle** 是 `Ref[T]`——檔案或 socket，scope-owned、恰好關一次；
-  **[not yet]**——`Ref[T]` 建好了,但一個 handle 還需要這個盒子承載使用者所寫的 `drop`(`E9114`,見
-  [值與記憶體](../core/memory.zh-TW.md)),而它沒有,所以還不存在 handle 型別,讀寫都走下方的整檔 leaf;
+  **[not yet]**——`Ref[T]` 與它的 `drop` 動作都建好了(見[值與記憶體](../core/memory.zh-TW.md));handle 等的是
+  那個型別本身,而 `handle` 是一個沒有任何宣告帶著的名字——_E4056 no type named `handle`_,那是
+  [FFI](ffi.zh-TW.md) 自己的標記——所以讀寫都走下方的整檔 leaf;
 - **失敗是值**——會失敗的呼叫回 `Result[T]`、以 `?` 傳播；EOF 不算。
 
 > **狀態。** 編譯器只出貨這個面的**子集**，而這個子集就是**整檔與整串流的葉子**——列表見

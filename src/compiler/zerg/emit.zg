@@ -3017,13 +3017,20 @@ fn c_ref_elem(mut &em: Emitter, t: ast.Ty) -> ast.Ty {
 # already uses — so a `Ref[str]` releases its string when the last holder lets go, and a
 # `Ref[int]` hands the cell a NULL and pays nothing.
 fn c_ref_new(mut &em: Emitter, el: ast.Ty, x: str) -> str {
+	return c_ref_new_with(em, el, x, "")
+}
+
+fn c_ref_new_with(mut &em: Emitter, el: ast.Ty, x: str, user_drop: str) -> str {
 	em.used_rt = true
 
 	# THE KEY IS THE PAYLOAD'S TYPE, not its element KIND. `c_elem_kind` answers "" for a type
 	# that owns nothing — it is about what a container owes, not about identity — so a
 	# `Ref[int]` and a `Ref[P]` were one helper named `zg_refnew_`, and cc was handed a `P`
 	# where an `int64_t` was declared.
-	nm := c_spec_cname(f"refnew${ast.ty_name(el)}")
+	# THE KEY CARRIES THE DROP, because two boxes of one payload type with different actions are
+	# two allocators. Without the action in it a `Ref(h, close_a)` and a `Ref(h, close_b)` were
+	# one helper and the second was silently the first.
+	nm := c_spec_cname(f"refnew${ast.ty_name(el)}${user_drop}")
 	if not c_name_in(em.refnew_done, nm) {
 		em.refnew_done.append(nm)
 		ct := c_type(el)
@@ -3032,18 +3039,35 @@ fn c_ref_new(mut &em: Emitter, el: ast.Ty, x: str) -> str {
 		# payload that owes nothing, and the three the prelude already carries — a list, a map,
 		# a str — are named there rather than defined again. Writing one here redefined
 		# `zg_elemcopy_str`, which cc reported against a file nobody wrote.
-		mut d := c_drop_thunk(em, el)
-		if d == "" {
-			d = "NULL"
+		# A USER-WRITTEN DROP IS WHAT THE CELL RUNS, and the payload's own give-back is not run
+		# beside it: the box carries ONE drop action (docs/core/memory.md), and a foreign handle
+		# closed by its paired free is exactly the case where the payload owes nothing else.
+		mut d := "NULL"
+		if user_drop != "" {
+			d = "&" + user_drop
 		} else {
-			c_spelled_register(em, el)
-			d = "&" + d
+			d = c_drop_thunk(em, el)
+			if d == "" {
+				d = "NULL"
+			} else {
+				c_spelled_register(em, el)
+				d = "&" + d
+			}
 		}
 		mut out := "static void* " + nm + "(" + ct + " v) {\n"
 		out = out + "    void* r = zrt_ref_alloc(sizeof(" + ct + "), " + d + ");\n"
 		out = out + "    *(" + ct + "*)zrt_ref_payload(r) = v;\n"
 		out = out + "    return r;\n}\n\n"
-		em.res_decls.append(out)
+
+		# A USER DROP PUTS THE HELPER IN THE DEFER STREAM WITH ITS THUNK. The thunk calls a
+		# program function, so it is placed after the prototypes — and this names the thunk, so
+		# it has to follow it. The ordinary allocator names nothing a program declares and stays
+		# where every on-demand declaration goes.
+		if user_drop == "" {
+			em.res_decls.append(out)
+		} else {
+			em.dfn_decls.append(out)
+		}
 	}
 	return f"{nm}({x})"
 }
@@ -3095,14 +3119,17 @@ fn c_ref_call(mut &em: Emitter, args: list[ast.Expr], sb: Subst) -> str {
 
 	el := c_infer(em, args[0])
 	c_ref_record(em, el)
-	return c_ref_new(em, el, c_copied(em, el, args[0], sb))
+	return c_ref_new(em, el, c_copied(em, el, args[0], sb)) if args.len() < 2
+
+	callee := c_ref_drop_fn(em, args[1])
+	return c_ref_new_with(em, el, c_copied(em, el, args[0], sb), c_ref_drop_thunk(em, el, callee))
 }
 
 # c_ref_ty_of is that call's type, and c_ref_record is the half both ends share — the mint has
 # to happen whichever asks first, or one of them names a type the other has never heard of.
 fn c_ref_ty_of(mut &em: Emitter, args: list[ast.Expr]) -> ast.Ty {
 	c_ref_arity(em, args)
-	return ast.Ty.TUnknown if args.len() != 1
+	return ast.Ty.TUnknown if args.len() < 1 or args.len() > 2
 
 	el := c_infer(em, args[0])
 	c_ref_record(em, el)
@@ -3117,9 +3144,39 @@ fn c_ref_ty_of(mut &em: Emitter, args: list[ast.Expr]) -> ast.Ty {
 # ASKED FROM BOTH ENDS, because inference runs first and answered `?` for a miscounted call —
 # so the complaint a reader got was the next rule's, about a `?`.
 fn c_ref_arity(mut &em: Emitter, args: list[ast.Expr]) {
-	raise c_diag(em, rule.Rule.NotYetRefDrop, f"NotImplemented: `Ref` with {strconv.to_string(args.len(), 10)} arguments — the box carries the VALUE and this compiler runs the payload's own give-back when the last holder lets go; a user-written `drop` beside it is not built (docs/core/memory.md)") if args.len() > 1
+	return if args.len() == 2
 
 	chk_call_arity_exact(em, "Ref", args.len())
+}
+
+# c_ref_drop_fn is the second argument of `Ref(x, drop)`: the action the cell runs when the last
+# holder lets go (docs/runtime/ffi.md — "the box's drop is the paired free"). It is a NAMED
+# function and not an expression, because the cell's drop is a bare `void (*)(void*)` and has
+# nowhere to keep a closure's environment: a held function value carries one, and the runtime's
+# slot is one pointer wide.
+fn c_ref_drop_fn(mut &em: Emitter, e: ast.Expr) -> str {
+	n := c_ident_name(e)
+	raise c_diag(em, rule.Rule.RefDropNotAFunction, f"`Ref`'s second argument is the action the box runs when the last holder lets go, and it has to be a NAMED function — the cell keeps one pointer and a held function value carries an environment beside it") if n == "" or not c_is_free_fn(em, n)
+
+	return n
+}
+
+# c_ref_drop_thunk gives that function the shape the cell's drop slot has: the payload by
+# ADDRESS, because the runtime hands it what it allocated, and the user's function takes the
+# value. One thunk per (payload type, action), emitted once.
+fn c_ref_drop_thunk(mut &em: Emitter, el: ast.Ty, callee: str) -> str {
+	nm := c_spec_cname(f"refdrop${ast.ty_name(el)}${callee}")
+	return nm if c_name_in(em.refnew_done, nm)
+
+	em.refnew_done.append(nm)
+	ct := c_type(el)
+	cn := c_fn_cname_in(em, check.c_mod_of(em, em.at_path), "", callee)
+
+	# INTO THE DEFER STREAM and not the on-demand one: this thunk CALLS A PROGRAM FUNCTION, and
+	# `res_decls` is emitted ahead of the prototypes. cc reported `zg_closed` undeclared against
+	# generated C. `dfn_decls` is placed after them for exactly this reason, and says so.
+	em.dfn_decls.append(f"static void {nm}(void* p) {{ {cn}(*({ct}*)p); }}\n")
+	return nm
 }
 
 fn c_ref_record(mut &em: Emitter, el: ast.Ty) {

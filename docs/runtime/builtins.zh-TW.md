@@ -29,6 +29,10 @@
 兩個都建好了。那個 cell 就是編譯器早已把 `chan`、`str` 與遞迴型別裝進去的同一個;`Ref` 只是給它一個名字,讓程式
 能像那三者一樣共享一個值。等這一項的是 `atomic` 模組,而 `import "atomic"` 現在可用。
 
+`Ref(x: T, drop: fn(T))` 是第二種形式:cell 在最後一個持有者放手時跑的動作,也就是一個 foreign handle 恰好關閉
+一次的方式(見 [FFI](ffi.zh-TW.md))。它**取代** payload 自己的歸還——盒子帶的是一個 drop 動作——而且它必須是
+**具名函式**,因為 cell 只留一個指標給它。
+
 ## `deref`
 
 `deref(r: Ref[T]) -> T`——把 box 的內容讀出來。讀出是一個值（非 POD 的 `T` 會複製）；box 本身不受影響。

@@ -189,10 +189,10 @@ teardown 一起交給 runtime,而 scheduler 在每個 worker 都停下之後跑�
 與 `chan`、`str` 和遞迴型別被裝進去的是同一個計數 cell。釋放時跑的是 **payload 自己的**歸還:`Ref[str]` 會釋放它的
 字串,`Ref[int]` 什麼都不欠。
 
-> **[not yet]** 這個盒子還不承載**使用者所寫的 `drop`**——_E9114 NotImplemented: `Ref` with 2 arguments — the
-> box carries the VALUE and this compiler runs the payload's own give-back when the last holder lets go; a
-> user-written `drop` beside it is not built_。逃出自身 scope 的資源由這個盒子持有;而關閉需要一段使用者動作的
-> 那種,仍在等。
+**使用者所寫的 `drop`** 是第二個引數:`Ref(raw, close)`,也就是 [FFI](../runtime/ffi.zh-TW.md) 為 foreign
+handle 寫的形式。它是 cell 在最後一個持有者放手時跑的東西,而且它**取代** payload 自己的歸還——盒子帶的是**一個**
+drop 動作,而一次配對的 foreign free 正是那個東西。這個動作必須是**具名函式**:cell 只留一個指標,而一個被持有的
+函式值旁邊還帶著環境,沒有地方放(_E4097_)。
 
 多數清理只是記憶體，離開 scope 時就自動釋放。若一個**資源的釋放不屬於這種自動釋放**——foreign handle（見
 [FFI](../runtime/ffi.zh-TW.md)）、任何必須**恰好關閉一次**者——且它必須**逃出開啟它的 scope**（被 return、存進欄位、送過

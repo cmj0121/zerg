@@ -974,6 +974,28 @@ ZG
 #
 # The payload OWNS something, which is the half that has two chances to go wrong — the cell and
 # the string inside it — and the box is copied so the retain is exercised rather than assumed.
+# AND THE USER-WRITTEN DROP, which replaces the payload's own: what has to balance here is the
+# CELL, and the action is what says whether it ran. A leak of the cell shows as a live count
+# that grows; an action that ran twice would be a double free, which the sanitizers see.
+case_run ref_box_drop no no <<'ZG'
+fn closed(n: int) {
+	nop
+}
+
+fn main() {
+	mut n := 0
+	mut i := 0
+	r := rounds()
+	for i < r {
+		a := Ref(i, closed)
+		b := a
+		n = n + deref(b)
+		i = i + 1
+	}
+	print n
+}
+ZG
+
 case_run ref_box no no <<'ZG'
 fn mk(n: int) -> Ref[str] {
 	return Ref(f"{n}abcdefghijklmnop")

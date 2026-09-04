@@ -395,8 +395,15 @@ LINUX_IMAGE ?= golang:1.26-bookworm
 # program and answers `E5014 import cycle` when handed over as one. The two REFUSED examples
 # are in, not filtered out: neither has a finding, and a negative example is source a reader
 # copies from too.
-LINT_SKIP := src/stdlib/atomic.zg
-LINT_ENTRIES := $(ZERG_ENTRY) $(filter-out $(LINT_SKIP),$(wildcard src/stdlib/*.zg)) $(wildcard $(EXAMPLE_SRCS))
+# `atomic.zg` was held out of this list, unexplained, because the module could not be built
+# at all: `import "atomic"` was E9104 and a linter that cannot resolve a module has nothing
+# to say about it. The module builds now, the code retired, and the exclusion outlived both —
+# one stdlib file linted by nothing, on a line whose only record of WHY was that it existed.
+#
+# There is no exclusion list any more. If one is ever needed again it owes the shape
+# CORPUS_SKIP now has: a name is a claim, and the gate checks the claim rather than
+# remembering it.
+LINT_ENTRIES := $(ZERG_ENTRY) $(wildcard src/stdlib/*.zg) $(wildcard $(EXAMPLE_SRCS))
 
 # A FLOOR under how many entries were linted, of the kind `corpus`, `examples` and `fmt-corpus`
 # carry. The one glob above reaches a directory, and a glob that matches nothing leaves a loop

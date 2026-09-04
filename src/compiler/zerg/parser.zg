@@ -2142,7 +2142,7 @@ fn parse_typedecl(mut &p: Parser, is_pub: bool) -> ast.TypeDecl {
 	# could not pin.
 	if p_at(p, token.Kind.LBrack) {
 		b := cur(p)
-		raise p_diag_at(p, b.line, b.col, rule.Rule.NotYetGenericTypedef, f"NotImplemented: a generic `type {name}[…] = …` — a parameterized alias is one instantiation per argument, and this compiler erases type parameters (the reason a generic `enum` is E9003) (GRAMMAR#type-decl)")
+		raise p_diag_at(p, b.line, b.col, rule.Rule.NotYetGenericTypedef, f"NotImplemented: a generic `type {name}[…] = …` — a parameterized alias is one instantiation per argument, and only a `struct` is instantiated (the reason a generic `enum` is E9003) (GRAMMAR#type-decl)")
 	}
 
 	expect(p, token.Kind.Assign)
@@ -2351,7 +2351,7 @@ fn parse_enum(mut &p: Parser, is_pub: bool) -> ast.EnumDecl {
 	# `enum E[T] { A(T) }` — the parameter list was read and dropped the way a struct's is,
 	# but an enum's payload NAMES it, so `T` reached cc as a type nothing declares. A struct's
 	# field types go through c_check_named_ty; a variant's did not.
-	raise p_diag(p, rule.Rule.NotYetGenericEnum, f"NotImplemented: a generic enum `{name}[…]` — this compiler erases type parameters, and a variant's payload names one (GRAMMAR#enum-decl)") if p_at(p, token.Kind.LBrack)
+	raise p_diag(p, rule.Rule.NotYetGenericEnum, f"NotImplemented: a generic enum `{name}[…]` — a generic `struct` is instantiated once per application and an `enum` is not (GRAMMAR#enum-decl)") if p_at(p, token.Kind.LBrack)
 	expect(p, token.Kind.LBrace)
 	skip_semis(p)
 

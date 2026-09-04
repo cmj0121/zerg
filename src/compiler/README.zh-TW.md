@@ -142,11 +142,15 @@ make reject     # 每一支不是 Zerg 的程式都被拒絕——由編譯器�
 今天做對的那一組，而且是**閘門**：一個案例掉出這組就是 regression，會讓 target 失敗。其餘的由
 `CORPUS_SKIP` 擋著，而把一個名字從裡面刪掉，**就是**那個名字所等的功能的閘門。
 
-還在等的有五個，每一個都是**指名**拒絕、不是誤譯——`gen_enum` 回答的是
-_E9003 NotImplemented: a generic enum `Either[…]` — this compiler erases type parameters, and a
-variant's payload names one_——它們等的是泛型的 `enum`、`#[dyn]`，以及「無欄位 enum 的 `Eq`」以外
-的 `derive`。泛型 `struct` 本來是第六個，已經建好了。另外兩個，`spec_bound` 與 `gen_identity`，今天建得起來、也印得出該印的東西：是這份
-清單還沒跟上。
+被擋下來的都是**指名**拒絕、不是誤譯——`gen_enum` 回答的是
+_E9003 NotImplemented: a generic enum `Either[…]` — a generic `struct` is instantiated once per
+application and an `enum` is not_——這份清單等的是泛型的 `enum`、`#[dyn]`，以及「無欄位 enum 的 `Eq`」
+以外的 `derive`。
+
+刪掉一個名字只是單向的閘門，而有一段時間那就是全部的機制:泛型 `struct` 建好之後，`gen_struct`
+還留在清單上，而這一段散文說它建好了、清單卻仍然擋著那個案例。現在 recipe 會把每一個被跳過的案例
+**建一次**，只要有一個成功就讓 gate 失敗——於是一個名字所主張的「這個案例還是建不起來」，是被檢查
+的，不是被記得的。
 
 ## 一支程式必須是什麼，以及誰說了算
 
@@ -294,10 +298,11 @@ optional 時會壓平）、`!`，以及 `?`（把缺席從一個結果載得住�
 desugar 成這個形式本來被定義成的那條 `+` 鏈——這既是 AST 與 emitter 對 f-string 一無所知的原因，
 也是種子只要能 lex 與 parse 它就建得出 stage 1 的原因。
 
-仍然缺少的，而且每一個都是**指名**拒絕、不是誤譯：`Ref[T]`（`E9058`）、泛型的
-`enum`——也就是被 payload 指名的型別參數（`E9003`；泛型 `struct` 已經建好，而讓 `import "atomic"`
-變成 `E9104` 的是它旁邊的 `impl Atomic[int]`）、具名引數的建構 `T(a: 1)`（`E9010`），以及 command literal
-（`E9020`）。
+仍然缺少的，而且每一個都是**指名**拒絕、不是誤譯：泛型的 `enum`（`E9003`——泛型 `struct` 每個應用
+實例化一次，`enum` 沒有），以及具名引數的建構 `T(a: 1)`（`E9010`）。這句話原本還列了另外三個，直到
+它們一一被建好——`Ref[T]`、等它的 `import "atomic"`，以及 command literal——而三個都沒有在這裡被發現，
+因為一份「還缺什麼」的散文清單，沒有任何東西把它釘在那些代碼上。真正是那份清單的，是
+[Compile Diagnostics](../../docs/tooling/diagnostics.md) 裡目錄的 retired 那一半。
 
 ## 效能還剩下什麼
 

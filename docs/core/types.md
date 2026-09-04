@@ -257,7 +257,7 @@ enum Either[X, Y] {         # generic sum type
 ```
 
 > **[not yet]** The **generic `enum`** in that block does not compile: it is _E9003 NotImplemented: a generic
-> enum `Either[…]` — this compiler erases type parameters, and a variant's payload names one_. A recursive
+> enum `Either[…]` — a generic `struct` is instantiated once per application and an `enum` is not_. A recursive
 > `struct` is `E4026` (below).
 >
 > A generic **`struct`** is built. The declaration is a **template**, and an application (`Box[int]`) is an

@@ -219,7 +219,7 @@ enum Either[X, Y] {         # 泛型 sum type
 ```
 
 > **[not yet]** 上面那一段裡的**泛型 `enum`** 編不過:它是 _E9003 NotImplemented: a generic enum `Either[…]`
-> — this compiler erases type parameters, and a variant's payload names one_。遞迴 `struct` 是 `E4026`(見下)。
+> — a generic `struct` is instantiated once per application and an `enum` is not_。遞迴 `struct` 是 `E4026`(見下)。
 >
 > 泛型 **`struct`** 建好了。宣告是一個 **template**,一次應用(`Box[int]`)是一個以那個名字存在的普通型別。
 > 一次建構**從它自己的引數解出參數**,那是[型別系統](type-system.zh-TW.md)對一次呼叫定的規則,而建構就是一次

@@ -340,7 +340,7 @@ fn doc_file_decls(f: ast.File, mut &tv: DocTrivia, mut &out: list[DocDecl]) {
 			}
 		}
 		if s.is_pub {
-			ds.append(DocDecl("struct", s.name, "", "struct " + s.name, doc, ms, hidden, s.path, s.line))
+			ds.append(DocDecl("struct", s.name, "", f"struct {s.name}{doc_tparams(s.tparams)}", doc, ms, hidden, s.path, s.line))
 		}
 	}
 
@@ -430,6 +430,15 @@ fn doc_sorted(ds: list[DocDecl]) -> list[DocDecl] {
 # from unsafe" — and group 5 gives the single-function form the same spelling, so this is the
 # language's own word for it and not a marker invented here. Leaving it off would document a
 # function as callable from anywhere when it is callable from one place.
+# doc_tparams is a declaration's type parameters, spelled. A generic `fn` printed its own and a
+# generic STRUCT did not, so `struct Box[T]` was documented as `struct Box` with a field `v: T`
+# — a parameter with no introduction, in the one document a reader has for the type.
+fn doc_tparams(tps: list[str]) -> str {
+	return "" if tps.len() == 0
+
+	return f"[{parser.join_commas(tps)}]"
+}
+
 fn doc_fn_sig(fd: ast.FnDecl) -> str {
 	mut out := doc_fn_word(fd) + fd.name
 	if fd.tparams.len() > 0 {

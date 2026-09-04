@@ -4454,21 +4454,54 @@ fn c_ty_register(mut &em: Emitter, nm: str, kind: int, under: ast.Ty, path: str,
 # path, which every rule reads as "be quiet" — for a name the registry does not hold.
 pub fn c_ty_path(mut &em: Emitter, nm: str) -> str {
 	r := c_ty_row(em, nm)
-	return "" if r < 0
+	return c_gen_struct_path(em, nm) if r < 0
 
 	return em.tk_path[r]
 }
 
 pub fn c_ty_mod(mut &em: Emitter, nm: str) -> str {
 	r := c_ty_row(em, nm)
-	return "" if r < 0
+	return c_gen_struct_mod(em, nm) if r < 0
 
 	return em.tk_mod[r]
 }
 
+# c_gen_struct_mod is the module a TEMPLATE was declared in. A template is removed from the
+# program before the type table is built — it is not a type — so the table cannot answer for
+# it, and the rule that asks which module a qualified type comes from was left comparing
+# against nothing: `b.Box[int]` on a `pub struct Box[T]` reported that the module has no `Box`.
+#
+# A template is still a name a module EXPOSES, which is the question that rule asks.
+fn c_gen_struct_mod(mut &em: Emitter, nm: str) -> str {
+	r := c_gen_struct_row(em, nm)
+	return "" if r < 0
+
+	return check.c_mod_of(em, em.gen_structs[r].path)
+}
+
+# AND ITS FILE AND ITS MARKER, for the same reason and read the same way. A template that
+# answered "no row" was answered `true` for `pub` and "" for its file, which is the shape a
+# GENERATED declaration has — so privacy was not enforced on one at all: a non-`pub`
+# `struct Hidden[T]` was constructible from another module while the plain `struct Secret`
+# beside it was refused, which is the rule this compiler lost once before on the way to
+# self-hosting.
+fn c_gen_struct_path(mut &em: Emitter, nm: str) -> str {
+	r := c_gen_struct_row(em, nm)
+	return "" if r < 0
+
+	return em.gen_structs[r].path
+}
+
+fn c_gen_struct_pub(mut &em: Emitter, nm: str) -> bool {
+	r := c_gen_struct_row(em, nm)
+	return true if r < 0
+
+	return em.gen_structs[r].is_pub
+}
+
 pub fn c_ty_pub(mut &em: Emitter, nm: str) -> bool {
 	r := c_ty_row(em, nm)
-	return true if r < 0
+	return c_gen_struct_pub(em, nm) if r < 0
 
 	return em.tk_pub[r]
 }
@@ -9421,6 +9454,12 @@ fn c_free_method(mut &em: Emitter, target: ast.Expr, meth: str, args: list[ast.E
 		# signature.
 		return c_call(em, meth, args, sb) if c_is_generic(em, meth)
 
+		# AND A NAMESPACED GENERIC TYPE, for the same reason one line up: `boxmod.Box(4)` is
+		# the construction of a template that module declares, and a template has no signature
+		# either — so the check below reported the module as having no `Box` while it was
+		# sitting in the generic-type table.
+		return c_call(em, meth, args, sb) if c_gen_struct_row(em, meth) >= 0
+
 		# a REAL module and a member no module declares — the same rule the field path
 		# reports (c_fieldref), because it is the same mistake. Falling through said "the
 		# method `x` on a ?", which describes the namespace as a value of no type rather
@@ -9899,6 +9938,10 @@ fn c_k_idx(mut &em: Emitter, name: str) -> int {
 # because a body constructed it has no written application to be found by, so it registers on
 # demand — which is the path a tuple and a carrier already take (c_spelled_register).
 fn c_gen_construct(mut &em: Emitter, base: str, args: list[ast.Expr], sb: Subst) -> str {
+	# A CONSTRUCTION NAMES THE TYPE, which is the question the ordinary struct path asks here
+	# too — and a template reaching this one had never been asked it.
+	check.chk_ty_visible(em, base)
+
 	applied := c_gen_applied(em, base, args)
 	return "(" + c_ty_cname(applied) + "){" + c_struct_args(em, applied, args, sb) + "}"
 }

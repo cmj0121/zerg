@@ -138,6 +138,11 @@ via `derive`; there is **no auto-derived equality** and no implicit `Object` spe
 are built; **`Ord`**, **`Hash`**, **`Encode`** and **`Decode`** are specified here and **[not yet]** —
 naming one is `E9054`.
 
+A derive on a **generic** target derives for every instantiation of it: `#[derive(Eq)] struct Box[T]` is
+one implementation written with the type's own parameters, materialized per instantiation the way any
+`impl[T]` is ([Specs & Generics](specs.md)). It reads the structure once and the answer follows the
+argument — `Box[int]` compares its `int` and `Box[str]` its `str`.
+
 **`From`** is the one whose reading is not the type's own structure but a variant's: on an `enum` it
 generates the conversion each variant implies, `impl Into[E] for P` per single-payload variant, so a
 layer's error becomes the caller's with `e.into()` rather than a `match` written per variant. It is the

@@ -27,8 +27,20 @@ set -u
 
 ZERG=${ZERG:-./bin/zerg}
 
-# every F4xx rule, off: see the note at the fmt call below
-REWRITES="--off F401 --off F402 --off F403 --off F404 --off F405 --off F406 --off F407 --off F408"
+# EVERY F4xx RULE, OFF — see the note at the fmt call below. The list is READ FROM THE TABLE
+# that documents them rather than written out here, because a written one goes stale silently:
+# it said F401..F408 and `F409` had been added since, so the gate ran the one rewrite it exists
+# to hold constant and reported its own blind spot as a source changing meaning. A rule added
+# to the table joins this list by being in it.
+#
+# The floor under that read is the same one every derived list here needs: a table that
+# stopped matching, or a renamed file, would empty the set and turn every rewrite back on.
+REWRITES=$(grep -oE '^\| `F4[0-9][0-9]`' docs/tooling/fmt.md | grep -oE 'F4[0-9][0-9]' | sort -u | sed 's/^/--off /' | tr '\n' ' ')
+n_rewrites=$(printf '%s' "$REWRITES" | tr ' ' '\n' | grep -c -- '--off' || true)
+if [ "${n_rewrites:-0}" -lt 8 ]; then
+	printf 'fmt-tokens: only %s F4xx rules were read from docs/tooling/fmt.md — the rewrites this gate turns off are not all off\n' "${n_rewrites:-0}" >&2
+	exit 2
+fi
 
 tmp=$(mktemp -d)
 trap 'rm -rf "$tmp"' EXIT

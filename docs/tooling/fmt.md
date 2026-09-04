@@ -222,12 +222,18 @@ pads it back to the same column — which is why `F201` reads "at least one spac
 
 ## F2xx — spacing
 
-| Code   | Rule                                                                        |
-| ------ | --------------------------------------------------------------------------- |
-| `F201` | one space around a binary operator, after a comma, at least one around `=>` |
-| `F202` | no space after `(` `[`, before `)` `]` `,`, or between a name and its `(`   |
-| `F203` | a prefix operator is tight to its operand — `-1`, `&x`, `<-ch`              |
-| `F204` | a range operator is tight to both its bounds — `0..n`, `a..=b`              |
+| Code   | Rule                                                                               |
+| ------ | ---------------------------------------------------------------------------------- |
+| `F201` | one space around a binary operator, after a comma, at least one around `=>`        |
+| `F202` | no space after `(` `[`, before `)` `]` `,`, or between a thing and its own `(` `[` |
+| `F203` | a prefix operator is tight to its operand — `-1`, `&x`, `<-ch`                     |
+| `F204` | a range operator is tight to both its bounds — `0..n`, `a..=b`                     |
+
+`F202`'s last clause is about what OWNS the bracket, which is usually a name and is sometimes a
+keyword: `chan[T]`, `ptr[T]`, `close(ch)` and `impl[T]` each spell their own brackets straight
+after the word. `impl[T]` was the one that got away — `fn wrap[T]` and `struct Box[T]` are
+tightened by the name clause, which an `impl` never reaches — so one declaration had two
+canonical spellings until it joined the list.
 
 `F203` is decided by what is to the LEFT, not by which token it is. `-` is a negation and a
 subtraction, `<-` is a receive and a send and a direction marker; each is prefix exactly

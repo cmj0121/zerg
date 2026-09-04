@@ -2934,7 +2934,13 @@ fn binds_tight(k: token.Kind) -> bool {
 		Kind.Chan  => true
 		Kind.Ptr   => true
 		Kind.Close => true
-		_          => false
+
+		# and `impl[T]`, the fourth and the newest: an `impl` carrying its own type parameters
+		# spells them straight after the keyword. `fn wrap [T]` and `struct Box [T]` were both
+		# tightened by the Ident case above while this one kept its space, so one declaration
+		# had two canonical spellings and `zerg desugar` re-emitted the loose one.
+		Kind.Impl => true
+		_         => false
 	}
 }
 

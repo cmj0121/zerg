@@ -438,6 +438,7 @@ shipping compiler rather than a part of it (the line
 | `E4094` | a generic type named without its arguments                                                            |
 | `E4095` | a type parameter no field mentions, so a construction cannot solve it                                 |
 | `E4096` | `deref` on something that is not a `Ref[T]`                                                           |
+| `E4097` | `Ref`'s drop action is not a named function                                                           |
 | `E5001` | this entry file declares no `fn main`                                                                 |
 | `E5002` | cannot resolve import `…`, and where it was looked for                                                |
 | `E5007` | `…` is a module this build compiles and this module did not import                                    |
@@ -505,7 +506,6 @@ shipping compiler rather than a part of it (the line
 | `E9110` | a NAMED rest in a list pattern                                                                        |
 | `E9111` | an array length reached through an import                                                             |
 | `E9112` | the array method `…`                                                                                  |
-| `E9114` | `Ref` with a user-written `drop` beside the value                                                     |
 
 They are reported the moment a file is **read**, before its imports are scanned — scanning
 them parses, and a parser handed unreadable text can only say something untrue about it.
@@ -581,6 +581,10 @@ questions behind it — which is why the first four were found by reading codes 
 **One more retired because its form was BUILT.** `E9004` refused a generic `struct`. The declaration is a
 template now, an application is an ordinary type under its applied name, and what a use can still get
 wrong has codes of its own — `E4093`, `E4094` and `E4095`.
+
+**And the drop it carries.** `E9114` refused a `Ref` given an action beside the value. That is the form
+`docs/runtime/ffi.md` writes for a foreign handle — `Ref(raw!, sqlite3_close)` — and it is built; what a
+reader can still get wrong is giving it something that is not a named function, which is `E4097`.
 
 **And the impl that stands for all of them.** `E9037` refused an `impl` carrying its own type parameters,
 on the reasoning that one impl standing for every instantiation of its target needs those instantiations
@@ -697,6 +701,7 @@ name now is the prelude rule (`E2061`), which is about the name rather than abou
 | `E9058` | —       | the form was built: `Ref[T]` is the counted cell, named            |
 | `E9104` | —       | the form was built: `atomic` imports and runs                      |
 | `E9037` | —       | the form was built: one impl per instantiation of its target       |
+| `E9114` | —       | the form was built: the box carries the action beside the value    |
 
 **One of them moved nowhere**, and it is the only row whose second column is empty. `E3047`
 reported a prefix operator on a `type X = Y` — _operator `not` has no meaning on `Flag`_ — on

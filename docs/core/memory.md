@@ -231,10 +231,11 @@ and the last holder releases — the same counted cell a `chan`, a `str` and a r
 held in. What a release runs is the PAYLOAD's own give-back: a `Ref[str]` releases its string, a `Ref[int]`
 owes nothing.
 
-> **[not yet]** What the box does not carry is a **user-written `drop`** — _E9114 NotImplemented: `Ref` with
-> 2 arguments — the box carries the VALUE and this compiler runs the payload's own give-back when the last
-> holder lets go; a user-written `drop` beside it is not built_. A resource that escapes its scope is held by
-> this box; one whose closing is a user action still waits.
+A **user-written `drop`** is the second argument: `Ref(raw, close)`, the form [FFI](../runtime/ffi.md) writes
+for a foreign handle. It is what the cell runs when the last holder lets go, and it runs INSTEAD of the
+payload's own give-back — the box carries one drop action, which is what a paired foreign free is. The
+action is a NAMED function: the cell keeps one pointer, and a held function value carries an environment
+beside it that there is nowhere to put (_E4097_).
 
 Most cleanup is just memory, which scope exit frees automatically. A **resource whose release is not that
 automatic free** — a foreign handle (see [FFI](../runtime/ffi.md)), anything that must be closed **exactly once** — and

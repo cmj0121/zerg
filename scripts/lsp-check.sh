@@ -603,6 +603,45 @@ if [ $fail -ne 0 ]; then
 	exit 1
 fi
 
+# --- 5. the outline's OTHER reading carries the parameters ------------------------------
+#
+# The outline above is compared against `--emit ast`, so a fact missing from BOTH is agreed
+# on and invisible. That is exactly what happened to a declaration's type parameters: the
+# dump printed `struct Box` for `struct Box[T]` and `fn wrap` for `fn wrap[T]`, and the
+# comparison was green because the outline reports a NAME, which is `Box` either way.
+#
+# So this case does not compare the two readings — it asserts the content of the one that is
+# supposed to carry more. `--emit ast` answers "did the parser see what I wrote", and a
+# reader asking why a generic did not specialize was shown a declaration with no parameters
+# at all.
+gen="$tmp/generic.zg"
+cat >"$gen" <<'ZG'
+struct Box[T] {
+	v: T
+}
+
+fn wrap[T](n: T) -> Box[T] {
+	return Box(n)
+}
+
+fn main() {
+	b := wrap(1)
+	print(b.v)
+}
+ZG
+gen_dump=$("$ZERG" build --emit ast "$gen" 2>&1 || true)
+for want in "struct Box[T]" "fn wrap[T](" ; do
+	case "$gen_dump" in
+	*"$want"*) ;;
+	*)
+		echo "lsp-check: --emit ast does not carry \`$want\` — a declaration's type parameters are"
+		echo "           dropped from the dump, and the outline cannot see it because it reports a name"
+		printf '%s\n' "$gen_dump" | sed -n '1,12p'
+		exit 1
+		;;
+	esac
+done
+
 if [ "$ran" -lt "${MIN_SESSIONS:-4}" ]; then
 	echo "lsp-check: only $ran sessions ran — the list is empty, or the server is not starting"
 	exit 1
@@ -623,4 +662,4 @@ if [ "$members" -lt 3 ]; then
 	echo "lsp-check: only $members module members were opened — the fixture did not build, or the loop did not run"
 	exit 1
 fi
-echo "lsp-check: $ran buffers agree with the compiler, $outlined outlines are the parser's own, $members module members are checked against their module, formatting is fmt's answer, and 15 protocol cases hold"
+echo "lsp-check: $ran buffers agree with the compiler, $outlined outlines are the parser's own, $members module members are checked against their module, formatting is fmt's answer, and 15 protocol cases hold, and the dump carries the type parameters the outline cannot show"

@@ -157,11 +157,16 @@ Each case is a `.zg` program beside the stdout it must produce. `mk/gates.mk`'s
 is a regression and fails the target. `CORPUS_SKIP` holds back the rest, and deleting a name
 from it **is** the gate for the feature that name waits on.
 
-Five are waiting, each refused **by name** rather than mis-emitted — `gen_enum` answers
-_E9003 NotImplemented: a generic enum `Either[…]` — this compiler erases type parameters, and
-a variant's payload names one_ — on a generic `enum`, `#[dyn]`, or `derive` beyond `Eq` on a
-fieldless enum. A generic `struct` was the sixth and is built. Two more, `spec_bound` and
-`gen_identity`, build and print what they must today: the list has not caught up with them.
+What is held back is refused **by name** rather than mis-emitted — `gen_enum` answers
+_E9003 NotImplemented: a generic enum `Either[…]` — a generic `struct` is instantiated once
+per application and an `enum` is not_ — and the list waits on a generic `enum`, `#[dyn]`, and
+`derive` beyond `Eq` on a fieldless enum.
+
+Deleting a name is the gate in one direction only, and for a while that was the whole
+mechanism: `gen_struct` stayed on the list after generic structs were built, and this
+paragraph said so in prose while the list still held the case back. The recipe now BUILDS
+every skipped case and fails if one succeeds, so the claim a name makes — that the case
+still cannot be built — is checked rather than remembered.
 
 ## What a program has to be, and who says so
 
@@ -330,11 +335,13 @@ interpolating-command forms are each refused by name rather than by silence
 chain the form is defined to be, which is why the AST and the emitter know nothing about
 f-strings at all — and why the seed only has to lex and parse one to build stage 1.
 
-Still missing, and each refused by name rather than mis-emitted: `Ref[T]` (`E9058`), a
-generic `enum` — a type parameter that a payload names (`E9003`; a generic `struct` is built,
-and it is the `impl Atomic[int]` beside it that makes `import "atomic"` an `E9104`),
-named-argument
-construction `T(a: 1)` (`E9010`), and the command literal (`E9020`).
+Still missing, and each refused by name rather than mis-emitted: a generic `enum` (`E9003` —
+a generic `struct` is instantiated once per application and an `enum` is not) and
+named-argument construction `T(a: 1)` (`E9010`). This sentence named three more until each
+was built — `Ref[T]`, the `import "atomic"` that waited on it, and the command literal — and
+none of the three was noticed here, because a prose list of what is missing is held to the
+codes by nothing. The retired half of the catalogue in
+[Compile Diagnostics](../../docs/tooling/diagnostics.md) is the list that is.
 
 ## What performance work is left
 

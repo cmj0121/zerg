@@ -128,6 +128,10 @@ impl Show for Shape {
 **沒有**自動導出的相等,也沒有隱含的 `Object` spec。**`Eq`** 與 **`From`** 已建;**`Ord`**、**`Hash`**、
 **`Encode`** 與 **`Decode`** 在此規範、但 **[not yet]**——指名其一是 `E9054`。
 
+標在**泛型**目標上的 derive,會為它的每一次實例化各推導一份:`#[derive(Eq)] struct Box[T]` 是一個用該型別自己的
+參數寫出來的實作,並如同任何 `impl[T]` 那樣依每次實例化被具現(見 [Spec 與 Generics](specs.zh-TW.md))。它讀一次
+結構,而答案跟著引數走——`Box[int]` 比的是它的 `int`,`Box[str]` 比的是它的 `str`。
+
 **`From`** 是其中唯一不讀型別自身結構、而讀變體的:在 `enum` 上它生成每個變體所蘊含的那個轉換,對每個帶單一
 payload 的變體各一份 `impl Into[E] for P`,於是一層的錯誤只要 `e.into()` 就成為呼叫者的,不必為每個變體手寫一次
 `match`。這正是這個語言選擇要付的那筆包裝費——它沒有開放式的 error downcast,而取而代之的答案就是每層一個 error

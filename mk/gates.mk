@@ -331,8 +331,14 @@ CORPUS_CONC_REPS ?= 10
 # one and against 0 where there is not. Only stdout was compared before, so a program that
 # stopped aborting — or started — passed unchanged: the abort contract's third step (exit 1)
 # was a thing the corpus could not see, which is a poor property for a corpus that holds
-# cases whose whole subject is aborting. Its FIRST step, the message on stderr, still is:
-# that needs a `<name>.err` beside the other two and is not built.
+# cases whose whole subject is aborting.
+#
+# Its FIRST step, the message on stderr, is checked now too, and against `<name>.err` where
+# there is one — but the absence of that file is the half worth stating. It is not "this case
+# is excused"; it is the claim that the case writes NOTHING to stderr, and the gate holds it
+# to that. Seven cases aborted with a message no file recorded, so the whole of what a reader
+# sees when a Zerg program dies could have changed in either compiler and every gate on this
+# board would have stayed green.
 corpus:                         # run zerg against the test-data corpus it now owns
 	$(MAKE) build
 	@[ -d test-data/codegen ] || { echo "test-data submodule not initialized (git submodule update --init)"; exit 1; }
@@ -345,14 +351,19 @@ corpus:                         # run zerg against the test-data corpus it now o
 		reps=1; case $$name in conc_*) reps=$(CORPUS_CONC_REPS);; esac; \
 		n=0; \
 		while [ $$n -lt $$reps ]; do \
-			got=$$(./bin/corpus-case 2>/dev/null); rc=$$?; \
+			got=$$(./bin/corpus-case 2>./bin/corpus-case.err); rc=$$?; \
 			[ "$$got" = "$$want" ] || { echo "OUTPUT $$name (run $$n)"; fail=1; break; }; \
 			[ "$$rc" = "$$want_rc" ] || { echo "STATUS $$name (run $$n): want $$want_rc, got $$rc"; fail=1; break; }; \
+			if [ -f test-data/codegen/$$name.err ]; then \
+				diff -q test-data/codegen/$$name.err ./bin/corpus-case.err >/dev/null 2>&1 || { echo "STDERR $$name (run $$n): $$(head -1 ./bin/corpus-case.err)"; fail=1; break; }; \
+			elif [ -s ./bin/corpus-case.err ]; then \
+				echo "UNPINNED-STDERR $$name (run $$n): $$(head -1 ./bin/corpus-case.err) — put it in $$name.err"; fail=1; break; \
+			fi; \
 			n=$$((n+1)); \
 		done; \
 		if [ $$n -eq $$reps ]; then ran=$$((ran+1)); fi; \
 	done; \
-	rm -f ./bin/corpus-case ./bin/corpus-case.c; \
+	rm -f ./bin/corpus-case ./bin/corpus-case.c ./bin/corpus-case.err; \
 	[ $$fail -eq 0 ] || { echo "corpus: a case that used to pass regressed"; exit 1; }; \
 	[ $$ran -ge $(CORPUS_MIN) ] || { echo "corpus: only $$ran cases were run, and the floor is $(CORPUS_MIN)"; exit 1; }; \
 	held=0; \

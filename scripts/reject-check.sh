@@ -6024,6 +6024,26 @@ pub fn tag_of(s: str) -> str {
 }
 EOF
 
+# AND THE SAME RULE ON A GENERIC ONE, which had it and lost it: a template is removed from the
+# program before the type table is built — it is not a type — so every rule that reads that
+# table about a type had nothing to read about this one, and privacy was not enforced on a
+# generic at all while the plain `struct` above was refused.
+reject a-module-private-generic-type E5008 <<'EOF'
+import "./lib"
+
+fn main() {
+	print lib.Hidden(1).v
+}
+--- lib/mod.zg
+struct Hidden[T] {
+	pub v: T
+}
+
+pub fn ok() -> int {
+	return 1
+}
+EOF
+
 # THE SAME TYPE, SPELLED THROUGH THE NAMESPACE. `lib.Secret` is rewritten to its last segment
 # before anything is lowered (c_ns_unqualify), so a rule written only on the bare form would
 # have left the qualified one — which is the ONLY form the seed refuses — accepted by the

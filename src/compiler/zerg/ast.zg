@@ -1216,7 +1216,7 @@ pub fn dump_ast(f: File) -> str {
 		}
 	}
 	for s in f.structs {
-		out = out + "\tstruct " + s.name + "\n"
+		out = out + "\tstruct " + s.name + dump_tparams(s.tparams) + "\n"
 		for fd in s.fields {
 			out = out + "\t\tfield " + fd.name + ": " + ty_name(fd.ty) + "\n"
 		}
@@ -1240,7 +1240,7 @@ pub fn dump_ast(f: File) -> str {
 		}
 	}
 	for fn_d in f.fns {
-		out = out + "\t" + fn_kind(fn_d) + " " + qual_name(fn_d) + "(" + params_of(fn_d) + ")"
+		out = out + "\t" + fn_kind(fn_d) + " " + qual_name(fn_d) + dump_tparams(fn_d.tparams) + "(" + params_of(fn_d) + ")"
 		if fn_d.has_ret {
 			out = out + " -> " + ty_name(fn_d.ret)
 		}
@@ -1253,6 +1253,26 @@ pub fn dump_ast(f: File) -> str {
 # spec_kind and spec_member_kind are `fn_kind`'s counterparts for a spec: its visibility, and
 # whether a member is the REQUIREMENT or the provided default — which an empty body cannot say
 # and `has_body` is what does.
+# dump_tparams is a declaration's type parameters, and it is here for the reason the `spec`
+# paragraph above gives: this view answers "did the parser see what I wrote", and it did not
+# show the parameters it had seen. `struct Box[T]` printed as `struct Box` with a field `v: T`,
+# and `fn wrap[T]` as `fn wrap` — a reader asking why a generic did not specialize was shown a
+# declaration with no parameters at all.
+fn dump_tparams(tps: list[str]) -> str {
+	return "" if tps.len() == 0
+
+	mut out := "["
+	mut i := 0
+	for i < tps.len() {
+		if i > 0 {
+			out = out + ", "
+		}
+		out = out + tps[i]
+		i = i + 1
+	}
+	return out + "]"
+}
+
 fn spec_kind(s: SpecDecl) -> str {
 	return "pub spec" if s.is_pub
 

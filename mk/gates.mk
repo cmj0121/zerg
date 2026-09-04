@@ -293,11 +293,15 @@ fmt-roundtrip:                  # what the formatter writes, the parser reads
 # than growing forever.
 
 # Cases awaiting a feature `zerg` does not have. Delete a name when its feature lands;
-# that deletion IS the gate for the feature.
+# that deletion IS the gate for the feature — and the recipe now checks the OTHER direction,
+# because nothing did. A name here is a claim that the case still cannot be built, and a case
+# that quietly starts building stays skipped forever: `gen_struct` sat here after generic
+# structs were built, gated by nothing, while this file's own README said in prose that it
+# was built. So each skipped case is BUILT, and one that succeeds fails the gate.
 CORPUS_SKIP := \
 	derive_enum derive_ord \
 	dyn_witness \
-	gen_enum gen_enum2 gen_struct
+	gen_enum gen_enum2
 
 CORPUS_PASS := $(filter-out $(CORPUS_SKIP),$(basename $(notdir $(wildcard test-data/codegen/*.zg))))
 
@@ -351,7 +355,17 @@ corpus:                         # run zerg against the test-data corpus it now o
 	rm -f ./bin/corpus-case ./bin/corpus-case.c; \
 	[ $$fail -eq 0 ] || { echo "corpus: a case that used to pass regressed"; exit 1; }; \
 	[ $$ran -ge $(CORPUS_MIN) ] || { echo "corpus: only $$ran cases were run, and the floor is $(CORPUS_MIN)"; exit 1; }; \
-	echo "corpus: $$ran/$$(ls test-data/codegen/*.zg | wc -l | tr -d ' ') cases pass (the rest await features zerg does not have yet)"
+	held=0; \
+	for name in $(CORPUS_SKIP); do \
+		if ./bin/zerg build --emit bin -o ./bin/corpus-skip test-data/codegen/$$name.zg >/dev/null 2>&1; then \
+			echo "SKIPPED-BUT-BUILDS $$name"; fail=1; \
+		else \
+			held=$$((held+1)); \
+		fi; \
+	done; \
+	rm -f ./bin/corpus-skip ./bin/corpus-skip.c; \
+	[ $$fail -eq 0 ] || { echo "corpus: a case in CORPUS_SKIP builds now — delete its name, which IS the gate for its feature"; exit 1; }; \
+	echo "corpus: $$ran/$$(ls test-data/codegen/*.zg | wc -l | tr -d ' ') cases pass, and $$held are still refused (the rest await features zerg does not have yet)"
 
 # The compiler compiles itself, so the one program big enough to find a rare emitter path
 # is the compiler — and until now nothing compared the two stages `build` already makes.

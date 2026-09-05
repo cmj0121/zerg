@@ -246,4 +246,9 @@ if [ "$cases" -lt "$MIN_CASES" ]; then
 	printf '\nsanitize-conc: only %s cases were measured, and the floor is %s\n' "$cases" "$MIN_CASES" >&2
 	exit 1
 fi
-printf '\nsanitize-conc: %s cases x %s seeded schedules + %s multi-worker runs, clean\n' "$cases" "$SCHEDULES" "$RUNS"
+# The leak state is named HERE and not only in the header. `clean` on its own is the word a
+# reader takes away, and on macOS it means clean of what address and undefined behaviour see,
+# with leak detection off — the header that said so has scrolled past by then, and on the
+# board it was never shown at all. Its neighbour `mem-check` ends with "no per-round leak",
+# which names what was measured rather than declaring an absence.
+printf '\nsanitize-conc: %s cases x %s seeded schedules + %s multi-worker runs, clean under address + undefined, leak detection %s\n' "$cases" "$SCHEDULES" "$RUNS" "$LEAKS"

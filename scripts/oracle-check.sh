@@ -89,21 +89,28 @@ for src in "$@"; do
 		continue
 	fi
 
-	# stdout AND the exit status: a program that aborts prints nothing, and two compilers
-	# agreeing on the empty string while one raised and the other returned 0 is the exact
-	# shape of an overflow check that went missing
-	out0=$("$tmp/$name.0" 2>/dev/null)
+	# stdout, stderr AND the exit status: a program that aborts prints nothing, and two
+	# compilers agreeing on the empty string while one raised and the other returned 0 is the
+	# exact shape of an overflow check that went missing.
+	#
+	# The exit status catches THAT a program aborted. What it aborted WITH went to /dev/null,
+	# which is the half this gate is best placed to see: an abort's message is a runtime
+	# answer, both binaries carry the same runtime, and two compilers that die at the same
+	# point with different words disagree about which check fired. The comparison is `diff`
+	# rather than `$(...)` for the reason its neighbours are — `$(...)` strips trailing
+	# newlines from both sides at once, so a program that stopped ending in one still matched.
+	"$tmp/$name.0" >"$tmp/out0" 2>"$tmp/err0"
 	rc0=$?
-	out1=$("$tmp/$name.1" 2>/dev/null)
+	"$tmp/$name.1" >"$tmp/out1" 2>"$tmp/err1"
 	rc1=$?
 
-	if [ "$out0" = "$out1" ] && [ "$rc0" -eq "$rc1" ]; then
+	if diff -q "$tmp/out0" "$tmp/out1" >/dev/null 2>&1 && diff -q "$tmp/err0" "$tmp/err1" >/dev/null 2>&1 && [ "$rc0" -eq "$rc1" ]; then
 		same=$((same + 1))
 		continue
 	fi
 	echo "DIFFER    $src — the two compilers do not agree"
-	echo "  zerg0 (rc $rc0): $(echo "$out0" | head -3 | tr '\n' '|')"
-	echo "  zerg  (rc $rc1): $(echo "$out1" | head -3 | tr '\n' '|')"
+	echo "  zerg0 (rc $rc0): $(head -3 "$tmp/out0" | tr '\n' '|')$(head -1 "$tmp/err0" | sed 's/^/ !/')"
+	echo "  zerg  (rc $rc1): $(head -3 "$tmp/out1" | tr '\n' '|')$(head -1 "$tmp/err1" | sed 's/^/ !/')"
 	fail=$((fail + 1))
 done
 

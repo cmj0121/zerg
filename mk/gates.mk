@@ -183,12 +183,12 @@ examples:                       # build every example with zerg itself, check it
 		out=bin/examples/$$(echo $$src | sed 's|^examples/||; s|/|_|g; s|\.zg$$||'); \
 		./bin/zerg build $$src --emit check >/dev/null 2>&1 || { echo "CHECK  $$src"; fail=1; continue; }; \
 		./bin/zerg build $$src --emit bin -o $$out >/dev/null 2>&1 || { echo "BUILD  $$src"; fail=1; continue; }; \
-		got=$$($$out 2>/dev/null) || { echo "RUN    $$src"; fail=1; continue; }; \
+		$$out >bin/examples/got.out 2>bin/examples/got.err || { echo "RUN    $$src"; fail=1; continue; }; \
 		want=test-data/examples/$$(echo $$src | sed 's|^examples/||; s|\.zg$$|.out|'); \
-		if [ -f $$want ]; then \
-			cmp=$$((cmp+1)); \
-			[ "$$got" = "$$(cat $$want)" ] || { echo "OUTPUT $$src"; fail=1; continue; }; \
-		fi; \
+		[ -f $$want ] || { echo "NO-OUT $$src — an example a reader copies owes what it prints"; fail=1; continue; }; \
+		cmp=$$((cmp+1)); \
+		diff -q $$want bin/examples/got.out >/dev/null 2>&1 || { echo "OUTPUT $$src"; fail=1; continue; }; \
+		[ -s bin/examples/got.err ] && { echo "STDERR $$src: $$(head -1 bin/examples/got.err) — an example prints to stdout"; fail=1; continue; }; \
 		n=$$((n+1)); \
 	done; \
 	for src in $(EXAMPLE_REFUSED); do \

@@ -80,9 +80,21 @@ for src in "$@"; do
 	core="$tmp/$slug/$(basename "$src")"
 	name=$(echo "$src" | sed 's|^\./||; s|/|_|g; s|\.zg$||')
 
-	# a program the compiler cannot build as written is not this gate's finding — the corpus
-	# carries cases waiting on features, and `make corpus` is what accounts for them
-	if ! "$ZERG" build --emit bin -o "$tmp/$name.sugar" "$src" >/dev/null 2>&1; then
+	# A program the compiler cannot build as written is not this gate's finding — the corpus
+	# carries cases waiting on features, and `make corpus` is what accounts for them.
+	#
+	# But the skip was a COUNT in a line nobody asserts on: five today, and a sixth would have
+	# read as five plus one more, green. What makes it a claim rather than a tally is the
+	# project's own contract — lowered correctly, or refused BY NAME — so a source may be
+	# skipped here only if it is refused with a code. One that fails for any other reason,
+	# a cc escape above all, is this gate's finding after all.
+	if ! why=$("$ZERG" build --emit bin -o "$tmp/$name.sugar" "$src" 2>&1 >/dev/null); then
+		if ! printf '%s' "$why" | grep -qE '\b[EL][0-9]{4}\b'; then
+			echo "UNBUILT   $src — it does not build and names no rule for it"
+			echo "  $(printf '%s' "$why" | head -1)"
+			fail=$((fail + 1))
+			continue
+		fi
 		skip=$((skip + 1))
 		continue
 	fi
@@ -94,15 +106,29 @@ for src in "$@"; do
 		continue
 	fi
 
-	out0=$("$tmp/$name.sugar" 2>/dev/null)
+	# Both streams, into files, compared with `diff`. They went through `$(...)` before, which
+	# strips trailing newlines from both sides at once — so a sugar form that stopped ending in
+	# a newline matched a core form that still did — and stderr went to /dev/null on both, which
+	# left the MESSAGE a program dies with out of a gate whose whole subject is whether two
+	# spellings do the same thing. An abort travels on stderr; the exit status alone says only
+	# that both died.
+	"$tmp/$name.sugar" >"$tmp/out0" 2>"$tmp/err0"
 	rc0=$?
-	out1=$("$tmp/$name.core" 2>/dev/null)
+	"$tmp/$name.core" >"$tmp/out1" 2>"$tmp/err1"
 	rc1=$?
 
-	if [ "$out0" != "$out1" ] || [ "$rc0" -ne "$rc1" ]; then
+	if ! diff -q "$tmp/out0" "$tmp/out1" >/dev/null 2>&1 || [ "$rc0" -ne "$rc1" ]; then
 		echo "DIFFER    $src — the sugar and the core form do not do the same thing"
-		echo "  as written (rc $rc0): $(echo "$out0" | head -3 | tr '\n' '|')"
-		echo "  desugared  (rc $rc1): $(echo "$out1" | head -3 | tr '\n' '|')"
+		echo "  as written (rc $rc0): $(head -3 "$tmp/out0" | tr '\n' '|')"
+		echo "  desugared  (rc $rc1): $(head -3 "$tmp/out1" | tr '\n' '|')"
+		fail=$((fail + 1))
+		continue
+	fi
+
+	if ! diff -q "$tmp/err0" "$tmp/err1" >/dev/null 2>&1; then
+		echo "STDERR    $src — the two spellings die with different words"
+		echo "  as written: $(head -3 "$tmp/err0" | tr '\n' '|')"
+		echo "  desugared : $(head -3 "$tmp/err1" | tr '\n' '|')"
 		fail=$((fail + 1))
 		continue
 	fi

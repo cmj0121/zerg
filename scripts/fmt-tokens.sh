@@ -50,13 +50,26 @@ n=0
 
 # how many sources must actually be measured. Raise it when the corpus grows; a gate that
 # measures nothing looks exactly like a gate that found nothing.
-MIN_SOURCES=${MIN_SOURCES:-100}
+# 240 against the 270 measured today. The old figure was 100, which is what a floor looks
+# like when it is set once against a corpus a third of the size and never revisited: two
+# thirds of the sources could have dropped out with the gate reporting success. A floor is
+# for an EMPTY glob — a submodule that is not checked out — and it can only do that job if
+# it sits near the number it is guarding.
+MIN_SOURCES=${MIN_SOURCES:-240}
 
 for src in test-data/fmt/*.zg test-data/codegen/*.zg examples/[0-9][0-9]_*.zg; do
 	[ -f "$src" ] || continue
 
-	# a source this compiler cannot lex says nothing about what formatting does to it
-	"$ZERG" build --emit tokens "$src" >"$tmp/before" 2>/dev/null || continue
+	# A source this compiler cannot lex says nothing about what formatting does to it — but
+	# it does not say nothing about the compiler, and skipping it SILENTLY is how a source
+	# leaves the measured set without anyone deciding that it should. Zero of the 270 are
+	# skipped here today, so the branch that excused them was excusing nobody; what it did
+	# was stand ready to excuse a regression.
+	"$ZERG" build --emit tokens "$src" >"$tmp/before" 2>/dev/null || {
+		printf 'LEX    %s — this source no longer lexes at all\n' "$(basename "$src")"
+		fail=1
+		continue
+	}
 
 	cp "$src" "$tmp/case.zg"
 	# The F4xx rules are OFF. They are the group that "changes the code's SHAPE, not its
@@ -65,7 +78,11 @@ for src in test-data/fmt/*.zg test-data/codegen/*.zg examples/[0-9][0-9]_*.zg; d
 	# says which rule did it. What must never change it is LAYOUT and SPACING, which is
 	# F1xx-F3xx, and that is what this measures. The first run of this gate reported F401
 	# as a defect, which was the gate being wrong rather than the formatter.
-	"$ZERG" fmt $REWRITES "$tmp/case.zg" >/dev/null 2>&1 || continue
+	"$ZERG" fmt $REWRITES "$tmp/case.zg" >/dev/null 2>&1 || {
+		printf 'FMT    %s — the formatter refused a source it is measured on\n' "$(basename "$src")"
+		fail=1
+		continue
+	}
 	"$ZERG" build --emit tokens "$tmp/case.zg" >"$tmp/after" 2>/dev/null || {
 		printf 'LEX    %s — the formatted source no longer lexes\n' "$(basename "$src")"
 		fail=1

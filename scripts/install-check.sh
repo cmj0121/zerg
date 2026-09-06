@@ -56,12 +56,23 @@ for f in "$PREFIX/bin/zerg" "$PREFIX/lib/zerg/csrc/zergrt.h" "$PREFIX/lib/zerg/s
 	fi
 done
 
-# The runtime needs its per-platform slots present, not merely most of them: the driver
-# picks between them by target, and a missing one is a link error a user cannot act on.
-for f in "$PREFIX"/lib/zerg/csrc/*.S; do
-	[ -e "$f" ] && break
-	echo "MISSING   no .S sources under $PREFIX/lib/zerg/csrc — the context-switch slots"
-	fail=$((fail + 1))
+# The runtime needs its per-platform slots present, NOT MERELY MOST OF THEM: the driver picks
+# between them by target, and a missing one is a link error a user cannot act on.
+#
+# That sentence stood over a loop which broke on the first `.S` it found, so it asserted that
+# at least one slot was installed — the opposite end of the claim above it. An install that
+# shipped `ctx_arm64.S` and dropped `ctx_x86_64.S` passed, and the person it fails is the one
+# on the other architecture.
+#
+# The expected set is DERIVED from the source tree rather than listed here, because a list
+# here is a third copy of a fact `make install` already acts on: a slot added for a new
+# architecture is checked on the day it appears, without this file being touched.
+for src in src/runtime/csrc/*.S; do
+	[ -e "$src" ] || continue
+	if [ ! -f "$PREFIX/lib/zerg/csrc/$(basename "$src")" ]; then
+		echo "MISSING   $PREFIX/lib/zerg/csrc/$(basename "$src") — a context-switch slot the source tree has"
+		fail=$((fail + 1))
+	fi
 done
 
 # --- the part a file listing cannot answer ---------------------------------------------

@@ -34,8 +34,13 @@ on:
   # AND A RELEASE CALLS THIS ONE. `release.yml` used to define its own board job and say in a
   # comment that it ran "the same gates as CI" — which was a sentence, not a mechanism, and it
   # was wrong on the first tag: it ran `make test`, the whole board, where the steps below
-  # guard nine gates behind the private corpus being fetchable. Nine failed and nothing was
-  # published. Being callable is what makes the claim true by construction.
+  # guard every gate that needs the private corpus behind its being fetchable. Those failed
+  # and nothing was published. Being callable is what makes the claim true by construction.
+  #
+  # The number of guarded gates is NOT written here. It was — as nine, while `gates-check`
+  # said six about the same set and the set was thirteen — because two prose counts of one
+  # list drift apart the moment a step is added to either. `make gates` counts them and names
+  # them on every run.
   workflow_call:
 
 permissions:

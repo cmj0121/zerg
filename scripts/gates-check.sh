@@ -117,12 +117,17 @@ done
 #    `run: make <target>`, so that a failure names the gate rather than the board.
 #
 #    WHAT THIS CANNOT SEE: it asserts the step is PRESENT, and the property wanted is that
-#    the step RUNS. Six board gates sit behind `if: steps.corpus_fetch.outputs.available ==
+#    the step RUNS. Board gates sit behind `if: steps.corpus_fetch.outputs.available ==
 #    'true'` because they need the private submodule, and a skipped step is green — which is
 #    the exact failure the header above recounts, one level up. Closing it means the board
 #    being single-sourced (CI running `make test`, or its steps generated from a matrix) rather
 #    than a third copy of the list this script compares against; until then the conditional
-#    six are trusted, and that is the declared limit of clause 2.
+#    ones are trusted, and that is the declared limit of clause 2.
+#
+#    HOW MANY THEY ARE IS COUNTED, not written down. This paragraph said six and the workflow
+#    header said nine about the same set, which was thirteen: a prose count of a list drifts
+#    the moment a step joins it, and a limit whose SIZE is wrong reads as a smaller limit than
+#    it is. The tagline names them, so the trusted set is in front of whoever reads the run.
 #    A leading `VAR=value` is allowed on the run line. A gate may need one — `treesitter`
 #    takes `REQUIRE=1` so that a runner without node FAILS rather than skipping — and the
 #    alternative was a target that reads the variable itself, which would hide from a reader
@@ -158,5 +163,13 @@ if [ "$fail" -ne 0 ]; then
 	exit 1
 fi
 
+# The conditional set, derived from the workflow rather than remembered. `grep -A2` is the
+# same window clause 2 reads the step through: the `if:` line, then the `run:` line under it.
+conditional=$(grep -A 2 "if: steps.corpus_fetch.outputs.available == 'true'" "$WORKFLOW" |
+	grep -oE 'run: ([A-Z_]+=[^ ]+ )*make [a-z-]+' | sed 's/.*make //' | sort -u)
+n_cond=$(printf '%s\n' "$conditional" | grep -c . || true)
+
 printf 'gates-check: %s gates — each on the board, each run by CI\n' \
 	"$(printf '%s\n' "$board" | wc -l | tr -d ' ')"
+printf 'gates-check: %s of them run only when the private corpus was fetched — %s\n' \
+	"$n_cond" "$(printf '%s\n' "$conditional" | tr '\n' ' ')"

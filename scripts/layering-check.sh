@@ -78,11 +78,33 @@ LAYER_NAME="the checker and the emitter"
 # shellcheck disable=SC2086
 LAYER_DEFS=$(zg_defs $LAYER_FILES)
 
-if [ "$(printf '%s\n' "$LAYER_DEFS" | wc -l)" -lt 50 ]; then
-	note "$LAYER_NAME definitions did not extract — $(printf '%s\n' "$LAYER_DEFS" | wc -l) names found"
-	printf 'layering-check: the layer it measures against could not be read\n' >&2
-	exit 1
-fi
+# The layer is read PER FILE, and that is the whole of the guard. A single floor under the
+# union was what stood here — 50, against the 1083 names the three files define — so it caught
+# an extraction that had failed COMPLETELY and nothing else: one of the three renamed or moved
+# takes the union to roughly 400, which is eight times the floor, and every assertion below
+# then holds over a layer with a third of it missing.
+#
+# `method-gaps-check` reaches the same conclusion in its own words: a number is the wrong
+# shape when the thing being guarded is a SET of named parts, because a floor cannot tell
+# which part left. So each file answers for itself.
+#
+# 25 is a floor under a FILE, and what it catches is a file that has MOVED or stopped being
+# readable — the union floor could not, because the other two carry it. It does not catch a
+# file that shrinks by half, and no number here would: the three define 181, 862 and 40 names,
+# so a floor that binds the largest is nonsense for the smallest.
+# An ABSENT file is caught above, by the guard that answers for every source this gate reads.
+# What is left to catch is a file that is THERE and reads as almost nothing: `zg_defs` greps
+# for a declaration's spelling, and a spelling that changes — the way a `pub` prefix or a
+# module qualifier has before — leaves the file in place and the reader empty.
+LAYER_FILE_MIN=${LAYER_FILE_MIN:-25}
+for lf in $LAYER_FILES; do
+	n_lf=$(zg_defs "$lf" | wc -l)
+	if [ "$n_lf" -lt "$LAYER_FILE_MIN" ]; then
+		note "$lf defines $n_lf names to this reader, which is too few to be the file it is"
+		printf 'layering-check: the layer it measures against could not be read\n' >&2
+		exit 1
+	fi
+done
 
 # reaches_into <caller.zg> — the caller must call nothing defined in the layer. A name the
 # caller defines itself is its own, not a reach.

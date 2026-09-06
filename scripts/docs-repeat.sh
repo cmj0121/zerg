@@ -91,5 +91,14 @@ if found:
     print('docs-repeat: %d paragraph(s) written twice in one document' % found, file=sys.stderr)
     sys.exit(1)
 
+# A FLOOR under the documents collected. Every assertion here is of the form "no paragraph in
+# this document is written twice", and all of them hold for a list with nothing in it — so a
+# walk that stops matching (a directory renamed, a suffix filter that no longer fits) prints
+# `0 documents` and exits 0. 60 against the 75 there are today.
+floor = int(os.environ.get('DOCS_MIN', '60'))
+if len(files) < floor:
+    print('docs-repeat: only %d documents were read, and the floor is %d — the walk is no longer finding them' % (len(files), floor), file=sys.stderr)
+    sys.exit(1)
+
 print('docs-repeat: %d documents, no paragraph written twice in one of them' % len(files))
 EOF

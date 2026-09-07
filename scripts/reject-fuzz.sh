@@ -130,14 +130,16 @@ for src in "$CORPUS"/*.zg; do
 			fail=$((fail + 1))
 			continue
 		fi
-		# REPORTED, NOT ENFORCED — the same shape as CORPUS_PASS. A place is owed by every
-		# diagnostic and the parser's and the emitter's refusals do not have one yet; a
-		# gate that fails on a known gap is not a gate, and a gate that says nothing about
-		# it lets the gap grow. The count is the thing to watch: when it reaches zero this
-		# becomes an assertion.
-		# a refusal SAYS something. An internal abort, a panic, an empty message — none has
+		# A refusal SAYS something. An internal abort, a panic, an empty message — none has
 		# a place either, so without this they would land in `noplace` and pass under a
 		# ceiling that exists to watch a different thing entirely.
+		#
+		# A paragraph stood here describing the counts as REPORTED, NOT ENFORCED, because
+		# "the parser's and the emitter's refusals do not have one yet" — which the header of
+		# this same file contradicts: both report through a channel of their own, all five
+		# ceilings are declared at zero, and `extra-arg` reads zero on every run. It was also
+		# attached to this check, which is about a refusal that says NOTHING, rather than to
+		# the place check below.
 		if [ -z "$out" ]; then
 			echo "SILENT    $name/$kind — non-zero exit and nothing said"
 			fail=$((fail + 1))

@@ -70,7 +70,13 @@ emit_step() {
 		head -15 "$log" >&2
 		die "$what"
 	fi
-	[ -s "$out" ] || die "$what — it emitted nothing at all"
+	# NOT `-s`. This gate's whole claim is that two files are IDENTICAL, and two truncated
+	# files are identical too — `entry-path-check`, which compares two emissions of this same
+	# compiler, puts it exactly right: two files this small are identical for the wrong
+	# reason. So the floor is that gate's, by name and by value.
+	n=$(size "$out")
+	[ "$n" -ge "${MIN_BYTES:-1000000}" ] ||
+		die "$what — it emitted $n bytes and the floor is ${MIN_BYTES:-1000000}"
 }
 
 # stage0 is the Go seed. It is built here rather than taken from bin/ for two reasons: the

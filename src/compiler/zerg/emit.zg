@@ -14864,9 +14864,26 @@ fn c_map_vt(mut &em: Emitter, kt: ast.Ty, vt: ast.Ty) -> str {
 	# NULL copy is the runtime's memcpy fast path, which is what a POD key or value wants.
 	# A key or value that OWNS storage gets the same thunk a list element of that type
 	# gets: without one, `zrt_map_copy` bit-copied a `list` value and both maps' entries
-	# named one buffer. The DROPS are still NULL, which is the one container teardown that
-	# has not been built: a map's own drop frees its tables, and its keys and values go
-	# with it only once these are filled in.
+	# named one buffer.
+	#
+	# THE DROPS ARE STILL NULL, and what that costs is measured: a `map[str, list[int]]`
+	# frees its table and leaks every buffer in it, which is what test-data/sanitize-leaks.txt
+	# records for `map_value_semantics` and `every_form_handled`.
+	#
+	# FILLING THEM IN IS NOT THE WHOLE FIX, and trying it is how that was learned: the corpus
+	# answers `heap-use-after-free`, not a leak. What the report says, and it is worth writing
+	# down because the obvious explanations are all wrong:
+	#
+	#   the buffer is one `zrt_list_unshare` allocated for a list BINDING on its first write;
+	#   that binding's own registered drop frees it at scope exit; the map's entry drop then
+	#   releases the same buffer.
+	#
+	# So an entry does not hold the reference a val_drop assumes. It is NOT the read side —
+	# `v := m[k]` deep-copies, measured — and NOT the insert side — `m[k] = v` calls
+	# zrt_list_copy, which retains, measured — and NOT `zrt_map_copy`, which deep-copies per
+	# entry. The accounting is off somewhere those three do not cover, and finding it is its
+	# own unit of work. Until then the leak is the cheaper of the two defects and the list
+	# records it by name.
 	kc := c_elem_copy_fn(em, kt)
 	vc := c_elem_copy_fn(em, vt)
 	em.mvt_decls.append(f"static const zrt_map_vt {name} = {{ {hash}, {eq}, {kc}, NULL, {vc}, NULL }};\n")

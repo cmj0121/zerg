@@ -15047,7 +15047,13 @@ fn c_map_method(mut &em: Emitter, target: ast.Expr, meth: str, args: list[ast.Ex
 
 		return f"((int64_t)zrt_map_len({recv}))" if place
 
-		return f"({{ {bind}(int64_t)zrt_map_len({recv}); }})"
+		# THE RECEIVER WE MATERIALISED IS OURS TO RELEASE. `bind` gives an rvalue the storage
+		# an address needs, and nothing was giving that storage back: `{"a": 1}.len()` built a
+		# map, read its length and walked away from its entry table. A bound receiver is not
+		# ours — it is registered where it was declared — which is why this only happens on
+		# the `not place` side.
+		nr := c_tmp(em, "zgt_mr")
+		return f"({{ {bind}int64_t {nr} = (int64_t)zrt_map_len({recv}); {c_drop_stmt(em, tty, "zgt_mx")} {nr}; }})"
 	}
 	if meth == "has" {
 		raise c_diag(em, rule.Rule.HasTakesOneKey, f"`has` asks about one key, and this gives {strconv.to_string(args.len(), 10)}") if args.len() != 1
@@ -15055,7 +15061,11 @@ fn c_map_method(mut &em: Emitter, target: ast.Expr, meth: str, args: list[ast.Ex
 		kt := c_map_key_ty(tty)
 		check.chk_slot_fits(em, f"a key of this {ast.ty_name(tty)}", kt, args[0])
 		k := c_expr(em, args[0], sb)
-		return f"({{ {bind}{c_type(kt)} zgt_mk = {k}; zrt_map_has({recv}, &zgt_mk); }})"
+		return f"({{ {bind}{c_type(kt)} zgt_mk = {k}; zrt_map_has({recv}, &zgt_mk); }})" if place
+
+		# the same release as `len`'s, and for the same reason
+		hr := c_tmp(em, "zgt_mr")
+		return f"({{ {bind}{c_type(kt)} zgt_mk = {k}; bool {hr} = zrt_map_has({recv}, &zgt_mk); {c_drop_stmt(em, tty, "zgt_mx")} {hr}; }})"
 	}
 
 	# TWO ANSWERS BEHIND A NAME THIS FUNCTION DOES NOT LOWER. `insert`, `remove` and `get` are

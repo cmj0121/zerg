@@ -642,3 +642,12 @@ jobs:
       - name: Build every conc_* case with the sanitizers on, and run it
         if: steps.corpus_fetch.outputs.available == 'true'
         run: make sanitize-conc
+
+      # And the OTHER 179, which had never been under a sanitizer at all — the twenty above
+      # are the concurrency cases, and `list`, `str`, `map` and `conv` are exercised by the
+      # rest. This step is where the leak half of that measurement actually happens: it is a
+      # Linux job, and LeakSanitizer does not exist on macOS, so a developer's board reports
+      # only that it did not re-check the list.
+      - name: The rest of the corpus under the sanitizers, against the named list
+        if: steps.corpus_fetch.outputs.available == 'true'
+        run: make sanitize-corpus

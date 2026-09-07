@@ -77,11 +77,20 @@ ZG
 | zero-dependency  | like Go——編譯後的程式不連結任何第三方庫                               |
 
 ```zerg
-break if done                   # → if done { break }
-print f"{count} items"          # 插值 → str 串接
+#[derive(Eq)] # compiler 依結構代寫 impl
+struct Point {
+ pub x: int
+ pub y: int
+}
 
-#[derive(Eq)]                   # compiler 依結構代寫 impl
-struct Point { x: int; y: int }
+fn main() {
+ mut count := 0
+ for p in [Point(1, 2), Point(1, 2), Point(3, 4)] {
+  break if p == Point(3, 4) # `break if c` 就是 `if c { break }`
+  count = count + 1
+ }
+ print f"{count} items" # 插值，而不是手寫串接
+}
 ```
 
 Zero-dependency 分兩層。**runtime**——透過平台 C 函式庫碰 OS、別無其他的那一小塊 C 底層——由 spec 與其實作共同

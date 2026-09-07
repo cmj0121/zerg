@@ -83,11 +83,20 @@ that asked for a file got none and exited 0. What differs per stage is only the 
 | zero-dependency  | like Go — a compiled program links no third-party library                               |
 
 ```zerg
-break if done                   # → if done { break }
-print f"{count} items"          # interpolation → str concatenation
+#[derive(Eq)] # the compiler writes the impl from the structure
+struct Point {
+ pub x: int
+ pub y: int
+}
 
-#[derive(Eq)]                   # the compiler writes the impl from the structure
-struct Point { x: int; y: int }
+fn main() {
+ mut count := 0
+ for p in [Point(1, 2), Point(1, 2), Point(3, 4)] {
+  break if p == Point(3, 4) # `break if c` is `if c { break }`
+  count = count + 1
+ }
+ print f"{count} items" # interpolation, not a hand-written concatenation
+}
 ```
 
 Zero-dependency is two layers. The **runtime** — the small C floor reaching the OS through the

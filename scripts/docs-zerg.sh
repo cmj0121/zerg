@@ -95,7 +95,14 @@ ZERG=$(cd "$(dirname "$ZERG")" && pwd)/$(basename "$ZERG")
 pages=$*
 whole_tree=0
 [ -n "$pages" ] || {
-	pages=$(git ls-files 'docs/*.md' 'docs/**/*.md')
+	# EVERY TRACKED .md, not `docs/` only. The rule at the top of this file — a ` ```zerg `
+	# fence claims its contents are a whole program that compiles, and a picture of code is
+	# ` ```text ` — is a claim about this repository's prose, and 54 blocks under `docs/` were
+	# re-fenced to honour it. The two files a visitor opens FIRST were outside the walk, and
+	# both broke it: `README.md` and `README.zh-TW.md` each fenced an illustrative fragment as
+	# ` ```zerg `, which answered `E4045` when compiled. They are programs now, and the walk
+	# reaches them, so the rule holds where it is read most.
+	pages=$(git ls-files '*.md')
 	whole_tree=1
 }
 

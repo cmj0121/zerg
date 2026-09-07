@@ -14864,9 +14864,26 @@ fn c_map_vt(mut &em: Emitter, kt: ast.Ty, vt: ast.Ty) -> str {
 	# NULL copy is the runtime's memcpy fast path, which is what a POD key or value wants.
 	# A key or value that OWNS storage gets the same thunk a list element of that type
 	# gets: without one, `zrt_map_copy` bit-copied a `list` value and both maps' entries
-	# named one buffer. The DROPS are still NULL, which is the one container teardown that
-	# has not been built: a map's own drop frees its tables, and its keys and values go
-	# with it only once these are filled in.
+	# named one buffer.
+	#
+	# THE DROPS ARE STILL NULL, and what that costs is measured: a `map[str, list[int]]`
+	# frees its table and leaks every buffer in it, which is what test-data/sanitize-leaks.txt
+	# records for `map_value_semantics` and `every_form_handled`.
+	#
+	# FILLING THEM IN IS NOT THE WHOLE FIX, and trying it is how that was learned: the corpus
+	# answers `heap-use-after-free`, not a leak. What the report says, and it is worth writing
+	# down because the obvious explanations are all wrong:
+	#
+	#   the buffer is one `zrt_list_unshare` allocated for a list BINDING on its first write;
+	#   that binding's own registered drop frees it at scope exit; the map's entry drop then
+	#   releases the same buffer.
+	#
+	# So an entry does not hold the reference a val_drop assumes. It is NOT the read side —
+	# `v := m[k]` deep-copies, measured — and NOT the insert side — `m[k] = v` calls
+	# zrt_list_copy, which retains, measured — and NOT `zrt_map_copy`, which deep-copies per
+	# entry. The accounting is off somewhere those three do not cover, and finding it is its
+	# own unit of work. Until then the leak is the cheaper of the two defects and the list
+	# records it by name.
 	kc := c_elem_copy_fn(em, kt)
 	vc := c_elem_copy_fn(em, vt)
 	em.mvt_decls.append(f"static const zrt_map_vt {name} = {{ {hash}, {eq}, {kc}, NULL, {vc}, NULL }};\n")
@@ -15047,7 +15064,13 @@ fn c_map_method(mut &em: Emitter, target: ast.Expr, meth: str, args: list[ast.Ex
 
 		return f"((int64_t)zrt_map_len({recv}))" if place
 
-		return f"({{ {bind}(int64_t)zrt_map_len({recv}); }})"
+		# THE RECEIVER WE MATERIALISED IS OURS TO RELEASE. `bind` gives an rvalue the storage
+		# an address needs, and nothing was giving that storage back: `{"a": 1}.len()` built a
+		# map, read its length and walked away from its entry table. A bound receiver is not
+		# ours — it is registered where it was declared — which is why this only happens on
+		# the `not place` side.
+		nr := c_tmp(em, "zgt_mr")
+		return f"({{ {bind}int64_t {nr} = (int64_t)zrt_map_len({recv}); {c_drop_stmt(em, tty, "zgt_mx")} {nr}; }})"
 	}
 	if meth == "has" {
 		raise c_diag(em, rule.Rule.HasTakesOneKey, f"`has` asks about one key, and this gives {strconv.to_string(args.len(), 10)}") if args.len() != 1
@@ -15055,7 +15078,11 @@ fn c_map_method(mut &em: Emitter, target: ast.Expr, meth: str, args: list[ast.Ex
 		kt := c_map_key_ty(tty)
 		check.chk_slot_fits(em, f"a key of this {ast.ty_name(tty)}", kt, args[0])
 		k := c_expr(em, args[0], sb)
-		return f"({{ {bind}{c_type(kt)} zgt_mk = {k}; zrt_map_has({recv}, &zgt_mk); }})"
+		return f"({{ {bind}{c_type(kt)} zgt_mk = {k}; zrt_map_has({recv}, &zgt_mk); }})" if place
+
+		# the same release as `len`'s, and for the same reason
+		hr := c_tmp(em, "zgt_mr")
+		return f"({{ {bind}{c_type(kt)} zgt_mk = {k}; bool {hr} = zrt_map_has({recv}, &zgt_mk); {c_drop_stmt(em, tty, "zgt_mx")} {hr}; }})"
 	}
 
 	# TWO ANSWERS BEHIND A NAME THIS FUNCTION DOES NOT LOWER. `insert`, `remove` and `get` are
@@ -16434,7 +16461,15 @@ fn c_let(mut &em: Emitter, name: str, ty: ast.Ty, has_type: bool, is_mut: bool, 
 		# outer one, or the one this declaration re-declares — never the new variable
 		mval := c_map_lit_as(em, eff, ival, c_nosub())
 		c_add_var(em, name, eff, is_mut, is_const)
-		return f"{ind}zrt_map {c_var_cname(em, name)} = {mval};\n"
+
+		# AND THE REGISTRATION, which this arm returned without for as long as it existed.
+		# `m := {"a": 1}` falls to the bottom of this function and is registered there;
+		# `m: map[str, int] = {"a": 1}` came here and was not, so an ANNOTATION was the
+		# difference between a map that gives its entry table back and one that does not.
+		# The carrier arm below records the same omission being closed on its own slot.
+		mcn := c_var_cname(em, name)
+		mgive := c_pend_drop(em, eff, mcn, ind)
+		return f"{ind}zrt_map {mcn} = {mval};\n" + mgive
 	}
 
 	return c_let_list(em, name, eff, is_mut, is_const, ival, ind) if c_is_list(eff)

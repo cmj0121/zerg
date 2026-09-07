@@ -8803,6 +8803,18 @@ fn c_index(mut &em: Emitter, target: ast.Expr, idx: ast.Expr, sb: Subst) -> str 
 	if c_needs_copy(em, et) {
 		val = c_copy_of(em, et, slot)
 	}
+
+	# A MAP INDEX IS A BORROW, and this is the exception to the sentence above. `m[k]` lowers
+	# to a bit copy of a value the map still owns — c_is_place says so in its own words, by
+	# excluding exactly this shape from being a place — so `c["k"][0]` arrives here with a
+	# target that something else will name again. Releasing it frees a buffer the map's entry
+	# still points at, which goes unobserved only because that vtable's drops are NULL.
+	#
+	# The element above is already read out and copied where it owns anything, so the borrow
+	# is finished with by the time this returns and there is nothing to give back.
+	borrowed := c_is_index(target) and c_is_map(c_infer(em, c_index_target(target)))
+	return f"({{ zrt_list {ln} = {tgt}; {ct} {vn} = {val}; {vn}; }})" if borrowed
+
 	return f"({{ zrt_list {ln} = {tgt}; {ct} {vn} = {val}; zrt_list_drop(&{ln}); {vn}; }})"
 }
 

@@ -19,7 +19,7 @@
 # LINUX_GATES, and a step in .github/workflows/ci.yml. `make gates` holds all three
 # to each other.
 
-.PHONY: suites test-runner stdlib-test install-check examples corpus fixpoint sanitize-conc \
+.PHONY: suites test-runner stdlib-test install-check examples corpus fixpoint sanitize-conc sanitize-corpus \
 	mem-check refuse reject oracle lsp editor-align treesitter desugar gates reject-fuzz \
 	check-equal fmt-corpus fmt-self fmt-tokens fmt-roundtrip docs-links docs-mirror docs-zerg \
 	grammar-cites grammar-cited grammar-keywords grammar-mirror refusal-cites docs-repeat generic-walks sha256 layering conformance productions \
@@ -427,6 +427,30 @@ sanitize-conc:                  # run the concurrency corpus under address/UB/le
 # than an RSS reading, and its programs are written inside the script — so it runs on every
 # platform, on every fork, with nothing fetched. What it cannot see is written at the top of
 # the script: a leak that is bounded per PROGRAM is invisible to a difference.
+# THE OTHER 179. `sanitize-conc` above runs the twenty `conc_*` cases, which is what its name
+# says and what its repetitions are for — but those twenty are not where `list`, `str`, `map`
+# and `conv` are exercised. The rest of the corpus had never been under a sanitizer at all, and
+# the first run of it found sixteen cases leaking, in four classes.
+#
+# THIS GATE IS THE DEBT, HELD STILL. It is the same script with the same compile and the same
+# sanitizers, given the whole corpus and a list of what reports today; the argument for a named
+# list rather than a count is in scripts/sanitize-leaks.txt. One schedule and one run each,
+# because these are not concurrent programs — repetition buys nothing and the corpus is nine
+# times the size.
+#
+# CORPUS_PASS and not a glob, so the five cases waiting on a feature are out for the reason
+# `corpus` has them out, and a sixth joining that list does not become a failure here.
+# `conc_*` is taken out with a WILDCARD and not a `%` pattern: make's filter-out allows one
+# `%` per pattern, so `%/conc_%` matches nothing and silently filtered nobody — the first run
+# of this gate measured 199 cases and reported it as a success.
+SANITIZE_CORPUS_CASES = $(filter-out $(wildcard test-data/codegen/conc_*.zg) $(addprefix test-data/codegen/,$(addsuffix .zg,$(CORPUS_SKIP))),$(wildcard test-data/codegen/*.zg))
+
+sanitize-corpus:                # the rest of the corpus under the sanitizers, against a named list
+	$(MAKE) build
+	@CASES="$(SANITIZE_CORPUS_CASES)" \
+		KNOWN="scripts/sanitize-leaks.txt test-data/sanitize-leaks.txt" \
+		MIN_CASES=150 SCHEDULES=1 RUNS=1 ./scripts/sanitize-conc.sh
+
 mem-check:                      # a value that outlives its scope, counted rather than estimated
 	$(MAKE) build
 	./scripts/mem-check.sh
@@ -540,7 +564,7 @@ gates:                          # every gate is on the board, and the board is r
 	./scripts/gates-check.sh
 
 # `version-check` sits straight after `build` because it reads bin/ rather than filling it.
-LINUX_GATES ?= build version-check suites test-runner stdlib-test examples corpus desugar lsp editor-align treesitter install-check refuse reject oracle reject-fuzz check-equal fmt-corpus fmt-tokens fmt-roundtrip fmt-self lint lint-check doc-check fixpoint docs-links docs-mirror docs-repeat docs-zerg generic-walks grammar-cites grammar-cited grammar-keywords grammar-mirror refusal-cites layering stmt-walk entry-path examples-index conformance productions counterexamples behaviour error-codes-check seed-gaps deviation-check marker-codes chapter-codes method-gaps build-deps-check cache-key-check sha256 gates mem-check mem-peak release-notes sanitize-conc
+LINUX_GATES ?= build version-check suites test-runner stdlib-test examples corpus desugar lsp editor-align treesitter install-check refuse reject oracle reject-fuzz check-equal fmt-corpus fmt-tokens fmt-roundtrip fmt-self lint lint-check doc-check fixpoint docs-links docs-mirror docs-repeat docs-zerg generic-walks grammar-cites grammar-cited grammar-keywords grammar-mirror refusal-cites layering stmt-walk entry-path examples-index conformance productions counterexamples behaviour error-codes-check seed-gaps deviation-check marker-codes chapter-codes method-gaps build-deps-check cache-key-check sha256 gates mem-check mem-peak release-notes sanitize-conc sanitize-corpus
 
 # `reject` holds the mistakes somebody thought of; this holds the ones nobody did. It takes
 # the corpus's WELL-FORMED programs, breaks each in a way the language has a rule about,

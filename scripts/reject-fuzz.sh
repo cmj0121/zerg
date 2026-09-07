@@ -181,6 +181,20 @@ done
 # 60 and the gate still says OK. These can only go down, and the day they reach zero the
 # report above becomes an assertion.
 rc=0
+
+# The SKIPPED SOURCES get one too, and for the reason the paragraph above gives about counts
+# that are only printed. A source that does not build in isolation is not this gate's finding
+# — the reason is three paragraphs up and it is a good one — but it leaves the fuzzer's
+# population smaller, and the population is the only thing standing between "no mutation was
+# refused for the wrong reason" and "almost nothing was mutated". Eleven today; a change that
+# made a hundred sources unbuildable on their own would have read as eleven plus more, green,
+# with MIN_REFUSED far enough below the 461 applied to tolerate the collapse.
+UNBUILDABLE_MAX=${UNBUILDABLE_MAX:-11}
+if [ "$unbuildable" -gt "$UNBUILDABLE_MAX" ]; then
+	echo "reject-fuzz: $unbuildable sources do not build on their own, and the ceiling is $UNBUILDABLE_MAX — the fuzzer's population is shrinking"
+	rc=1
+fi
+
 for kind in missing-arg wrong-type write-immutable int-condition mixed-operands; do
 	eval "n=\${noplace_${kind//-/_}:-0}"
 	eval "cap=\${NOPLACE_MAX_${kind//-/_}:--1}"

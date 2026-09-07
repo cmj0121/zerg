@@ -12077,9 +12077,18 @@ fn c_list_method_rv(mut &em: Emitter, target: ast.Expr, meth: str, args: list[as
 	# `len` is the only list method that answers a value, and it answers an int — so the
 	# result is held across the drop, and everything else is a statement whose value is the
 	# drop itself.
+	#
+	# EXCEPT WHERE THE TARGET IS A MAP INDEX, which is the same exception c_list_index carries
+	# and for the same reason: `lists["xs"].len()` is handed a bit copy of a value the map
+	# still owns, and releasing it frees a buffer the entry still points at. c_is_place names
+	# this shape already, by excluding it from being a place.
+	borrowed := c_is_index(target) and c_is_map(c_infer(em, c_index_target(target)))
+
+	return f"({{ zrt_list {ln} = {src}; {inner}; }})" if borrowed and meth != "len"
 	return f"({{ zrt_list {ln} = {src}; {inner}; zrt_list_drop(&{ln}); }})" if meth != "len"
 
 	rn := c_tmp(em, "zgt_t")
+	return f"({{ zrt_list {ln} = {src}; int64_t {rn} = {inner}; {rn}; }})" if borrowed
 	return f"({{ zrt_list {ln} = {src}; int64_t {rn} = {inner}; zrt_list_drop(&{ln}); {rn}; }})"
 }
 

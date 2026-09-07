@@ -245,7 +245,14 @@ fmt-corpus:                     # every test-data/fmt case must already be canon
 # `examples` JOINED THAT SET and immediately had two: the corpus a reader meets first had
 # never been handed to the formatter, so `05_bitwise` shipped `0b1100 &0b1010` — the operand
 # spacing of a chapter whose subject IS that operator.
-fmt-self:                       # every Zerg source this repository writes is canonical
+#
+# TEST-DATA IS NOT IN THE SET, and that is a decision rather than an omission. 93 of the 204
+# `codegen` sources are not canonical: their subject is what a program DOES, and a case
+# written before a formatting rule landed says what it always said. `test-data/fmt` is the
+# corpus whose subject IS the formatting, and `fmt-corpus` holds it. The line above this
+# recipe used to say "every Zerg source this repository writes", which is 93 sources wider
+# than what runs — and the recipe's own closing line had it right all along.
+fmt-self:                       # the compiler, the stdlib and the examples are in canonical form
 	$(MAKE) build
 	@./bin/zerg fmt --check $(SELF_TREES) \
 		|| { echo "fmt-self: a source this repository writes is not in canonical form"; exit 1; }

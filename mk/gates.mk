@@ -175,7 +175,7 @@ EXAMPLE_OUT_MIN ?= 36
 # `examples/1g/siblings` built and ran and printed the right three lines while `--emit check`
 # refused it, because only one of the two loaders knew a sibling import loads nothing (#57).
 # The check costs no `cc`, and it is the stage an editor runs on every save.
-examples:                       # build every example with zerg itself, check it, and run it
+examples:                       # every example builds, runs, and prints what its file says
 	$(MAKE) build
 	@fail=0; n=0; cmp=0; mkdir -p bin/examples; \
 	for src in $(EXAMPLE_SRCS); do \

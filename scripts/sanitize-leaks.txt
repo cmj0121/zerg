@@ -1,0 +1,28 @@
+# sanitize-leaks — the corpus programs that still report under the sanitizers, and what allocates.
+#
+# The private half of this file is test-data/sanitize-leaks.txt, and it holds the case NAMES,
+# for the reason scripts/oracle-skips.txt gives about its own pair: a case name is corpus
+# content, and listing sixteen of them here would be that submodule leaking out one line at a
+# time. This half carries the argument; that half carries the list.
+#
+# WHY A LIST AND NOT A COUNT. These are a known debt, not a surprise: the emitter registers a
+# release at each declaration and unwinds at every exit, and the work that took the CONCURRENCY
+# corpus from 39 reports to 0 did not reach the rest of the corpus. A count would let one leak
+# be fixed while another arrives and read as no change, which is the failure `reject-fuzz` has
+# per-kind ceilings to avoid. A named set with a reason each cannot hide that trade.
+#
+# Format is <case>TAB<the first runtime frame that allocated>. The gate fails on a case that
+# reports and is not listed, on a listed case that no longer reports, and on a listed case
+# whose allocator moved — the last being the one worth having, since a case that starts
+# leaking somewhere else is a new defect wearing an old name.
+#
+# WHAT THE LIST IS NOT ALLOWED TO DO IS GROW. A line comes off it when the leak is fixed; a
+# line is added only by a person who has decided to accept a new one, and the diff says so.
+#
+# LEAK DETECTION IS LINUX-ONLY — LeakSanitizer does not exist on macOS, and asking for it there
+# aborts before main. So the STALE half of the contract is checked only where the leak half
+# runs; a macOS run says out loud that it did not re-check the list rather than reporting every
+# line of it as fixed.
+#
+# There are no entries here: all sixteen are test-data cases. The file exists because the
+# argument is public even when the list cannot be.

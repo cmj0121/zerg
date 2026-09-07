@@ -123,6 +123,22 @@ printf 'sanitize-conc: address + undefined, leak detection %s, %s seeded single-
 
 fail=0
 cases=0
+seen_known=""
+
+# KNOWN is a list of files naming the cases that report today, one `<case>TAB<allocator>` per
+# line. Unset — which is how `sanitize-conc` runs — every report is a failure and nothing below
+# changes. Set, the reports are held to the list instead, and the list is held back: see
+# scripts/sanitize-leaks.txt for why it is a named set with a reason each rather than a count.
+KNOWN=${KNOWN:-}
+
+known_reason() {
+	[ -n "$KNOWN" ] || return 0
+	for kf in $KNOWN; do
+		[ -f "$kf" ] || continue
+		awk -F'\t' -v n="$1" '$1 == n { print $2; found = 1 } END { exit !found }' "$kf" && return 0
+	done
+	return 0
+}
 
 # How many cases must actually be measured, checked at the bottom. The submodule guard above
 # catches an ABSENT test-data and nothing else: a shallow, partial or wrong-commit checkout
@@ -218,6 +234,24 @@ for src in ${CASES:-test-data/codegen/conc_*.zg}; do
 			# So it is matched, and a run that prints it fails. The annotations in sched.c
 			# are what keep it quiet; if it comes back, they have been lost.
 			if grep -Eq 'ERROR: .*Sanitizer|runtime error:|ASan is ignoring' "$WORK/$name.err"; then
+				# THE KNOWN SET, when one is given. Without `KNOWN` this is what it always
+				# was: a report is a failure. With it, the report is held to a LIST — the
+				# contract scripts/sanitize-leaks.txt argues for, and the same three clauses
+				# `oracle-check` holds its skips to.
+				#
+				# The reason is the first runtime frame that allocated, because a case that
+				# starts leaking somewhere else is a new defect wearing an old name.
+				why=$(grep -oE "in (zrt_[a-z_]+|buf_alloc|str_alloc) [^ ]*csrc/(fmt|str|map|list|ref|unwind)\.c:" "$WORK/$name.err" | head -1 | awk '{ print $2 }')
+				listed=$(known_reason "$name")
+				if [ -n "$KNOWN" ] && [ -n "$listed" ]; then
+					if [ -n "$why" ] && [ "$why" != "$listed" ]; then
+						printf 'REASON %s — listed as %s, and it now allocates in %s\n' "$name" "$listed" "$why"
+						fail=1
+					else
+						seen_known="$seen_known $name"
+					fi
+					break 2
+				fi
 				printf 'SAN    %s (%s workers, run %s) — %s\n' "$name" "$mode" "$n" "$repro"
 				head -20 "$WORK/$name.err"
 				fail=1
@@ -246,9 +280,36 @@ if [ "$cases" -lt "$MIN_CASES" ]; then
 	printf '\nsanitize-conc: only %s cases were measured, and the floor is %s\n' "$cases" "$MIN_CASES" >&2
 	exit 1
 fi
+
+# THE OTHER DIRECTION, and the half that makes the list shrink. A line whose case no longer
+# reports is a leak somebody fixed, and leaving it there means the next one to arrive under
+# that name passes. It is checked only where LEAK DETECTION RAN: on macOS every line would
+# read as fixed, which is a report about the platform and not about the code.
+if [ -n "$KNOWN" ]; then
+	stale=""
+	for kf in $KNOWN; do
+		[ -f "$kf" ] || continue
+		while IFS="$(printf '\t')" read -r kname _; do
+			case $kname in '' | '#'*) continue ;; esac
+			case " $seen_known " in *" $kname "*) continue ;; esac
+			stale="$stale $kname"
+		done <"$kf"
+	done
+	if [ "$LEAKS" = "on" ]; then
+		if [ -n "$stale" ]; then
+			printf '\nsanitize-conc: these no longer report and their lines are still there —%s\n' "$stale" >&2
+			printf 'sanitize-conc: delete each from the list; that deletion IS the gate for the fix\n' >&2
+			exit 1
+		fi
+	else
+		printf 'sanitize-conc: the known-report list was NOT re-checked — leak detection is off here\n'
+	fi
+fi
 # The leak state is named HERE and not only in the header. `clean` on its own is the word a
 # reader takes away, and on macOS it means clean of what address and undefined behaviour see,
 # with leak detection off — the header that said so has scrolled past by then, and on the
 # board it was never shown at all. Its neighbour `mem-check` ends with "no per-round leak",
 # which names what was measured rather than declaring an absence.
-printf '\nsanitize-conc: %s cases x %s seeded schedules + %s multi-worker runs, clean under address + undefined, leak detection %s\n' "$cases" "$SCHEDULES" "$RUNS" "$LEAKS"
+known_note=""
+[ -n "$KNOWN" ] && known_note=", $(printf '%s' "$seen_known" | wc -w | tr -d ' ') of them reporting as listed"
+printf '\nsanitize-conc: %s cases x %s seeded schedules + %s multi-worker runs%s, clean under address + undefined, leak detection %s\n' "$cases" "$SCHEDULES" "$RUNS" "$known_note" "$LEAKS"

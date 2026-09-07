@@ -8788,6 +8788,13 @@ fn c_index(mut &em: Emitter, target: ast.Expr, idx: ast.Expr, sb: Subst) -> str 
 	# The element is read out BEFORE the drop and copied if it owns anything, because it is a
 	# slot in the buffer that is about to be freed. The temporaries are numbered from em.tmp_n
 	# rather than fixed, so `f()[g()[0]]` cannot shadow the name the outer one is holding.
+	#
+	# "NOTHING ELSE WILL EVER NAME IT" IS NOT TRUE OF EVERY TARGET THAT REACHES HERE. A map
+	# index does: `c["k"][0]` arrives because `c["k"]` is not a place, and what it hands over
+	# is a BIT COPY of a value the map still owns — so this drop frees a buffer the entry is
+	# still pointing at. It goes unobserved only because a map's vtable has NULL drops and
+	# never touches the value again; c_map_vt records what that costs and why the two cannot
+	# be fixed in the other order.
 	ln := c_tmp(em, "zgt_t")
 	vn := c_tmp(em, "zgt_t")
 	et := c_list_elem(tty)
@@ -14878,12 +14885,25 @@ fn c_map_vt(mut &em: Emitter, kt: ast.Ty, vt: ast.Ty) -> str {
 	#   that binding's own registered drop frees it at scope exit; the map's entry drop then
 	#   releases the same buffer.
 	#
-	# So an entry does not hold the reference a val_drop assumes. It is NOT the read side —
-	# `v := m[k]` deep-copies, measured — and NOT the insert side — `m[k] = v` calls
-	# zrt_list_copy, which retains, measured — and NOT `zrt_map_copy`, which deep-copies per
-	# entry. The accounting is off somewhere those three do not cover, and finding it is its
-	# own unit of work. Until then the leak is the cheaper of the two defects and the list
-	# records it by name.
+	# IT IS THE INLINE READ, and the site is c_list_index's rvalue arm. `c["k"][0]`
+	# materialises `c["k"]` into a temp so an address can be taken, and gives it back on the
+	# reasoning written there — "because nothing else will ever name it". True of `f()[0]`,
+	# whose target is a fresh call result. False of a map index: `m[k]` is a BIT COPY of a
+	# value the map still owns, so that drop frees a buffer the entry still points at.
+	#
+	# It goes unobserved only because these drops are NULL and the map never touches the
+	# value again. THE ORDER IS THEREFORE FIXED: that arm has to tell a fresh rvalue from a
+	# borrow out of a container before these can stop being NULL, and not the other way
+	# round — a leak is the cheaper defect and a double free is not.
+	#
+	# Three explanations the reports rule out, so the next attempt does not spend them again:
+	# not the BINDING read (`v := m[k]` deep-copies), not the insert (`m[k] = v` calls
+	# zrt_list_copy, which retains), not `zrt_map_copy` (which deep-copies per entry).
+	#
+	# Three lines reproduce it once the drops are filled in:
+	#
+	#     c: map[str, list[int]] = {"k": [1, 2]}
+	#     print c["k"][0]
 	kc := c_elem_copy_fn(em, kt)
 	vc := c_elem_copy_fn(em, vt)
 	em.mvt_decls.append(f"static const zrt_map_vt {name} = {{ {hash}, {eq}, {kc}, NULL, {vc}, NULL }};\n")

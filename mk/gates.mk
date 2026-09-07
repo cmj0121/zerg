@@ -245,7 +245,14 @@ fmt-corpus:                     # every test-data/fmt case must already be canon
 # `examples` JOINED THAT SET and immediately had two: the corpus a reader meets first had
 # never been handed to the formatter, so `05_bitwise` shipped `0b1100 &0b1010` — the operand
 # spacing of a chapter whose subject IS that operator.
-fmt-self:                       # every Zerg source this repository writes is canonical
+#
+# TEST-DATA IS NOT IN THE SET, and that is a decision rather than an omission. 93 of the 204
+# `codegen` sources are not canonical: their subject is what a program DOES, and a case
+# written before a formatting rule landed says what it always said. `test-data/fmt` is the
+# corpus whose subject IS the formatting, and `fmt-corpus` holds it. The line above this
+# recipe used to say "every Zerg source this repository writes", which is 93 sources wider
+# than what runs — and the recipe's own closing line had it right all along.
+fmt-self:                       # the compiler, the stdlib and the examples are in canonical form
 	$(MAKE) build
 	@./bin/zerg fmt --check $(SELF_TREES) \
 		|| { echo "fmt-self: a source this repository writes is not in canonical form"; exit 1; }
@@ -501,10 +508,24 @@ editor-align:                   # no editor file states a language fact the comp
 # parser to build, and a gate that goes red over a missing editor tool teaches people to stop
 # reading the board.
 treesitter:                     # the tree-sitter grammar reads every Zerg file in the tree
-	# SELF_SRCS AND NOT SELF_TREES, because this hands a FILE LIST to a script that reads each
-	# one — the walk lives in `zerg`, and a shell script is not it. The two scopes are the
-	# hazard named above, and this is the one place that still has to carry the second copy.
-	@./scripts/treesitter-check.sh $(SELF_SRCS) $(EXAMPLE_SRCS) $$(ls test-data/codegen/*.zg test-data/fmt/*.zg 2>/dev/null)
+	# THE LIST IS FOUND, NOT WRITTEN. It used to be four globs — SELF_SRCS, EXAMPLE_SRCS,
+	# codegen and fmt — which came to 347 of the 769 `.zg` files in the tree, while the line
+	# above this recipe said "every Zerg file in the tree". Everything left out parses: the
+	# 175 behaviour cases, the 175 production cases, desugar, parser, lexer, and the example
+	# MODULE files that `EXAMPLE_SRCS` skips because it takes entries only.
+	#
+	# TWO DIRECTORIES ARE EXCLUDED BY NAME, and both for the same reason: they deliberately
+	# hold what this compiler will not read. `counterexamples` is programs GRAMMAR does not
+	# derive. `conformance` holds forms refused BY NAME — its `g04_expressions` is `E9010`,
+	# `g06_control_flow` is `E9025`, `g07_types` is `E2011` — and a grammar that read them
+	# would be the defect. The gate's own sentence is "the grammar cannot read files the
+	# compiler CAN", so a file the compiler cannot read is outside the claim.
+	#
+	# `find` and not a glob, so a corpus directory added tomorrow is covered the day it
+	# appears rather than on the day somebody remembers this line.
+	@./scripts/treesitter-check.sh $$(find src examples test-data -name '*.zg' \
+		-not -path 'test-data/counterexamples/*' \
+		-not -path 'test-data/conformance/*' | sort)
 
 desugar:                        # a program and the same program desugared do the same thing
 	$(MAKE) build

@@ -5307,6 +5307,16 @@ fn c_elem_copy_fn(mut &em: Emitter, t: ast.Ty) -> str {
 	return c_ty_helper("elemcopy", k)
 }
 
+# c_elem_drop_fn is the same question asked of teardown. c_elem_vt_helper emits the two
+# thunks together, so wherever the copy above names one this names its pair.
+fn c_elem_drop_fn(mut &em: Emitter, t: ast.Ty) -> str {
+	k := c_elem_kind(em, t)
+
+	return "NULL" if k == ""
+
+	return c_ty_helper("elemdrop", k)
+}
+
 # c_elem_kind is the one dispatch behind both: which FAMILY of thunk a type needs, or ""
 # for a POD that takes the memcpy path. The two above spell it — `zg_listvt_` and
 # `zg_elemcopy_` — and had the four-way decision written out twice, so a kind added to one
@@ -12077,9 +12087,18 @@ fn c_list_method_rv(mut &em: Emitter, target: ast.Expr, meth: str, args: list[as
 	# `len` is the only list method that answers a value, and it answers an int — so the
 	# result is held across the drop, and everything else is a statement whose value is the
 	# drop itself.
+	#
+	# EXCEPT WHERE THE TARGET IS A MAP INDEX, which is the same exception c_list_index carries
+	# and for the same reason: `lists["xs"].len()` is handed a bit copy of a value the map
+	# still owns, and releasing it frees a buffer the entry still points at. c_is_place names
+	# this shape already, by excluding it from being a place.
+	borrowed := c_is_index(target) and c_is_map(c_infer(em, c_index_target(target)))
+
+	return f"({{ zrt_list {ln} = {src}; {inner}; }})" if borrowed and meth != "len"
 	return f"({{ zrt_list {ln} = {src}; {inner}; zrt_list_drop(&{ln}); }})" if meth != "len"
 
 	rn := c_tmp(em, "zgt_t")
+	return f"({{ zrt_list {ln} = {src}; int64_t {rn} = {inner}; {rn}; }})" if borrowed
 	return f"({{ zrt_list {ln} = {src}; int64_t {rn} = {inner}; zrt_list_drop(&{ln}); {rn}; }})"
 }
 
@@ -14897,28 +14916,26 @@ fn c_map_vt(mut &em: Emitter, kt: ast.Ty, vt: ast.Ty) -> str {
 	#   that binding's own registered drop frees it at scope exit; the map's entry drop then
 	#   releases the same buffer.
 	#
-	# IT IS THE INLINE READ, and the site is c_list_index's rvalue arm. `c["k"][0]`
-	# materialises `c["k"]` into a temp so an address can be taken, and gives it back on the
-	# reasoning written there — "because nothing else will ever name it". True of `f()[0]`,
-	# whose target is a fresh call result. False of a map index: `m[k]` is a BIT COPY of a
-	# value the map still owns, so that drop frees a buffer the entry still points at.
+	# THE DROPS ARE FILLED IN, and the borrow they were waiting on is fixed: c_list_index no
+	# longer releases a target that came out of a map, so an entry's value has exactly one
+	# owner again and this can give it back.
 	#
-	# It goes unobserved only because these drops are NULL and the map never touches the
-	# value again. THE ORDER IS THEREFORE FIXED: that arm has to tell a fresh rvalue from a
-	# borrow out of a container before these can stop being NULL, and not the other way
-	# round — a leak is the cheaper defect and a double free is not.
-	#
-	# Three explanations the reports rule out, so the next attempt does not spend them again:
-	# not the BINDING read (`v := m[k]` deep-copies), not the insert (`m[k] = v` calls
-	# zrt_list_copy, which retains), not `zrt_map_copy` (which deep-copies per entry).
-	#
-	# Three lines reproduce it once the drops are filled in:
+	# THE ORDER MATTERED AND IS WORTH KEEPING WRITTEN DOWN. Filled in first, the corpus
+	# answered `heap-use-after-free` rather than a leak — the map released a buffer that the
+	# inline read had already released — and a leak is the cheaper defect of the two. Three
+	# lines were the reproduction:
 	#
 	#     c: map[str, list[int]] = {"k": [1, 2]}
 	#     print c["k"][0]
+	#
+	# Three explanations the reports ruled out, kept because each cost a measurement: it is
+	# not the BINDING read (`v := m[k]` deep-copies), not the insert (`m[k] = v` calls
+	# zrt_list_copy, which retains), and not `zrt_map_copy` (which deep-copies per entry).
 	kc := c_elem_copy_fn(em, kt)
 	vc := c_elem_copy_fn(em, vt)
-	em.mvt_decls.append(f"static const zrt_map_vt {name} = {{ {hash}, {eq}, {kc}, NULL, {vc}, NULL }};\n")
+	kd := c_elem_drop_fn(em, kt)
+	vd := c_elem_drop_fn(em, vt)
+	em.mvt_decls.append(f"static const zrt_map_vt {name} = {{ {hash}, {eq}, {kc}, {kd}, {vc}, {vd} }};\n")
 	return name
 }
 

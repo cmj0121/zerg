@@ -763,40 +763,48 @@ asm-operand ::= 'in' '(' str-lit ')' expr | 'out' '(' str-lit ')' lvalue
 ## 已規範但未實作
 
 以下每個形式都是 **[not yet]**:文法定義了它,`zerg` **以它自己的名字**拒絕它,沒有任何用到它的程式會被編譯成
-別的東西。這份清單不是散文 —— `scripts/refuse-check.sh` 每一列都有對應案例，以該拒絕的 `E###` 釘住——把 range
-當值是 `E9077`、泛型別名 `type X[T] = …` 是 `E9075`、body 是 reassignment 或 send 的 `match` arm 是 `E9041`——
-所以一個形式若悄悄開始能動、或悄悄換了失敗方式,gate 就會擋下來。
+別的東西。這份清單不是散文 —— `scripts/refuse-check.sh` 每一列都有對應案例,而 **Code** 欄就是該列被釘住的那個
+拒絕——把 range 當值是 `E9077`、泛型別名 `type X[T] = …` 是 `E9075`、body 是 reassignment 或 send 的 `match` arm
+是 `E9041`——所以一個形式若悄悄開始能動、或悄悄換了失敗方式,gate 就會擋下來。
 
 **Group** 欄用的是本章自己的編號（見上）——導出該 production 的那一節，而不是最早提到它的那一節。
 
-| Group | 形式                                                                                             |
-| ----- | ------------------------------------------------------------------------------------------------ |
-| 3     | command literal `` `…` ``（其內插形式 `` f`…` `` 屬 group 5）                                    |
-| 4     | 解構，**兩個方向都算** —— `(a, b) := …` 與 `(a, b) = …`、`Div{q, r} = …`                         |
-| 4     | 不是名字的 callee —— `fs[0](…)`、`p?.m(…)`                                                       |
-| 4     | 沒有**下界**的 range —— `xs[..n]`，以及一起算的 list pattern `[a, ..rest]`                       |
-| 4     | 在需要上界處使用**開放**range —— `xs[a..]`、`for i in n..`                                       |
-| 4     | 把 range 當**值** —— `r := 0..3`；它只是 `for … in` 的 iterable，不是別的                        |
-| 4     | 後面沒有接呼叫的 postfix 型別引數 —— `map[str, int]`、`f[int]`                                   |
-| 4     | 把 `map[K, V](…)` 當建構子 —— 空 map 是字面值 `{:}`                                              |
-| 5     | f-string 的 `{x!r}` / `{x=}` / `{x:spec}`                                                        |
-| 5     | 具名引數 `f(b: 1)` —— 不論呼叫或建構，引數都只依位置繫結                                         |
-| 5     | **closure** 參數上的預設值；**function type** 裡的 `mut &` 參數                                  |
-| 5     | 泛型 METHOD                                                                                      |
-| 6     | struct / list / tuple / or-pattern；`pattern as name`；`if v := <enum>`；`nil` 當 pattern        |
-| 6     | body 是 reassignment 或 send 的 `match` arm —— 那兩者需要 block body                             |
-| 6     | `for mut v in …` —— 會把每個被改過的元素寫回原位的迴圈繫結                                       |
-| 6     | 帶繫結頭部的 `if` **運算式**，或某一分支超過一個敘述的 `if` 運算式                               |
-| 7     | 泛型 `struct` / `enum`；泛型別名 `type X[T] = …`                                                 |
-| 7     | array type `[T; N]`；`spec` 當型別或做分派；有 body 的 `spec` member                             |
-| 7     | associated function `Type.f(…)`                                                                  |
-| 7     | 對內建型別的 `impl`（`impl Tag for int`）、對帶型別引數的目標的 `impl`、或自己帶 `[T]` 的 `impl` |
-| 7     | 不是 method 的 `impl` item —— associated value 或 type 繫結，以及其餘任何東西                    |
-| 7     | associated type projection `It.Item`；value 泛型參數 `f[N: int]`；帶參數的 bound `Eq[int]`       |
-| 7     | 除 `#[derive(…)]`、`#[obj]`、`#[test]`、`#[fixture]` 與 `#[allow(…)]` 以外的所有 decorator       |
-| 7     | 不是 `int` 或 `str` 的 map key —— key 需要 `Hash`                                                |
-| 7     | 內建 `Ref` / `deref` / `sizeof[T]` / `alignof[T]` / `set`，以及定寬階梯 `i8`…`f64`               |
-| 12    | `unsafe` 區塊、`asm`、`ptr` / `ptr[T]`、獨立的 `unsafe fn`、`unsafe` 的 `spec` 簽章              |
+| Group | Code    | 形式                                                                                     |
+| ----- | ------- | ---------------------------------------------------------------------------------------- |
+| 4     | `E9009` | 不是名字的 callee —— `fs[0](…)`、`p?.m(…)`                                               |
+| 4     | `E2071` | 沒有**下界**的 range —— `xs[..n]`,以及與它同形的 list 樣式 `[a, ..rest]`                 |
+| 4     | `E9050` | 需要界限處的**開放** range —— `xs[a..]`、`for i in n..`                                  |
+| 4     | `E9077` | 把 range 當**值** —— `r := 0..3`;它是 `for … in` 的可迭代物,除此之外什麼都不是           |
+| 4     | `E2035` | 後面沒有呼叫的後綴型別引數 —— `map[str, int]`、`f[int]`                                  |
+| 4     | `E9067` | 用 `map[K, V](…)` 當建構子 —— 空 map 是字面值 `{:}`                                      |
+| 5     | `E9010` | 具名引數 `f(b: 1)` —— 引數依位置綁定,呼叫與建構都是                                      |
+| 5     | `E9034` | **closure** 參數的預設值                                                                 |
+| 5     | `E9044` | 泛型 METHOD                                                                              |
+| 6     | `E9068` | 把 `nil` 當樣式                                                                          |
+| 6     | `E9041` | body 是 reassignment 或 send 的 `match` arm —— 那些需要 block body                       |
+| 6     | `E9025` | `for mut v in …` —— 把每個被編輯的元素寫回去的迴圈綁定                                   |
+| 6     | `E9032` | 帶綁定頭、或分支超過一個語句的 `if` **運算式**                                           |
+| 7     | `E9003` | 泛型 `enum`                                                                              |
+| 7     | `E9075` | 泛型別名 `type X[T] = …`                                                                 |
+| 7     | `E9048` | 把 `spec` 當型別或當 dispatch                                                            |
+| 7     | `E9038` | 對內建型別的 `impl`                                                                      |
+| 7     | `E9046` | `alignof[T]`                                                                             |
+| 7     | `E9064` | `set`                                                                                    |
+| 7     | `E9063` | 定寬階梯 `i8`…`f64`                                                                      |
+| 7     | `E2076` | 除 `#[derive(…)]`、`#[obj]`、`#[test]`、`#[fixture]`、`#[allow(…)]` 以外的每個 decorator |
+| 12    | `E9036` | `unsafe` 的 `spec` 簽名                                                                  |
+
+CODE 欄才是重點。這張表原本寫著「`scripts/refuse-check.sh` 每一列都有對應案例」卻沒有指名任何代碼,於是
+一列可以活得比它描述的形式更久:**十七個形式已經建好而它們的列還留著** —— command literal、雙向解構、
+f-string 的尾綴、`[T; N]`、關聯函式、帶自己 `[T]` 的 `impl`、關聯值、`Ref` 與 `deref`、`unsafe` 區塊、`asm`、
+`ptr`、獨立的 `unsafe fn`、參數化界限,以及 struct、list、tuple 與 or 樣式。照這份清單讀的人,會被告知這個
+語言做不到它其實做得到的事。
+
+**複合列也因為同一個理由消失了。**「closure 參數的預設值;函式型別裡的 `mut &` 參數」原本是同一個
+`[not yet]` 底下的一列,而後半已經建好 —— 一個已建的形式替它的鄰居把一個活著的標記養著,那正是
+`marker-codes` 看不見的形狀。現在一列就是一個形式、一個代碼。
+
+一列的代碼若不在目錄的 LIVE 那一半,就表示這張表活得比它久了;`make chapter-codes` 是說出這件事的那一關。
 
 即使沒有東西在 `spec` 上做分派,一個 `spec` 的**required member 仍然被強制**於 `impl … for …` —— 一個宣告出來的
 介面至少該有這個意思。被強制的是**簽章**:arity,以及每個位置上參數的名字、型別、`mut &`,和它有沒有預設值,

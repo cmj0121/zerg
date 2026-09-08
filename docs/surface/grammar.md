@@ -894,42 +894,54 @@ asm-operand ::= 'in' '(' str-lit ')' expr | 'out' '(' str-lit ')' lvalue
 
 Every form below is **[not yet]**: the grammar defines it, `zerg` refuses it **by its own
 name**, and no program that uses one compiles into something else. This list is not prose —
-`scripts/refuse-check.sh` holds a case for each row, pinned by the refusal's `E###` — a
-range used as a value is `E9077`, a generic `type X[T] = …` alias is `E9075`, a `match` arm
-whose body is a reassignment or a send is `E9041` — so a form that quietly starts working,
-or quietly starts failing differently, fails the gate.
+`scripts/refuse-check.sh` holds a case for each row, and the **Code** column names the
+refusal each row is pinned by — `E9077` for a range used as a value, `E9075` for a generic
+`type X[T] = …` alias, `E9041` for a `match` arm whose body is a reassignment or a send — so
+a form that quietly starts working, or quietly starts failing differently, fails the gate.
 
 The **Group** column is this chapter's own numbering, above — the section that derives the
 production, not the one that first mentions it.
 
-| Group | Form                                                                                                      |
-| ----- | --------------------------------------------------------------------------------------------------------- |
-| 3     | command literal `` `…` `` (its interpolating form `` f`…` `` is group 5)                                  |
-| 4     | destructuring, in **both** directions — `(a, b) := …` and `(a, b) = …`, `Div{q, r} = …`                   |
-| 4     | a callee that is not a name — `fs[0](…)`, `p?.m(…)`                                                       |
-| 4     | a range with no **lower** bound — `xs[..n]`, and the list pattern `[a, ..rest]` with it                   |
-| 4     | an **open-ended** range where a bound is needed — `xs[a..]`, `for i in n..`                               |
-| 4     | a range as a **value** — `r := 0..3`; it is a `for … in` iterable and nothing else                        |
-| 4     | postfix type arguments with no call after them — `map[str, int]`, `f[int]`                                |
-| 4     | `map[K, V](…)` as a constructor — an empty map is the literal `{:}`                                       |
-| 5     | f-string `{x!r}` / `{x=}` / `{x:spec}`                                                                    |
-| 5     | a named argument `f(b: 1)` — arguments bind by position, in a call and a construction                     |
-| 5     | a default on a **closure** parameter; a `mut &` parameter in a **function type**                          |
-| 5     | a generic METHOD                                                                                          |
-| 6     | struct, list, tuple and or-patterns; `pattern as name`; `if v := <enum>`; `nil` as a pattern              |
-| 6     | a `match` arm whose body is a reassignment or a send — those need a block body                            |
-| 6     | `for mut v in …` — the loop binding that writes each edited element back                                  |
-| 6     | an `if` **expression** with a binding head, or with a branch of more than one statement                   |
-| 7     | generic `struct` / `enum`; a generic `type X[T] = …` alias                                                |
-| 7     | array type `[T; N]`; `spec` as a type or a dispatch; a `spec` member with a body                          |
-| 7     | associated function `Type.f(…)`                                                                           |
-| 7     | an `impl` on a built-in type, on a target with type arguments, or carrying its own `[T]`                  |
-| 7     | an `impl` item that is not a method — an associated value or type binding, or anything else               |
-| 7     | an associated type projection `It.Item`; a value generic `f[N: int]`; a parameterized bound `Eq[int]`     |
-| 7     | every decorator but `#[derive(…)]`, `#[obj]`, `#[test]`, `#[fixture]` and `#[allow(…)]`                   |
-| 7     | a map key that is not an `int` or a `str` — a key needs `Hash`                                            |
-| 7     | the built-ins `Ref` / `deref` / `sizeof[T]` / `alignof[T]` / `set`, and the fixed-width ladder `i8`…`f64` |
-| 12    | `unsafe` block, `asm`, `ptr` / `ptr[T]`, a standalone `unsafe fn`, an `unsafe` `spec` signature           |
+| Group | Code    | Form                                                                                    |
+| ----- | ------- | --------------------------------------------------------------------------------------- |
+| 4     | `E9009` | a callee that is not a name — `fs[0](…)`, `p?.m(…)`                                     |
+| 4     | `E2071` | a range with no **lower** bound — `xs[..n]`, and the list pattern `[a, ..rest]` with it |
+| 4     | `E9050` | an **open-ended** range where a bound is needed — `xs[a..]`, `for i in n..`             |
+| 4     | `E9077` | a range as a **value** — `r := 0..3`; it is a `for … in` iterable and nothing else      |
+| 4     | `E2035` | postfix type arguments with no call after them — `map[str, int]`, `f[int]`              |
+| 4     | `E9067` | `map[K, V](…)` as a constructor — an empty map is the literal `{:}`                     |
+| 5     | `E9010` | a named argument `f(b: 1)` — arguments bind by position, in a call and a construction   |
+| 5     | `E9034` | a default on a **closure** parameter                                                    |
+| 5     | `E9044` | a generic METHOD                                                                        |
+| 6     | `E9068` | `nil` as a pattern                                                                      |
+| 6     | `E9041` | a `match` arm whose body is a reassignment or a send — those need a block body          |
+| 6     | `E9025` | `for mut v in …` — the loop binding that writes each edited element back                |
+| 6     | `E9032` | an `if` **expression** with a binding head, or with a branch of more than one statement |
+| 7     | `E9003` | a generic `enum`                                                                        |
+| 7     | `E9075` | a generic `type X[T] = …` alias                                                         |
+| 7     | `E9048` | `spec` as a type or a dispatch                                                          |
+| 7     | `E9038` | an `impl` on a built-in type                                                            |
+| 7     | `E9046` | `alignof[T]`                                                                            |
+| 7     | `E9064` | `set`                                                                                   |
+| 7     | `E9063` | the fixed-width ladder `i8`…`f64`                                                       |
+| 7     | `E2076` | every decorator but `#[derive(…)]`, `#[obj]`, `#[test]`, `#[fixture]` and `#[allow(…)]` |
+| 12    | `E9036` | an `unsafe` `spec` signature                                                            |
+
+THE CODE COLUMN IS THE POINT. This table said "`scripts/refuse-check.sh` holds a case for
+each row" and named no code, so a row could outlive the form it described: seventeen forms
+were built while their rows stayed — the command literal, destructuring both ways, an
+f-string's tails, `[T; N]`, an associated function, an `impl` carrying its own `[T]`, an
+associated value, `Ref` and `deref`, an `unsafe` block, `asm`, `ptr`, a standalone
+`unsafe fn`, a parameterized bound, and the struct, list, tuple and or-patterns. A reader
+following this list was told the language could not do things it does.
+
+COMPOUND ROWS ARE GONE for the same reason. `a default on a closure parameter; a mut &
+parameter in a function type` was one row under one `[not yet]`, and the second half had
+been built — a built form kept a live marker warm for its neighbour, which is the one shape
+`marker-codes` cannot see. One row is one form and one code now.
+
+A row whose code is not in the LIVE half of the catalogue is a row this table has outlived;
+`make chapter-codes` is what says so.
 
 A `spec`'s **required members are enforced** on an `impl … for …` even though nothing
 dispatches on the spec — that much a declared interface means. What is enforced is the

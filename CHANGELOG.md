@@ -7,6 +7,26 @@ The full account of a release, broken out by area and with its gaps named, lives
 The number a build reports comes from [`VERSION`](VERSION), the single source both compilers are generated from.
 **A release's date is its tag's**, so no entry here writes one down.
 
+## 0.3.0
+
+The release in which the **grammar stops being a promise**: the forms `GRAMMAR` derives are lowered, not
+refused. → [full notes](notes/0.3/0.3.0_CHANGELOG.md)
+
+- **Seventeen forms built.** Generic `struct`, `impl` and `fn`; `Ref[T]` and `deref`; associated functions
+  and associated values; destructuring both ways; struct, list, tuple and or-patterns; `pattern as name`;
+  the array type `[T; N]`; a `spec` member with a body; a `mut &` in a function type; the command literal;
+  an f-string's `{x!r}` / `{x=}` / `{x:spec}` tails; `asm`; `ptr`; a standalone `unsafe fn`.
+- **A generic is a name.** A declaration is a template and an application is an ordinary type with that
+  name, so nothing in the type tree grew a case — measured before it was chosen.
+- **What is still not built is named row by row**, each with the code that refuses it, and `chapter-codes`
+  fails if a row outlives its form. Seventeen rows had.
+- **The gates were audited against themselves.** A skip list that only checked one direction, an exclusion
+  that outlived its reason, four gates that compared what a program prints and not what it dies with, and a
+  file list that read 347 of 769 sources under a line claiming all of them.
+- **The corpus runs under the sanitizers.** 179 cases that had never been measured; sixteen leaked, six are
+  closed, and the ten that remain are listed by name with what allocates.
+- **58 gates**, up from 52.
+
 ## 0.2.0
 
 The release in which the specification stops disagreeing with the compiler, and the **file** becomes the unit

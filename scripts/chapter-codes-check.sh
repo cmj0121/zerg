@@ -29,6 +29,9 @@ fail=0
 [ -f "$CAT" ] || { echo "chapter-codes-check: no catalogue at $CAT" >&2; exit 1; }
 [ -f "$RULES" ] || { echo "chapter-codes-check: no rule registry at $RULES" >&2; exit 1; }
 
+GRAMMAR_DOC=${GRAMMAR_DOC:-docs/surface/grammar.md}
+GRAMMAR_DOC_ZH=${GRAMMAR_DOC_ZH:-docs/surface/grammar.zh-TW.md}
+
 tmp=$(mktemp -d)
 trap 'rm -rf "$tmp"' EXIT
 
@@ -90,5 +93,35 @@ done <"$tmp/all"
 declared=$(grep -cE '^	[A-Za-z_][A-Za-z_0-9]* = 9[0-9]{3}$' "$RULES")
 [ "$n" -eq "$declared" ] || { echo "STALE     $n codes were read from $CAT and $RULES declares $declared — one of the two has gone stale" >&2; fail=1; }
 
+# AND THE OTHER DIRECTION, for the one table that is a LIST of unbuilt forms rather than a
+# chapter that mentions some. `docs/surface/grammar.md` § "What is specified and not built"
+# carries one row per form with the code that refuses it, and a row can outlive its form: at
+# 0.3.0 seventeen of them had, because the table named no codes at all and nothing could be
+# compared. A code there that is not in the live half is a row this table has outlived.
+#
+# Read from the CODE COLUMN and not from the whole line, so a code quoted in the prose under
+# the table is not mistaken for a row.
+for gsrc in "$GRAMMAR_DOC" "$GRAMMAR_DOC_ZH"; do
+	[ -f "$gsrc" ] || continue
+	awk '/^\| Group \| Code/ {intable = 1; next} intable && !/^\|/ {intable = 0} intable' "$gsrc" |
+		grep -oE '^\| *[0-9]+ *\| *`E[0-9]{4}`' | grep -oE 'E[0-9]{4}' | sort -u >"$tmp/rows"
+
+	rows=$(grep -c . "$tmp/rows" || true)
+	if [ "$rows" -lt "${GRAMMAR_ROWS_MIN:-15}" ]; then
+		echo "STALE     only $rows rows were read from $gsrc — the table moved and this stopped reading it" >&2
+		fail=1
+		continue
+	fi
+
+	while read -r code; do
+		case $code in
+		E9*)
+			grep -qxF "$code" "$tmp/all" ||
+				{ echo "RETIRED   $gsrc lists $code and the catalogue does not: the form was built and its row stayed" >&2; fail=1; }
+			;;
+		esac
+	done <"$tmp/rows"
+done
+
 [ "$fail" -eq 0 ] || { echo "chapter-codes-check: an unbuilt form is not named where its readers are" >&2; exit 1; }
-echo "chapter-codes-check: $n unbuilt-form codes, each named in a chapter"
+echo "chapter-codes-check: $n unbuilt-form codes, each named in a chapter, and the grammar inventory names none the catalogue retired"

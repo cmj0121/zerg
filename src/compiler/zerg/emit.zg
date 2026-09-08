@@ -15442,6 +15442,24 @@ fn c_render_body(mut &em: Emitter, name: str, t: ast.Ty) -> str {
 }
 
 # A SEQUENCE RENDERS AS ITS LITERAL, `[a, b]`, and the two sequences share this body: what
+# c_render_join appends one piece to a renderer's accumulator and gives back what the append
+# replaces. `zrt_str_concat` consumes NEITHER operand and answers a fresh cell, so `s =
+# zrt_str_concat(s, x)` drops the reference `s` was holding — once per field in the two that
+# walk a declaration, and once per ELEMENT in the two that loop.
+#
+# A LITERAL PIECE IS NOT A CELL. `", "` reaches concat as a C string, so only the accumulator
+# goes back for one; a rendered piece is a cell this expression owns and goes back too.
+fn c_render_join(ind: str, piece: str, owned: bool) -> str {
+	return f"{ind}{{ const char *o = s; s = zrt_str_concat(s, {piece}); zrt_str_release(o); }}\n" if not owned
+
+	return f"{ind}{{ const char *o = s; const char *p = {piece}; s = zrt_str_concat(s, p); zrt_str_release(o); zrt_str_release(p); }}\n"
+}
+
+# c_render_close is the same for the last piece, which is a literal and is RETURNED.
+fn c_render_close(tail: str) -> str {
+	return f"    {{ const char *o = s; const char *r = zrt_str_concat(s, \"{tail}\"); zrt_str_release(o); return r; }}\n"
+}
+
 # differs is where the length comes from and how a slot is reached, which is two lines.
 fn c_render_list_body(mut &em: Emitter, t: ast.Ty) -> str {
 	arr := c_is_arr(t)
@@ -15461,10 +15479,10 @@ fn c_render_list_body(mut &em: Emitter, t: ast.Ty) -> str {
 
 	mut out := "    const char *s = zrt_str_dup(\"[\");\n"
 	out = out + f"    for (size_t i = 0; i < (size_t)({n}); i++) {{\n"
-	out = out + "        if (i > 0) { s = zrt_str_concat(s, \", \"); }\n"
-	out = out + f"        s = zrt_str_concat(s, {c_render_of(em, et, slot, true)});\n"
+	out = out + "        if (i > 0) " + c_render_join("", "\", \"", false)
+	out = out + c_render_join("        ", c_render_of(em, et, slot, true), true)
 	out = out + "    }\n"
-	return out + "    return zrt_str_concat(s, \"]\");\n"
+	return out + c_render_close("]")
 }
 
 # A MAP RENDERS AS ITS LITERAL, `{k: v}`, in INSERTION ORDER — the order the language pins for
@@ -15478,12 +15496,12 @@ fn c_render_map_body(mut &em: Emitter, t: ast.Ty) -> str {
 
 	mut out := "    const char *s = zrt_str_dup(\"{\");\n"
 	out = out + "    for (size_t i = 0; i < zrt_map_len(&v); i++) {\n"
-	out = out + "        if (i > 0) { s = zrt_str_concat(s, \", \"); }\n"
-	out = out + f"        s = zrt_str_concat(s, {c_render_of(em, kt, ks, true)});\n"
-	out = out + "        s = zrt_str_concat(s, \": \");\n"
-	out = out + f"        s = zrt_str_concat(s, {c_render_of(em, vt, vs, true)});\n"
+	out = out + "        if (i > 0) " + c_render_join("", "\", \"", false)
+	out = out + c_render_join("        ", c_render_of(em, kt, ks, true), true)
+	out = out + c_render_join("        ", "\": \"", false)
+	out = out + c_render_join("        ", c_render_of(em, vt, vs, true), true)
 	out = out + "    }\n"
-	return out + "    return zrt_str_concat(s, \"}\");\n"
+	return out + c_render_close("}")
 }
 
 fn c_render_tuple_body(mut &em: Emitter, t: ast.Ty) -> str {
@@ -15492,12 +15510,12 @@ fn c_render_tuple_body(mut &em: Emitter, t: ast.Ty) -> str {
 	mut i := 0
 	for i < es.len() {
 		if i > 0 {
-			out = out + "    s = zrt_str_concat(s, \", \");\n"
+			out = out + c_render_join("    ", "\", \"", false)
 		}
-		out = out + f"    s = zrt_str_concat(s, {c_render_of(em, es[i], f"v.f{strconv.to_string(i, 10)}", true)});\n"
+		out = out + c_render_join("    ", c_render_of(em, es[i], f"v.f{strconv.to_string(i, 10)}", true), true)
 		i = i + 1
 	}
-	return out + "    return zrt_str_concat(s, \")\");\n"
+	return out + c_render_close(")")
 }
 
 # A CARRIER RENDERS WHAT IT HOLDS, and an absent optional renders `nil` — the word the program
@@ -15575,16 +15593,16 @@ fn c_render_struct_body(mut &em: Emitter, sn: str) -> str {
 	for i < em.fld_struct.len() {
 		if em.fld_struct[i] == sn {
 			if not first {
-				out = out + "    s = zrt_str_concat(s, \", \");\n"
+				out = out + c_render_join("    ", "\", \"", false)
 			}
 			first = false
 			fnm := em.fld_name[i]
-			out = out + f"    s = zrt_str_concat(s, \"{fnm}: \");\n"
-			out = out + f"    s = zrt_str_concat(s, {c_render_of(em, em.fld_ty[i], f"v.zg_{fnm}", true)});\n"
+			out = out + c_render_join("    ", f"\"{fnm}: \"", false)
+			out = out + c_render_join("    ", c_render_of(em, em.fld_ty[i], f"v.zg_{fnm}", true), true)
 		}
 		i = i + 1
 	}
-	return out + "    return zrt_str_concat(s, \")\");\n"
+	return out + c_render_close(")")
 }
 
 # --- an f-string hole with a tail (GRAMMAR#interp) ----------------------------------------
@@ -15615,11 +15633,23 @@ fn c_fmt_hole(mut &em: Emitter, x: ast.Expr, conv: str, fspec: str, sb: Subst) -
 	text := c_render_of(em, t, c_expr(em, x, sb), conv == "r" or conv == "a")
 	mut out := text
 	if conv == "a" {
-		out = f"zrt_ascii_escape({out})"
+		# GIVEN BACK, for the reason the `zrt_fmt_str` return below carries: `zrt_ascii_escape`
+		# reads its argument and answers a fresh cell without releasing it, so handing it the
+		# owned rendering lost that reference.
+		an := c_tmp(em, "zgt_fs")
+		ar := c_tmp(em, "zgt_fs")
+		out = f"({{ const char* {an} = {out}; const char* {ar} = zrt_ascii_escape({an}); zrt_str_release({an}); {ar}; }})"
 	}
 	return out if fspec == ""
 
-	return f"zrt_fmt_str({out}, {c_str_lit(fspec)})"
+	# AND THE RENDERING IS GIVEN BACK. `c_render_of` answers with a reference this expression
+	# OWNS — a retain for a `str`, a fresh cell for everything else — and the `fspec == ""`
+	# return above hands that to the concat chain, which releases it. `zrt_fmt_str` does not:
+	# it reads its argument, dups, pads and answers a fresh cell, so the owned reference
+	# passed to it was simply lost. One `{p:>12}` on a `str` leaked one cell.
+	fn_ := c_tmp(em, "zgt_fs")
+	fr := c_tmp(em, "zgt_fs")
+	return f"({{ const char* {fn_} = {out}; const char* {fr} = zrt_fmt_str({fn_}, {c_str_lit(fspec)}); zrt_str_release({fn_}); {fr}; }})"
 }
 
 # c_fmt_spec_type holds a spec's TYPE LETTER to what the value can render as. Both halves are

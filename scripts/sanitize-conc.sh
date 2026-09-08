@@ -243,6 +243,9 @@ for src in ${CASES:-test-data/codegen/conc_*.zg}; do
 				# starts leaking somewhere else is a new defect wearing an old name.
 				why=$(grep -oE "in (zrt_[a-z_]+|buf_alloc|str_alloc) [^ ]*csrc/(fmt|str|map|list|ref|unwind)\.c:" "$WORK/$name.err" | head -1 | awk '{ print $2 }')
 				listed=$(known_reason "$name")
+
+				# the `?` that marks a host-dependent line is not part of the allocator
+				listed=${listed#\?}
 				if [ -n "$KNOWN" ] && [ -n "$listed" ]; then
 					if [ -n "$why" ] && [ "$why" != "$listed" ]; then
 						printf 'REASON %s — listed as %s, and it now allocates in %s\n' "$name" "$listed" "$why"
@@ -289,9 +292,18 @@ if [ -n "$KNOWN" ]; then
 	stale=""
 	for kf in $KNOWN; do
 		[ -f "$kf" ] || continue
-		while IFS="$(printf '\t')" read -r kname _; do
+		while IFS="$(printf '\t')" read -r kname kwhy; do
 			case $kname in '' | '#'*) continue ;; esac
 			case " $seen_known " in *" $kname "*) continue ;; esac
+
+			# A REASON THAT OPENS WITH `?` IS NOT HELD BY THIS HALF. The list is a set of
+			# cases and it cannot say "on some hosts": `assert_claim` reports on linux/arm64
+			# and not on linux/amd64, so a strict STALE turns a true line into a red board on
+			# whichever architecture is not the one it was measured on. UNLISTED still covers
+			# it — nothing new may leak anywhere — and what is given up is only the claim that
+			# this particular line is still earning its place.
+			case $kwhy in '?'*) continue ;; esac
+
 			stale="$stale $kname"
 		done <"$kf"
 	done

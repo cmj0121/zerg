@@ -20,6 +20,7 @@
 set -uo pipefail
 
 MAKEFILE=${MAKEFILE:-Makefile}
+GATES_MK=${GATES_MK:-mk/gates.mk}
 WORKFLOW=${WORKFLOW:-.github/workflows/ci.yml}
 
 fail=0
@@ -171,5 +172,56 @@ n_cond=$(printf '%s\n' "$conditional" | grep -c . || true)
 
 printf 'gates-check: %s gates — each on the board, each run by CI\n' \
 	"$(printf '%s\n' "$board" | wc -l | tr -d ' ')"
+# CLAUSE 4 — a gate that READS the private corpus is either guarded or says it tolerates the
+# absence.
+#
+# The derived set above was printed and compared to nothing, and this file's own doctrine is
+# that a printed number asserts nothing. What it costs was measured the hard way: `examples`
+# reads `test-data/examples` and is NOT behind the fetch, so every CI job that does not fetch
+# the corpus answered `NO-OUT` for a file that was there, one repository over — and the fix
+# went into the recipe rather than into the rule.
+#
+# THE RULE IS NOT "reads it ⇒ must be conditional". `treesitter`, `oracle` and `examples` all
+# read the corpus and all three work without it, by design. So the ones that tolerate the
+# absence are NAMED here, with the reason, and anything else that reads it must be behind the
+# fetch. A gate added tomorrow is in one of the two sets or it is a finding.
+TOLERATES="entry-path examples install-check oracle treesitter"
+
+for t in $board; do
+	body=$(awk -v pat="^$t:" '$0 ~ pat { on = 1; next } on && /^[a-z-]+:/ { exit } on' "$GATES_MK" "$MAKEFILE" 2>/dev/null)
+	printf '%s' "$body" | grep -q 'test-data' || continue
+
+	case " $(printf '%s ' $conditional) " in *" $t "*) continue ;; esac
+	case " $TOLERATES " in *" $t "*) continue ;; esac
+
+	note "\`make $t\` reads the private corpus, is not behind the fetch, and is not named as tolerating its absence"
+done
+
+# CLAUSE 5 — a gate that SWEEPS a discovered set declares a floor.
+#
+# "A gate that measures nothing looks exactly like a gate that found nothing" is written out in
+# prose at seven sites and checked at none. The doctrine belongs here, where the board is
+# already read.
+#
+# NOT EVERY GATE OWES ONE, and forcing a number onto the two that do not is how a floor becomes
+# decoration: `cache-key-check` asserts that two keys DIFFER and `install-check` that named
+# files are where `make install` put them — neither sweeps a set that could come back empty.
+# They are named, with that as the reason, the way the tolerating gates above are.
+# `build` is here for a different reason: the script its recipe reaches is `gen-version.sh`,
+# a GENERATOR rather than a check, and a generator has nothing to measure.
+NO_FLOOR="cache-key-check install-check build"
+
+for t in $board; do
+	case " $NO_FLOOR " in *" $t "*) continue ;; esac
+
+	body=$(awk -v pat="^$t:" '$0 ~ pat { on = 1; next } on && /^[a-z-]+:/ { exit } on' "$GATES_MK" "$MAKEFILE" 2>/dev/null)
+	gscript=$(printf '%s' "$body" | grep -oE '\./scripts/[a-z0-9-]+\.sh' | head -1)
+	[ -n "$gscript" ] || continue
+	[ -f "${gscript#./}" ] || continue
+
+	grep -qE 'MIN|floor|-lt [0-9]+|-ge [0-9]+|self_test' "${gscript#./}" ||
+		note "\`make $t\` sweeps through ${gscript#./} and that script declares no floor — a walk that stops matching would report success"
+done
+
 printf 'gates-check: %s of them run only when the private corpus was fetched — %s\n' \
 	"$n_cond" "$(printf '%s\n' "$conditional" | tr '\n' ' ')"

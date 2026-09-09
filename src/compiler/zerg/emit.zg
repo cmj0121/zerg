@@ -5307,14 +5307,16 @@ fn c_elem_copy_fn(mut &em: Emitter, t: ast.Ty) -> str {
 	return c_ty_helper("elemcopy", k)
 }
 
-# c_elem_drop_fn is the same question asked of teardown. c_elem_vt_helper emits the two
-# thunks together, so wherever the copy above names one this names its pair.
+# c_elem_drop_fn is the same question asked of teardown, and it asks `c_drop_thunk` rather than
+# spelling the dispatch again — that function's own comment says why: "It was a longhand copy,
+# and the copy is how a kind gets added to one and not the other." The only difference is the
+# sentinel a vtable slot wants, which is `NULL` where a thunk name wants "".
 fn c_elem_drop_fn(mut &em: Emitter, t: ast.Ty) -> str {
-	k := c_elem_kind(em, t)
+	d := c_drop_thunk(em, t)
 
-	return "NULL" if k == ""
+	return "NULL" if d == ""
 
-	return c_ty_helper("elemdrop", k)
+	return d
 }
 
 # c_elem_kind is the one dispatch behind both: which FAMILY of thunk a type needs, or ""

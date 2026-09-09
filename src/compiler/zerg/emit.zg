@@ -16489,6 +16489,17 @@ fn c_forin(mut &em: Emitter, var: str, iter: ast.Expr, body: list[ast.Stmt], ind
 
 # c_formap is the list loop over a map's KEYS, on the runtime's insertion-ordered accessor.
 # The map is materialised into a local for the same reason the list is: a call result has no
+# c_let_decl is the ONE EXIT a binding's declaration leaves through, and the reason it exists
+# is that there were three: the map-literal arm, the carrier arm and the bottom of c_let each
+# wrote `c_var_cname` + `c_pend_drop` + the same interpolation, and each comment noted the arm
+# beside it "closing the same omission on its own slot". An arm added tomorrow — a spec's box
+# is the next one — would have been the fourth place to remember.
+#
+# An arm answers with the value it computed; the registration is not its to forget.
+fn c_let_decl(mut &em: Emitter, cname: str, eff: ast.Ty, val: str, ind: str) -> str {
+	return f"{ind}{c_type(eff)} {cname} = {val};\n" + c_pend_drop(em, eff, cname, ind)
+}
+
 # address, and two sequential loops must not clash on the temp name.
 fn c_formap(mut &em: Emitter, var: str, iter: ast.Expr, ct: ast.Ty, body: list[ast.Stmt], ind: str) -> str {
 	kt := c_map_key_ty(ct)
@@ -16579,9 +16590,7 @@ fn c_let(mut &em: Emitter, name: str, ty: ast.Ty, has_type: bool, is_mut: bool, 
 		# `m: map[str, int] = {"a": 1}` came here and was not, so an ANNOTATION was the
 		# difference between a map that gives its entry table back and one that does not.
 		# The carrier arm below records the same omission being closed on its own slot.
-		mcn := c_var_cname(em, name)
-		mgive := c_pend_drop(em, eff, mcn, ind)
-		return f"{ind}zrt_map {mcn} = {mval};\n" + mgive
+		return c_let_decl(em, c_var_cname(em, name), eff, mval, ind)
 	}
 
 	return c_let_list(em, name, eff, is_mut, is_const, ival, ind) if c_is_list(eff)
@@ -16603,9 +16612,7 @@ fn c_let(mut &em: Emitter, name: str, ty: ast.Ty, has_type: bool, is_mut: bool, 
 	if has_type and c_is_carrier(eff) {
 		cval := c_carrier_fit(em, check.chk_binding_says(name), eff, ival, c_nosub())
 		c_add_var(em, name, eff, is_mut, is_const)
-		ccn := c_var_cname(em, name)
-		cgive := c_pend_drop(em, eff, ccn, ind)
-		return f"{ind}{c_type(eff)} {ccn} = {cval};\n" + cgive
+		return c_let_decl(em, c_var_cname(em, name), eff, cval, ind)
 	}
 
 	# The initializer is rendered BEFORE the binding enters scope: in `mut n := n` the
@@ -16640,8 +16647,7 @@ fn c_let(mut &em: Emitter, name: str, ty: ast.Ty, has_type: bool, is_mut: bool, 
 	# rest: c_carrier_decl generates its drop beside its copy, so a `T?` binding gives its
 	# payload back at scope exit rather than leaking it. The typed arm above registers the
 	# one it wraps for the same reason.
-	give := c_pend_drop(em, eff, cn, ind)
-	return f"{ind}{c_type(eff)} {cn} = {val};\n" + give
+	return c_let_decl(em, cn, eff, val, ind)
 }
 
 # c_let_chan declares a CHANNEL binding, which owns what it holds. Two halves:

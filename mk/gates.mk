@@ -175,9 +175,21 @@ EXAMPLE_OUT_MIN ?= 36
 # `examples/1g/siblings` built and ran and printed the right three lines while `--emit check`
 # refused it, because only one of the two loaders knew a sibling import loads nothing (#57).
 # The check costs no `cc`, and it is the stage an editor runs on every save.
+# THE EXPECTATIONS LIVE IN THE PRIVATE SUBMODULE and this gate is NOT one of the fourteen
+# behind the corpus fetch — a fork builds and runs the examples with no test-data at all. So
+# "every example owes an expectation" is asked only where the expectations can be: with the
+# submodule, a missing file is a finding; without it, there is nothing to be missing from, and
+# the tagline says how many were compared so a run that measured none cannot read as a run
+# that found none.
+#
+# Requiring the file unconditionally is what broke CI on every job that does not fetch the
+# corpus, which is most of them: `bootstrap + examples` on both platforms and the two c99/c17
+# jobs all answered `NO-OUT examples/25_errors.zg` for a file that was there, one repository
+# over.
 examples:                       # every example builds, runs, and prints what its file says
 	$(MAKE) build
 	@fail=0; n=0; cmp=0; mkdir -p bin/examples; \
+	have_out=1; [ -d test-data/examples ] || have_out=0; \
 	for src in $(EXAMPLE_SRCS); do \
 		case " $(EXAMPLE_REFUSED) " in *" $$src "*) continue;; esac; \
 		out=bin/examples/$$(echo $$src | sed 's|^examples/||; s|/|_|g; s|\.zg$$||'); \
@@ -185,10 +197,14 @@ examples:                       # every example builds, runs, and prints what it
 		./bin/zerg build $$src --emit bin -o $$out >/dev/null 2>&1 || { echo "BUILD  $$src"; fail=1; continue; }; \
 		$$out >bin/examples/got.out 2>bin/examples/got.err || { echo "RUN    $$src"; fail=1; continue; }; \
 		want=test-data/examples/$$(echo $$src | sed 's|^examples/||; s|\.zg$$|.out|'); \
-		[ -f $$want ] || { echo "NO-OUT $$src — an example a reader copies owes what it prints"; fail=1; continue; }; \
-		cmp=$$((cmp+1)); \
+		if [ ! -f $$want ]; then \
+			[ $$have_out -eq 1 ] && { echo "NO-OUT $$src — an example a reader copies owes what it prints"; fail=1; }; \
+			n=$$((n+1)); \
+			continue; \
+		fi; \
 		diff -q $$want bin/examples/got.out >/dev/null 2>&1 || { echo "OUTPUT $$src"; fail=1; continue; }; \
 		[ -s bin/examples/got.err ] && { echo "STDERR $$src: $$(head -1 bin/examples/got.err) — an example prints to stdout"; fail=1; continue; }; \
+		cmp=$$((cmp+1)); \
 		n=$$((n+1)); \
 	done; \
 	for src in $(EXAMPLE_REFUSED); do \

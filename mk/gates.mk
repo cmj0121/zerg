@@ -380,14 +380,15 @@ corpus:                         # run zerg against the test-data corpus it now o
 		src=test-data/codegen/$$name.zg; \
 		./bin/zerg build --emit bin -o ./bin/corpus-case $$src >/dev/null 2>&1 || { echo "BUILD  $$name"; fail=1; continue; }; \
 		want_rc=0; [ -f test-data/codegen/$$name.rc ] && want_rc=$$(cat test-data/codegen/$$name.rc); \
+		want_out=test-data/codegen/$$name.out; want_err=test-data/codegen/$$name.err; \
 		reps=1; case $$name in conc_*) reps=$(CORPUS_CONC_REPS);; esac; \
 		n=0; \
 		while [ $$n -lt $$reps ]; do \
 			./bin/corpus-case >./bin/corpus-case.out 2>./bin/corpus-case.err; rc=$$?; \
-			diff -q test-data/codegen/$$name.out ./bin/corpus-case.out >/dev/null 2>&1 || { echo "OUTPUT $$name (run $$n)"; fail=1; break; }; \
+			cmp -s $$want_out ./bin/corpus-case.out || { echo "OUTPUT $$name (run $$n)"; fail=1; break; }; \
 			[ "$$rc" = "$$want_rc" ] || { echo "STATUS $$name (run $$n): want $$want_rc, got $$rc"; fail=1; break; }; \
-			if [ -f test-data/codegen/$$name.err ]; then \
-				diff -q test-data/codegen/$$name.err ./bin/corpus-case.err >/dev/null 2>&1 || { echo "STDERR $$name (run $$n): $$(head -1 ./bin/corpus-case.err)"; fail=1; break; }; \
+			if [ -f $$want_err ]; then \
+				cmp -s $$want_err ./bin/corpus-case.err || { echo "STDERR $$name (run $$n): $$(head -1 ./bin/corpus-case.err)"; fail=1; break; }; \
 			elif [ -s ./bin/corpus-case.err ]; then \
 				echo "UNPINNED-STDERR $$name (run $$n): $$(head -1 ./bin/corpus-case.err) — put it in $$name.err"; fail=1; break; \
 			fi; \
@@ -454,6 +455,11 @@ sanitize-conc:                  # run the concurrency corpus under address/UB/le
 # because these are not concurrent programs — repetition buys nothing and the corpus is nine
 # times the size.
 #
+# AND PARALLEL=1. The repetitions were turned off and the load siblings were not: `many` mode
+# spawns PARALLEL-1 background instances as CPU pressure to shake out races, which is three
+# extra launches of a sanitized binary per case here, buying nothing a single run does not
+# already say.
+#
 # CORPUS_PASS and not a glob, so the five cases waiting on a feature are out for the reason
 # `corpus` has them out, and a sixth joining that list does not become a failure here.
 # `conc_*` is taken out with a WILDCARD and not a `%` pattern: make's filter-out allows one
@@ -465,7 +471,7 @@ sanitize-corpus:                # the rest of the corpus under the sanitizers, a
 	$(MAKE) build
 	@CASES="$(SANITIZE_CORPUS_CASES)" \
 		KNOWN="scripts/sanitize-leaks.txt test-data/sanitize-leaks.txt" \
-		MIN_CASES=150 SCHEDULES=1 RUNS=1 ./scripts/sanitize-conc.sh
+		MIN_CASES=150 SCHEDULES=1 RUNS=1 PARALLEL=1 ./scripts/sanitize-conc.sh
 
 mem-check:                      # a value that outlives its scope, counted rather than estimated
 	$(MAKE) build

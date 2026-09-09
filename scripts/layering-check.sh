@@ -76,7 +76,11 @@ zg_calls() {
 LAYER_FILES="$ZG/check.zg $ZG/emit.zg $ZG/generic.zg"
 LAYER_NAME="the checker and the emitter"
 # shellcheck disable=SC2086
-LAYER_DEFS=$(zg_defs $LAYER_FILES)
+# ACCUMULATED FROM THE PER-FILE PASSES rather than read again. The paragraph above is about
+# reading these three files once; the per-file floor below then read them a second time —
+# 1.15 MB — which is the waste this hoist exists to remove, reinstated by the guard added to
+# protect it.
+LAYER_DEFS=""
 
 # The layer is read PER FILE, and that is the whole of the guard. A single floor under the
 # union was what stood here — 50, against the 1083 names the three files define — so it caught
@@ -98,7 +102,10 @@ LAYER_DEFS=$(zg_defs $LAYER_FILES)
 # module qualifier has before — leaves the file in place and the reader empty.
 LAYER_FILE_MIN=${LAYER_FILE_MIN:-25}
 for lf in $LAYER_FILES; do
-	n_lf=$(zg_defs "$lf" | wc -l)
+	lf_defs=$(zg_defs "$lf")
+	LAYER_DEFS="$LAYER_DEFS
+$lf_defs"
+	n_lf=$(printf '%s\n' "$lf_defs" | grep -c .)
 	if [ "$n_lf" -lt "$LAYER_FILE_MIN" ]; then
 		note "$lf defines $n_lf names to this reader, which is too few to be the file it is"
 		printf 'layering-check: the layer it measures against could not be read\n' >&2

@@ -8865,9 +8865,12 @@ fn c_lvalue(mut &em: Emitter, e: ast.Expr, sb: Subst) -> str {
 # expression's to release.
 #
 # IT IS A BORROW. `m[k]` lowers to a bit copy of a value the map still owns, so a consumer that
-# materialises one and gives it back frees a buffer the entry still points at.
+# materialises one and gives it back frees a buffer the entry still points at. That went
+# unobserved while a map's vtable had NULL drops; with them filled in, `print m["a"].len()` on a
+# `map[str, map[str, int]]` printed its answer and then SEGFAULTED.
 #
-# One name, because five inline copies is how the sixth consumer forgets.
+# One name, because five inline copies is how the sixth consumer forgets: `c_map_method` was
+# the sixth and it did.
 pub fn c_is_map_index(mut &em: Emitter, e: ast.Expr) -> bool {
 	return c_is_index(e) and c_is_map(c_infer(em, c_index_target(e)))
 }
@@ -15116,9 +15119,20 @@ fn c_map_method(mut &em: Emitter, target: ast.Expr, meth: str, args: list[ast.Ex
 
 	mut recv := f"&({tgt})"
 	mut bind := ""
+	mut give := ""
 	if not place {
 		recv = "&zgt_mx"
 		bind = f"zrt_map zgt_mx = {tgt}; "
+
+		# AND WHETHER IT IS OURS TO GIVE BACK, decided HERE with the binding and not in each
+		# arm — `len` and `has` both materialise the same receiver and an arm added tomorrow
+		# would be the third place to remember. `m["a"].len()` hands over a bit copy of a value
+		# the outer map still owns, and releasing it printed the answer and then SEGFAULTED
+		# once a map's vtable carried real drops.
+		give = c_drop_stmt(em, tty, "zgt_mx") + " "
+		if c_is_map_index(em, target) {
+			give = ""
+		}
 	}
 
 	if meth == "len" {
@@ -15132,7 +15146,7 @@ fn c_map_method(mut &em: Emitter, target: ast.Expr, meth: str, args: list[ast.Ex
 		# ours — it is registered where it was declared — which is why this only happens on
 		# the `not place` side.
 		nr := c_tmp(em, "zgt_mr")
-		return f"({{ {bind}int64_t {nr} = (int64_t)zrt_map_len({recv}); {c_drop_stmt(em, tty, "zgt_mx")} {nr}; }})"
+		return f"({{ {bind}int64_t {nr} = (int64_t)zrt_map_len({recv}); {give}{nr}; }})"
 	}
 	if meth == "has" {
 		raise c_diag(em, rule.Rule.HasTakesOneKey, f"`has` asks about one key, and this gives {strconv.to_string(args.len(), 10)}") if args.len() != 1
@@ -15144,7 +15158,7 @@ fn c_map_method(mut &em: Emitter, target: ast.Expr, meth: str, args: list[ast.Ex
 
 		# the same release as `len`'s, and for the same reason
 		hr := c_tmp(em, "zgt_mr")
-		return f"({{ {bind}{c_type(kt)} zgt_mk = {k}; bool {hr} = zrt_map_has({recv}, &zgt_mk); {c_drop_stmt(em, tty, "zgt_mx")} {hr}; }})"
+		return f"({{ {bind}{c_type(kt)} zgt_mk = {k}; bool {hr} = zrt_map_has({recv}, &zgt_mk); {give}{hr}; }})"
 	}
 
 	# TWO ANSWERS BEHIND A NAME THIS FUNCTION DOES NOT LOWER. `insert`, `remove` and `get` are

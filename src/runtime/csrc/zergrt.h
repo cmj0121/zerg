@@ -81,6 +81,32 @@ typedef struct {
  * mechanism that lets literals and heap strings share one `const char*` ABI (S2). */
 #define ZRT_RC_IMMORTAL ((size_t)SIZE_MAX)
 
+/* zrt_dyn_hdr is a SPEC VALUE's header: the counted cell a Ref has, plus the witness table
+ * that says what the payload can do. A Zerg `s: S` is, in C, a `void*` pointing at it —
+ * the same width and the same lifetime rules as a `Ref[T]`, with one more word.
+ *
+ * The layout is `[ zrt_ref_hdr | const void *vt | payload... ]`, so `zrt_release` and the
+ * drop-in-header contract work on it unchanged: the compiler emits a drop per payload type
+ * exactly as it does for a Ref, and the vt is read by the call sites that dispatch.
+ *
+ * `vt` is `const void *` here because the runtime never looks inside it. Its shape is one
+ * static struct per spec, emitted by the compiler: the payload's copy and drop first — the
+ * same two slots `zrt_elem_vt` has, so a spec value can be a list element — then one
+ * function pointer per required member, in declaration order. */
+typedef struct {
+	zrt_ref_hdr hdr;
+	const void *vt;
+} zrt_dyn_hdr;
+
+/* zrt_dyn_alloc boxes a value of payload_sz bytes against a witness table, refcount 1. */
+void *zrt_dyn_alloc(size_t payload_sz, zrt_drop_fn drop, const void *vt);
+
+/* zrt_dyn_vt is the witness table a spec value was boxed against. */
+const void *zrt_dyn_vt(const void *cell);
+
+/* zrt_dyn_payload is the boxed value itself, past both header words. */
+void *zrt_dyn_payload(const void *cell);
+
 /* zrt_ref_alloc allocates a Ref holding payload_sz bytes with refcount 1 and
  * the given drop function, and returns the header pointer. */
 void *zrt_ref_alloc(size_t payload_sz, zrt_drop_fn drop);

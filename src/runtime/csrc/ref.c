@@ -21,6 +21,22 @@
  */
 #include "zergrt.h"
 
+void *zrt_dyn_alloc(size_t payload_sz, zrt_drop_fn drop, const void *vt) {
+	zrt_dyn_hdr *h = (zrt_dyn_hdr *)zrt_alloc(sizeof(zrt_dyn_hdr) + payload_sz);
+	h->hdr.rc = 1;
+	h->hdr.drop = drop;
+	h->vt = vt;
+	return h;
+}
+
+const void *zrt_dyn_vt(const void *cell) {
+	return ((const zrt_dyn_hdr *)cell)->vt;
+}
+
+void *zrt_dyn_payload(const void *cell) {
+	return (void *)((const char *)cell + sizeof(zrt_dyn_hdr));
+}
+
 void *zrt_ref_alloc(size_t payload_sz, zrt_drop_fn drop) {
 	zrt_ref_hdr *h = (zrt_ref_hdr *)zrt_alloc(sizeof(zrt_ref_hdr) + payload_sz);
 	h->rc = 1;

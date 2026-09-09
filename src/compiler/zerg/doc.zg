@@ -436,7 +436,7 @@ fn doc_sorted(ds: list[DocDecl]) -> list[DocDecl] {
 fn doc_tparams(tps: list[str]) -> str {
 	return "" if tps.len() == 0
 
-	return f"[{parser.join_commas(tps)}]"
+	return ast.dump_tparams(tps)
 }
 
 fn doc_fn_sig(fd: ast.FnDecl) -> str {

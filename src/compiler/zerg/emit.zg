@@ -5307,14 +5307,16 @@ fn c_elem_copy_fn(mut &em: Emitter, t: ast.Ty) -> str {
 	return c_ty_helper("elemcopy", k)
 }
 
-# c_elem_drop_fn is the same question asked of teardown. c_elem_vt_helper emits the two
-# thunks together, so wherever the copy above names one this names its pair.
+# c_elem_drop_fn is the same question asked of teardown, and it asks `c_drop_thunk` rather than
+# spelling the dispatch again — that function's own comment says why: "It was a longhand copy,
+# and the copy is how a kind gets added to one and not the other." The only difference is the
+# sentinel a vtable slot wants, which is `NULL` where a thunk name wants "".
 fn c_elem_drop_fn(mut &em: Emitter, t: ast.Ty) -> str {
-	k := c_elem_kind(em, t)
+	d := c_drop_thunk(em, t)
 
-	return "NULL" if k == ""
+	return "NULL" if d == ""
 
-	return c_ty_helper("elemdrop", k)
+	return d
 }
 
 # c_elem_kind is the one dispatch behind both: which FAMILY of thunk a type needs, or ""
@@ -15660,23 +15662,27 @@ fn c_fmt_hole(mut &em: Emitter, x: ast.Expr, conv: str, fspec: str, sb: Subst) -
 	text := c_render_of(em, t, c_expr(em, x, sb), conv == "r" or conv == "a")
 	mut out := text
 	if conv == "a" {
-		# GIVEN BACK, for the reason the `zrt_fmt_str` return below carries: `zrt_ascii_escape`
-		# reads its argument and answers a fresh cell without releasing it, so handing it the
-		# owned rendering lost that reference.
-		an := c_tmp(em, "zgt_fs")
-		ar := c_tmp(em, "zgt_fs")
-		out = f"({{ const char* {an} = {out}; const char* {ar} = zrt_ascii_escape({an}); zrt_str_release({an}); {ar}; }})"
+		out = c_str_thru(em, out, "zrt_ascii_escape", "")
 	}
 	return out if fspec == ""
 
-	# AND THE RENDERING IS GIVEN BACK. `c_render_of` answers with a reference this expression
-	# OWNS — a retain for a `str`, a fresh cell for everything else — and the `fspec == ""`
-	# return above hands that to the concat chain, which releases it. `zrt_fmt_str` does not:
-	# it reads its argument, dups, pads and answers a fresh cell, so the owned reference
-	# passed to it was simply lost. One `{p:>12}` on a `str` leaked one cell.
-	fn_ := c_tmp(em, "zgt_fs")
-	fr := c_tmp(em, "zgt_fs")
-	return f"({{ const char* {fn_} = {out}; const char* {fr} = zrt_fmt_str({fn_}, {c_str_lit(fspec)}); zrt_str_release({fn_}); {fr}; }})"
+	return c_str_thru(em, out, "zrt_fmt_str", f", {c_str_lit(fspec)}")
+}
+
+# c_str_thru passes an owned `str` through a runtime call that BORROWS it, and gives it back.
+#
+# `c_render_of` answers with a reference this expression OWNS — a retain for a `str`, a fresh
+# cell for everything else — and the plain hole hands that to the concat chain, which releases
+# it. `zrt_fmt_str` and `zrt_ascii_escape` do not: each reads its argument, answers a fresh
+# cell, and leaves the reference it was given with nobody to release it. One `{p:>12}` on a
+# `str` leaked one cell, and so did one `{s!a}`.
+#
+# One helper because there is a THIRD function of the same shape one call away — `zrt_debug_str`
+# — and two hand-written copies is how the third one arrives without its give-back.
+fn c_str_thru(mut &em: Emitter, owned: str, callee: str, rest: str) -> str {
+	sn := c_tmp(em, "zgt_fs")
+	rn := c_tmp(em, "zgt_fs")
+	return f"({{ const char* {sn} = {owned}; const char* {rn} = {callee}({sn}{rest}); zrt_str_release({sn}); {rn}; }})"
 }
 
 # c_fmt_spec_type holds a spec's TYPE LETTER to what the value can render as. Both halves are
@@ -16483,6 +16489,17 @@ fn c_forin(mut &em: Emitter, var: str, iter: ast.Expr, body: list[ast.Stmt], ind
 
 # c_formap is the list loop over a map's KEYS, on the runtime's insertion-ordered accessor.
 # The map is materialised into a local for the same reason the list is: a call result has no
+# c_let_decl is the ONE EXIT a binding's declaration leaves through, and the reason it exists
+# is that there were three: the map-literal arm, the carrier arm and the bottom of c_let each
+# wrote `c_var_cname` + `c_pend_drop` + the same interpolation, and each comment noted the arm
+# beside it "closing the same omission on its own slot". An arm added tomorrow — a spec's box
+# is the next one — would have been the fourth place to remember.
+#
+# An arm answers with the value it computed; the registration is not its to forget.
+fn c_let_decl(mut &em: Emitter, cname: str, eff: ast.Ty, val: str, ind: str) -> str {
+	return f"{ind}{c_type(eff)} {cname} = {val};\n" + c_pend_drop(em, eff, cname, ind)
+}
+
 # address, and two sequential loops must not clash on the temp name.
 fn c_formap(mut &em: Emitter, var: str, iter: ast.Expr, ct: ast.Ty, body: list[ast.Stmt], ind: str) -> str {
 	kt := c_map_key_ty(ct)
@@ -16573,9 +16590,7 @@ fn c_let(mut &em: Emitter, name: str, ty: ast.Ty, has_type: bool, is_mut: bool, 
 		# `m: map[str, int] = {"a": 1}` came here and was not, so an ANNOTATION was the
 		# difference between a map that gives its entry table back and one that does not.
 		# The carrier arm below records the same omission being closed on its own slot.
-		mcn := c_var_cname(em, name)
-		mgive := c_pend_drop(em, eff, mcn, ind)
-		return f"{ind}zrt_map {mcn} = {mval};\n" + mgive
+		return c_let_decl(em, c_var_cname(em, name), eff, mval, ind)
 	}
 
 	return c_let_list(em, name, eff, is_mut, is_const, ival, ind) if c_is_list(eff)
@@ -16597,9 +16612,7 @@ fn c_let(mut &em: Emitter, name: str, ty: ast.Ty, has_type: bool, is_mut: bool, 
 	if has_type and c_is_carrier(eff) {
 		cval := c_carrier_fit(em, check.chk_binding_says(name), eff, ival, c_nosub())
 		c_add_var(em, name, eff, is_mut, is_const)
-		ccn := c_var_cname(em, name)
-		cgive := c_pend_drop(em, eff, ccn, ind)
-		return f"{ind}{c_type(eff)} {ccn} = {cval};\n" + cgive
+		return c_let_decl(em, c_var_cname(em, name), eff, cval, ind)
 	}
 
 	# The initializer is rendered BEFORE the binding enters scope: in `mut n := n` the
@@ -16634,8 +16647,7 @@ fn c_let(mut &em: Emitter, name: str, ty: ast.Ty, has_type: bool, is_mut: bool, 
 	# rest: c_carrier_decl generates its drop beside its copy, so a `T?` binding gives its
 	# payload back at scope exit rather than leaking it. The typed arm above registers the
 	# one it wraps for the same reason.
-	give := c_pend_drop(em, eff, cn, ind)
-	return f"{ind}{c_type(eff)} {cn} = {val};\n" + give
+	return c_let_decl(em, cn, eff, val, ind)
 }
 
 # c_let_chan declares a CHANNEL binding, which owns what it holds. Two halves:

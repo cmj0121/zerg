@@ -152,7 +152,6 @@ seen_known=""
 KNOWN=${KNOWN:-}
 
 known_reason() {
-	[ -n "$KNOWN" ] || return 0
 	for kf in $KNOWN; do
 		[ -f "$kf" ] || continue
 		awk -F'\t' -v n="$1" '$1 == n { print $2; found = 1 } END { exit !found }' "$kf" && return 0
@@ -260,12 +259,12 @@ for src in ${CASES:-test-data/codegen/conc_*.zg}; do
 				#
 				# The reason is the first runtime frame that allocated, because a case that
 				# starts leaking somewhere else is a new defect wearing an old name.
-				why=$(grep -oE "in (zrt_[a-z_]+|buf_alloc|str_alloc) [^ ]*csrc/(fmt|str|map|list|ref|unwind)\.c:" "$WORK/$name.err" | head -1 | awk '{ print $2 }')
 				listed=$(known_reason "$name")
 
 				# the `?` that marks a host-dependent line is not part of the allocator
 				listed=${listed#\?}
-				if [ -n "$KNOWN" ] && [ -n "$listed" ]; then
+				if [ -n "$listed" ]; then
+					why=$(grep -oE "in (zrt_[a-z_]+|buf_alloc|str_alloc) [^ ]*csrc/(fmt|str|map|list|ref|unwind)\.c:" "$WORK/$name.err" | head -1 | awk '{ print $2 }')
 					if [ -n "$why" ] && [ "$why" != "$listed" ]; then
 						printf 'REASON %s — listed as %s, and it now allocates in %s\n' "$name" "$listed" "$why"
 						fail=1

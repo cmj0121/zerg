@@ -399,17 +399,12 @@ corpus:                         # run zerg against the test-data corpus it now o
 	rm -f ./bin/corpus-case ./bin/corpus-case.c ./bin/corpus-case.out ./bin/corpus-case.err; \
 	[ $$fail -eq 0 ] || { echo "corpus: a case that used to pass regressed"; exit 1; }; \
 	[ $$ran -ge $(CORPUS_MIN) ] || { echo "corpus: only $$ran cases were run, and the floor is $(CORPUS_MIN)"; exit 1; }; \
-	held=0; \
 	for name in $(CORPUS_SKIP); do \
-		if ./bin/zerg build --emit bin -o ./bin/corpus-skip test-data/codegen/$$name.zg >/dev/null 2>&1; then \
-			echo "SKIPPED-BUT-BUILDS $$name"; fail=1; \
-		else \
-			held=$$((held+1)); \
-		fi; \
+		! ./bin/zerg build --emit bin -o ./bin/corpus-skip test-data/codegen/$$name.zg >/dev/null 2>&1 || { echo "SKIPPED-BUT-BUILDS $$name"; fail=1; }; \
 	done; \
 	rm -f ./bin/corpus-skip ./bin/corpus-skip.c; \
 	[ $$fail -eq 0 ] || { echo "corpus: a case in CORPUS_SKIP builds now — delete its name, which IS the gate for its feature"; exit 1; }; \
-	echo "corpus: $$ran/$$(ls test-data/codegen/*.zg | wc -l | tr -d ' ') cases pass, and $$held are still refused (the rest await features zerg does not have yet)"
+	echo "corpus: $$ran/$$(ls test-data/codegen/*.zg | wc -l | tr -d ' ') cases pass, and $(words $(CORPUS_SKIP)) are still refused (the rest await features zerg does not have yet)"
 
 # The compiler compiles itself, so the one program big enough to find a rare emitter path
 # is the compiler — and until now nothing compared the two stages `build` already makes.
@@ -465,7 +460,7 @@ sanitize-conc:                  # run the concurrency corpus under address/UB/le
 # `conc_*` is taken out with a WILDCARD and not a `%` pattern: make's filter-out allows one
 # `%` per pattern, so `%/conc_%` matches nothing and silently filtered nobody — the first run
 # of this gate measured 199 cases and reported it as a success.
-SANITIZE_CORPUS_CASES = $(filter-out $(wildcard test-data/codegen/conc_*.zg) $(addprefix test-data/codegen/,$(addsuffix .zg,$(CORPUS_SKIP))),$(wildcard test-data/codegen/*.zg))
+SANITIZE_CORPUS_CASES := $(filter-out $(wildcard test-data/codegen/conc_*.zg) $(addprefix test-data/codegen/,$(addsuffix .zg,$(CORPUS_SKIP))),$(wildcard test-data/codegen/*.zg))
 
 sanitize-corpus:                # the rest of the corpus under the sanitizers, against a named list
 	$(MAKE) build

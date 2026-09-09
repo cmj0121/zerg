@@ -15662,23 +15662,27 @@ fn c_fmt_hole(mut &em: Emitter, x: ast.Expr, conv: str, fspec: str, sb: Subst) -
 	text := c_render_of(em, t, c_expr(em, x, sb), conv == "r" or conv == "a")
 	mut out := text
 	if conv == "a" {
-		# GIVEN BACK, for the reason the `zrt_fmt_str` return below carries: `zrt_ascii_escape`
-		# reads its argument and answers a fresh cell without releasing it, so handing it the
-		# owned rendering lost that reference.
-		an := c_tmp(em, "zgt_fs")
-		ar := c_tmp(em, "zgt_fs")
-		out = f"({{ const char* {an} = {out}; const char* {ar} = zrt_ascii_escape({an}); zrt_str_release({an}); {ar}; }})"
+		out = c_str_thru(em, out, "zrt_ascii_escape", "")
 	}
 	return out if fspec == ""
 
-	# AND THE RENDERING IS GIVEN BACK. `c_render_of` answers with a reference this expression
-	# OWNS — a retain for a `str`, a fresh cell for everything else — and the `fspec == ""`
-	# return above hands that to the concat chain, which releases it. `zrt_fmt_str` does not:
-	# it reads its argument, dups, pads and answers a fresh cell, so the owned reference
-	# passed to it was simply lost. One `{p:>12}` on a `str` leaked one cell.
-	fn_ := c_tmp(em, "zgt_fs")
-	fr := c_tmp(em, "zgt_fs")
-	return f"({{ const char* {fn_} = {out}; const char* {fr} = zrt_fmt_str({fn_}, {c_str_lit(fspec)}); zrt_str_release({fn_}); {fr}; }})"
+	return c_str_thru(em, out, "zrt_fmt_str", f", {c_str_lit(fspec)}")
+}
+
+# c_str_thru passes an owned `str` through a runtime call that BORROWS it, and gives it back.
+#
+# `c_render_of` answers with a reference this expression OWNS — a retain for a `str`, a fresh
+# cell for everything else — and the plain hole hands that to the concat chain, which releases
+# it. `zrt_fmt_str` and `zrt_ascii_escape` do not: each reads its argument, answers a fresh
+# cell, and leaves the reference it was given with nobody to release it. One `{p:>12}` on a
+# `str` leaked one cell, and so did one `{s!a}`.
+#
+# One helper because there is a THIRD function of the same shape one call away — `zrt_debug_str`
+# — and two hand-written copies is how the third one arrives without its give-back.
+fn c_str_thru(mut &em: Emitter, owned: str, callee: str, rest: str) -> str {
+	sn := c_tmp(em, "zgt_fs")
+	rn := c_tmp(em, "zgt_fs")
+	return f"({{ const char* {sn} = {owned}; const char* {rn} = {callee}({sn}{rest}); zrt_str_release({sn}); {rn}; }})"
 }
 
 # c_fmt_spec_type holds a spec's TYPE LETTER to what the value can render as. Both halves are

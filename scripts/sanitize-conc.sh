@@ -119,6 +119,26 @@ esac
 
 WORK="$(mktemp -d "${TMPDIR:-/tmp}/zerg-sanitize.XXXXXX")" || exit 2
 
+# THE RUNTIME IS COMPILED ONCE. It was inside the case loop — `$(rt_sources)` on every link — so
+# the same ~14 sanitized translation units were rebuilt per case: fine at 20 concurrency cases,
+# and 2,800 of them once `sanitize-corpus` brought the other 179. The flags never vary and the
+# sources do not either, so the only thing a case needs is its own object linked against these.
+#
+# The `ls`/`uname` in rt_sources() is also once now rather than once per case.
+mkdir -p "$WORK/rt"
+RT_OBJS=""
+for rsrc in $(rt_sources); do
+	robj="$WORK/rt/$(basename "$rsrc").o"
+	if ! $CC -std=c11 -g -fno-omit-frame-pointer \
+		-fsanitize=address,undefined -fno-sanitize-recover=all \
+		-I "$RT" -c "$rsrc" -o "$robj" 2>"$WORK/rt.cc.log"; then
+		printf 'CC     the runtime does not build under the sanitizers\n' >&2
+		head -10 "$WORK/rt.cc.log" >&2
+		exit 1
+	fi
+	RT_OBJS="$RT_OBJS $robj"
+done
+
 printf 'sanitize-conc: address + undefined, leak detection %s, %s seeded single-worker schedules + %s multi-worker runs per case\n\n' "$LEAKS" "$SCHEDULES" "$RUNS"
 
 fail=0
@@ -166,10 +186,9 @@ for src in ${CASES:-test-data/codegen/conc_*.zg}; do
 		continue
 	fi
 
-	# shellcheck disable=SC2046  # the source list is one path per line and has no spaces
 	if ! $CC -std=c11 -g -fno-omit-frame-pointer \
 		-fsanitize=address,undefined -fno-sanitize-recover=all \
-		-I "$RT" -o "$WORK/$name.bin" "$WORK/$name.c" $(rt_sources) 2>"$WORK/$name.cc.log"; then
+		-I "$RT" -o "$WORK/$name.bin" "$WORK/$name.c" $RT_OBJS 2>"$WORK/$name.cc.log"; then
 		printf 'CC     %s\n' "$name"
 		head -10 "$WORK/$name.cc.log"
 		fail=1

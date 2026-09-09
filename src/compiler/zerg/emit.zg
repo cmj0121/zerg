@@ -15556,12 +15556,19 @@ fn c_render_carrier_body(mut &em: Emitter, t: ast.Ty) -> str {
 		return out + f"    return {c_render_of(em, el, "v.ok", true)};\n"
 	}
 
+	# THE ACCUMULATOR FORM, like the other five. These were nested `zrt_str_concat` expressions
+	# — invisible to a change keyed on the `s` shape — and each dropped two intermediate cells
+	# plus the rendered payload on the floor.
 	lt := c_either_left(t)
 	rt := c_either_right(t)
 	mut out := "    if (v.tag != 0) {\n"
-	out = out + f"        return zrt_str_concat(zrt_str_dup(\"Right(\"), zrt_str_concat({c_render_of(em, rt, "v.err", true)}, \")\"));\n"
+	out = out + "        const char *s = zrt_str_dup(\"Right(\");\n"
+	out = out + c_render_join("        ", c_render_of(em, rt, "v.err", true), true)
+	out = out + "    " + c_render_close(")")
 	out = out + "    }\n"
-	return out + f"    return zrt_str_concat(zrt_str_dup(\"Left(\"), zrt_str_concat({c_render_of(em, lt, "v.ok", true)}, \")\"));\n"
+	out = out + "    const char *s = zrt_str_dup(\"Left(\");\n"
+	out = out + c_render_join("    ", c_render_of(em, lt, "v.ok", true), true)
+	return out + c_render_close(")")
 }
 
 # A SUM RENDERS BY TAG THEN PAYLOAD: `E.A` for a variant that carries nothing, `E.B(3)` for one
@@ -15572,8 +15579,9 @@ fn c_render_enum_body(mut &em: Emitter, en: str) -> str {
 	for i < em.var_name.len() {
 		if em.var_enum[i] == en {
 			vn := em.var_name[i]
-			out = out + "    case " + strconv.to_string(em.var_tag[i], 10) + ":\n"
-			out = out + f"        return {c_render_variant(em, en, vn)};\n"
+			out = out + "    case " + strconv.to_string(em.var_tag[i], 10) + ": {\n"
+			out = out + c_render_variant(em, en, vn)
+			out = out + "    }\n"
 		}
 		i = i + 1
 	}
@@ -15599,18 +15607,27 @@ fn c_render_variant(mut &em: Emitter, en: str, vn: str) -> str {
 	}
 
 	lit := f"zrt_str_dup(\"{en}.{vn}\")"
-	return lit if ps.len() == 0
 
-	mut out := f"zrt_str_concat({lit}, \"(\")"
+	# A VARIANT WITH NO PAYLOAD is its own name and nothing else — no accumulator and no
+	# parentheses. It returns a STATEMENT like the arm below it, because the caller now opens a
+	# block per case rather than writing `return` itself.
+	return f"        return {lit};\n" if ps.len() == 0
+
+	# THE ACCUMULATOR FORM, like the other five renderers. This built a NESTED concat chain and
+	# returned it as one expression, so it was invisible to a change keyed on the `s` shape —
+	# and every intermediate cell, plus every rendered payload, was dropped on the floor.
+	# `print Shape.Line(3)` allocated three cells and released none.
+	mut out := f"        const char *s = {lit};\n"
+	out = out + c_render_join("        ", "\"(\"", false)
 	mut j := 0
 	for j < ps.len() {
 		if j > 0 {
-			out = f"zrt_str_concat({out}, \", \")"
+			out = out + c_render_join("        ", "\", \"", false)
 		}
-		out = f"zrt_str_concat({out}, {ps[j]})"
+		out = out + c_render_join("        ", ps[j], true)
 		j = j + 1
 	}
-	return f"zrt_str_concat({out}, \")\")"
+	return out + "    " + c_render_close(")")
 }
 
 # A PRODUCT RENDERS BY ITS FIELDS, named: `P(x: 1, y: "a")` is the constructor a reader would

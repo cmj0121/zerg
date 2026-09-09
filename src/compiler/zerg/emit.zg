@@ -265,6 +265,13 @@ pub struct Emitter {
 	pub mvt_names: list[str]
 	pub mvt_decls: list[str]
 
+	# svt_names / svt_decls are the SPEC witness tables — one static per `impl S for T`, and
+	# one typedef per spec. A spec value is a box carrying a pointer to one of these, so a
+	# method call reads the pointer rather than a name the caller knew: `docs/core/specs.md`'s
+	# third role for a spec, the one that makes `list[Sink]` a thing a reader can write.
+	pub svt_names: list[str]
+	pub svt_decls: list[str]
+
 	# dfn_decls are the generated defer thunks and their env structs, one per site.
 	# fn_mark is the cleanup-stack mark a `return` unwinds to, and loop_mark the one a
 	# `break` or `continue` unwinds to — empty when there is no defer to run.
@@ -18372,6 +18379,97 @@ fn c_derive_enum_at(prog: ast.File, target: str) -> int {
 	return -1
 }
 
+# c_spec_vt_name is the witness table for one `impl S for T`, and c_spec_vt_type the struct
+# every table of that spec has. Both are names a call site can spell without asking anything:
+# the pair is known at the `impl`, which is the whole reason a spec value can dispatch.
+fn c_is_this_ty(t: ast.Ty) -> bool {
+	return match t {
+		Ty.TNamed(n) => n == "This"
+		_            => false
+	}
+}
+
+fn c_spec_vt_type(sp: str) -> str {
+	return f"zg_specvt_{c_spec_cname(sp)}"
+}
+
+fn c_spec_vt_name(sp: str, target: str) -> str {
+	return f"zg_specvt_{c_spec_cname(sp)}_{c_spec_cname(target)}"
+}
+
+# c_spec_vt_decl writes the struct a spec's tables have: the payload's copy and drop first —
+# the same two slots `zrt_elem_vt` carries, so a spec value can be a list element without a
+# second convention — then one pointer per required member, in DECLARATION order.
+#
+# Order is the contract. A call site reads the slot by index, so a member added to a spec
+# renumbers every table of it, which is exactly what recompiling the program does.
+fn c_spec_vt_typedef(mut &em: Emitter, sp: ast.SpecDecl) -> str {
+	mut out := f"typedef struct {{\n"
+	out = out + "    void (*copy)(void *dst, const void *src);\n"
+	out = out + "    void (*drop)(void *elem);\n"
+	for req in sp.reqs {
+		# `This` IS THE RECEIVER, and it is already the first parameter. A spec's method may
+		# name the self type explicitly — `fn read(this: This)` — and rendering that as a
+		# second parameter asks cc for a `zg_This` no declaration makes.
+		mut ps := "void *self"
+		for p in req.params {
+			if not c_is_this_ty(p.ty) {
+				ps = ps + ", " + c_type(p.ty)
+			}
+		}
+		mut rt := "void"
+		if req.has_ret {
+			rt = c_type(req.ret)
+		}
+		out = out + f"    {rt} (*{req.name})({ps});\n"
+	}
+	return out + f"}} {c_spec_vt_type(sp.name)};\n"
+}
+
+# c_spec_vt_register emits one spec's typedef (once) and one table per `impl S for T`.
+#
+# The method slots are filled from the IMPL's own methods, which is where the provided
+# defaults have already landed: `c_with_spec_defaults` copies a spec member with a body into
+# the impl before this runs, so a table never has a hole and this function never needs to know
+# which half a slot came from.
+pub fn c_spec_vt_register(mut &em: Emitter, sp: ast.SpecDecl, target: str) {
+	# A PARAMETERIZED SPEC HAS NO SINGLE TABLE SHAPE. `Into[T]`'s member answers `T`, so one
+	# typedef per spec is the wrong unit for it — `impl Into[Meters]` and `impl Into[Feet]`
+	# need different signatures, and rendering the parameter as `zg_T` asks cc for a type no
+	# declaration makes. The identity a table needs is the spec's ARGUMENTS as well as its
+	# name, which is what `ast.spec_key` already says everywhere else in this file.
+	#
+	# Until a table is keyed that way, a parameterized spec has none. It costs nothing today:
+	# a spec value is not yet a type, so nothing reads one.
+	return if sp.params.len() != 0
+
+	tn := c_spec_vt_type(sp.name)
+	mut have_type := false
+	for n in em.svt_names {
+		if n == tn {
+			have_type = true
+		}
+	}
+	if not have_type {
+		em.svt_names.append(tn)
+		em.svt_decls.append(c_spec_vt_typedef(em, sp))
+	}
+
+	vn := c_spec_vt_name(sp.name, target)
+	for n in em.svt_names {
+		return if n == vn
+	}
+	em.svt_names.append(vn)
+
+	mut out := f"static const {tn} {vn} = {{ "
+	out = out + c_elem_copy_fn(em, ast.Ty.TNamed(target)) + ", "
+	out = out + c_elem_drop_fn(em, ast.Ty.TNamed(target))
+	for req in sp.reqs {
+		out = out + ", (void *)" + c_fn_cname(target, req.name)
+	}
+	em.svt_decls.append(out + " };\n")
+}
+
 fn c_derive_spec_at(prog: ast.File, nm: str) -> int {
 	mut i := 0
 	for i < prog.specs.len() {
@@ -18532,6 +18630,15 @@ fn c_build_impls(mut &em: Emitter, f: ast.File) {
 		# other — and the bound could not ask for either, having dropped its own arguments too.
 		em.impl_on.append(ast.spec_key(ip.on, ip.args))
 		em.impl_target.append(ip.target)
+
+		# AND ITS WITNESS TABLE, which is the same pair read for a different question: the
+		# rows above answer "does this type implement that spec", and the table answers "what
+		# does it DO" — the half a spec value needs, since a call through one knows the spec
+		# and not the type.
+		at := c_derive_spec_at(f, ip.on)
+		if at >= 0 {
+			c_spec_vt_register(em, f.specs[at], ip.target)
+		}
 	}
 }
 
@@ -18690,7 +18797,7 @@ fn c_emit_unit(prog0: ast.File, own0: ast.File, ms: Mods, whole: bool, want_lint
 	# is what makes that invariant hold for a multi-unit program, at the place it already lives,
 	# and it is what lets the declaration passes below go back to reading the WHOLE program.
 	seen := diags.len()
-	mut em := Emitter([], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], false, false, false, [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], 0, [], 0, [], [], false, "", "", [], [], ast.Ty.TVoid, 0, "", 0, 0, diags, 0, 0, [], [], [], [], [], false, 0, false, "", 0, false, false, [], [], [], [], [], [], [], [], [], [], "", want_lints, [], [], [], [], [], [], [], [], [], [], [], [], false, 0, [], [], "", c_nosub(), [], [], [], [], [], [], [], [], [], [])
+	mut em := Emitter([], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], false, false, false, [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], 0, [], 0, [], [], false, "", "", [], [], ast.Ty.TVoid, 0, "", 0, 0, diags, 0, 0, [], [], [], [], [], false, 0, false, "", 0, false, false, [], [], [], [], [], [], [], [], [], [], "", want_lints, [], [], [], [], [], [], [], [], [], [], [], [], false, 0, [], [], "", c_nosub(), [], [], [], [], [], [], [], [], [], [])
 
 	# ASSIGNED, NOT PASSED. Every argument above is a zero value, and `layering` asserts that
 	# — it lines the call up with the fields by KIND, which only works while nothing in it
@@ -18960,7 +19067,12 @@ fn c_emit_unit(prog0: ast.File, own0: ast.File, ms: Mods, whole: bool, want_lint
 
 	# THE STRUCTURAL RENDERERS go here too, and for the same reason: one may call a type's
 	# `display` override, which is a program function the prototypes above declare.
+	# THE SPEC WITNESS TABLES go with them, and for the same reason twice over: a table's
+	# slots are program functions, so it has to follow the prototypes that declare them.
 	mut rnds := ""
+	for d in em.svt_decls {
+		rnds = rnds + c_lowered(checking, d)
+	}
 	for d in em.rnd_decls {
 		rnds = rnds + c_lowered(checking, d)
 	}

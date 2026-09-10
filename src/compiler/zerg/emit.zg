@@ -7922,9 +7922,28 @@ fn c_is_test(mut &em: Emitter, x: ast.Expr, name: str, sb: Subst) -> str {
 		return f"(({c_expr(em, x, sb)}).kind == {kind})"
 	}
 
+	# A BOX IS THE ONE OPERAND WHOSE TYPE IS NOT A COMPILE-TIME ANSWER, and folding it as one
+	# said `false` about a value that WAS an `A`. docs/core/specs.md reads the answer off "the
+	# dispatch identity the box already carries" — which is the witness table, one static per
+	# (spec, type) pair, so identity is a pointer comparison and nothing new has to be carried.
+	#
+	# The comment on c_is_foldable had already named this: a spec is the existential half, and
+	# it "must not read as no, it is not one of those".
+	return c_spec_is(em, x, c_named_of(t), name, sb) if c_is_spec_name(em, c_named_of(t))
+
 	raise c_diag(em, rule.Rule.NotYetIsErrorKind, f"NotImplemented: `is {name}` — an `is` test compares the operand's own type against a named one here, and `{name}` names no type to put on the right of it; GRAMMAR#cmp-expr takes any `type-name`, so this is a narrower test than the grammar writes") if not c_is_foldable(em, name, t)
 
 	return c_const_over(em, x, t, c_bool(ast.ty_name(t) == name), sb)
+}
+
+# c_spec_is is `x is T` where x is a BOX: the table the value was boxed against, against the
+# one T would have been boxed against. A type that does not implement the spec was never in
+# this box, and that is a compile-time `false` rather than a comparison against a table no
+# program has.
+fn c_spec_is(mut &em: Emitter, x: ast.Expr, sp: str, name: str, sb: Subst) -> str {
+	return "false" if not c_impls(em, name, sp)
+
+	return f"(zrt_dyn_vt({c_expr(em, x, sb)}) == &{c_spec_vt_name(sp, name)})"
 }
 
 # c_is_foldable reports whether `x is Name` has an answer this compiler can work out. It asks
@@ -18640,7 +18659,7 @@ fn c_spec_vt_typedef(mut &em: Emitter, sp: ast.SpecDecl, ip: ast.ImplDecl) -> st
 			pi = pi + 1
 		}
 		if c_spec_boxable(req) {
-			out = out + f"    {c_ret_type(m)} (*{req.name})({ps});\n"
+			out = out + f"    {c_spec_slot_ret(sp, ip, req, m)} (*{req.name})({ps});\n"
 		}
 	}
 	return out + f"}} {c_spec_vt_type(ast.spec_key(sp.name, ip.args))};\n"
@@ -18664,6 +18683,15 @@ fn c_spec_typedefs(mut &em: Emitter, f: ast.File) -> str {
 	return out if out == ""
 
 	return out + "\n"
+}
+
+# c_spec_slot_ret is a slot's return type, which is the member's EXCEPT for a `This`: that
+# comes back as the spec, because the caller reading the slot holds a box and has no concrete
+# type to receive one in. The typedef and the shim both ask, so neither can spell it alone.
+fn c_spec_slot_ret(sp: ast.SpecDecl, ip: ast.ImplDecl, req: ast.FnDecl, m: ast.FnDecl) -> str {
+	return c_ty_cname(ast.spec_key(sp.name, ip.args)) if c_is_this_ty(req.ret)
+
+	return c_ret_type(m)
 }
 
 # c_spec_shim_register is the function a witness table's slot actually points at: the member
@@ -18710,8 +18738,15 @@ fn c_spec_shim_register(mut &em: Emitter, sp: ast.SpecDecl, ip: ast.ImplDecl, re
 		i = i + 1
 	}
 
-	call := f"{c_fn_cname(ip.target, c_spec_key(req.name, c_impl_spec_of(ip)))}({xs})"
-	mut out := f"static {c_ret_type(m)} {sn}({ps}) {{\n"
+	# A `This` RESULT COMES BACK AS THE SPEC, re-boxed — docs/core/specs.md: what a box offers
+	# is "re-boxing a `This`-returning result as the same spec". The caller reading this slot
+	# holds a box and knows no concrete type, so handing it one would be a slot whose C type
+	# nothing on the call side can name. The thunk that boxes is the one this pair already has.
+	mut call := f"{c_fn_cname(ip.target, c_spec_key(req.name, c_impl_spec_of(ip)))}({xs})"
+	if c_is_this_ty(req.ret) {
+		call = f"{c_spec_box_register(em, key, ip.target)}({call})"
+	}
+	mut out := f"static {c_spec_slot_ret(sp, ip, req, m)} {sn}({ps}) {{\n"
 	if m.has_ret {
 		out = f"{out}    return {call};\n"
 	}
@@ -18793,6 +18828,13 @@ pub fn c_spec_vt_register(mut &em: Emitter, sp: ast.SpecDecl, ip: ast.ImplDecl) 
 		return if n == vn
 	}
 	em.svt_names.append(vn)
+
+	# THE TABLE IS DECLARED BEFORE ITS OWN SHIMS, because a `This`-returning member makes the
+	# pair genuinely circular: the table names the shim, and the shim re-boxes its result
+	# against this same table. A tentative definition is what C has for that, and it costs one
+	# line — the alternative is to decide the cycle does not happen, which is what it did until
+	# a member returned a `This`.
+	em.svt_decls.append(f"static const {tn} {vn};\n")
 
 	mut out := f"static const {tn} {vn} = {{ "
 	out = out + c_elem_copy_fn(em, ast.Ty.TNamed(target)) + ", "

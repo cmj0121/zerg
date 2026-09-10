@@ -1239,6 +1239,37 @@ fn main() {
 }
 EOF
 
+# A SPEC NAMES A TYPE, and a PARAMETERIZED one does not yet. The witness tables are already
+# keyed by `ast.spec_key` — name and arguments — so the identity is there; what is missing is
+# the spec's members seated under the applied key, which is where a call reads a return type.
+#
+# It is refused by name rather than as an unknown type. "no type named `Conv[int]`" is the
+# sentence retiring E9048 was supposed to stop, one parameterization along.
+
+expect "$ZERG" a-parameterized-spec-as-a-type E9115 'only on an `impl`' <<'EOF'
+spec Conv[T] {
+	fn to() -> T
+}
+
+struct A {
+	pub n: int
+}
+
+impl Conv[int] for A {
+	fn to() -> int {
+		return this.n
+	}
+}
+
+fn go(c: Conv[int]) -> int {
+	return c.to()
+}
+
+fn main() {
+	print go(A(2))
+}
+EOF
+
 # A BOX OFFERS WHAT DISPATCHES THROUGH `this` ALONE (docs/core/specs.md). `eq`'s other operand
 # is a `This` — exactly the concrete type erasure removed — so a witness table has no slot for
 # it and two boxed values are never comparable by value. Until this stood, cc answered: _no

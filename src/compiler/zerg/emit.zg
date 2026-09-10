@@ -4408,6 +4408,16 @@ fn c_check_type_name(mut &em: Emitter, nm: str, s: Site) {
 		return
 	}
 
+	# A PARAMETERIZED SPEC IS ONE OF THE THREE ROLES TOO, and this compiler carries a spec's
+	# arguments only on an `impl`. Saying "no type named `Conv[int]`" about a spec the reader
+	# declared three lines above is the sentence retiring E9048 was supposed to stop — one
+	# parameterization along.
+	#
+	# The witness tables are ALREADY keyed this way (`ast.spec_key`), so what is missing is not
+	# the identity: it is seating the spec's members under the applied key, which is where the
+	# call side reads a return type from.
+	raise c_diag(em, rule.Rule.NotYetParamSpecAsType, f"NotImplemented: the parameterized `spec` `{nm}` used as a TYPE ({site}) — this compiler carries a spec's type arguments only on an `impl`; a bare `{c_app_base(nm)}` names a type, and a bound fixes the arguments (GRAMMAR#type-name)") if c_is_applied(nm) and c_is_spec_name(em, c_app_base(nm))
+
 	# a TYPE PARAMETER of the template this signature belongs to. It names no declared type
 	# on purpose — that is what makes it a parameter — and it is gone by the time anything
 	# is emitted, because a specialization has a real type in its place.

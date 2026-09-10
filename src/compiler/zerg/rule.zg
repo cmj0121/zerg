@@ -476,7 +476,6 @@ pub enum Rule {
 	NotYetGenericMethod = 9044
 	NotYetCompileTimeBuiltin = 9046
 	NotYetImplOnBuiltin = 9047
-	NotYetSpecAsType = 9048
 	NotYetMutateListRvalue = 9049
 	NotYetOpenRangeHere = 9050
 	NotYetMapKeyType = 9052

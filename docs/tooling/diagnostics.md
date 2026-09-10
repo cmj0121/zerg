@@ -472,7 +472,6 @@ shipping compiler rather than a part of it (the line
 | `E9044` | a generic METHOD `….…[…]`                                                                             |
 | `E9046` | the compile-time built-in `…[T]`                                                                      |
 | `E9047` | an `impl` on the built-in type `…`                                                                    |
-| `E9048` | the `spec` `…` used as a TYPE (…)                                                                     |
 | `E9049` | `…` MUTATES its list, and `…` is a value rather than a place                                          |
 | `E9050` | an open-ended range has no upper bound here                                                           |
 | `E9052` | a map key of type …                                                                                   |
@@ -702,6 +701,7 @@ name now is the prelude rule (`E2061`), which is about the name rather than abou
 | `E9104` | —       | the form was built: `atomic` imports and runs                      |
 | `E9037` | —       | the form was built: one impl per instantiation of its target       |
 | `E9114` | —       | the form was built: the box carries the action beside the value    |
+| `E9048` | —       | the form was built: a spec names a type, and a box dispatches      |
 
 **One of them moved nowhere**, and it is the only row whose second column is empty. `E3047`
 reported a prefix operator on a `type X = Y` — _operator `not` has no meaning on `Flag`_ — on

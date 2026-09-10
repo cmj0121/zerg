@@ -955,9 +955,13 @@ fn main() {
 }
 EOF
 
-# A `spec` IS THE EXISTENTIAL HALF — the one `docs/core/specs.md` marks **[not yet]**. It is
-# unreachable from the other direction too (E9048: a spec cannot be used as a type), so this
-# is the test asked of a concrete value against a name that is not a type here.
+# A `spec` ON THE RIGHT IS A DIFFERENT QUESTION. `x is A` asks what a value IS, and a spec
+# names no type a concrete value can equal — "does this int implement Greet" is a question
+# about the TYPE, answered by a bound. It is refused rather than folded, because folding it
+# would answer `false` about an operand whose type may well implement the spec.
+#
+# The operand that DOES have an answer is a box, and it has one now: `t is A` reads the
+# witness table the value was boxed against (docs/core/specs.md, Type tests).
 expect "$ZERG" is-a-spec-name E9078 'is Greet' <<'EOF'
 spec Greet {
 	fn hello() -> str
@@ -1232,35 +1236,6 @@ EOF
 expect "$ZERG" alignof-builtin E9046 <<'EOF'
 fn main() {
 	print alignof[int]
-}
-EOF
-
-# A `spec` HAS three roles (docs/core/specs.md): the bound on a generic parameter, the
-# interface a type conforms to, and a TYPE in its own right. The third is not built, and
-# saying "no type named `Tag`" about a spec declared three lines above invited the reader to
-# go and declare it again. An `impl` on a primitive is the same shape of answer.
-
-expect "$ZERG" spec-used-as-a-type E9048 <<'EOF'
-spec Tag {
-	fn tag() -> int
-}
-
-struct A {
-	pub v: int
-}
-
-impl Tag for A {
-	fn tag() -> int {
-		return this.v
-	}
-}
-
-fn show(t: Tag) -> int {
-	return t.tag()
-}
-
-fn main() {
-	print show(A(7))
 }
 EOF
 

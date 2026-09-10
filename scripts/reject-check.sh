@@ -8404,20 +8404,6 @@ fn main() {
 }
 EOF
 
-reject a-spec-used-as-a-struct-field-type E9048 '(field `A.v`)' seed-gap <<'EOF'
-spec Tag {
-	fn tag() -> int
-}
-
-struct A {
-	pub v: Tag
-}
-
-fn main() {
-	print 1
-}
-EOF
-
 reject the-self-type-as-a-struct-field E3062 'field `A.v` is outside an `impl`' <<'EOF'
 struct A {
 	pub v: This

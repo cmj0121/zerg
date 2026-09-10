@@ -1287,6 +1287,78 @@ fn main() {
 }
 EOF
 
+# THE THIRD OF THE THREE, and it became reachable the moment a generic method was built. A
+# witness table holds one slot per required member and a generic one would need one per type
+# ARGUMENT, so a box has nothing to dispatch it through. Unrefused, the answer came out as
+# _this function's answer is int, and this gives T_ — about a parameter the reader can see and
+# a reason they cannot.
+
+expect "$ZERG" a-generic-method-on-a-box E3157 'nothing to dispatch it through' <<'EOF'
+spec Mapper {
+	fn pick[T](v: T) -> T
+	fn n() -> int
+}
+
+struct A {
+	pub k: int
+}
+
+impl Mapper for A {
+	fn pick[T](v: T) -> T {
+		print this.k
+		return v
+	}
+
+	fn n() -> int {
+		return this.k
+	}
+}
+
+fn go(m: Mapper) -> int {
+	return m.pick(1)
+}
+
+fn main() {
+	print go(A(4))
+}
+EOF
+
+# THE THIRD OF THE THREE, and it became reachable the moment a generic method was built. A
+# witness table holds one slot per required member and a generic one would need one per type
+# ARGUMENT, so a box has nothing to dispatch it through. Unrefused, the answer came out as
+# _this function's answer is int, and this gives T_ — about a parameter the reader can see and
+# a reason they cannot.
+
+expect "$ZERG" a-generic-method-on-a-box E3157 'nothing to dispatch it through' <<'EOF'
+spec Mapper {
+	fn pick[T](v: T) -> T
+	fn n() -> int
+}
+
+struct A {
+	pub k: int
+}
+
+impl Mapper for A {
+	fn pick[T](v: T) -> T {
+		print this.k
+		return v
+	}
+
+	fn n() -> int {
+		return this.k
+	}
+}
+
+fn go(m: Mapper) -> int {
+	return m.pick(1)
+}
+
+fn main() {
+	print go(A(4))
+}
+EOF
+
 # A BOX OFFERS WHAT DISPATCHES THROUGH `this` ALONE (docs/core/specs.md). `eq`'s other operand
 # is a `This` — exactly the concrete type erasure removed — so a witness table has no slot for
 # it and two boxed values are never comparable by value. Until this stood, cc answered: _no
@@ -2123,20 +2195,6 @@ fn main() {
 	a := Side.Lft(1)
 	print 1
 }
-EOF
-
-expect "$ZERG" generic-method E9044 <<'EOF'
-struct P {
-	pub x: int
-}
-
-impl P {
-	fn get[T](v: T) -> T {
-		return v
-	}
-}
-
-fn main() { print 1 }
 EOF
 
 # A bound is a CONJUNCTION — `T: Eq + Show` asks for both — and the one that is not met is

@@ -912,7 +912,6 @@ production, not the one that first mentions it.
 | 4     | `E9067` | `map[K, V](…)` as a constructor — an empty map is the literal `{:}`                     |
 | 5     | `E9010` | a named argument `f(b: 1)` — arguments bind by position, in a call and a construction   |
 | 5     | `E9034` | a default on a **closure** parameter                                                    |
-| 5     | `E9044` | a generic METHOD                                                                        |
 | 6     | `E9068` | `nil` as a pattern                                                                      |
 | 6     | `E9041` | a `match` arm whose body is a reassignment or a send — those need a block body          |
 | 6     | `E9025` | `for mut v in …` — the loop binding that writes each edited element back                |

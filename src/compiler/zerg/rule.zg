@@ -315,6 +315,7 @@ pub enum Rule {
 	AmbiguousSpecMethod = 3154
 	BinaryOnExistential = 3155
 	GenericVariantNoPosition = 3156
+	GenericMethodOnExistential = 3157
 	SpecDefaultReadsField = 3138
 
 	# emitting — a form this compiler will not lower
@@ -473,7 +474,6 @@ pub enum Rule {
 	NotYetMatchArmStatement = 9041
 	NotYetTypedefNonScalar = 9042
 	NotYetJumpOutOfGuard = 9043
-	NotYetGenericMethod = 9044
 	NotYetParamSpecAsType = 9115
 	NotYetRenderBoxed = 9116
 	NotYetCompileTimeBuiltin = 9046

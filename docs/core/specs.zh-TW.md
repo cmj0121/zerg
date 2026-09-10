@@ -66,9 +66,9 @@ cell,它擁有自己的 payload:複製它會建出一個獨立的 cell——spec
 > holds one slot per required member and a rendering is not one_。`debug` 在上面被列為 box 會分派的東西之一;
 > 在表帶上一個 rendering 以前,沒有東西可以分派。
 >
-> box 服務不了的三種成員裡,一種到得了、也被拒絕了:**二元同型別**成員在呼叫處是 _E3155_。**associated fn**
-> 在這裡不是 spec 宣告得出來的東西——每個成員都帶著隱含的接收者——而**泛型方法**在 `impl` 就被拒(_E9044_),
-> 而那個 impl 得先存在,才可能有東西被裝箱。
+> box 服務不了的三種成員裡,兩種到得了、而且各自在呼叫處被拒:**二元同型別**成員是 _E3155_,**泛型方法**是
+> _E3157_——一張表每個必要成員一個槽位,而泛型方法會需要每個型別引數一個。**associated fn** 在這裡不是 spec
+> 宣告得出來的東西,因為每個成員都帶著隱含的接收者。
 
 concrete bound 的 generic 會在產出的 C 裡 **monomorphize**——編譯器為每個具體型別各生成一份特化版本——而把 `spec`
 當型別用是唯一改用 dynamic dispatch 之處。concrete type 之間**沒有 subtyping**，所以泛型是**不變（invariant）**
@@ -78,8 +78,12 @@ concrete bound 的 generic 會在產出的 C 裡 **monomorphize**——編譯器
 不必寫 `[int]`。沒有任何引數提到的型別參數是編譯錯誤而非猜測;而 **bound 在 instantiation 時檢查**——那是具體型別
 第一次存在、可供檢查的地方。
 
-> **[not yet]** 泛型 **`fn`** 已實作,指名一個以上 spec 的 bound 也已實作——`T: Eq + Show` 是一個連言,而沒被滿足的
-> 那個 spec 就是拒絕訊息會指名的那個。泛型 **`struct`**、泛型 **`enum`** 與泛型 **method** 各自仍被指名拒絕。
+泛型 **`fn`**、泛型 **`struct`**、泛型 **`enum`** 與泛型 **method** 全都建好了,指名一個以上 spec 的 bound 也是
+——`T: Eq + Show` 是一個連言,而沒被滿足的那個 spec 就是拒絕訊息會指名的那個。一個帶著自己 `[U]` 的方法,寫在一個
+帶著自己 `[T]` 的型別上,兩份參數列都解得出來:`T` 由接收者決定(因為它就是第一個參數),`U` 由引數決定。
+
+> **[not yet]** 參數化的 spec 寫在 `impl` 以外的任何地方,是 _E9001 NotImplemented: a parameterized `S[…]`
+> as a bound — this compiler carries a spec's type arguments only on an `impl`_。
 
 一個**實作**（型別滿足某 spec）本身不帶可見性標記：coherence 要求一組 `(型別, spec)`（含參數）到處都解析到同一個實作，
 因此實作既不能被藏、也不能被複製——它的作用範圍恰好是「型別與 spec 同時可見之處」。實作是為**具體或泛型型別**寫的

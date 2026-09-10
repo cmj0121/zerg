@@ -779,7 +779,6 @@ asm-operand ::= 'in' '(' str-lit ')' expr | 'out' '(' str-lit ')' lvalue
 | 4     | `E9067` | 用 `map[K, V](…)` 當建構子 —— 空 map 是字面值 `{:}`                                      |
 | 5     | `E9010` | 具名引數 `f(b: 1)` —— 引數依位置綁定,呼叫與建構都是                                      |
 | 5     | `E9034` | **closure** 參數的預設值                                                                 |
-| 5     | `E9044` | 泛型 METHOD                                                                              |
 | 6     | `E9068` | 把 `nil` 當樣式                                                                          |
 | 6     | `E9041` | body 是 reassignment 或 send 的 `match` arm —— 那些需要 block body                       |
 | 6     | `E9025` | `for mut v in …` —— 把每個被編輯的元素寫回去的迴圈綁定                                   |

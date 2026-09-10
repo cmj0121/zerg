@@ -12382,6 +12382,13 @@ fn c_infer_call(mut &em: Emitter, name: str, args: list[ast.Expr]) -> ast.Ty {
 	# type with a kind tag, which is what makes `e is ValueError` a comparison rather than a
 	# cast, and what lets a bound Err be re-raised or handed to `from`.
 	return ast.Ty.TErr if c_err_kind(name) > 0
+
+	# A CALL DOES NOT CONSTRUCT A SPEC — c_call says so by name (E4064) — so inference must not
+	# answer one either. It did, and `print S(1)` was told a box has no rendering: a true
+	# sentence about a value this program never makes, standing in front of the one the reader
+	# needs. Unknown is what a construction that cannot happen leaves behind.
+	return ast.Ty.TUnknown if c_is_spec_name(em, name)
+
 	return ast.Ty.TNamed(name) if c_names_a_type(em, name)
 
 	# A BINDING HOLDING A FUNCTION answers the function type's result. `g := double; n :=

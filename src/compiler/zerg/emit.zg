@@ -11113,7 +11113,41 @@ fn c_recv_call(mut &em: Emitter, recv: str, meth: str, target: ast.Expr, args: l
 # the same code.
 fn c_spec_call(mut &em: Emitter, recv: str, meth: str, target: ast.Expr, args: list[ast.Expr], sb: Subst) -> str {
 	key := c_sig_key(recv, meth)
+	c_spec_call_check(em, recv, meth, key)
 	return f"{c_spec_disp_register(em, recv, meth)}({c_recv_args(em, key, target, args, sb)})"
+}
+
+# c_spec_call_check refuses the one call a witness table has no slot for.
+#
+# A BOX OFFERS WHAT DISPATCHES THROUGH `this` ALONE. docs/core/specs.md names three kinds that
+# do not, and one of them can be written here: a member whose other operand is a `This` —
+# `Eq`'s `eq`, `Ord`'s comparison, and so `Hash` keying — wants exactly the concrete type
+# erasure removed. Two boxed values are never comparable by value.
+#
+# THE OTHER TWO CANNOT REACH THIS FUNCTION, and both were measured rather than assumed. A
+# spec's member always carries an implicit receiver — `parse_fn_sig` asks for one — so an
+# ASSOCIATED fn is not a thing a spec can declare in this compiler; and a GENERIC method is
+# refused at the impl that would have to exist before anything could be boxed (_E9044_).
+# Neither gets a code, because a code with no raise site is a code that says nothing.
+#
+# It is not an object-safety gate: the chapter is explicit that a spec is ALWAYS usable as a
+# type, and this is a refusal of the CALL, where the reader asked for the thing that cannot be
+# done. Until it stood here the answer came from cc — _no member named `eq`_, about generated
+# C, which is the one reporter `make refuse` exists to keep off this path.
+fn c_spec_call_check(mut &em: Emitter, sp: str, meth: str, key: str) {
+	row := c_sig_row(em, key)
+	return if row < 0
+
+	# `This` IS THE SPEC HERE. c_build_sigs seats a spec's members on an `impl S for S`, so a
+	# `This` operand arrives already spelled as the spec — the same name the receiver has, and
+	# the reason this reads a type rather than looking for the word.
+	mut i := 1
+	for i < em.sig_nparams[row] {
+		pr := c_param_row(em, key, i)
+		raise c_diag(em, rule.Rule.BinaryOnExistential, f"`{meth}` on a {sp} takes another {sp}, and a boxed value is exactly the concrete type that operand needs — erasure removed it, and `is` tests identity rather than supplying it. Two boxed values are never comparable by value: keep the concrete type, or a generic parameter bounded by the spec, to compare, sort or key one (docs/core/specs.md)") if c_named_of(em.pr_ty[pr]) == sp
+
+		i = i + 1
+	}
 }
 
 # c_spec_disp_register names one member's dispatcher and emits it once.

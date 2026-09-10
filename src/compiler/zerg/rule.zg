@@ -313,6 +313,7 @@ pub enum Rule {
 	# bound to read, and answering it by declaration order would make the result depend on
 	# which file was loaded first.
 	AmbiguousSpecMethod = 3154
+	BinaryOnExistential = 3155
 	SpecDefaultReadsField = 3138
 
 	# emitting — a form this compiler will not lower

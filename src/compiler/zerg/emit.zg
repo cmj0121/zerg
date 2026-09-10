@@ -18403,10 +18403,15 @@ fn c_spec_vt_name(sp: str, target: str) -> str {
 #
 # Order is the contract. A call site reads the slot by index, so a member added to a spec
 # renumbers every table of it, which is exactly what recompiling the program does.
-fn c_spec_vt_typedef(mut &em: Emitter, sp: ast.SpecDecl) -> str {
+fn c_spec_vt_typedef(mut &em: Emitter, sp: ast.SpecDecl, ip: ast.ImplDecl) -> str {
 	mut out := f"typedef struct {{\n"
 	out = out + "    void (*copy)(void *dst, const void *src);\n"
 	out = out + "    void (*drop)(void *elem);\n"
+
+	# EVERY MEMBER SIGNATURE THROUGH THE IMPL'S ARGUMENTS. `c_spec_subst` is the function the
+	# provided-method machinery already uses for this: it turns the spec's `T` into whatever
+	# this impl named, which is what makes one table per PAIR well-typed where one per spec
+	# NAME is not — `Into[T]`'s member answers `T`, and nothing declares a `zg_T`.
 	for req in sp.reqs {
 		# `This` IS THE RECEIVER, and it is already the first parameter. A spec's method may
 		# name the self type explicitly — `fn read(this: This)` — and rendering that as a
@@ -18414,16 +18419,17 @@ fn c_spec_vt_typedef(mut &em: Emitter, sp: ast.SpecDecl) -> str {
 		mut ps := "void *self"
 		for p in req.params {
 			if not c_is_this_ty(p.ty) {
-				ps = ps + ", " + c_type(p.ty)
+				ps = ps + ", " + c_type(c_spec_subst(p.ty, sp, ip))
 			}
 		}
+
 		mut rt := "void"
 		if req.has_ret {
-			rt = c_type(req.ret)
+			rt = c_type(c_spec_subst(req.ret, sp, ip))
 		}
 		out = out + f"    {rt} (*{req.name})({ps});\n"
 	}
-	return out + f"}} {c_spec_vt_type(sp.name)};\n"
+	return out + f"}} {c_spec_vt_type(ast.spec_key(sp.name, ip.args))};\n"
 }
 
 # c_spec_vt_register emits one spec's typedef (once) and one table per `impl S for T`.
@@ -18432,18 +18438,18 @@ fn c_spec_vt_typedef(mut &em: Emitter, sp: ast.SpecDecl) -> str {
 # defaults have already landed: `c_with_spec_defaults` copies a spec member with a body into
 # the impl before this runs, so a table never has a hole and this function never needs to know
 # which half a slot came from.
-pub fn c_spec_vt_register(mut &em: Emitter, sp: ast.SpecDecl, target: str) {
-	# A PARAMETERIZED SPEC HAS NO SINGLE TABLE SHAPE. `Into[T]`'s member answers `T`, so one
-	# typedef per spec is the wrong unit for it — `impl Into[Meters]` and `impl Into[Feet]`
-	# need different signatures, and rendering the parameter as `zg_T` asks cc for a type no
-	# declaration makes. The identity a table needs is the spec's ARGUMENTS as well as its
-	# name, which is what `ast.spec_key` already says everywhere else in this file.
+pub fn c_spec_vt_register(mut &em: Emitter, sp: ast.SpecDecl, ip: ast.ImplDecl) {
+	# THE KEY IS `ast.spec_key`, name AND arguments, which is what `c_build_impls` records one
+	# line up and what `docs/core/specs.md` calls a parameterized spec's identity.
 	#
-	# Until a table is keyed that way, a parameterized spec has none. It costs nothing today:
-	# a spec value is not yet a type, so nothing reads one.
-	return if sp.params.len() != 0
+	# It has to be. `Into[T]`'s member answers `T`, so `impl Into[Meters]` and `impl Into[Feet]`
+	# need different signatures — a table per spec NAME rendered the parameter as `zg_T` and
+	# asked cc for a type no declaration makes. Keyed by the pair, each table's `T` is already
+	# the concrete type the impl named, and the question does not arise.
+	key := ast.spec_key(sp.name, ip.args)
+	target := ip.target
 
-	tn := c_spec_vt_type(sp.name)
+	tn := c_spec_vt_type(key)
 	mut have_type := false
 	for n in em.svt_names {
 		if n == tn {
@@ -18452,10 +18458,10 @@ pub fn c_spec_vt_register(mut &em: Emitter, sp: ast.SpecDecl, target: str) {
 	}
 	if not have_type {
 		em.svt_names.append(tn)
-		em.svt_decls.append(c_spec_vt_typedef(em, sp))
+		em.svt_decls.append(c_spec_vt_typedef(em, sp, ip))
 	}
 
-	vn := c_spec_vt_name(sp.name, target)
+	vn := c_spec_vt_name(key, target)
 	for n in em.svt_names {
 		return if n == vn
 	}
@@ -18465,7 +18471,13 @@ pub fn c_spec_vt_register(mut &em: Emitter, sp: ast.SpecDecl, target: str) {
 	out = out + c_elem_copy_fn(em, ast.Ty.TNamed(target)) + ", "
 	out = out + c_elem_drop_fn(em, ast.Ty.TNamed(target))
 	for req in sp.reqs {
-		out = out + ", (void *)" + c_fn_cname(target, req.name)
+		# UNDER THE KEY THE DECLARATION CARRIES. A parameterized spec folds its arguments into
+		# its methods' identity (c_with_spec_keys), so `IoError.into` for `Into[AppError]` is
+		# declared as `into$Into[AppError]` and spelling `zg_{target}_{name}` here named a
+		# function no declaration makes. Built from `c_impl_spec_of` rather than resolved by
+		# name because the impl in hand already says WHICH — and a type with two of them
+		# (`into_two_impls`) has no name-resolution answer at all.
+		out = f"{out}, (void *){c_fn_cname(target, c_spec_key(req.name, c_impl_spec_of(ip)))}"
 	}
 	em.svt_decls.append(out + " };\n")
 }
@@ -18637,7 +18649,7 @@ fn c_build_impls(mut &em: Emitter, f: ast.File) {
 		# and not the type.
 		at := c_derive_spec_at(f, ip.on)
 		if at >= 0 {
-			c_spec_vt_register(em, f.specs[at], ip.target)
+			c_spec_vt_register(em, f.specs[at], ip)
 		}
 	}
 }

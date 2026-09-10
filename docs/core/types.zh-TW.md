@@ -218,10 +218,12 @@ enum Either[X, Y] {         # 泛型 sum type
 }
 ```
 
-> **[not yet]** 上面那一段裡的**泛型 `enum`** 編不過:它是 _E9003 NotImplemented: a generic enum `Either[…]`
-> — a generic `struct` is instantiated once per application and an `enum` is not_。遞迴 `struct` 是 `E4026`(見下)。
->
-> 泛型 **`struct`** 建好了。宣告是一個 **template**,一次應用(`Box[int]`)是一個以那個名字存在的普通型別。
+泛型 **`enum`** 建好了,每一次應用一份特化,而且遞迴的那種不需要指標:
+`enum Tree[T] { Leaf; Node(T, Tree[T], Tree[T]) }` 會像任何遞迴型別一樣把自己那個槽自動裝箱。一個變體解出它
+**提到**的參數,其餘由位置補上——`Either.Left(1)` 對 `Y` 什麼都沒說,所以它寫在型別所在的地方,而沒有位置的
+建構是 _E3156_。遞迴 `struct` 仍然是 `E4026`(見下)。
+
+> **[not yet]** 泛型 **`struct`** 建好了。宣告是一個 **template**,一次應用(`Box[int]`)是一個以那個名字存在的普通型別。
 > 一次建構**從它自己的引數解出參數**,那是[型別系統](type-system.zh-TW.md)對一次呼叫定的規則,而建構就是一次
 > 呼叫:`Box(7)` 不論寫在哪裡都是 `Box[int]`,而 `b: Box[str] = Box(1)` 解出 `Box[int]` 之後在**繫結處**被拒——
 > 與 `x: float = id(5)` 走的是同樣兩步。一次使用還可能寫錯的東西各自被拒收:引數個數不對(`E4093`)、指名

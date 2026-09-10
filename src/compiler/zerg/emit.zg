@@ -5104,6 +5104,11 @@ fn c_needs_copy(mut &em: Emitter, t: ast.Ty) -> bool {
 
 	return true if c_is_list(t) or c_is_map(t)
 
+	# A SPEC VALUE IS A BOX, and copying one builds an INDEPENDENT cell rather than sharing
+	# this one: a spec value is a VALUE (docs/core/type-system.md), so two names for one boxed
+	# `En` are two boxed `En`s. It is also what makes the release the copy owes balance.
+	return true if c_is_spec_name(em, c_named_of(t))
+
 	# A str is a refcounted cell (c_str_cell), so giving one a second name is a COPY like
 	# any other — a retain, which is what makes the two names' releases balance. A literal's
 	# cell is immortal, so retain and release both no-op on it and a program that holds
@@ -5196,6 +5201,16 @@ fn c_copy_of(mut &em: Emitter, t: ast.Ty, x: str) -> str {
 		return "({ void* zgt_rr = (void*)(" + x + "); zrt_retain(zgt_rr); zgt_rr; })"
 	}
 
+	# A BOX IS COPIED BY BUILDING ANOTHER, which is where it parts company with the `Ref` above:
+	# a `Ref` is sharing made explicit and retains, a spec value is a value and does not. The
+	# payload goes through the witness table's own copy slot, so a boxed `Row` holding a list
+	# duplicates the list — the runtime reads that slot without being told the type.
+	if c_is_spec_name(em, c_named_of(t)) {
+		em.used_rt = true
+
+		return f"zrt_dyn_copy({x})"
+	}
+
 	# the source is BOUND before its address is taken, because `&(x)` needs x to be a place
 	# and not everything copied is one. `m[k]` lowers to a statement expression, so reading
 	# a list out of a map — `v := c["k"]` — reached cc as "cannot take the address of an
@@ -5240,6 +5255,16 @@ fn c_copy_helpers(mut &em: Emitter, f: ast.File) -> str {
 	for sd in f.structs {
 		if c_needs_copy(em, ast.Ty.TNamed(sd.name)) {
 			out = out + c_copy_helper(em, sd) + c_drop_helper(em, sd) + c_elem_vt_helper(em, ast.Ty.TNamed(sd.name))
+		}
+	}
+
+	# The SPECS, through the third of those three alone: a box is one word whatever it holds,
+	# so `c_elem_vt_helper` writes its copy and its drop out of `c_copy_of` and `c_drop_fn`
+	# with nothing per-spec to generate — no field walk, because the fields are the payload's
+	# and the payload's own table already knows them.
+	for sp in f.specs {
+		if c_name_in(em.spec_tys, sp.name) {
+			out = out + c_elem_vt_helper(em, ast.Ty.TNamed(sp.name))
 		}
 	}
 
@@ -5475,6 +5500,10 @@ fn c_drop_stmt(mut &em: Emitter, t: ast.Ty, place: str) -> str {
 fn c_drop_fn(mut &em: Emitter, t: ast.Ty) -> str {
 	return "zrt_release" if c_is_ref_box(t)
 
+	# and a BOX, which is the same counted cell one word wider — the payload's own teardown is
+	# in the witness table, which the cell's header runs on the way down.
+	return "zrt_release" if c_is_spec_name(em, c_named_of(t))
+
 	return "zrt_list_drop" if c_is_list(t)
 	return "zrt_map_drop" if c_is_map(t)
 	return "zrt_str_release" if c_is_str(t)
@@ -5503,7 +5532,12 @@ fn c_drop_fn(mut &em: Emitter, t: ast.Ty) -> str {
 # c_drop_arg spells what the give-back is handed: a list, a map and a struct are all given
 # back through the address of their storage, a str by its own value.
 fn c_drop_arg(mut &em: Emitter, t: ast.Ty, place: str) -> str {
-	return place if c_is_str(t) or c_is_ref_box(t)
+	# A BOX GOES BACK BY VALUE, with the str and the `Ref`: all three are `zrt_release` (or its
+	# str spelling) taking the CELL. Handing it `&place` released the address of the variable
+	# holding the cell, which is the defect this function was written to stop being written by
+	# hand — and a spec value is the third type to need it.
+	return place if c_is_str(t) or c_is_ref_box(t) or c_is_spec_name(em, c_named_of(t))
+
 	return "&" + place
 }
 
@@ -11100,8 +11134,20 @@ fn c_spec_disp_register(mut &em: Emitter, sp: str, meth: str) -> str {
 	rty := c_lookup_sig_ret(em, key)
 	np := em.sig_nparams[row]
 
+	# A RECEIVER ARRIVES THE WAY EVERY METHOD'S DOES, and c_recv_args decides which: a plain
+	# method takes it BY VALUE — the caller copies, and whoever holds a copy gives it back —
+	# and a `mut fn` takes the caller's own variable, which is a borrow and owes nothing. A
+	# dispatcher is generated C and has no scope to register a release in, so it writes the
+	# by-value half by hand. Without it every call on a box built a cell and dropped it on the
+	# floor: `zrt_dyn_copy` in the argument, nothing anywhere giving it back.
+	byref := em.pr_ref[c_param_row(em, key, 0)]
+	mut cell := "zg_self"
 	mut ps := f"{c_ty_cname(sp)} zg_self"
-	mut xs := "zrt_dyn_payload(zg_self)"
+	if byref {
+		cell = "(*zg_self)"
+		ps = f"{c_ty_cname(sp)} *zg_self"
+	}
+	mut xs := f"zrt_dyn_payload({cell})"
 	mut i := 1
 	for i < np {
 		pr := c_param_row(em, key, i)
@@ -11110,13 +11156,17 @@ fn c_spec_disp_register(mut &em: Emitter, sp: str, meth: str) -> str {
 		i = i + 1
 	}
 
-	call := f"((const {c_spec_vt_type(sp)} *)zrt_dyn_vt(zg_self))->{meth}({xs})"
+	call := f"((const {c_spec_vt_type(sp)} *)zrt_dyn_vt({cell}))->{meth}({xs})"
+	mut give := ""
+	if not byref {
+		give = "    zrt_release(zg_self);\n"
+	}
 	mut out := f"static {c_type(rty)} {dn}({ps}) {{\n"
 	if em.sig_hasret[row] {
-		out = out + f"    return {call};\n"
+		out = out + f"    {c_type(rty)} zg_r = {call};\n" + give + "    return zg_r;\n"
 	}
 	if not em.sig_hasret[row] {
-		out = out + f"    {call};\n"
+		out = out + f"    {call};\n" + give
 	}
 	em.svt_decls.append(out + "}\n")
 	return dn
@@ -18650,7 +18700,11 @@ fn c_spec_box(mut &em: Emitter, want: ast.Ty, e: ast.Expr, sb: Subst) -> str {
 	key := c_named_of(want)
 	tty := c_infer(em, e)
 	target := c_named_of(tty)
-	return f"{c_spec_box_register(em, key, target)}({c_expr(em, e, sb)})"
+
+	# THE PAYLOAD IS COPIED IN, through the same `c_copied` every other typed position ends at.
+	# The cell owns what it holds — its drop runs the payload's teardown out of the table — so
+	# a box built over the caller's own value would give the two one set of cells between them.
+	return f"{c_spec_box_register(em, key, target)}({c_copied(em, tty, e, sb)})"
 }
 
 # c_spec_box_register names the thunk and emits it once.
@@ -18663,9 +18717,8 @@ fn c_spec_box_register(mut &em: Emitter, key: str, target: str) -> str {
 
 	ct := c_ty_cname(target)
 	vn := c_spec_vt_name(key, target)
-	drop := c_elem_drop_fn(em, ast.Ty.TNamed(target))
 	mut out := f"static void *{bn}({ct} zg_v) {{\n"
-	out = out + f"    void *zg_c = zrt_dyn_alloc(sizeof({ct}), {drop}, &{vn});\n"
+	out = out + f"    void *zg_c = zrt_dyn_alloc(sizeof({ct}), &{vn});\n"
 	out = out + f"    *({ct} *)zrt_dyn_payload(zg_c) = zg_v;\n"
 	out = out + "    return zg_c;\n}\n"
 	em.svt_decls.append(out)

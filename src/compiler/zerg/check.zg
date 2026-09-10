@@ -1297,6 +1297,17 @@ fn chk_impl_member(mut &em: emit.Emitter, f: ast.File, ip: ast.ImplDecl, sp: ast
 			return
 		}
 	}
+
+	# AND THE TEMPLATE TABLE, because a GENERIC member is supplied by a template and a template
+	# is removed from the program before this runs (`c_without_templates`). Asked of `f.fns`
+	# alone, `impl Mapper for A { fn pick[T](…) }` was told `A` does not implement `pick` —
+	# about a method written six lines above.
+	#
+	# The signatures are not compared: two type parameters are the same parameter only under a
+	# renaming, and that comparison is `chk_sig_differs` asked of a shape it does not have. What
+	# it costs is a mis-shaped generic member reported at the CALL rather than at the impl.
+	return if emit.c_has_gen_method(em, ip.target, req.name)
+
 	chk_at_place(em, ip.path, ip.line, ip.col, rule.Rule.SpecRequirementUnmet, f"`{ip.target}` does not implement `{req.name}`, which `{sp.name}` requires")
 }
 

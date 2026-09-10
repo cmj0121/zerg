@@ -315,6 +315,7 @@ pub enum Rule {
 	AmbiguousSpecMethod = 3154
 	BinaryOnExistential = 3155
 	GenericVariantNoPosition = 3156
+	GenericMethodOnExistential = 3157
 	SpecDefaultReadsField = 3138
 
 	# emitting — a form this compiler will not lower

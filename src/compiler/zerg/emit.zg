@@ -3780,6 +3780,14 @@ fn c_build_sigs(mut &em: Emitter, f: ast.File) {
 		self_ip := ast.ImplDecl(sp.name, noargs, sp.name, notp, sp.path, sp.line, sp.col)
 		for req in sp.reqs {
 			c_add_sig(em, c_default_method(sp, self_ip, req))
+
+			# AND THE TEMPLATE TABLE FOR A GENERIC ONE, which is what lets a call on a BOX be
+			# told from a call on a concrete type. Both reach `c_gen_meth_resolved`; only the
+			# box has nothing to dispatch through.
+			if req.tparams.len() != 0 and not c_has_gen_method(em, sp.name, req.name) {
+				em.gen_names.append(c_sig_key(sp.name, req.name))
+				em.gen_tpls.append(c_default_method(sp, self_ip, req))
+			}
 		}
 	}
 }
@@ -4027,9 +4035,27 @@ fn c_lookup_sig_ret(mut &em: Emitter, name: str) -> ast.Ty {
 #
 # THE KEY IS `c_sig_key`'s, the same one the template was recorded under — the receiver joins
 # it, which is what tells `P.pick` from `Q.pick` and from a free `pick`.
+# c_has_gen_method is whether a type declares a GENERIC method of this base name — the
+# template table's answer to `c_has_method`, which reads signatures a template has none of.
+pub fn c_has_gen_method(mut &em: Emitter, recv: str, name: str) -> bool {
+	key := c_sig_key(recv, name)
+	for k in em.gen_names {
+		return true if k == key
+	}
+	return false
+}
+
 fn c_gen_meth_resolved(mut &em: Emitter, recv: str, meth: str, target: ast.Expr, args: list[ast.Expr]) -> str {
 	key := c_sig_key(recv, meth)
 	return meth if recv == "" or not c_is_generic(em, key)
+
+	# A BOX CANNOT DISPATCH ONE. docs/core/specs.md: a witness table holds one entry per type
+	# and a generic method would need one per type ARGUMENT — the third of the three member
+	# kinds the chapter names, and the one that became reachable the moment a generic method
+	# was built. Refused before the specialization is made, because making it would hand the
+	# call a name no table has a slot for; unrefused, the answer came out as _this function's
+	# answer is int, and this gives T_.
+	raise c_diag(em, rule.Rule.GenericMethodOnExistential, f"`{meth}` on a {recv} is a GENERIC method, and a boxed value has nothing to dispatch it through — a witness table holds one slot per required member and a generic method would need one per type argument. Call it on the concrete type, or through a generic parameter bounded by the spec (docs/core/specs.md)") if c_is_spec_name(em, recv)
 
 	# THE RECEIVER IS THE FIRST ACTUAL, because it is the first PARAMETER: `this` is implicit in
 	# the source and explicit in the list from the parser on. Solving against the written

@@ -953,6 +953,14 @@ fn c_fit_copied(mut &em: Emitter, where: str, want: ast.Ty, e: ast.Expr, sb: Sub
 	# fires on it.
 	return c_list_lit_vals(em, c_list_elem(want), c_elem_exprs(em, e, c_list_elem(want))) if c_is_list(want) and c_is_listlit(e)
 
+	# A SPEC-TYPED POSITION BUILDS A BOX out of the implementer written into it. It is asked
+	# here for the reason this function exists: eighteen callers are the typed positions, and a
+	# rule written at the ones somebody remembered is the bug this file has fixed six times.
+	# A box already boxed is itself — `pass(g)` on a `Greet` hands the same cell along.
+	if c_is_spec_name(em, c_named_of(want)) and not c_is_spec_name(em, c_named_of(c_infer(em, e))) {
+		return c_spec_box(em, want, e, sb)
+	}
+
 	return c_into(em, want, e, sb)
 }
 
@@ -4560,7 +4568,7 @@ fn c_ty_kind_word(mut &em: Emitter, nm: str) -> str {
 	return "a type"
 }
 
-fn c_is_spec_name(mut &em: Emitter, nm: str) -> bool {
+pub fn c_is_spec_name(mut &em: Emitter, nm: str) -> bool {
 	return c_ty_kind(em, nm) == TK_SPEC
 }
 
@@ -18464,6 +18472,40 @@ fn c_spec_typedefs(mut &em: Emitter, f: ast.File) -> str {
 	return out + "\n"
 }
 
+# c_spec_box is a value put into the box a spec-typed position asks for. `take(En(7))` on a
+# `Greet` parameter builds a `Greet` OUT OF an `En` — docs/core/type-system.md's "a spec-typed
+# position builds", the one wrap in the language that allocates.
+#
+# THROUGH A THUNK RATHER THAN INLINE, because the payload has to be WRITTEN into the cell and
+# C has no expression that allocates, stores and answers the cell. One `static` per (spec,
+# type) pair is the same unit the witness table already is, keyed the same way, so the pair
+# that has a table has a thunk and neither can exist without the other.
+fn c_spec_box(mut &em: Emitter, want: ast.Ty, e: ast.Expr, sb: Subst) -> str {
+	key := c_named_of(want)
+	tty := c_infer(em, e)
+	target := c_named_of(tty)
+	return f"{c_spec_box_register(em, key, target)}({c_expr(em, e, sb)})"
+}
+
+# c_spec_box_register names the thunk and emits it once.
+fn c_spec_box_register(mut &em: Emitter, key: str, target: str) -> str {
+	bn := c_spec_cname(f"specbox${key}${target}")
+	for n in em.svt_names {
+		return bn if n == bn
+	}
+	em.svt_names.append(bn)
+
+	ct := c_ty_cname(target)
+	vn := c_spec_vt_name(key, target)
+	drop := c_elem_drop_fn(em, ast.Ty.TNamed(target))
+	mut out := f"static void *{bn}({ct} zg_v) {{\n"
+	out = out + f"    void *zg_c = zrt_dyn_alloc(sizeof({ct}), {drop}, &{vn});\n"
+	out = out + f"    *({ct} *)zrt_dyn_payload(zg_c) = zg_v;\n"
+	out = out + "    return zg_c;\n}\n"
+	em.svt_decls.append(out)
+	return bn
+}
+
 # c_spec_vt_register emits one spec's typedef (once) and one table per `impl S for T`.
 #
 # The method slots are filled from the IMPL's own methods, which is where the provided
@@ -18687,7 +18729,7 @@ fn c_build_impls(mut &em: Emitter, f: ast.File) {
 }
 
 # c_impls reports whether a named type implements a named spec.
-fn c_impls(mut &em: Emitter, target: str, spec_nm: str) -> bool {
+pub fn c_impls(mut &em: Emitter, target: str, spec_nm: str) -> bool {
 	mut i := 0
 	for i < em.impl_on.len() {
 		return true if em.impl_on[i] == spec_nm and em.impl_target[i] == target

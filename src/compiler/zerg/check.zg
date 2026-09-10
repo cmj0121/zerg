@@ -2662,6 +2662,20 @@ pub fn chk_lit_float_tree(e: ast.Expr) -> bool {
 }
 
 # chk_fits is whether a value of type `got` may fill a slot declared `want`.
+# chk_spec_fits is what a spec-typed position accepts: an implementer of that spec, or a box
+# of it already. There is no object-safety question here — docs/core/specs.md puts every
+# member a box cannot serve on the CALL and none of them on the position.
+fn chk_spec_fits(mut &em: emit.Emitter, want: ast.Ty, got: ast.Ty) -> bool {
+	sp := emit.c_named_of(want)
+	nm := emit.c_named_of(got)
+
+	return false if nm == ""
+
+	return true if nm == sp
+
+	return emit.c_impls(em, nm, sp)
+}
+
 fn chk_fits(mut &em: emit.Emitter, want: ast.Ty, got: ast.Ty) -> bool {
 	return true if emit.c_is_unknown(want) or emit.c_is_unknown(got)
 
@@ -2676,6 +2690,12 @@ fn chk_fits(mut &em: emit.Emitter, want: ast.Ty, got: ast.Ty) -> bool {
 	return chk_carrier_fits(em, want, got) if emit.c_is_carrier(want)
 	return chk_chan_fits(em, want, got) if ast.ty_is_chan(want)
 	return chk_map_fits(em, want, got) if emit.c_is_map(want)
+
+	# A SPEC-TYPED POSITION BUILDS A BOX, which is the fourth reshaping slot and the only one
+	# that allocates: `g: Greet = En(7)` is not an `En` re-typed, it is a `Greet` BUILT out of
+	# an `En` — docs/core/type-system.md's "a spec-typed position builds". What may be built
+	# out of is what implements the spec, and a box of the same spec is already one.
+	return chk_spec_fits(em, want, got) if emit.c_is_spec_name(em, emit.c_named_of(want))
 
 	# NO SCALAR WIDENS HERE, AND NONE WIDENS ANYWHERE. A conversion between two scalars is
 	# written — `int(b)`, `float(i)` — and there is no longer a second route through a

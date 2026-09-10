@@ -672,15 +672,6 @@ fn main() {
 }
 EOF
 
-expect "$ZERG" generic-enum E9003 <<'EOF'
-enum E[T] {
-	A(T)
-	B
-}
-
-fn main() { print 1 }
-EOF
-
 # THE ASSOCIATED VALUE IS BUILT, and this is the reading it makes possible to get wrong: a type
 # is not a value, so `B.NOPE` is a name an `impl B` never declared. Before it, the type name
 # lowered AS a value and `zg_B.zg_NOPE` reached cc as `expected ')'` — an escape the standing
@@ -2117,15 +2108,6 @@ fn main() {
 }
 EOF
 
-expect "$ZERG" generic-enum E9003 <<'EOF'
-enum Opt2[T] {
-	Some(T)
-	None
-}
-
-fn main() { print 1 }
-EOF
-
 # A VARIANT SOLVES WHAT IT MENTIONS AND THE POSITION SUPPLIES THE REST, so a construction with
 # no position has nothing to decide the specialization. `Lft(1)` solves `X` and no variant of a
 # sum type mentions every parameter — that is what a sum type IS — so `Y` is named as the one
@@ -3362,7 +3344,8 @@ fn main() {
 EOF
 
 # A parameterized alias is one instantiation per argument, the reason a generic `enum` is
-# E9003 and a generic `struct` E9004. This one had no code and no place until it had this.
+# a generic `enum` and a generic `struct`, each of which is built. This one had no code and no
+# place until it had this.
 expect "$ZERG" a-generic-type-alias E9075 <<'EOF'
 type Pairs[T] = list[T]
 

@@ -86,10 +86,10 @@ owned value.
 > holds one slot per required member and a rendering is not one_. `debug` is listed above among what a box
 > dispatches; until the table carries a rendering there is nothing to dispatch through.
 >
-> Of the three member kinds a box cannot serve, one is reachable and refused: a **binary same-type** member
-> is _E3155_ at the call. An **associated fn** is not something a spec can declare here — every member
-> carries an implicit receiver — and a **generic method** is refused at the `impl` (_E9044_) that would have
-> to exist before anything could be boxed.
+> Of the three member kinds a box cannot serve, two are reachable and each is refused at the call: a
+> **binary same-type** member is _E3155_, and a **generic method** is _E3157_ — a table holds one slot per
+> required member and a generic one would need one per type argument. An **associated fn** is not something
+> a spec can declare here, because every member carries an implicit receiver.
 
 Concrete-bound generics are **monomorphized** in the emitted C — the compiler emits a separate
 specialized version for each concrete type — while a spec used as a type is the one place codegen uses
@@ -100,12 +100,13 @@ concrete type first exists to check it against. There is **no subtyping** betwee
 generics are **invariant**: `list[Cat]` is not a `list[Animal]` — abstract over a family with a spec bound
 (`[T: X]`), not subtype substitution.
 
-> **[not yet]** A generic **`fn`** is built, and so is a bound naming more than one spec — `T: Eq + Show`
-> is a conjunction, and the spec that is not met is the one the refusal names. A generic **`struct`** or
-> **`enum`** and a generic **method** are each still refused by name: the method is _E9044
-> NotImplemented: a generic METHOD `T.name[…]` — this compiler instantiates a free function_. A
-> parameterized spec written anywhere but on an `impl` is _E9001 NotImplemented: a parameterized `S[…]`
-> as a bound — this compiler carries a spec's type arguments only on an `impl`_.
+A generic **`fn`**, a generic **`struct`**, a generic **`enum`** and a generic **method** are all built, and
+so is a bound naming more than one spec — `T: Eq + Show` is a conjunction, and the spec that is not met is
+the one the refusal names. A method carrying its own `[U]` on a type carrying its own `[T]` resolves both
+lists: the receiver decides `T` because it is the first parameter, and the arguments decide `U`.
+
+> **[not yet]** A parameterized spec written anywhere but on an `impl` is _E9001 NotImplemented: a
+> parameterized `S[…]` as a bound — this compiler carries a spec's type arguments only on an `impl`_.
 
 An **implementation** (a type satisfying a spec) carries no visibility marker of its own: coherence
 requires a `(type, spec)` pair — parameters included — to resolve to the same implementation everywhere,

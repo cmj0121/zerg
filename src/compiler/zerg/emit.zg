@@ -272,6 +272,12 @@ pub struct Emitter {
 	pub svt_names: list[str]
 	pub svt_decls: list[str]
 
+	# spec_tys is every spec name that reached a TYPE position — recorded where the position
+	# is checked, because that is the one place each of them arrives. A spec gets its `typedef
+	# void *` only when it is on this list, so a program that uses a spec as a bound and never
+	# as a type emits exactly the C it emitted before.
+	pub spec_tys: list[str]
+
 	# dfn_decls are the generated defer thunks and their env structs, one per site.
 	# fn_mark is the cleanup-stack mark a `return` unwinds to, and loop_mark the one a
 	# `break` or `continue` unwinds to — empty when there is no defer to run.
@@ -4353,7 +4359,19 @@ fn c_check_type_name(mut &em: Emitter, nm: str, s: Site) {
 		return
 	}
 
-	if c_is_type_name(em, nm) {
+	# A `spec` NAMES A TYPE, the third of the three roles docs/core/specs.md gives it, and it
+	# resolves here like the other two kinds do. The chapter is explicit that there is no
+	# object-safety gate — "a spec is ALWAYS usable as a type" — so nothing about the members
+	# it declares is asked at a type position; what a box cannot serve is refused at the CALL.
+	if c_is_type_name(em, nm) or c_is_spec_name(em, nm) {
+		# RECORDED HERE, because this is where a spec name in a type position arrives — all six
+		# of them, the leaf of a `list[…]` included, since c_check_named_ty is transparent to a
+		# container. A spec used only as a BOUND never reaches this function, so it never gets
+		# a typedef and the program's C is unchanged.
+		if c_is_spec_name(em, nm) and not c_name_in(em.spec_tys, nm) {
+			em.spec_tys.append(nm)
+		}
+
 		# THE NAME RESOLVES, AND THAT IS ONLY HALF THE QUESTION. A type flattens into one
 		# program-wide space here, so resolving says the declaration EXISTS and says nothing
 		# about whether this module may write it, or whether the declaration doing the writing
@@ -4377,12 +4395,6 @@ fn c_check_type_name(mut &em: Emitter, nm: str, s: Site) {
 		check.chk_at(em, rule.Rule.ThisOutsideImpl, f"`This` is the self type, and {site} is outside an `impl` — there is no type for it to name")
 		return
 	}
-
-	# A `spec` IS a type in the language — the third of the three roles docs/core/specs.md
-	# gives it, beside the bound and the interface — and this compiler has not built that
-	# one. Saying "no type named `Tag`" about a spec the reader declared three lines above
-	# invites them to go and declare it again.
-	raise c_diag(em, rule.Rule.NotYetSpecAsType, f"NotImplemented: the `spec` `{nm}` used as a TYPE ({site}) — a spec is a bound and an interface here, not yet a value's type; take the concrete type, or a generic parameter bounded by it (GRAMMAR#type-name)") if c_is_spec_name(em, nm)
 
 	# EVERY BUILT-IN NAME THE LANGUAGE HAS AND THIS COMPILER DOES NOT, not only the ladder. A
 	# type position reached `c_fixed_width_check` alone, so `p: ptr` reported "no type named
@@ -18432,6 +18444,26 @@ fn c_spec_vt_typedef(mut &em: Emitter, sp: ast.SpecDecl, ip: ast.ImplDecl) -> st
 	return out + f"}} {c_spec_vt_type(ast.spec_key(sp.name, ip.args))};\n"
 }
 
+# c_spec_typedefs is the C type a spec value has: `void *`, under the spec's own name.
+#
+# THE POINT IS THAT `c_type` DOES NOT CHANGE. A box is a pointer, and a pointer under a typedef
+# is a type C already has — so a parameter, a field, a `list[…]` element and a return spell
+# `zg_Greet` through the same pure function every other type goes through, and nothing had to
+# learn that this one name is special in order to SPELL it. Where the emitter has to know it
+# is a box rather than a value — boxing at a position, dispatching a call, copying, dropping —
+# it asks `c_is_spec_ty`, which is a question about the Zerg type and not about the C text.
+fn c_spec_typedefs(mut &em: Emitter, f: ast.File) -> str {
+	mut out := ""
+	for sp in f.specs {
+		if c_name_in(em.spec_tys, sp.name) {
+			out = out + f"typedef void *{c_ty_cname(sp.name)};\n"
+		}
+	}
+	return out if out == ""
+
+	return out + "\n"
+}
+
 # c_spec_vt_register emits one spec's typedef (once) and one table per `impl S for T`.
 #
 # The method slots are filled from the IMPL's own methods, which is where the provided
@@ -18809,7 +18841,7 @@ fn c_emit_unit(prog0: ast.File, own0: ast.File, ms: Mods, whole: bool, want_lint
 	# is what makes that invariant hold for a multi-unit program, at the place it already lives,
 	# and it is what lets the declaration passes below go back to reading the WHOLE program.
 	seen := diags.len()
-	mut em := Emitter([], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], false, false, false, [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], 0, [], 0, [], [], false, "", "", [], [], ast.Ty.TVoid, 0, "", 0, 0, diags, 0, 0, [], [], [], [], [], false, 0, false, "", 0, false, false, [], [], [], [], [], [], [], [], [], [], "", want_lints, [], [], [], [], [], [], [], [], [], [], [], [], false, 0, [], [], "", c_nosub(), [], [], [], [], [], [], [], [], [], [])
+	mut em := Emitter([], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], false, false, false, [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], 0, [], 0, [], [], false, "", "", [], [], ast.Ty.TVoid, 0, "", 0, 0, diags, 0, 0, [], [], [], [], [], false, 0, false, "", 0, false, false, [], [], [], [], [], [], [], [], [], [], "", want_lints, [], [], [], [], [], [], [], [], [], [], [], [], false, 0, [], [], "", c_nosub(), [], [], [], [], [], [], [], [], [], [])
 
 	# ASSIGNED, NOT PASSED. Every argument above is a zero value, and `layering` asserts that
 	# — it lines the call up with the fields by KIND, which only works while nothing in it
@@ -18912,6 +18944,10 @@ fn c_emit_unit(prog0: ast.File, own0: ast.File, ms: Mods, whole: bool, want_lint
 	mut tuples: list[ast.Ty] = []
 	mut carriers: list[ast.Ty] = []
 	c_decl_types(sites, tuples, carriers)
+
+	# A SPEC'S BOX IS A C TYPE, and it comes ahead of every declaration that may name one — a
+	# struct field, a parameter, a `list[…]` element.
+	types = types + c_lowered(checking, c_spec_typedefs(em, f))
 
 	types = types + c_lowered(checking, c_type_decls(em, f, carriers, tuples))
 	mut i := 0

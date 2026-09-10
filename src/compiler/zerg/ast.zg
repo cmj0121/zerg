@@ -773,6 +773,13 @@ pub struct EnumDecl {
 	pub name: str
 	pub variants: list[VariantDef]
 
+	# the TEMPLATE's parameters — the `[X, Y]` of `enum Either[X, Y]`, read where
+	# GRAMMAR#enum-decl puts them. They are the whole of what makes this declaration a
+	# template: a specialization is an ordinary EnumDecl with them substituted and an applied
+	# NAME, so nothing past the instantiation has to know one existed. Same field, same
+	# meaning and same position as StructDecl's.
+	pub tparams: list[str]
+
 	# `pub` on the declaration — see StructDecl.is_pub
 	pub is_pub: bool
 

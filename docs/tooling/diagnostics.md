@@ -471,7 +471,6 @@ shipping compiler rather than a part of it (the line
 | `E9041` | a match arm's body is an expression, and this one is a statement                                      |
 | `E9042` | `type … = …` over a non-scalar                                                                        |
 | `E9043` | `…` leaving a `guard` block                                                                           |
-| `E9044` | a generic METHOD `….…[…]`                                                                             |
 | `E9046` | the compile-time built-in `…[T]`                                                                      |
 | `E9047` | an `impl` on the built-in type `…`                                                                    |
 | `E9049` | `…` MUTATES its list, and `…` is a value rather than a place                                          |
@@ -705,6 +704,7 @@ name now is the prelude rule (`E2061`), which is about the name rather than abou
 | `E9104` | —       | the form was built: `atomic` imports and runs                          |
 | `E9037` | —       | the form was built: one impl per instantiation of its target           |
 | `E9114` | —       | the form was built: the box carries the action beside the value        |
+| `E9044` | —       | the form was built: a method carries its own type parameters           |
 | `E9003` | —       | the form was built: a generic enum, one specialization per application |
 | `E9048` | —       | the form was built: a spec names a type, and a box dispatches          |
 

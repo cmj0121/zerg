@@ -251,7 +251,7 @@ pub fn gen_resolve_lens(f: ast.File) -> ast.File {
 	}
 	mut enums: list[ast.EnumDecl] = []
 	for ed in f.enums {
-		enums.append(ast.EnumDecl(ed.name, gen_len_variants(su, ed.variants), ed.is_pub, ed.path, ed.line, ed.col))
+		enums.append(ast.EnumDecl(ed.name, subst_variants(su, ed.variants), ed.tparams, ed.is_pub, ed.path, ed.line, ed.col))
 	}
 	mut types: list[ast.TypeDecl] = []
 	for td in f.types {
@@ -357,7 +357,10 @@ pub fn subst_fields(su: TySubst, fs: list[ast.FieldDef]) -> list[ast.FieldDef] {
 	return out
 }
 
-fn gen_len_variants(su: TySubst, vs: list[ast.VariantDef]) -> list[ast.VariantDef] {
+# subst_variants is a variant list with its payload types substituted. It is the enum's half
+# of `subst_fields` and was written for the length pass alone; an enum SPECIALIZATION needs
+# exactly the same walk, so it is one function rather than the second copy of one.
+pub fn subst_variants(su: TySubst, vs: list[ast.VariantDef]) -> list[ast.VariantDef] {
 	mut out: list[ast.VariantDef] = []
 	for v in vs {
 		out.append(ast.VariantDef(v.name, subst_tys(su, v.fields), v.has_discr, v.discr, v.line, v.col))

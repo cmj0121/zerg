@@ -784,7 +784,6 @@ asm-operand ::= 'in' '(' str-lit ')' expr | 'out' '(' str-lit ')' lvalue
 | 6     | `E9041` | body 是 reassignment 或 send 的 `match` arm —— 那些需要 block body                       |
 | 6     | `E9025` | `for mut v in …` —— 把每個被編輯的元素寫回去的迴圈綁定                                   |
 | 6     | `E9032` | 帶綁定頭、或分支超過一個語句的 `if` **運算式**                                           |
-| 7     | `E9003` | 泛型 `enum`                                                                              |
 | 7     | `E9075` | 泛型別名 `type X[T] = …`                                                                 |
 | 7     | `E9115` | 參數化的 `spec` 當型別                                                                   |
 | 7     | `E9038` | 對內建型別的 `impl`                                                                      |

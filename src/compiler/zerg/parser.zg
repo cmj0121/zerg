@@ -2348,10 +2348,15 @@ fn parse_enum(mut &p: Parser, is_pub: bool) -> ast.EnumDecl {
 	p_advance(p) # 'enum'
 	name := p_type_name(p, "an enum")
 
-	# `enum E[T] { A(T) }` — the parameter list was read and dropped the way a struct's is,
-	# but an enum's payload NAMES it, so `T` reached cc as a type nothing declares. A struct's
-	# field types go through c_check_named_ty; a variant's did not.
-	raise p_diag(p, rule.Rule.NotYetGenericEnum, f"NotImplemented: a generic enum `{name}[…]` — a generic `struct` is instantiated once per application and an `enum` is not (GRAMMAR#enum-decl)") if p_at(p, token.Kind.LBrack)
+	# `enum Either[X, Y] { … }` — read where GRAMMAR#enum-decl puts them, the same three lines
+	# a struct's parameters go through. They used to be read and DROPPED, which is why the
+	# refusal that stood here existed: a variant's payload NAMES a parameter, so `T` reached cc
+	# as a type nothing declares.
+	mut tparams: list[str] = []
+	mut tbounds: list[str] = []
+	if p_at(p, token.Kind.LBrack) {
+		p_type_params(p, tparams, tbounds)
+	}
 	expect(p, token.Kind.LBrace)
 	skip_semis(p)
 
@@ -2407,7 +2412,7 @@ fn parse_enum(mut &p: Parser, is_pub: bool) -> ast.EnumDecl {
 	# equal its position was indistinguishable from one that declared nothing, so `P(int) = 0`
 	# had its discriminant read and then quietly dropped.
 	raise p_diag(p, rule.Rule.DiscriminantOnPayloadEnum, f"enum `{name}` carries a payload, so its tag is opaque — a discriminant (on `{spelled[0]}`) belongs to an enum whose every variant is fieldless") if payload and spelled.len() > 0
-	return ast.EnumDecl(name, variants, is_pub, p.path, kw.line, kw.col)
+	return ast.EnumDecl(name, variants, tparams, is_pub, p.path, kw.line, kw.col)
 }
 
 # is_pascal reports whether a name starts with an uppercase ASCII letter — the tell for

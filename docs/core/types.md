@@ -256,11 +256,13 @@ enum Either[X, Y] {         # generic sum type
 }
 ```
 
-> **[not yet]** The **generic `enum`** in that block does not compile: it is _E9003 NotImplemented: a generic
-> enum `Either[…]` — a generic `struct` is instantiated once per application and an `enum` is not_. A recursive
-> `struct` is `E4026` (below).
->
-> A generic **`struct`** is built. The declaration is a **template**, and an application (`Box[int]`) is an
+A generic **`enum`** is built, one specialization per application, and a recursive one needs no pointer:
+`enum Tree[T] { Leaf; Node(T, Tree[T], Tree[T]) }` auto-boxes its own slot the way any recursive type does.
+A variant solves the parameters it **mentions** and the position supplies the rest — `Either.Left(1)` says
+nothing about `Y`, so it is written where the type is, and a construction with no position is _E3156_. A
+recursive `struct` is still `E4026` (below).
+
+> **[not yet]** A generic **`struct`** is built. The declaration is a **template**, and an application (`Box[int]`) is an
 > ordinary type under that name. A construction **solves its own parameters from the arguments**, which is
 > [Type System](type-system.md)'s rule for a call and a construction is one: `Box(7)` is a `Box[int]`
 > wherever it is written, and `b: Box[str] = Box(1)` solves `Box[int]` and is refused at the **binding** —

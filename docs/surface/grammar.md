@@ -917,7 +917,6 @@ production, not the one that first mentions it.
 | 6     | `E9041` | a `match` arm whose body is a reassignment or a send — those need a block body          |
 | 6     | `E9025` | `for mut v in …` — the loop binding that writes each edited element back                |
 | 6     | `E9032` | an `if` **expression** with a binding head, or with a branch of more than one statement |
-| 7     | `E9003` | a generic `enum`                                                                        |
 | 7     | `E9075` | a generic `type X[T] = …` alias                                                         |
 | 7     | `E9115` | a parameterized `spec` as a type                                                        |
 | 7     | `E9038` | an `impl` on a built-in type                                                            |

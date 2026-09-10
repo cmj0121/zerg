@@ -323,8 +323,7 @@ fmt-roundtrip:                  # what the formatter writes, the parser reads
 # was built. So each skipped case is BUILT, and one that succeeds fails the gate.
 CORPUS_SKIP := \
 	derive_enum derive_ord \
-	dyn_witness \
-	gen_enum gen_enum2
+	dyn_witness
 
 CORPUS_PASS := $(filter-out $(CORPUS_SKIP),$(basename $(notdir $(wildcard test-data/codegen/*.zg))))
 

@@ -67,6 +67,14 @@ Five notes carry the rules into the language:
   lands: `x: float = id(5)` solves `T = int` (the literal defaults at `x: T`), and the `int` answer is
   then refused at the binding — write `float(id(5))`. The demand neither solves `T` nor converts the
   answer: **inference is local**, twice over.
+- **A generic enum's variant is the one exception, and it is narrow.** A **variant solves the parameters
+  it mentions and the position supplies the rest**: `e: Either[int, str] = Either.Left(1)` takes `Y` from
+  the binding, because no variant of a sum type mentions every parameter — that is what a sum type IS.
+  The struct rule does not carry over, and `E4095` says why: every value of a struct carries every field,
+  and a variant does not. It applies **only** to a sum type, **only** to the parameters a variant does not
+  mention, and **only** where a position exists — a construction with none is _E3156_, naming what the
+  variant left unsolved. It sits beside the wrap rule rather than against it: a position may already put a
+  value into a carrier, and here it supplies a type the construction could not have known.
 
 > **[not yet]** One note runs ahead of the compiler: a **parameterized** spec used as a type is refused by
 > name, _E9115_ — the bare spec is built, and a spec-typed position boxes what is written into it. The

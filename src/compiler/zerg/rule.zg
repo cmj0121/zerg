@@ -314,6 +314,7 @@ pub enum Rule {
 	# which file was loaded first.
 	AmbiguousSpecMethod = 3154
 	BinaryOnExistential = 3155
+	GenericVariantNoPosition = 3156
 	SpecDefaultReadsField = 3138
 
 	# emitting — a form this compiler will not lower
@@ -457,7 +458,6 @@ pub enum Rule {
 	# range because it is its own class: each of these retires when the form is built, and
 	# keeping that churn out of the five stage ranges is what keeps them dense
 	NotYetParameterizedSpec = 9001
-	NotYetGenericEnum = 9003
 	NotYetDecoratorLayout = 9005
 	NotYetCallee = 9009
 	NotYetNamedArgument = 9010

@@ -85,21 +85,36 @@ typedef struct {
  * that says what the payload can do. A Zerg `s: S` is, in C, a `void*` pointing at it —
  * the same width and the same lifetime rules as a `Ref[T]`, with one more word.
  *
- * The layout is `[ zrt_ref_hdr | const void *vt | payload... ]`, so `zrt_release` and the
- * drop-in-header contract work on it unchanged: the compiler emits a drop per payload type
- * exactly as it does for a Ref, and the vt is read by the call sites that dispatch.
+ * The layout is `[ zrt_ref_hdr | const void *vt | size_t size | payload... ]`.
  *
- * `vt` is `const void *` here because the runtime never looks inside it. Its shape is one
- * static struct per spec, emitted by the compiler: the payload's copy and drop first — the
- * same two slots `zrt_elem_vt` has, so a spec value can be a list element — then one
- * function pointer per required member, in declaration order. */
+ * THE PAYLOAD IS NOT WHERE `zrt_release` LOOKS. It runs `hdr.drop(zrt_ref_payload(h))`, which
+ * is the word right after the ref header — the `vt` field here, two words before the payload.
+ * The comment this replaces claimed the drop-in-header contract worked on a dyn cell
+ * unchanged; it did not, and only a POD payload (a NULL drop, never called) kept that from
+ * showing. So a dyn cell installs a drop of the RUNTIME's, which recovers the header from
+ * that address and reads the payload's teardown out of the table.
+ *
+ * `vt` is `const void *` because a call site's slots are the compiler's business. The first
+ * two are not: the payload's copy and drop, the same pair `zrt_elem_vt` holds — which is what
+ * lets a spec value be a list element, and what lets this file drop and copy one without
+ * being told how.
+ *
+ * `size` is the payload's, and it is here because a COPY needs it: a spec value is a value
+ * (docs/core/type-system.md), so copying one builds an independent cell rather than sharing
+ * this one. */
 typedef struct {
 	zrt_ref_hdr hdr;
 	const void *vt;
+	size_t size;
 } zrt_dyn_hdr;
 
-/* zrt_dyn_alloc boxes a value of payload_sz bytes against a witness table, refcount 1. */
-void *zrt_dyn_alloc(size_t payload_sz, zrt_drop_fn drop, const void *vt);
+/* zrt_dyn_alloc boxes a payload_sz-byte value against a witness table, refcount 1. The
+ * payload's teardown comes from the table, so no drop is passed. */
+void *zrt_dyn_alloc(size_t payload_sz, const void *vt);
+
+/* zrt_dyn_copy is an INDEPENDENT cell holding a copy of this one's payload, deep-copied
+ * through the table's copy slot (a NULL one is a POD payload: the bytes are the copy). */
+void *zrt_dyn_copy(const void *cell);
 
 /* zrt_dyn_vt is the witness table a spec value was boxed against. */
 const void *zrt_dyn_vt(const void *cell);

@@ -507,6 +507,7 @@ shipping compiler rather than a part of it (the line
 | `E9111` | an array length reached through an import                                                             |
 | `E9112` | the array method `…`                                                                                  |
 | `E9115` | the parameterized `spec` `…` used as a TYPE (…)                                                       |
+| `E9116` | rendering a `…`, which is a boxed value                                                               |
 
 They are reported the moment a file is **read**, before its imports are scanned — scanning
 them parses, and a parser handed unreadable text can only say something untrue about it.

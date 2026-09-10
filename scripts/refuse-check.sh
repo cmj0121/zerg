@@ -1239,6 +1239,32 @@ fn main() {
 }
 EOF
 
+# A BOX HAS A RENDERING AND NO SLOT TO REACH IT THROUGH. A witness table holds one entry per
+# required member, and a rendering is not one — so `print t` rendered the CELL POINTER as an
+# integer, a different number every run, of a value the program never wrote. It is the shape
+# `c_display_check` was extracted to end, one type later.
+
+expect "$ZERG" rendering-a-boxed-value E9116 'which is a boxed value' <<'EOF'
+spec Tag {
+	fn v() -> int
+}
+
+struct A {
+	pub n: int
+}
+
+impl Tag for A {
+	fn v() -> int {
+		return this.n
+	}
+}
+
+fn main() {
+	t: Tag = A(1)
+	print t
+}
+EOF
+
 # A SPEC NAMES A TYPE, and a PARAMETERIZED one does not yet. The witness tables are already
 # keyed by `ast.spec_key` — name and arguments — so the identity is there; what is missing is
 # the spec's members seated under the applied key, which is where a call reads a return type.

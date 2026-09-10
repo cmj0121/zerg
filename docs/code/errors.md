@@ -253,8 +253,8 @@ but **not the concrete type's own fields** — the value was erased and is never
 that is what `is` is FOR: the eleven reified kinds above are the only names it answers from a runtime tag,
 and a taxonomy name outside them is `E9078` rather than a test that answers `false`. Every OTHER name is
 answered from the operand's own type as a compile-time constant, which
-[Specs & Generics](../core/specs.md#type-tests--is) decides; what is still **[not yet]** is the
-**existential** test, and it waits on a `spec` being usable as a type (_E9048_).
+[Specs & Generics](../core/specs.md#type-tests--is) decides — a **boxed** operand being the one whose
+answer is read at runtime, off the witness table it was boxed against.
 The set of errors reachable here is treated as **open** for coverage, so an `is`-chain can never be
 exhaustive: a **catch-all is mandatory**. An unmatched error would abort like any uncovered `match` — but
 `MatchError` is **[not yet]** a reified kind, and because the final `match` arm is always unconditional the

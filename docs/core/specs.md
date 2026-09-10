@@ -68,19 +68,28 @@ compile error **on an existential** — never a ban on using the spec as a type,
 for the binary ops. So there is **no object-safety gate**: a spec is **always usable as a type**, and the box
 offers precisely what dispatches through `this` alone — re-boxing a `This`-returning result as the same spec.
 
-> **[not yet]** A `spec` cannot be used **as a type** at all, so the three paragraphs above — the heap-boxed
-> existential, its dynamic dispatch, and the member-by-member account of what a box does and does not offer —
-> describe a facility no program can reach. `fn go(g: Greet)` is _E9048 NotImplemented: the `spec` `Greet`
-> used as a TYPE (parameter `g` of `go`) — a spec is a bound and an interface here, not yet a value's type;
-> take the concrete type, or a generic parameter bounded by it_. A `spec` fills two of its three roles here
-> and not the third; the same
-> claim in the [Language Reference](../language.md) overview is unbuilt for the same reason, and the
-> dynamic-dispatch half of the codegen paragraph below has nothing to dispatch on.
+A spec **used as a type is built**. `fn go(g: Greet)` takes a box, `g: Greet = En(7)` builds one, a
+`list[Greet]` holds a mixed set of them, `g.hello()` dispatches through the witness table the box carries,
+and `g is En` reads that same table. A box is a counted cell that owns its payload: copying one builds an
+independent cell — a spec value is a **value** — and it is given back when its scope ends, like every other
+owned value.
+
+> **[not yet]** A **parameterized spec** cannot be the type — _E9115_ — and rendering a box cannot be done
+> — _E9116_. Each is refused by name rather than answered wrongly; everything else above is built.
 >
-> What a program CAN reach is [`#[obj]`](#obj--a-specs-methods-held-as-values) below: the same
-> existential, encoded as a struct of function values over a captured implementer instead of as a boxed
-> pointer with a vtable. It offers what this section says a box offers and refuses the members this
-> section says a box cannot serve — so the facility is here, and the **type** is what is not.
+> `fn go(c: Conv[int])` is _E9115 NotImplemented: the parameterized `spec` `Conv[int]` used as a TYPE
+> (parameter `c` of `go`) — this compiler carries a spec's type arguments only on an `impl`_. The witness
+> tables are already keyed by name **and arguments**, so what is missing is the members seated under the
+> applied key, which is where a call reads its return type.
+>
+> **Rendering a box** is _E9116 NotImplemented: rendering a `…`, which is a boxed value — a witness table
+> holds one slot per required member and a rendering is not one_. `debug` is listed above among what a box
+> dispatches; until the table carries a rendering there is nothing to dispatch through.
+>
+> Of the three member kinds a box cannot serve, one is reachable and refused: a **binary same-type** member
+> is _E3155_ at the call. An **associated fn** is not something a spec can declare here — every member
+> carries an implicit receiver — and a **generic method** is refused at the `impl` (_E9044_) that would have
+> to exist before anything could be boxed.
 
 Concrete-bound generics are **monomorphized** in the emitted C — the compiler emits a separate
 specialized version for each concrete type — while a spec used as a type is the one place codegen uses
@@ -159,8 +168,9 @@ per-type opt-in `Eq` above included.
 `#[obj]` is what you write when you want a **heterogeneous collection**: on a spec, it generates a companion
 **struct of function values** — one field per method — and a **generic wrap** that turns any implementer into
 one. That struct is the **open encoding** of an existential (above), so a `spec` used **as a type** is this
-same thing with the compiler doing the writing — which is not built here (_E9048_, above). Until it is, the
-hand-written form is the one a program has, and no value can be typed by a spec.
+same thing with the compiler doing the writing. Both are built; they differ in what they cost and in what
+they can hold — an object is a struct of function values over a captured implementer, a box is one pointer
+with a table beside it.
 
 ```zerg
 #[obj]
@@ -278,12 +288,12 @@ never boxed. It composes as an ordinary `bool` — in an `if`, under `not` / `an
 guard — needing no new pattern form. Its main use is dispatching on an **erased error's** type (see
 [Null-safety & Errors](../code/errors.md)).
 
-Both halves of the sentence above are built. An **error kind** compares the tag an `Err` carries; every
-other name compares the operand's **own type** against it, and since this compiler has no existentials at
-all — a `spec` cannot be used as a type (above, _E9048_) — every operand it can see has
-a known concrete type, so every such test is the compile-time constant this section decides. A strong
-`type X = Y` is its **own** identity there: `m is Meters` and `m is int` are not the same question. What is
-still **[not yet]** is the **existential** test itself, and it waits on _E9048_ rather than on `is`.
+All three halves of the sentence above are built. An **error kind** compares the tag an `Err` carries; a
+**boxed value** compares the witness table it was boxed against, which is the dispatch identity it already
+carries; every other operand has a known concrete type, so the test is the compile-time constant this
+section decides. A strong `type X = Y` is its **own** identity there: `m is Meters` and `m is int` are not
+the same question. A type that does not implement the spec was never in the box, and that is a compile-time
+`false` rather than a comparison against a table no program has.
 
 A name that denotes **no type to compare against** is refused instead of answered: a `spec`, a name that
 needs arguments (`list`, `Result`), a built-in alias (`bytearray`), an error-carrier constructor (`Left`),

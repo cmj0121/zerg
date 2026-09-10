@@ -786,7 +786,7 @@ asm-operand ::= 'in' '(' str-lit ')' expr | 'out' '(' str-lit ')' lvalue
 | 6     | `E9032` | 帶綁定頭、或分支超過一個語句的 `if` **運算式**                                           |
 | 7     | `E9003` | 泛型 `enum`                                                                              |
 | 7     | `E9075` | 泛型別名 `type X[T] = …`                                                                 |
-| 7     | `E9048` | 把 `spec` 當型別或當 dispatch                                                            |
+| 7     | `E9115` | 參數化的 `spec` 當型別                                                                   |
 | 7     | `E9038` | 對內建型別的 `impl`                                                                      |
 | 7     | `E9046` | `alignof[T]`                                                                             |
 | 7     | `E9064` | `set`                                                                                    |

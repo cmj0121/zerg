@@ -50,16 +50,25 @@ box——內含 `Ref` 值 refcount-bump）與 `debug`，以及結構性記憶體
 op 完全一樣。因此**沒有 object-safety gate**：一個 spec **永遠可以當型別**，box 就只提供「單憑 `this` 就能分派」的
 東西——並把回傳 `This` 的結果 re-box 成同一個 spec。
 
-> **[not yet]** `spec` 根本不能**當型別用**,所以上面那三段——heap-boxed 的 existential、它的動態 dispatch、以及逐個
-> 成員交代 box 提供什麼、不提供什麼——講的是一套沒有程式到得了的機制。`fn go(g: Greet)` 會被拒絕、報
-> _E9048 NotImplemented: the `spec` `Greet` used as a TYPE (parameter `g` of `go`) — a spec is a bound and an interface
-> here, not yet a value's type; take the concrete type, or a generic parameter bounded by it_。`spec` 在這裡只扮演
-> 它三個角色中的兩個;[語言參考](../language.zh-TW.md) 概覽裡的同一個主張因同一個原因尚未建置,而下面那段 codegen
-> 裡屬於動態 dispatch 的那一半,沒有任何東西可以分派。
+`spec` 當**型別**用是**已經建起來的**。`fn go(g: Greet)` 收一個 box,`g: Greet = En(7)` 建一個,`list[Greet]`
+可以裝一組不同型別的實作者,`g.hello()` 透過 box 帶著的見證表分派,`g is En` 讀的也是同一張表。box 是一個計數
+cell,它擁有自己的 payload:複製它會建出一個獨立的 cell——spec 值是一個**值**——而且它會在作用域結束時被還回去,
+和其他每一個被擁有的值一樣。
+
+> **[not yet]** **參數化的 spec** 還不能當型別——_E9115_——而對一個 box 做 rendering 也還不行——_E9116_。
+> 兩者都是具名拒絕、而不是給出錯誤的答案;上面其餘的都建好了。
 >
-> 程式**到得了**的是下面的 [`#[obj]`](#obj把一個-spec-的方法當成值持有):同一個 existential,只是編碼成
-> 「一個裝著函式值、捕捉了實作者的 struct」,而不是「一個帶 vtable 的 boxed pointer」。它提供本節說 box 提供的東西、
-> 拒絕本節說 box 服務不了的成員——所以**機制在這裡,不在的是那個「型別」**。
+> `fn go(c: Conv[int])` 會報 _E9115 NotImplemented: the parameterized `spec` `Conv[int]` used as a TYPE
+> (parameter `c` of `go`) — this compiler carries a spec's type arguments only on an `impl`_。見證表早就以
+> 名字**加上引數**為鍵了,所以缺的不是身分,而是把成員安置在那個應用過的鍵底下——那正是呼叫端讀回傳型別的地方。
+>
+> 對 box 做 **rendering** 會報 _E9116 NotImplemented: rendering a `…`, which is a boxed value — a witness table
+> holds one slot per required member and a rendering is not one_。`debug` 在上面被列為 box 會分派的東西之一;
+> 在表帶上一個 rendering 以前,沒有東西可以分派。
+>
+> box 服務不了的三種成員裡,一種到得了、也被拒絕了:**二元同型別**成員在呼叫處是 _E3155_。**associated fn**
+> 在這裡不是 spec 宣告得出來的東西——每個成員都帶著隱含的接收者——而**泛型方法**在 `impl` 就被拒(_E9044_),
+> 而那個 impl 得先存在,才可能有東西被裝箱。
 
 concrete bound 的 generic 會在產出的 C 裡 **monomorphize**——編譯器為每個具體型別各生成一份特化版本——而把 `spec`
 當型別用是唯一改用 dynamic dispatch 之處。concrete type 之間**沒有 subtyping**，所以泛型是**不變（invariant）**
@@ -113,8 +122,8 @@ concrete bound 的 generic 會在產出的 C 裡 **monomorphize**——編譯器
 
 `#[obj]` 就是你想要**異質集合**時寫的東西:標在 spec 上,它生出一個 companion **函式值 struct**——一個方法
 一個欄位——加上一個**泛型包裝**,把任何實作者變成它。那個 struct 就是一個 existential 的**開放編碼**(見上),
-所以一個 `spec` 被當**型別**用,就是同一件事、只是改由 compiler 來寫——而那件事在這裡沒有建
-(_E9048_,見上)。在它建起來以前,程式手上有的是手寫的那個形式,也沒有任何值能被一個 spec 定型。
+所以一個 `spec` 被當**型別**用,就是同一件事、只是改由 compiler 來寫。兩者都建好了;差別在代價、以及裝得下
+什麼——object 是一個裝著函式值、捕捉了實作者的 struct,box 是一個指標加旁邊一張表。
 
 ```zerg
 #[obj]
@@ -210,11 +219,11 @@ reinterpret（見 [型別轉換](types.zh-TW.md)）。`T` 必須實作 `x` 所�
 guard——不需要任何新的 pattern 形式。它的主要用途是對**被抹除的錯誤**依型別分派
 (見 [Null-safety 與錯誤處理](../code/errors.zh-TW.md))。
 
-上面那句話的兩半都已經建起來了。**error kind** 比較的是 `Err` 攜帶的 tag;其他每一個名字比較的是運算元
-**自己的型別**——而這個編譯器根本沒有 existential(`spec` 不能當型別,見上文,_E9048_),
-所以它看得到的每一個運算元都有已知的具體型別,於是每一個這種測試都是本節所定的那個編譯期常數。強 `type X = Y`
-在這裡是**它自己的**身分:`m is Meters` 與 `m is int` 不是同一個問題。仍然 **[not yet]** 的是 **existential**
-測試本身,而它等的是 _E9048_、不是 `is`。
+上面那句話的三半都已經建起來了。**error kind** 比較的是 `Err` 攜帶的 tag;**裝箱的值**比較的是它被裝箱時
+對上的那張見證表,也就是它本來就帶著的 dispatch 身分;其他每一個運算元都有已知的具體型別,於是那個測試就是本節
+所定的那個編譯期常數。強 `type X = Y` 在這裡是**它自己的**身分:`m is Meters` 與 `m is int` 不是同一個問題。
+一個沒有實作該 spec 的型別從來就不會在那個 box 裡,所以那是編譯期的 `false`,而不是去比對一張沒有任何程式
+擁有的表。
 
 一個**指不出可比對型別**的名字會被拒收、而不是被回答:一個 `spec`、一個需要引數的名字(`list`、`Result`)、
 一個內建別名(`bytearray`)、一個 error-carrier 建構子(`Left`),以及這個編譯器叫不出名字的分類種類

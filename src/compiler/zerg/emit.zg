@@ -2513,9 +2513,27 @@ fn c_sig_seen(mut &em: Emitter, key: str) -> bool {
 fn c_build_generics(mut &em: Emitter, f: ast.File) {
 	for fn_i in f.fns {
 		if c_is_template(fn_i) {
-			raise c_diag_at(fn_i.path, fn_i.line, fn_i.col, rule.Rule.NotYetGenericMethod, f"NotImplemented: a generic METHOD `{fn_i.recv}.{fn_i.name}[…]` — this compiler instantiates a free function, and a method's specializations would each need a name in its type's namespace (GRAMMAR#fn-decl)") if fn_i.recv != ""
 			c_check_gen_dup(em, f, fn_i)
-			em.gen_names.append(fn_i.name)
+
+			# A METHOD OF A TEMPLATE IMPL IS NOT A TEMPLATE THIS TABLE CAN HOLD, because its
+			# RECEIVER is not a type yet: `impl[T] Box[T] { fn tag[U](…) }` has to be seated on
+			# `Box[int]` before `Box[int].tag` is a name anything can call. It goes where the
+			# impl's other methods go and comes back through c_seat_tpl_method, once per
+			# instantiation, still carrying its own `[U]`.
+			#
+			# Without this it was dropped outright: `c_without_templates` removes a template
+			# from the program before `c_with_impl_insts` collects the impl's methods, so a
+			# method that is BOTH reached neither pass.
+			if c_is_applied(fn_i.recv) {
+				em.impl_tpl_fns.append(fn_i)
+				continue
+			}
+
+			# KEYED THE WAY EVERY OTHER METHOD IS. `c_sig_key` answers the bare name for a free
+			# function, so a program with no generic method keys exactly as it did; a method
+			# joins under `P#pick`, which is what keeps `P.pick` and `Q.pick` — and a free
+			# `pick` — three templates rather than whichever one was recorded last.
+			em.gen_names.append(c_sig_key(fn_i.recv, fn_i.name))
 			em.gen_tpls.append(fn_i)
 		}
 	}
@@ -2781,7 +2799,10 @@ fn c_with_impl_insts(mut &em: Emitter, f: ast.File, record: bool) -> ast.File {
 		for applied in em.inst_tys {
 			continue if c_app_base(applied) != c_app_base(m.recv)
 
-			fns.append(c_tpl_method_for(em, f, m, applied))
+			mi := c_tpl_method_for(em, f, m, applied)
+			if not c_seat_tpl_method(em, mi) {
+				fns.append(mi)
+			}
 		}
 	}
 
@@ -2805,11 +2826,30 @@ fn c_with_impl_insts(mut &em: Emitter, f: ast.File, record: bool) -> ast.File {
 # They go where a generic `fn`'s specializations go: the signature table, so a call resolves,
 # and `inst_fns`, the watermark the emitter drains after every body. That list grows while it
 # is walked, which is exactly what a method discovered inside one needs.
+# c_seat_tpl_method takes one materialized method of a template impl and puts it where it
+# belongs: a method that still carries its OWN type parameters is a template, and a template
+# has no signature to record (c_build_generics says why). Seated as an ordinary function, the
+# `U` of `impl[T] Box[T] { fn tag[U](…) }` reached cc as a type nothing declares.
+#
+# It answers whether the method was seated as a template, so the caller knows not to emit it.
+fn c_seat_tpl_method(mut &em: Emitter, inst: ast.FnDecl) -> bool {
+	return false if not c_is_template(inst)
+
+	key := c_sig_key(inst.recv, inst.name)
+	return true if c_is_generic(em, key)
+
+	em.gen_names.append(key)
+	em.gen_tpls.append(inst)
+	return true
+}
+
 fn c_tpl_methods_late(mut &em: Emitter, applied: str) {
 	for m in em.impl_tpl_fns {
 		continue if c_app_base(applied) != c_app_base(m.recv)
 
 		inst := c_tpl_method_at(em, m, applied)
+		continue if c_seat_tpl_method(em, inst)
+
 		c_add_sig(em, inst)
 		em.inst_fns.append(inst)
 	}
@@ -3980,6 +4020,31 @@ fn c_lookup_sig_ret(mut &em: Emitter, name: str) -> ast.Ty {
 # declares and its keys are the keys everything downstream looks up by — so a name found here
 # is a name that resolves everywhere. A receiver that already HAS the bare name needs nothing:
 # an unparameterized spec's method and an inherent one are recorded under it.
+# c_gen_meth_resolved is a method call's name after a generic METHOD has been specialized for
+# it: `p.pick(7)` becomes `pick$int`, which `c_fn_cname` then mangles into the type's namespace
+# the way it does a spec-keyed method's. It answers the written name unchanged for everything
+# else, so a call on a type with no template pays one table test.
+#
+# THE KEY IS `c_sig_key`'s, the same one the template was recorded under — the receiver joins
+# it, which is what tells `P.pick` from `Q.pick` and from a free `pick`.
+fn c_gen_meth_resolved(mut &em: Emitter, recv: str, meth: str, target: ast.Expr, args: list[ast.Expr]) -> str {
+	key := c_sig_key(recv, meth)
+	return meth if recv == "" or not c_is_generic(em, key)
+
+	# THE RECEIVER IS THE FIRST ACTUAL, because it is the first PARAMETER: `this` is implicit in
+	# the source and explicit in the list from the parser on. Solving against the written
+	# arguments alone paired `this: P` with `7` and reported _argument 0 of `P.pick` is int, and
+	# this gives P_ — about an argument the caller never wrote.
+	#
+	# It is also what lets a method on a GENERIC type solve from its receiver: `Box[int].map`
+	# has `this: Box[int]` in front of everything the call passes.
+	mut actuals: list[ast.Expr] = [target]
+	for a in args {
+		actuals.append(a)
+	}
+	return c_sig_meth_of(c_instantiate(em, key, actuals))
+}
+
 fn c_meth_resolved(mut &em: Emitter, recv: str, meth: str) -> str {
 	return meth if recv == "" or c_has_method(em, recv, meth)
 
@@ -9585,7 +9650,12 @@ fn c_method(mut &em: Emitter, target: ast.Expr, meth: str, args: list[ast.Expr],
 
 	# THE WRITTEN NAME BECOMES THE RECORDED KEY, here, once — before the family is picked and
 	# before anything downstream looks the name up. Every arm below keys by it.
-	meth := c_meth_resolved(em, recv, meth)
+	#
+	# A GENERIC METHOD IS SPECIALIZED FIRST, because what it answers IS the recorded name: the
+	# template has no signature of its own (c_build_generics says why), so every rule below —
+	# the family test, the argument fitting, the return type — has to be asked of `pick$int`
+	# and not of `pick`.
+	meth := c_meth_resolved(em, recv, c_gen_meth_resolved(em, recv, meth, target, args))
 	return match c_meth_kind(em, tty, meth) {
 		MethKind.MRender => c_render_meth(em, target, meth, tty, sb)
 		MethKind.MList => c_list_method(em, target, meth, args, tty, sb)
@@ -12599,7 +12669,7 @@ fn c_infer_methcall(mut &em: Emitter, target: ast.Expr, meth: str, args: list[as
 	# reader wrote against the key it was recorded under. Applied at both ends or the two
 	# disagree — a provided method of a parameterized spec was EMITTED under its key and
 	# INFERRED under the bare name, so `same` answered `?` and a `bool` printed as `1`.
-	meth := c_meth_resolved(em, recv, meth)
+	meth := c_meth_resolved(em, recv, c_gen_meth_resolved(em, recv, meth, target, args))
 	return match c_meth_kind(em, tty, meth) {
 		MethKind.MRender  => ast.Ty.TStr
 		MethKind.MList    => c_list_method_ret(em, meth)

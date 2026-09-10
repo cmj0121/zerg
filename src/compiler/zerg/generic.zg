@@ -385,8 +385,13 @@ fn gen_len_fn(su: TySubst, fd: ast.FnDecl) -> ast.FnDecl {
 # subst_method is subst_fn for a method of a template `impl`: the same walk, plus the RECEIVER
 # replaced by the instantiation this copy is for. The name is not mangled — a method's namespace
 # is its type's, and the type is what differs between the copies.
+# THE METHOD'S OWN PARAMETERS SURVIVE. This substitutes the IMPL's — `impl[T] Box[T]` seated on
+# `Box[int]` — and a method carrying its own `[U]` is still a template afterwards, to be
+# specialized per call. Cleared to `[]` here, `Box[int].tag` was registered as an ordinary
+# signature and its `U` was reported to the caller as a type: _argument 1 of `Box[int].tag` is
+# U, and this gives str_.
 pub fn subst_method(su: TySubst, m: ast.FnDecl, recv: str) -> ast.FnDecl {
-	return ast.FnDecl(m.name, recv, subst_params(su, m.params), m.has_ret, subst_ty(su, m.ret), subst_block(su, m.body), m.is_pub, m.path, m.line, m.col, [], [], m.in_unsafe, m.is_test, m.is_fixture, m.has_body, m.is_assoc, m.spec_of)
+	return ast.FnDecl(m.name, recv, subst_params(su, m.params), m.has_ret, subst_ty(su, m.ret), subst_block(su, m.body), m.is_pub, m.path, m.line, m.col, m.tparams, m.tbounds, m.in_unsafe, m.is_test, m.is_fixture, m.has_body, m.is_assoc, m.spec_of)
 }
 
 pub fn subst_fn(tpl: ast.FnDecl, args: list[ast.Ty], at: str, apps: list[ast.TyApp]) -> ast.FnDecl {

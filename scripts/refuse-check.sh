@@ -955,9 +955,13 @@ fn main() {
 }
 EOF
 
-# A `spec` IS THE EXISTENTIAL HALF — the one `docs/core/specs.md` marks **[not yet]**. It is
-# unreachable from the other direction too (E9048: a spec cannot be used as a type), so this
-# is the test asked of a concrete value against a name that is not a type here.
+# A `spec` ON THE RIGHT IS A DIFFERENT QUESTION. `x is A` asks what a value IS, and a spec
+# names no type a concrete value can equal — "does this int implement Greet" is a question
+# about the TYPE, answered by a bound. It is refused rather than folded, because folding it
+# would answer `false` about an operand whose type may well implement the spec.
+#
+# The operand that DOES have an answer is a box, and it has one now: `t is A` reads the
+# witness table the value was boxed against (docs/core/specs.md, Type tests).
 expect "$ZERG" is-a-spec-name E9078 'is Greet' <<'EOF'
 spec Greet {
 	fn hello() -> str
@@ -1235,32 +1239,92 @@ fn main() {
 }
 EOF
 
-# A `spec` HAS three roles (docs/core/specs.md): the bound on a generic parameter, the
-# interface a type conforms to, and a TYPE in its own right. The third is not built, and
-# saying "no type named `Tag`" about a spec declared three lines above invited the reader to
-# go and declare it again. An `impl` on a primitive is the same shape of answer.
+# A BOX HAS A RENDERING AND NO SLOT TO REACH IT THROUGH. A witness table holds one entry per
+# required member, and a rendering is not one — so `print t` rendered the CELL POINTER as an
+# integer, a different number every run, of a value the program never wrote. It is the shape
+# `c_display_check` was extracted to end, one type later.
 
-expect "$ZERG" spec-used-as-a-type E9048 <<'EOF'
+expect "$ZERG" rendering-a-boxed-value E9116 'which is a boxed value' <<'EOF'
 spec Tag {
-	fn tag() -> int
+	fn v() -> int
 }
 
 struct A {
-	pub v: int
+	pub n: int
 }
 
 impl Tag for A {
-	fn tag() -> int {
-		return this.v
+	fn v() -> int {
+		return this.n
 	}
 }
 
-fn show(t: Tag) -> int {
-	return t.tag()
+fn main() {
+	t: Tag = A(1)
+	print t
+}
+EOF
+
+# A SPEC NAMES A TYPE, and a PARAMETERIZED one does not yet. The witness tables are already
+# keyed by `ast.spec_key` — name and arguments — so the identity is there; what is missing is
+# the spec's members seated under the applied key, which is where a call reads a return type.
+#
+# It is refused by name rather than as an unknown type. "no type named `Conv[int]`" is the
+# sentence retiring E9048 was supposed to stop, one parameterization along.
+
+expect "$ZERG" a-parameterized-spec-as-a-type E9115 'only on an `impl`' <<'EOF'
+spec Conv[T] {
+	fn to() -> T
+}
+
+struct A {
+	pub n: int
+}
+
+impl Conv[int] for A {
+	fn to() -> int {
+		return this.n
+	}
+}
+
+fn go(c: Conv[int]) -> int {
+	return c.to()
 }
 
 fn main() {
-	print show(A(7))
+	print go(A(2))
+}
+EOF
+
+# A BOX OFFERS WHAT DISPATCHES THROUGH `this` ALONE (docs/core/specs.md). `eq`'s other operand
+# is a `This` — exactly the concrete type erasure removed — so a witness table has no slot for
+# it and two boxed values are never comparable by value. Until this stood, cc answered: _no
+# member named `eq`_, about generated C.
+#
+# It refuses the CALL and not the type. `fn go(a: Same, b: Same)` is a well-formed signature;
+# what cannot be done is asking one box to compare itself with another.
+
+expect "$ZERG" a-binary-member-on-a-box E3155 'takes another Same' <<'EOF'
+spec Same {
+	fn eq(other: This) -> bool
+}
+
+struct N {
+	pub v: int
+}
+
+impl Same for N {
+	fn eq(other: This) -> bool {
+		return this.v == other.v
+	}
+}
+
+fn go(a: Same, b: Same) -> bool {
+	return a.eq(b)
+}
+
+fn main() {
+	print go(N(1), N(1))
 }
 EOF
 

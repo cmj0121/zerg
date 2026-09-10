@@ -919,7 +919,7 @@ production, not the one that first mentions it.
 | 6     | `E9032` | an `if` **expression** with a binding head, or with a branch of more than one statement |
 | 7     | `E9003` | a generic `enum`                                                                        |
 | 7     | `E9075` | a generic `type X[T] = …` alias                                                         |
-| 7     | `E9048` | `spec` as a type or a dispatch                                                          |
+| 7     | `E9115` | a parameterized `spec` as a type                                                        |
 | 7     | `E9038` | an `impl` on a built-in type                                                            |
 | 7     | `E9046` | `alignof[T]`                                                                            |
 | 7     | `E9064` | `set`                                                                                   |

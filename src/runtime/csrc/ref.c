@@ -19,14 +19,44 @@
  * this count is a `size_t` whose immortal sentinel is SIZE_MAX — which would
  * read back as -1 through them.
  */
+#include <string.h>  /* memcpy */
+
 #include "zergrt.h"
 
-void *zrt_dyn_alloc(size_t payload_sz, zrt_drop_fn drop, const void *vt) {
+/* dyn_drop is what a dyn cell puts in its header, and it exists because of WHERE the header
+ * contract hands a drop its pointer: `zrt_release` calls `hdr.drop(zrt_ref_payload(h))`, the
+ * word after the ref header, which on a dyn cell is `vt` and not the payload. Recovering the
+ * header from that address is the whole of it; the payload's own teardown is in the table. */
+static void dyn_drop(void *after_ref_hdr) {
+	zrt_dyn_hdr *h = (zrt_dyn_hdr *)((char *)after_ref_hdr - offsetof(zrt_dyn_hdr, vt));
+	const zrt_elem_vt *vt = (const zrt_elem_vt *)h->vt;
+	if (vt != NULL && vt->drop != NULL) {
+		vt->drop(zrt_dyn_payload(h));
+	}
+}
+
+void *zrt_dyn_alloc(size_t payload_sz, const void *vt) {
 	zrt_dyn_hdr *h = (zrt_dyn_hdr *)zrt_alloc(sizeof(zrt_dyn_hdr) + payload_sz);
 	h->hdr.rc = 1;
-	h->hdr.drop = drop;
+	h->hdr.drop = dyn_drop;
 	h->vt = vt;
+	h->size = payload_sz;
 	return h;
+}
+
+void *zrt_dyn_copy(const void *cell) {
+	if (cell == NULL) {
+		return NULL;
+	}
+	const zrt_dyn_hdr *s = (const zrt_dyn_hdr *)cell;
+	void *d = zrt_dyn_alloc(s->size, s->vt);
+	const zrt_elem_vt *vt = (const zrt_elem_vt *)s->vt;
+	if (vt != NULL && vt->copy != NULL) {
+		vt->copy(zrt_dyn_payload(d), zrt_dyn_payload(cell));
+	} else {
+		memcpy(zrt_dyn_payload(d), zrt_dyn_payload(cell), s->size);
+	}
+	return d;
 }
 
 const void *zrt_dyn_vt(const void *cell) {

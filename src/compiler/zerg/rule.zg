@@ -313,6 +313,7 @@ pub enum Rule {
 	# bound to read, and answering it by declaration order would make the result depend on
 	# which file was loaded first.
 	AmbiguousSpecMethod = 3154
+	BinaryOnExistential = 3155
 	SpecDefaultReadsField = 3138
 
 	# emitting — a form this compiler will not lower
@@ -473,9 +474,10 @@ pub enum Rule {
 	NotYetTypedefNonScalar = 9042
 	NotYetJumpOutOfGuard = 9043
 	NotYetGenericMethod = 9044
+	NotYetParamSpecAsType = 9115
+	NotYetRenderBoxed = 9116
 	NotYetCompileTimeBuiltin = 9046
 	NotYetImplOnBuiltin = 9047
-	NotYetSpecAsType = 9048
 	NotYetMutateListRvalue = 9049
 	NotYetOpenRangeHere = 9050
 	NotYetMapKeyType = 9052

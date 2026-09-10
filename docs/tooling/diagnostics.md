@@ -351,6 +351,7 @@ shipping compiler rather than a part of it (the line
 | `E3152` | `…` is an ASSOCIATED FN of `…`, reached through the type                                              |
 | `E3153` | an array length names `…`, and no compile-time constant this build can fold answers to it             |
 | `E3154` | `into` on a type with several impls says which by nothing                                             |
+| `E3155` | a binary same-type member called on a boxed value                                                     |
 | `E4001` | `…` outside of a loop: it belongs to a `for`, and a `select` arm is not one                           |
 | `E4002` | a `from` cause is an `Err`, and … is not one                                                          |
 | `E4004` | `…(…)` names one side of an `Either`, which holds exactly one value                                   |
@@ -472,7 +473,6 @@ shipping compiler rather than a part of it (the line
 | `E9044` | a generic METHOD `….…[…]`                                                                             |
 | `E9046` | the compile-time built-in `…[T]`                                                                      |
 | `E9047` | an `impl` on the built-in type `…`                                                                    |
-| `E9048` | the `spec` `…` used as a TYPE (…)                                                                     |
 | `E9049` | `…` MUTATES its list, and `…` is a value rather than a place                                          |
 | `E9050` | an open-ended range has no upper bound here                                                           |
 | `E9052` | a map key of type …                                                                                   |
@@ -506,6 +506,8 @@ shipping compiler rather than a part of it (the line
 | `E9110` | a NAMED rest in a list pattern                                                                        |
 | `E9111` | an array length reached through an import                                                             |
 | `E9112` | the array method `…`                                                                                  |
+| `E9115` | the parameterized `spec` `…` used as a TYPE (…)                                                       |
+| `E9116` | rendering a `…`, which is a boxed value                                                               |
 
 They are reported the moment a file is **read**, before its imports are scanned — scanning
 them parses, and a parser handed unreadable text can only say something untrue about it.
@@ -702,6 +704,7 @@ name now is the prelude rule (`E2061`), which is about the name rather than abou
 | `E9104` | —       | the form was built: `atomic` imports and runs                      |
 | `E9037` | —       | the form was built: one impl per instantiation of its target       |
 | `E9114` | —       | the form was built: the box carries the action beside the value    |
+| `E9048` | —       | the form was built: a spec names a type, and a box dispatches      |
 
 **One of them moved nowhere**, and it is the only row whose second column is empty. `E3047`
 reported a prefix operator on a `type X = Y` — _operator `not` has no meaning on `Flag`_ — on

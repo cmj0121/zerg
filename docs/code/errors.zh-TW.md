@@ -217,7 +217,7 @@ match guard { work() } {
 ——值已被抹除、永不重新建構。在一個錯誤上,那正是 `is` 的用途:上面那十一個具現化種類,是它唯一會從 runtime tag
 回答的名字,而分類範圍外的名字得到的是 `E9078`、而不是一個回答 `false` 的測試。其他每一個名字都是從運算元自己的
 型別回答的編譯期常數,那由 [Spec 與 Generics](../core/specs.zh-TW.md#型別測試type-testsis) 決定;仍然
-**[not yet]** 的是 **existential** 測試,而它等的是「`spec` 可以當型別」(_E9048_)。這裡可達的錯誤集合在覆蓋上被
+**裝箱**的運算元是唯一在執行期得到答案的:讀的是它被裝箱時對上的那張見證表。這裡可達的錯誤集合在覆蓋上被
 視為**開放**,所以 `is` 串永遠無法窮盡:**catch-all 必備**。未命中的錯誤會像任何未覆蓋的 `match` 一樣 abort——但
 `MatchError` 是 **[not yet]** 的具現化種類,且因為最後一個 `match` arm 一律無條件,compiler 今天永不 emit 一個(catch-all
 的要求是靜態規則、不是 runtime `MatchError`)。

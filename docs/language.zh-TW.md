@@ -92,7 +92,7 @@ Zerg 如何抽象行為。**`spec`** 是唯一機制——一個 nominal 介面,
 **型別本身**（heap-boxed、動態 dispatch 的 existential）。涵蓋內建 spec（`Eq`、`Ord`、`Hash`、`Error`、運算子——
 **沒有 auto-implement 的 `Object` spec**、也沒有隱式 `==`：相等與排序是經 `derive(Eq)` / `derive(Ord)` 或手寫 impl
 **opt-in**）、迭代協定,以及 `is` 型別測試（對錯誤種類的 `x is T` 比對 runtime tag;對其他任何名字,它是從運算元
-自己型別得到的編譯期常數——**existential** 測試仍是 **[not yet]**,等的是 _E9048_）。見
+自己型別得到的編譯期常數;裝箱的值比較的是它帶著的那張見證表）。見
 **[Spec 與 Generics](core/specs.zh-TW.md)**。
 
 ## Decorator 與 compiler 代寫的行為

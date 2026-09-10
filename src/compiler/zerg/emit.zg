@@ -1007,6 +1007,16 @@ fn c_into(mut &em: Emitter, want: ast.Ty, e0: ast.Expr, sb: Subst) -> str {
 	# was unwritable — and it would report the value it cannot hold instead of writing it.
 	return c_uint_lit(e) if c_is_uint(want) and c_is_wide_uint_lit(e)
 
+	# A SPEC-TYPED POSITION BUILDS A BOX out of the implementer written into it, and it is asked
+	# HERE rather than in c_fit_copied for the reason this function's own comment gives: a
+	# DECLARED BINDING is the one typed position that does not lower through that one. Written
+	# there, `t: Tag = A(1)` assigned an `A` to a `void *` and cc read the struct as a pointer.
+	# "One rule, N slots, written at fewer" is the bug this file has now fixed seven times.
+	#
+	# A box already boxed is itself — `pass(g)` on a `Greet` hands the cell along, and `c_copied`
+	# below duplicates it when the position owns one.
+	return c_spec_box(em, want, e, sb) if c_is_spec_name(em, c_named_of(want)) and not c_is_spec_name(em, c_named_of(c_infer(em, e)))
+
 	return c_copied(em, want, e, sb)
 }
 
@@ -3443,6 +3453,26 @@ fn c_build_sigs(mut &em: Emitter, f: ast.File) {
 		}
 		c_add_sig(em, fn_i)
 	}
+
+	# A SPEC'S OWN REQUIREMENTS ARE METHODS OF THE SPEC. `g.hello()` on a `Greet` box asks the
+	# same table every other receiver's methods are looked up in, so the return type, the
+	# parameter list and the "is there such a method" question all come from the one place —
+	# rather than a second lookup that would only have to agree with this one until it did not.
+	# A `spec` is registered AFTER the program's functions, so the collision rule above stays a
+	# rule about two declarations a reader wrote.
+	for sp in f.specs {
+		# `impl Greet for Greet`, which is what a box IS: the one implementer that dispatches
+		# rather than being dispatched to. Written as an ImplDecl so the `This` in a member's
+		# signature goes through c_spec_subst — the same substitution every real impl's members
+		# go through — and a `This`-returning member comes back as the SPEC, which is
+		# docs/core/specs.md's "re-boxing a `This`-returning result as the same spec".
+		mut noargs: list[ast.Ty] = []
+		mut notp: list[str] = []
+		self_ip := ast.ImplDecl(sp.name, noargs, sp.name, notp, sp.path, sp.line, sp.col)
+		for req in sp.reqs {
+			c_add_sig(em, c_default_method(sp, self_ip, req))
+		}
+	}
 }
 
 # c_first_with_key is the EARLIER declaration a key was already taken by — the half of a
@@ -4353,7 +4383,11 @@ fn c_check_type_name(mut &em: Emitter, nm: str, s: Site) {
 		return
 	}
 
-	if c_is_type_name(em, nm) {
+	# A `spec` NAMES A TYPE, the third of the three roles docs/core/specs.md gives it, and it
+	# resolves here like the other two kinds do. The chapter is explicit that there is no
+	# object-safety gate — "a spec is ALWAYS usable as a type" — so nothing about the members
+	# it declares is asked at a type position; what a box cannot serve is refused at the CALL.
+	if c_is_type_name(em, nm) or c_is_spec_name(em, nm) {
 		# THE NAME RESOLVES, AND THAT IS ONLY HALF THE QUESTION. A type flattens into one
 		# program-wide space here, so resolving says the declaration EXISTS and says nothing
 		# about whether this module may write it, or whether the declaration doing the writing
@@ -4363,6 +4397,16 @@ fn c_check_type_name(mut &em: Emitter, nm: str, s: Site) {
 		check.chk_ty_exported(em, nm, site, s.decl_pub)
 		return
 	}
+
+	# A PARAMETERIZED SPEC IS ONE OF THE THREE ROLES TOO, and this compiler carries a spec's
+	# arguments only on an `impl`. Saying "no type named `Conv[int]`" about a spec the reader
+	# declared three lines above is the sentence retiring E9048 was supposed to stop — one
+	# parameterization along.
+	#
+	# The witness tables are ALREADY keyed this way (`ast.spec_key`), so what is missing is not
+	# the identity: it is seating the spec's members under the applied key, which is where the
+	# call side reads a return type from.
+	raise c_diag(em, rule.Rule.NotYetParamSpecAsType, f"NotImplemented: the parameterized `spec` `{nm}` used as a TYPE ({site}) — this compiler carries a spec's type arguments only on an `impl`; a bare `{c_app_base(nm)}` names a type, and a bound fixes the arguments (GRAMMAR#type-name)") if c_is_applied(nm) and c_is_spec_name(em, c_app_base(nm))
 
 	# a TYPE PARAMETER of the template this signature belongs to. It names no declared type
 	# on purpose — that is what makes it a parameter — and it is gone by the time anything
@@ -4377,12 +4421,6 @@ fn c_check_type_name(mut &em: Emitter, nm: str, s: Site) {
 		check.chk_at(em, rule.Rule.ThisOutsideImpl, f"`This` is the self type, and {site} is outside an `impl` — there is no type for it to name")
 		return
 	}
-
-	# A `spec` IS a type in the language — the third of the three roles docs/core/specs.md
-	# gives it, beside the bound and the interface — and this compiler has not built that
-	# one. Saying "no type named `Tag`" about a spec the reader declared three lines above
-	# invites them to go and declare it again.
-	raise c_diag(em, rule.Rule.NotYetSpecAsType, f"NotImplemented: the `spec` `{nm}` used as a TYPE ({site}) — a spec is a bound and an interface here, not yet a value's type; take the concrete type, or a generic parameter bounded by it (GRAMMAR#type-name)") if c_is_spec_name(em, nm)
 
 	# EVERY BUILT-IN NAME THE LANGUAGE HAS AND THIS COMPILER DOES NOT, not only the ladder. A
 	# type position reached `c_fixed_width_check` alone, so `p: ptr` reported "no type named
@@ -4548,7 +4586,7 @@ fn c_ty_kind_word(mut &em: Emitter, nm: str) -> str {
 	return "a type"
 }
 
-fn c_is_spec_name(mut &em: Emitter, nm: str) -> bool {
+pub fn c_is_spec_name(mut &em: Emitter, nm: str) -> bool {
 	return c_ty_kind(em, nm) == TK_SPEC
 }
 
@@ -5066,6 +5104,11 @@ fn c_needs_copy(mut &em: Emitter, t: ast.Ty) -> bool {
 
 	return true if c_is_list(t) or c_is_map(t)
 
+	# A SPEC VALUE IS A BOX, and copying one builds an INDEPENDENT cell rather than sharing
+	# this one: a spec value is a VALUE (docs/core/type-system.md), so two names for one boxed
+	# `En` are two boxed `En`s. It is also what makes the release the copy owes balance.
+	return true if c_is_spec_name(em, c_named_of(t))
+
 	# A str is a refcounted cell (c_str_cell), so giving one a second name is a COPY like
 	# any other — a retain, which is what makes the two names' releases balance. A literal's
 	# cell is immortal, so retain and release both no-op on it and a program that holds
@@ -5158,6 +5201,16 @@ fn c_copy_of(mut &em: Emitter, t: ast.Ty, x: str) -> str {
 		return "({ void* zgt_rr = (void*)(" + x + "); zrt_retain(zgt_rr); zgt_rr; })"
 	}
 
+	# A BOX IS COPIED BY BUILDING ANOTHER, which is where it parts company with the `Ref` above:
+	# a `Ref` is sharing made explicit and retains, a spec value is a value and does not. The
+	# payload goes through the witness table's own copy slot, so a boxed `Row` holding a list
+	# duplicates the list — the runtime reads that slot without being told the type.
+	if c_is_spec_name(em, c_named_of(t)) {
+		em.used_rt = true
+
+		return f"zrt_dyn_copy({x})"
+	}
+
 	# the source is BOUND before its address is taken, because `&(x)` needs x to be a place
 	# and not everything copied is one. `m[k]` lowers to a statement expression, so reading
 	# a list out of a map — `v := c["k"]` — reached cc as "cannot take the address of an
@@ -5203,6 +5256,14 @@ fn c_copy_helpers(mut &em: Emitter, f: ast.File) -> str {
 		if c_needs_copy(em, ast.Ty.TNamed(sd.name)) {
 			out = out + c_copy_helper(em, sd) + c_drop_helper(em, sd) + c_elem_vt_helper(em, ast.Ty.TNamed(sd.name))
 		}
+	}
+
+	# The SPECS, through the third of those three alone: a box is one word whatever it holds,
+	# so `c_elem_vt_helper` writes its copy and its drop out of `c_copy_of` and `c_drop_fn`
+	# with nothing per-spec to generate — no field walk, because the fields are the payload's
+	# and the payload's own table already knows them.
+	for sp in f.specs {
+		out = out + c_elem_vt_helper(em, ast.Ty.TNamed(sp.name))
 	}
 
 	# The enums, through the same three helpers and in the same order, because they are the
@@ -5437,6 +5498,10 @@ fn c_drop_stmt(mut &em: Emitter, t: ast.Ty, place: str) -> str {
 fn c_drop_fn(mut &em: Emitter, t: ast.Ty) -> str {
 	return "zrt_release" if c_is_ref_box(t)
 
+	# and a BOX, which is the same counted cell one word wider — the payload's own teardown is
+	# in the witness table, which the cell's header runs on the way down.
+	return "zrt_release" if c_is_spec_name(em, c_named_of(t))
+
 	return "zrt_list_drop" if c_is_list(t)
 	return "zrt_map_drop" if c_is_map(t)
 	return "zrt_str_release" if c_is_str(t)
@@ -5465,7 +5530,12 @@ fn c_drop_fn(mut &em: Emitter, t: ast.Ty) -> str {
 # c_drop_arg spells what the give-back is handed: a list, a map and a struct are all given
 # back through the address of their storage, a str by its own value.
 fn c_drop_arg(mut &em: Emitter, t: ast.Ty, place: str) -> str {
-	return place if c_is_str(t) or c_is_ref_box(t)
+	# A BOX GOES BACK BY VALUE, with the str and the `Ref`: all three are `zrt_release` (or its
+	# str spelling) taking the CELL. Handing it `&place` released the address of the variable
+	# holding the cell, which is the defect this function was written to stop being written by
+	# hand — and a spec value is the third type to need it.
+	return place if c_is_str(t) or c_is_ref_box(t) or c_is_spec_name(em, c_named_of(t))
+
 	return "&" + place
 }
 
@@ -7850,9 +7920,28 @@ fn c_is_test(mut &em: Emitter, x: ast.Expr, name: str, sb: Subst) -> str {
 		return f"(({c_expr(em, x, sb)}).kind == {kind})"
 	}
 
+	# A BOX IS THE ONE OPERAND WHOSE TYPE IS NOT A COMPILE-TIME ANSWER, and folding it as one
+	# said `false` about a value that WAS an `A`. docs/core/specs.md reads the answer off "the
+	# dispatch identity the box already carries" — which is the witness table, one static per
+	# (spec, type) pair, so identity is a pointer comparison and nothing new has to be carried.
+	#
+	# The comment on c_is_foldable had already named this: a spec is the existential half, and
+	# it "must not read as no, it is not one of those".
+	return c_spec_is(em, x, c_named_of(t), name, sb) if c_is_spec_name(em, c_named_of(t))
+
 	raise c_diag(em, rule.Rule.NotYetIsErrorKind, f"NotImplemented: `is {name}` — an `is` test compares the operand's own type against a named one here, and `{name}` names no type to put on the right of it; GRAMMAR#cmp-expr takes any `type-name`, so this is a narrower test than the grammar writes") if not c_is_foldable(em, name, t)
 
 	return c_const_over(em, x, t, c_bool(ast.ty_name(t) == name), sb)
+}
+
+# c_spec_is is `x is T` where x is a BOX: the table the value was boxed against, against the
+# one T would have been boxed against. A type that does not implement the spec was never in
+# this box, and that is a compile-time `false` rather than a comparison against a table no
+# program has.
+fn c_spec_is(mut &em: Emitter, x: ast.Expr, sp: str, name: str, sb: Subst) -> str {
+	return "false" if not c_impls(em, name, sp)
+
+	return f"(zrt_dyn_vt({c_expr(em, x, sb)}) == &{c_spec_vt_name(sp, name)})"
 }
 
 # c_is_foldable reports whether `x is Name` has an answer this compiler can work out. It asks
@@ -8714,6 +8803,13 @@ fn c_display_check(mut &em: Emitter, t: ast.Ty, where: str) {
 	# propagated in the first place.
 	raise c_diag(em, rule.Rule.IdentityHasNoRendering, f"a {ast.ty_name(t)} is an identity rather than a value, and the language gives it no rendering — it is a place to send to or to jump to, and its address is not a rendering of anything the program wrote") if c_is_identity(t)
 
+	# A BOX HAS A RENDERING AND NO SLOT TO REACH IT THROUGH. docs/core/specs.md puts `debug`
+	# among the unary operations a boxed value dispatches, and a witness table holds one entry
+	# per required member — a rendering is not one, so there is nothing in the table to call.
+	# Left unsaid, `print t` rendered the CELL POINTER as an integer: a different number every
+	# run, of a value the program never wrote. Refused by name until the table carries it.
+	raise c_diag(em, rule.Rule.NotYetRenderBoxed, f"NotImplemented: rendering a {ast.ty_name(t)}, which is a boxed value — a witness table holds one slot per required member and a rendering is not one, so there is nothing to dispatch through; render the concrete type, or give the spec a member that answers a str (GRAMMAR#type-name)") if c_is_spec_name(em, c_named_of(t))
+
 	# NIL IS NOT A THING TO RENDER, and it is asked here because this is the one gate the
 	# three rendering positions share — `print x`, an f-string's `{x}` and `str(x)`. A `fn`
 	# with no `-> type` answers nil, so `print f()` cast a `void` to `long long` and cc
@@ -8977,6 +9073,7 @@ fn c_is_lvalue(e: ast.Expr) -> bool {
 # Which one it is has to be decided identically when the call is EMITTED and when it is
 # TYPED, so it is decided once, here, and both ask. Deciding it twice is how the two drift.
 enum MethKind {
+	MSpec
 	MRender
 	MPtr
 	MList
@@ -9160,6 +9257,13 @@ fn c_meth_kind(mut &em: Emitter, tty: ast.Ty, meth: str) -> MethKind {
 	# and every method on a CARRIER, for the same reason: `T?` and `Either[L, R]` are types
 	# the compiler builds rather than a program declares, so neither has anywhere to hang one.
 	return MethKind.MCarrier if ast.ty_is_opt(tty) or c_is_either(tty)
+
+	# A BOX DISPATCHES, and it is asked ahead of MRecv because a spec's requirements ARE in the
+	# signature table under the spec's own name — that is what gives a call on a box its return
+	# type and its parameter list. Left to MRecv the same row would read as an ordinary method
+	# on a type called `Greet` and emit a call to `zg_Greet_hello`, which nothing declares.
+	return MethKind.MSpec if c_is_spec_name(em, nm)
+
 	return MethKind.MRecv if c_has_method(em, c_named_of(tty), meth)
 	return MethKind.MFnField if c_is_fn(c_field_ty(em, c_named_of(tty), meth))
 
@@ -9196,6 +9300,7 @@ fn c_method(mut &em: Emitter, target: ast.Expr, meth: str, args: list[ast.Expr],
 		MethKind.MMap => c_map_method(em, target, meth, args, tty, sb)
 		MethKind.MErr => c_err_method(em, target, meth, args, sb)
 		MethKind.MCarrier => c_carrier_method(em, target, meth, args, tty, sb)
+		MethKind.MSpec => c_spec_call(em, recv, meth, target, args, sb)
 		MethKind.MRecv => c_recv_call(em, recv, meth, target, args, sb)
 		MethKind.MFnField => c_fnfield_call(em, recv, meth, target, args, sb)
 		_ => c_free_method(em, target, meth, args, sb)
@@ -11025,6 +11130,106 @@ fn c_recv_call(mut &em: Emitter, recv: str, meth: str, target: ast.Expr, args: l
 	return f"{c_fn_cname(recv, meth)}({c_recv_args(em, key, target, args, sb)})"
 }
 
+# c_spec_call is a method called on a BOX. It differs from c_recv_call in the callee alone —
+# a dispatcher that reads the witness table out of the cell instead of a name the caller knew
+# — so the arguments go through c_recv_args exactly as every other method call's do, and a
+# spec-typed parameter, a list literal and a defaulted argument behave here because they are
+# the same code.
+fn c_spec_call(mut &em: Emitter, recv: str, meth: str, target: ast.Expr, args: list[ast.Expr], sb: Subst) -> str {
+	key := c_sig_key(recv, meth)
+	c_spec_call_check(em, recv, meth, key)
+	return f"{c_spec_disp_register(em, recv, meth)}({c_recv_args(em, key, target, args, sb)})"
+}
+
+# c_spec_call_check refuses the one call a witness table has no slot for.
+#
+# A BOX OFFERS WHAT DISPATCHES THROUGH `this` ALONE. docs/core/specs.md names three kinds that
+# do not, and one of them can be written here: a member whose other operand is a `This` —
+# `Eq`'s `eq`, `Ord`'s comparison, and so `Hash` keying — wants exactly the concrete type
+# erasure removed. Two boxed values are never comparable by value.
+#
+# THE OTHER TWO CANNOT REACH THIS FUNCTION, and both were measured rather than assumed. A
+# spec's member always carries an implicit receiver — `parse_fn_sig` asks for one — so an
+# ASSOCIATED fn is not a thing a spec can declare in this compiler; and a GENERIC method is
+# refused at the impl that would have to exist before anything could be boxed (_E9044_).
+# Neither gets a code, because a code with no raise site is a code that says nothing.
+#
+# It is not an object-safety gate: the chapter is explicit that a spec is ALWAYS usable as a
+# type, and this is a refusal of the CALL, where the reader asked for the thing that cannot be
+# done. Until it stood here the answer came from cc — _no member named `eq`_, about generated
+# C, which is the one reporter `make refuse` exists to keep off this path.
+fn c_spec_call_check(mut &em: Emitter, sp: str, meth: str, key: str) {
+	row := c_sig_row(em, key)
+	return if row < 0
+
+	# `This` IS THE SPEC HERE. c_build_sigs seats a spec's members on an `impl S for S`, so a
+	# `This` operand arrives already spelled as the spec — the same name the receiver has, and
+	# the reason this reads a type rather than looking for the word.
+	mut i := 1
+	for i < em.sig_nparams[row] {
+		pr := c_param_row(em, key, i)
+		raise c_diag(em, rule.Rule.BinaryOnExistential, f"`{meth}` on a {sp} takes another {sp}, and a boxed value is exactly the concrete type that operand needs — erasure removed it, and `is` tests identity rather than supplying it. Two boxed values are never comparable by value: keep the concrete type, or a generic parameter bounded by the spec, to compare, sort or key one (docs/core/specs.md)") if c_named_of(em.pr_ty[pr]) == sp
+
+		i = i + 1
+	}
+}
+
+# c_spec_disp_register names one member's dispatcher and emits it once.
+#
+# ITS C SIGNATURE IS THE MEMBER'S, read from the same signature table the call site read, so
+# the dispatcher and the call cannot disagree about arity or about a type. Parameter zero is
+# the box; it is what the payload pointer comes out of, and the slot takes that pointer where
+# the member's `this` is.
+fn c_spec_disp_register(mut &em: Emitter, sp: str, meth: str) -> str {
+	dn := c_spec_cname(f"specdisp${sp}${meth}")
+	for n in em.svt_names {
+		return dn if n == dn
+	}
+	em.svt_names.append(dn)
+
+	key := c_sig_key(sp, meth)
+	row := c_sig_row(em, key)
+	rty := c_lookup_sig_ret(em, key)
+	np := em.sig_nparams[row]
+
+	# A RECEIVER ARRIVES THE WAY EVERY METHOD'S DOES, and c_recv_args decides which: a plain
+	# method takes it BY VALUE — the caller copies, and whoever holds a copy gives it back —
+	# and a `mut fn` takes the caller's own variable, which is a borrow and owes nothing. A
+	# dispatcher is generated C and has no scope to register a release in, so it writes the
+	# by-value half by hand. Without it every call on a box built a cell and dropped it on the
+	# floor: `zrt_dyn_copy` in the argument, nothing anywhere giving it back.
+	byref := em.pr_ref[c_param_row(em, key, 0)]
+	mut cell := "zg_self"
+	mut ps := f"{c_ty_cname(sp)} zg_self"
+	if byref {
+		cell = "(*zg_self)"
+		ps = f"{c_ty_cname(sp)} *zg_self"
+	}
+	mut xs := f"zrt_dyn_payload({cell})"
+	mut i := 1
+	for i < np {
+		pr := c_param_row(em, key, i)
+		ps = ps + f", {c_type(em.pr_ty[pr])} zg_a{strconv.to_string(i, 10)}"
+		xs = xs + f", zg_a{strconv.to_string(i, 10)}"
+		i = i + 1
+	}
+
+	call := f"((const {c_spec_vt_type(sp)} *)zrt_dyn_vt({cell}))->{meth}({xs})"
+	mut give := ""
+	if not byref {
+		give = "    zrt_release(zg_self);\n"
+	}
+	mut out := f"static {c_type(rty)} {dn}({ps}) {{\n"
+	if em.sig_hasret[row] {
+		out = out + f"    {c_type(rty)} zg_r = {call};\n" + give + "    return zg_r;\n"
+	}
+	if not em.sig_hasret[row] {
+		out = out + f"    {call};\n" + give
+	}
+	em.svt_decls.append(out + "}\n")
+	return dn
+}
+
 fn c_args(mut &em: Emitter, args: list[ast.Expr], sb: Subst) -> str {
 	mut none: list[ast.Ty] = []
 	return c_args_typed(em, none, args, sb, false)
@@ -12079,6 +12284,7 @@ fn c_infer_methcall(mut &em: Emitter, target: ast.Expr, meth: str, args: list[as
 		MethKind.MMap     => c_map_method_ret(meth)
 		MethKind.MErr     => c_err_method_ret(em, meth)
 		MethKind.MCarrier => c_carrier_method_ret(em, tty, meth)
+		MethKind.MSpec    => c_lookup_sig_ret(em, c_sig_key(recv, meth))
 		MethKind.MRecv    => c_lookup_sig_ret(em, c_sig_key(recv, meth))
 		MethKind.MFnField => c_fn_ret(c_field_ty(em, recv, meth))
 
@@ -12176,6 +12382,13 @@ fn c_infer_call(mut &em: Emitter, name: str, args: list[ast.Expr]) -> ast.Ty {
 	# type with a kind tag, which is what makes `e is ValueError` a comparison rather than a
 	# cast, and what lets a bound Err be re-raised or handed to `from`.
 	return ast.Ty.TErr if c_err_kind(name) > 0
+
+	# A CALL DOES NOT CONSTRUCT A SPEC — c_call says so by name (E4064) — so inference must not
+	# answer one either. It did, and `print S(1)` was told a box has no rendering: a true
+	# sentence about a value this program never makes, standing in front of the one the reader
+	# needs. Unknown is what a construction that cannot happen leaves behind.
+	return ast.Ty.TUnknown if c_is_spec_name(em, name)
+
 	return ast.Ty.TNamed(name) if c_names_a_type(em, name)
 
 	# A BINDING HOLDING A FUNCTION answers the function type's result. `g := double; n :=
@@ -17497,15 +17710,20 @@ fn c_param_types(fn_d: ast.FnDecl) -> str {
 		if i > 0 {
 			out = out + ", "
 		}
-		pm := fn_d.params[i]
-		mut ct := c_type(pm.ty)
-		if pm.is_ref {
-			ct = ct + "*"
-		}
-		out = out + ct
+		out = out + c_param_ctype(fn_d.params[i])
 		i = i + 1
 	}
 	return out
+}
+
+# c_param_ctype is a parameter's C type: `mut &T` is the caller's own storage lent for one
+# call, which is a pointer to it. Written once because a witness table's slot and the shim
+# that fills it both have to spell a parameter list, and a second copy of this rule is a
+# second copy that only has to agree until it does not.
+fn c_param_ctype(pm: ast.Param) -> str {
+	return c_type(pm.ty) + "*" if pm.is_ref
+
+	return c_type(pm.ty)
 }
 
 fn c_proto(mut &em: Emitter, fn_d: ast.FnDecl) -> str {
@@ -18382,6 +18600,33 @@ fn c_derive_enum_at(prog: ast.File, target: str) -> int {
 # c_spec_vt_name is the witness table for one `impl S for T`, and c_spec_vt_type the struct
 # every table of that spec has. Both are names a call site can spell without asking anything:
 # the pair is known at the `impl`, which is the whole reason a spec value can dispatch.
+# c_spec_boxable is whether a witness table can hold this member at all.
+#
+# A BOX OFFERS PRECISELY WHAT DISPATCHES THROUGH `this` ALONE — docs/core/specs.md, which then
+# names the three kinds that do not. A member taking a second `This` (`Eq`'s `eq`, `Ord`'s
+# comparison, and so `Hash` keying) wants the concrete type erasure just removed; an ASSOCIATED
+# fn has no receiver to dispatch from; a GENERIC method would need one slot per type argument
+# and a table holds one per type. None of the three can be given a slot, and giving them one
+# anyway is what dropped `Eq.eq`'s operand and left `bool (*eq)(void *self)` in the table — a
+# slot whose C type says the member takes nothing it takes.
+#
+# It is not an object-safety gate. The chapter is explicit that a spec is ALWAYS usable as a
+# type; what these three are is a compile error ON THE CALL, which is where the reader is
+# asking for the thing that cannot be done.
+fn c_spec_boxable(req: ast.FnDecl) -> bool {
+	return false if req.tparams.len() != 0
+	return false if req.params.len() == 0
+	return false if not c_is_this_ty(req.params[0].ty)
+
+	mut i := 1
+	for i < req.params.len() {
+		return false if c_is_this_ty(req.params[i].ty)
+
+		i = i + 1
+	}
+	return true
+}
+
 fn c_is_this_ty(t: ast.Ty) -> bool {
 	return match t {
 		Ty.TNamed(n) => n == "This"
@@ -18408,28 +18653,155 @@ fn c_spec_vt_typedef(mut &em: Emitter, sp: ast.SpecDecl, ip: ast.ImplDecl) -> st
 	out = out + "    void (*copy)(void *dst, const void *src);\n"
 	out = out + "    void (*drop)(void *elem);\n"
 
-	# EVERY MEMBER SIGNATURE THROUGH THE IMPL'S ARGUMENTS. `c_spec_subst` is the function the
-	# provided-method machinery already uses for this: it turns the spec's `T` into whatever
-	# this impl named, which is what makes one table per PAIR well-typed where one per spec
-	# NAME is not — `Into[T]`'s member answers `T`, and nothing declares a `zg_T`.
+	# EVERY SLOT FROM THE SAME SEATED MEMBER THE SHIM READS. `c_default_method` is the spec's
+	# declaration put on one target — `This` resolved to it, the spec's parameters to the
+	# impl's arguments — which is what makes one table per PAIR well-typed where one per spec
+	# NAME is not: `Into[T]`'s member answers `T`, and nothing declares a `zg_T`.
+	#
+	# A slot's C type and the function that fills it are ONE signature written twice, and
+	# reading both out of this FnDecl is what keeps them from coming apart. They did: the
+	# receiver was skipped by TYPE — every parameter that is a `This` — so `Eq.eq`'s other
+	# operand went with it, and the slot said the member takes nothing it takes.
 	for req in sp.reqs {
-		# `This` IS THE RECEIVER, and it is already the first parameter. A spec's method may
-		# name the self type explicitly — `fn read(this: This)` — and rendering that as a
-		# second parameter asks cc for a `zg_This` no declaration makes.
+		m := c_default_method(sp, ip, req)
 		mut ps := "void *self"
-		for p in req.params {
-			if not c_is_this_ty(p.ty) {
-				ps = ps + ", " + c_type(c_spec_subst(p.ty, sp, ip))
-			}
+		mut pi := 1
+		for pi < m.params.len() {
+			ps = ps + ", " + c_param_ctype(m.params[pi])
+			pi = pi + 1
 		}
-
-		mut rt := "void"
-		if req.has_ret {
-			rt = c_type(c_spec_subst(req.ret, sp, ip))
+		if c_spec_boxable(req) {
+			out = out + f"    {c_spec_slot_ret(sp, ip, req, m)} (*{req.name})({ps});\n"
 		}
-		out = out + f"    {rt} (*{req.name})({ps});\n"
 	}
 	return out + f"}} {c_spec_vt_type(ast.spec_key(sp.name, ip.args))};\n"
+}
+
+# c_spec_typedefs is the C type a spec value has: `void *`, under the spec's own name.
+#
+# THE POINT IS THAT `c_type` DOES NOT CHANGE. A box is a pointer, and a pointer under a typedef
+# is a type C already has — so a parameter, a field, a `list[…]` element and a return spell
+# `zg_Greet` through the same pure function every other type goes through, and nothing had to
+# learn that this one name is special in order to SPELL it. Where the emitter has to know it
+# is a box rather than a value — boxing at a position, dispatching a call, copying, dropping —
+# it asks `c_is_spec_name`, which is a question about the Zerg type and not about the C text.
+fn c_spec_typedefs(f: ast.File) -> str {
+	mut out := ""
+	for sp in f.specs {
+		out = out + f"typedef void *{c_ty_cname(sp.name)};\n"
+	}
+	return out if out == ""
+
+	return out + "\n"
+}
+
+# c_spec_slot_ret is a slot's return type, which is the member's EXCEPT for a `This`: that
+# comes back as the spec, because the caller reading the slot holds a box and has no concrete
+# type to receive one in. The typedef and the shim both ask, so neither can spell it alone.
+fn c_spec_slot_ret(sp: ast.SpecDecl, ip: ast.ImplDecl, req: ast.FnDecl, m: ast.FnDecl) -> str {
+	return c_ty_cname(ast.spec_key(sp.name, ip.args)) if c_is_this_ty(req.ret)
+
+	return c_ret_type(m)
+}
+
+# c_spec_shim_register is the function a witness table's slot actually points at: the member
+# with its receiver taken as `void *` and dereferenced into the call.
+#
+# THE SLOT AND THE METHOD DISAGREE ABOUT THE RECEIVER, and the shim is where they are made to
+# agree. A slot takes `void *self` because a table is read by callers who do not know the
+# type; a method takes its receiver BY VALUE, like every other function this compiler emits.
+# Putting the method in the slot directly and casting to `(void *)` made that mismatch
+# compile: `zg_En_hello` was called with the cell POINTER where an `En` goes, and read whatever
+# the first bytes of a pointer are. The cast goes with the shim, so cc now CHECKS the table —
+# which is the half that was missing, not the shim.
+#
+# THE CALLEE IS THE KEY THE DECLARATION CARRIES. A parameterized spec folds its arguments into
+# its methods' identity (c_with_spec_keys), so `IoError.into` for `Into[AppError]` is declared
+# as `into$Into[AppError]`; `c_impl_spec_of` is that key, taken from the impl in hand — which
+# already says WHICH, where a type carrying two of them has no name-resolution answer to give.
+fn c_spec_shim_register(mut &em: Emitter, sp: ast.SpecDecl, ip: ast.ImplDecl, req: ast.FnDecl) -> str {
+	key := ast.spec_key(sp.name, ip.args)
+	sn := c_spec_cname(f"specshim${key}${ip.target}${req.name}")
+	for n in em.svt_names {
+		return sn if n == sn
+	}
+	em.svt_names.append(sn)
+
+	# THE MEMBER AS THIS IMPL SEATS IT, which is the same FnDecl a provided body is given —
+	# `This` resolved to the target and the spec's parameters to the impl's arguments — so the
+	# shim's C signature and the slot's cannot come apart.
+	m := c_default_method(sp, ip, req)
+	ct := c_ty_cname(ip.target)
+	mut ps := "void *zg_p"
+
+	# A `mut &this` RECEIVER IS ALREADY A POINTER, and the payload pointer is the one it wants
+	# — the cell is where the value lives, so a mutation through a box mutates the boxed value.
+	# Dereferencing unconditionally passed a `Cat` where `zg_Cat_add` takes a `Cat *`.
+	mut xs := f"*({ct} *)zg_p"
+	if m.params[0].is_ref {
+		xs = f"({ct} *)zg_p"
+	}
+	mut i := 1
+	for i < m.params.len() {
+		ps = f"{ps}, {c_param_ctype(m.params[i])} zg_a{strconv.to_string(i, 10)}"
+		xs = f"{xs}, zg_a{strconv.to_string(i, 10)}"
+		i = i + 1
+	}
+
+	# A `This` RESULT COMES BACK AS THE SPEC, re-boxed — docs/core/specs.md: what a box offers
+	# is "re-boxing a `This`-returning result as the same spec". The caller reading this slot
+	# holds a box and knows no concrete type, so handing it one would be a slot whose C type
+	# nothing on the call side can name. The thunk that boxes is the one this pair already has.
+	mut call := f"{c_fn_cname(ip.target, c_spec_key(req.name, c_impl_spec_of(ip)))}({xs})"
+	if c_is_this_ty(req.ret) {
+		call = f"{c_spec_box_register(em, key, ip.target)}({call})"
+	}
+	mut out := f"static {c_spec_slot_ret(sp, ip, req, m)} {sn}({ps}) {{\n"
+	if m.has_ret {
+		out = f"{out}    return {call};\n"
+	}
+	if not m.has_ret {
+		out = f"{out}    {call};\n"
+	}
+	em.svt_decls.append(out + "}\n")
+	return sn
+}
+
+# c_spec_box is a value put into the box a spec-typed position asks for. `take(En(7))` on a
+# `Greet` parameter builds a `Greet` OUT OF an `En` — docs/core/type-system.md's "a spec-typed
+# position builds", the one wrap in the language that allocates.
+#
+# THROUGH A THUNK RATHER THAN INLINE, because the payload has to be WRITTEN into the cell and
+# C has no expression that allocates, stores and answers the cell. One `static` per (spec,
+# type) pair is the same unit the witness table already is, keyed the same way, so the pair
+# that has a table has a thunk and neither can exist without the other.
+fn c_spec_box(mut &em: Emitter, want: ast.Ty, e: ast.Expr, sb: Subst) -> str {
+	key := c_named_of(want)
+	tty := c_infer(em, e)
+	target := c_named_of(tty)
+
+	# THE PAYLOAD IS COPIED IN, through the same `c_copied` every other typed position ends at.
+	# The cell owns what it holds — its drop runs the payload's teardown out of the table — so
+	# a box built over the caller's own value would give the two one set of cells between them.
+	return f"{c_spec_box_register(em, key, target)}({c_copied(em, tty, e, sb)})"
+}
+
+# c_spec_box_register names the thunk and emits it once.
+fn c_spec_box_register(mut &em: Emitter, key: str, target: str) -> str {
+	bn := c_spec_cname(f"specbox${key}${target}")
+	for n in em.svt_names {
+		return bn if n == bn
+	}
+	em.svt_names.append(bn)
+
+	ct := c_ty_cname(target)
+	vn := c_spec_vt_name(key, target)
+	mut out := f"static void *{bn}({ct} zg_v) {{\n"
+	out = out + f"    void *zg_c = zrt_dyn_alloc(sizeof({ct}), &{vn});\n"
+	out = out + f"    *({ct} *)zrt_dyn_payload(zg_c) = zg_v;\n"
+	out = out + "    return zg_c;\n}\n"
+	em.svt_decls.append(out)
+	return bn
 }
 
 # c_spec_vt_register emits one spec's typedef (once) and one table per `impl S for T`.
@@ -18467,17 +18839,20 @@ pub fn c_spec_vt_register(mut &em: Emitter, sp: ast.SpecDecl, ip: ast.ImplDecl) 
 	}
 	em.svt_names.append(vn)
 
+	# THE TABLE IS DECLARED BEFORE ITS OWN SHIMS, because a `This`-returning member makes the
+	# pair genuinely circular: the table names the shim, and the shim re-boxes its result
+	# against this same table. A tentative definition is what C has for that, and it costs one
+	# line — the alternative is to decide the cycle does not happen, which is what it did until
+	# a member returned a `This`.
+	em.svt_decls.append(f"static const {tn} {vn};\n")
+
 	mut out := f"static const {tn} {vn} = {{ "
 	out = out + c_elem_copy_fn(em, ast.Ty.TNamed(target)) + ", "
 	out = out + c_elem_drop_fn(em, ast.Ty.TNamed(target))
 	for req in sp.reqs {
-		# UNDER THE KEY THE DECLARATION CARRIES. A parameterized spec folds its arguments into
-		# its methods' identity (c_with_spec_keys), so `IoError.into` for `Into[AppError]` is
-		# declared as `into$Into[AppError]` and spelling `zg_{target}_{name}` here named a
-		# function no declaration makes. Built from `c_impl_spec_of` rather than resolved by
-		# name because the impl in hand already says WHICH — and a type with two of them
-		# (`into_two_impls`) has no name-resolution answer at all.
-		out = f"{out}, (void *){c_fn_cname(target, c_spec_key(req.name, c_impl_spec_of(ip)))}"
+		if c_spec_boxable(req) {
+			out = f"{out}, {c_spec_shim_register(em, sp, ip, req)}"
+		}
 	}
 	em.svt_decls.append(out + " };\n")
 }
@@ -18655,7 +19030,7 @@ fn c_build_impls(mut &em: Emitter, f: ast.File) {
 }
 
 # c_impls reports whether a named type implements a named spec.
-fn c_impls(mut &em: Emitter, target: str, spec_nm: str) -> bool {
+pub fn c_impls(mut &em: Emitter, target: str, spec_nm: str) -> bool {
 	mut i := 0
 	for i < em.impl_on.len() {
 		return true if em.impl_on[i] == spec_nm and em.impl_target[i] == target
@@ -18912,6 +19287,10 @@ fn c_emit_unit(prog0: ast.File, own0: ast.File, ms: Mods, whole: bool, want_lint
 	mut tuples: list[ast.Ty] = []
 	mut carriers: list[ast.Ty] = []
 	c_decl_types(sites, tuples, carriers)
+
+	# A SPEC'S BOX IS A C TYPE, and it comes ahead of every declaration that may name one — a
+	# struct field, a parameter, a `list[…]` element.
+	types = types + c_lowered(checking, c_spec_typedefs(f))
 
 	types = types + c_lowered(checking, c_type_decls(em, f, carriers, tuples))
 	mut i := 0

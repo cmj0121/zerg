@@ -327,6 +327,7 @@ seed 全程維持句子比對:代碼是語言的契約,而 seed 是建置正式�
 | `E3152` | `…` 是 `…` 的 associated fn,要透過型別去叫                                                            |
 | `E3153` | 陣列長度指名 `…`,而這次 build 摺不出同名的編譯期常數                                                  |
 | `E3154` | 型別有多個 impl 時,`into` 沒說是哪一個                                                                |
+| `E3155` | 在裝箱的值上呼叫二元同型別成員                                                                        |
 | `E4001` | `break` / `continue` 在它所屬的迴圈之外                                                               |
 | `E4002` | `raise … from` 的 cause 不是 `Err`                                                                    |
 | `E4004` | `…(…)` names one side of an `Either`, which holds exactly one value                                   |

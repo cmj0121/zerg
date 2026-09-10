@@ -1239,6 +1239,38 @@ fn main() {
 }
 EOF
 
+# A BOX OFFERS WHAT DISPATCHES THROUGH `this` ALONE (docs/core/specs.md). `eq`'s other operand
+# is a `This` — exactly the concrete type erasure removed — so a witness table has no slot for
+# it and two boxed values are never comparable by value. Until this stood, cc answered: _no
+# member named `eq`_, about generated C.
+#
+# It refuses the CALL and not the type. `fn go(a: Same, b: Same)` is a well-formed signature;
+# what cannot be done is asking one box to compare itself with another.
+
+expect "$ZERG" a-binary-member-on-a-box E3155 'takes another Same' <<'EOF'
+spec Same {
+	fn eq(other: This) -> bool
+}
+
+struct N {
+	pub v: int
+}
+
+impl Same for N {
+	fn eq(other: This) -> bool {
+		return this.v == other.v
+	}
+}
+
+fn go(a: Same, b: Same) -> bool {
+	return a.eq(b)
+}
+
+fn main() {
+	print go(N(1), N(1))
+}
+EOF
+
 expect "$ZERG" impl-on-a-primitive E9047 <<'EOF'
 spec Tag {
 	fn tag() -> int

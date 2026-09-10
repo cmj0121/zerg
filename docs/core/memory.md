@@ -21,6 +21,17 @@ the live-allocation counts to be equal, so a value kept per round shows as a dif
 - **Extract / return** — unwrap (`?`, `!`), `match`, and `return` copy out; the source is never
   invalidated. Move is only a silent optimization when the source is dead afterward.
 
+A **spec-typed position allocates**, and it is the first wrap that does. Every other one is free: `x: int? =
+5` sets a tag beside the value, `Ok(v)` and `Left(v)` pick a side of a union, a range fills two fields. A
+spec-typed position has nowhere to put a value whose size it does not know, so `sk: Sink = Stderr()` builds
+a **counted cell** — `[ header | witness table | payload ]` — and the position hands on a pointer to it.
+
+The cell is a **value**, not a handle. A second name for one is a second cell: the copy runs the payload's
+own copy through the table, so `b := a` then a mutation through `b` leaves `a` where it was
+(`spec_box_is_a_value`). Sharing is written, never inferred — that is what `Ref[T]` is for. And the cell is
+given back at the end of the scope that owns it, like a `list` or a `str`: a by-value parameter releases
+what the caller copied in, and a `list[Sink]` releases each element with the buffer.
+
 Recursive and self-referential types need no pointer — declare the field directly (e.g. `Node?`, or an
 `enum Expr { Num(int); Add(Expr, Expr) }`) and the compiler **auto-boxes the self-referential slot behind a
 refcounted cell**. A recursive value therefore copies **by reference** (refcount-shared), not by deep clone:

@@ -18,6 +18,15 @@ copy-by-value 是語意；編譯器會在安全時省略複製：
 - **取值 / 回傳**——unwrap（`?`、`!`）、`match`、`return` 都是複製出來；來源永不失效。move 只是來源之後死掉時的
   隱形最佳化。
 
+**spec 定型的位置會配置**,而且它是第一個會配置的 wrap。其他每一個都是免費的:`x: int? = 5` 在值旁邊放一個 tag,
+`Ok(v)` 與 `Left(v)` 選一個 union 的邊,range 填兩個欄位。spec 定型的位置沒有地方放一個它不知道大小的值,所以
+`sk: Sink = Stderr()` 會建一個**計數 cell**——`[ header | 見證表 | payload ]`——而那個位置交出去的是指向它的指標。
+
+那個 cell 是一個**值**,不是一個 handle。給它第二個名字就是第二個 cell:複製會透過表跑 payload 自己的 copy,所以
+`b := a` 之後透過 `b` 的改寫不會動到 `a`(`spec_box_is_a_value`)。共享是寫出來的、不是推出來的——那是 `Ref[T]` 的
+工作。而 cell 會在擁有它的作用域結束時被還回去,和 `list` 或 `str` 一樣:傳值的參數會釋放呼叫方拷貝進來的那份,
+`list[Sink]` 則連同 buffer 釋放每一個元素。
+
 遞迴與自我參照型別不需要 pointer——直接宣告欄位(例如 `Node?`,或 `enum Expr { Num(int); Add(Expr, Expr) }`),
 編譯器把那個自我參照的槽**自動裝箱在一個 refcounted cell 之後**。因此遞迴值的複製是**按參照**(refcount 共享),不是
 深拷貝:複製只令該 cell 的計數遞增、而非複製整條鏈,鏈則在最後持有者的 scope 結束時釋放。

@@ -1591,6 +1591,21 @@ fn c_gen_inst_pre(mut &em: Emitter, t: ast.Ty) {
 	nm := c_named_of(t)
 	return if nm == "" or not c_is_applied(nm) or c_name_in(em.inst_tys, nm)
 
+	# AN ENUM TEMPLATE IS THE SAME QUESTION. A `Box[int]` reaches this the moment it is SPELLED
+	# — in a specialization's own signature, before any body constructs one — and minting it
+	# only at a construction meant the pattern `Full(v)` was checked against an enum with no
+	# variants yet: "cannot match a subject of type Box[int]", about the enum it matches.
+	er := c_gen_enum_row(em, c_app_base(nm))
+	if er >= 0 {
+		for a in em.ty_apps {
+			if a.name == nm {
+				c_gen_enum_on_demand(em, em.gen_enums[er], nm, a.args)
+				return
+			}
+		}
+		return
+	}
+
 	r := c_gen_struct_row(em, c_app_base(nm))
 	return if r < 0
 
@@ -2895,6 +2910,140 @@ fn c_gen_struct_row(mut &em: Emitter, nm: str) -> int {
 # the program in favour of its specializations, so it names no type and no enum of its own.
 pub fn c_is_gen_enum_name(mut &em: Emitter, nm: str) -> bool {
 	return c_gen_enum_row(em, nm) >= 0
+}
+
+# c_gen_variant_owner is the generic enum TEMPLATE that declares a bare variant name, or "" —
+# the template half of `c_variant_enum`, which reads rows a template has none of. Two templates
+# declaring one variant name answer "", the way the bare spelling is ambiguous anywhere else.
+fn c_gen_variant_owner(mut &em: Emitter, name: str) -> str {
+	mut found := ""
+	mut n := 0
+	for ed in em.gen_enums {
+		for v in ed.variants {
+			if v.name == name {
+				found = ed.name
+				n = n + 1
+			}
+		}
+	}
+	return "" if n != 1
+
+	return found
+}
+
+# c_gen_enum_on_demand mints one specialization of a generic enum while a body is being
+# lowered. It is `c_gen_type_on_demand` for the other declaration kind, and it exists for the
+# same reason: `Full(42)` names a `Box[int]` that no source wrote, so nothing put it in the
+# application table for the declaration sweep to build.
+#
+# THE ROW GOES IN TOO, because both walks that take an applied name apart read that table —
+# the one that solves a parameter FROM it and the one that substitutes INTO it.
+fn c_gen_enum_on_demand(mut &em: Emitter, tpl: ast.EnumDecl, applied: str, sol: list[ast.Ty]) {
+	return if c_name_in(em.inst_tys, applied)
+
+	em.inst_tys.append(applied)
+	em.ty_apps.append(ast.TyApp(applied, c_app_base(applied), sol, em.at_path, em.at_line, em.at_col))
+
+	mut nokeys: list[str] = []
+	mut novals: list[str] = []
+	su := generic.TySubst(tpl.tparams, sol, nokeys, novals, em.ty_apps, c_place(em))
+	mut notp: list[str] = []
+	ed := ast.EnumDecl(applied, generic.subst_variants(su, tpl.variants), notp, tpl.is_pub, tpl.path, tpl.line, tpl.col)
+
+	c_register_enum(em, ed)
+	em.res_decls.append(c_enum_typedef(ed))
+	em.res_decls.append(c_refbox_helpers(ed))
+	if c_needs_copy(em, ast.Ty.TNamed(applied)) {
+		em.res_decls.append(c_enum_copy_helper(em, ed))
+		em.res_decls.append(c_enum_drop_helper(em, ed))
+		em.res_decls.append(c_elem_vt_helper(em, ast.Ty.TNamed(applied)))
+	}
+}
+
+# c_gen_enum_solved is the specialization a construction decides for itself, or "" when the
+# variant leaves a parameter for the position to answer. `Full(42)` solves `T` and stands
+# alone; `Lft(1)` on a two-parameter sum leaves `Y` and does not.
+fn c_gen_enum_solved(mut &em: Emitter, base: str, variant: str, args: list[ast.Expr]) -> str {
+	r := c_gen_enum_row(em, base)
+	return "" if r < 0
+
+	tpl := em.gen_enums[r]
+	mut decls: list[ast.Ty] = []
+	mut found := false
+	for v in tpl.variants {
+		if v.name == variant {
+			decls = v.fields
+			found = true
+		}
+	}
+	return "" if not found
+
+	mut actuals: list[ast.Ty] = []
+	for a in args {
+		actuals.append(c_infer(em, a))
+	}
+	sol := generic.gen_solve(tpl.tparams, decls, actuals, em.ty_apps)
+	return "" if sol.len() != tpl.tparams.len()
+
+	for t in sol {
+		return "" if c_is_unknown(t)
+	}
+
+	# THROUGH `ast.spec_key`, which is the applied-name spelling every type table uses —
+	# `Box[int]`. `gen_mangle` is the FUNCTION specialization's (`id$int`), and a type named
+	# that way reached cc as `zg_Box$int`: `c_ty_cname` mangles a name with brackets and passes
+	# one with a `$` straight through.
+	applied := ast.spec_key(base, sol)
+	c_gen_enum_on_demand(em, tpl, applied, sol)
+	return applied
+}
+
+# c_gen_enum_no_position refuses a generic enum's variant written where nothing says which
+# specialization it is. `Side.Lft(1)` builds a `Side[…]`; a bare `a := …` is not a position and
+# has nothing to supply the rest from.
+#
+# IT NAMES WHAT THE VARIANT COULD NOT SOLVE, through `gen_solve` — the same solver a generic
+# call uses, asked of the variant's declared payload against the arguments given. `Side.Lft(1)`
+# solves `X` and leaves `Y`, and no variant of a sum type mentions every parameter, which is
+# what a sum type IS. A variant that solves them ALL is refused too, and by the same rule: this
+# compiler decides the specialization AT THE POSITION, so where there is none there is no
+# answer to give — that is the sentence, and the unsolved names are an elaboration of it.
+fn c_gen_enum_no_position(mut &em: Emitter, base: str, variant: str, args: list[ast.Expr]) {
+	r := c_gen_enum_row(em, base)
+
+	return if r < 0
+	return if c_gen_enum_solved(em, base, variant, args) != ""
+
+	tpl := em.gen_enums[r]
+	mut decls: list[ast.Ty] = []
+	for v in tpl.variants {
+		if v.name == variant {
+			decls = v.fields
+		}
+	}
+	mut actuals: list[ast.Ty] = []
+	for a in args {
+		actuals.append(c_infer(em, a))
+	}
+
+	sol := generic.gen_solve(tpl.tparams, decls, actuals, em.ty_apps)
+	mut left := ""
+	mut i := 0
+	for i < tpl.tparams.len() {
+		if i < sol.len() and c_is_unknown(sol[i]) {
+			if left != "" {
+				left = left + ", "
+			}
+			left = left + "`" + tpl.tparams[i] + "`"
+		}
+		i = i + 1
+	}
+
+	mut says := ""
+	if left != "" {
+		says = f", and the variant leaves {left} unsolved"
+	}
+	raise c_diag(em, rule.Rule.GenericVariantNoPosition, f"`{base}.{variant}` builds a {base}[…] and nothing here says which{says} — a variant solves the parameters it MENTIONS and the position supplies the rest, so write the type where the value lands (`x: {base}[…] = {base}.{variant}(…)`); a bare binding is not a position (GRAMMAR#enum-decl)")
 }
 
 # c_gen_variant_of is the variant a construction names, when the construction is a generic
@@ -5704,44 +5853,51 @@ pub fn c_named_of(t: ast.Ty) -> str {
 fn c_build_enums(mut &em: Emitter, f: ast.File) {
 	mut i := 0
 	for i < f.enums.len() {
-		ed := f.enums[i]
-		c_ty_register(em, ed.name, TK_ENUM, ast.Ty.TUnknown, ed.path, ed.is_pub)
-
-		mut next := 0
-		mut taken: list[int] = []
-		mut j := 0
-		for j < ed.variants.len() {
-			v := ed.variants[j]
-			mut tag := next
-			if v.has_discr {
-				fv := check.chk_const_eval(em, v.discr)
-				if fv.ok {
-					tag = fv.value
-				} else {
-					check.chk_at_place(em, ed.path, v.line, v.col, rule.Rule.DiscriminantNotConstant, f"the discriminant of `{ed.name}.{v.name}` is not a compile-time constant — GRAMMAR#variant gives the position a const-expr, which is literals, other compile-time constants and the operators over them, and no function calls")
-				}
-			}
-			raise c_diag_at(ed.path, v.line, v.col, rule.Rule.EnumDiscriminantRepeated, f"an enum discriminant is distinct across variants, and `{v.name} = {tag}` repeats one already given") if c_tag_taken(taken, tag)
-			taken.append(tag)
-			next = tag + 1
-			em.var_name.append(v.name)
-			em.var_enum.append(ed.name)
-			em.var_tag.append(tag)
-			mut k := 0
-			for k < v.fields.len() {
-				em.vf_enum.append(ed.name)
-				em.vf_variant.append(v.name)
-				em.vf_index.append(k)
-
-				# a field whose type is the enclosing enum is boxed into a refcounted cell
-				# (void*), whose drop is the enum's own — c_refbox_helpers
-				em.vf_boxed.append(c_named_of(v.fields[k]) == ed.name)
-				em.vf_ty.append(v.fields[k])
-				k = k + 1
-			}
-			j = j + 1
-		}
+		c_register_enum(em, f.enums[i])
 		i = i + 1
+	}
+}
+
+# c_register_enum is one enum's rows, and it is a function of its own because a SPECIALIZATION
+# minted while a body is lowered has to arrive by the same door as a declared one. Written
+# inline in the sweep above, an on-demand `Box[int]` had no variants, no tags and no payload
+# types — and `Full(42)` came out as `undefined function`.
+fn c_register_enum(mut &em: Emitter, ed: ast.EnumDecl) {
+	c_ty_register(em, ed.name, TK_ENUM, ast.Ty.TUnknown, ed.path, ed.is_pub)
+
+	mut next := 0
+	mut taken: list[int] = []
+	mut j := 0
+	for j < ed.variants.len() {
+		v := ed.variants[j]
+		mut tag := next
+		if v.has_discr {
+			fv := check.chk_const_eval(em, v.discr)
+			if fv.ok {
+				tag = fv.value
+			} else {
+				check.chk_at_place(em, ed.path, v.line, v.col, rule.Rule.DiscriminantNotConstant, f"the discriminant of `{ed.name}.{v.name}` is not a compile-time constant — GRAMMAR#variant gives the position a const-expr, which is literals, other compile-time constants and the operators over them, and no function calls")
+			}
+		}
+		raise c_diag_at(ed.path, v.line, v.col, rule.Rule.EnumDiscriminantRepeated, f"an enum discriminant is distinct across variants, and `{v.name} = {tag}` repeats one already given") if c_tag_taken(taken, tag)
+		taken.append(tag)
+		next = tag + 1
+		em.var_name.append(v.name)
+		em.var_enum.append(ed.name)
+		em.var_tag.append(tag)
+		mut k := 0
+		for k < v.fields.len() {
+			em.vf_enum.append(ed.name)
+			em.vf_variant.append(v.name)
+			em.vf_index.append(k)
+
+			# a field whose type is the enclosing enum is boxed into a refcounted cell
+			# (void*), whose drop is the enum's own — c_refbox_helpers
+			em.vf_boxed.append(c_named_of(v.fields[k]) == ed.name)
+			em.vf_ty.append(v.fields[k])
+			k = k + 1
+		}
+		j = j + 1
 	}
 }
 
@@ -9401,6 +9557,20 @@ fn c_method(mut &em: Emitter, target: ast.Expr, meth: str, args: list[ast.Expr],
 	en := c_ident_name(target)
 	return c_enum_of(em, en, meth, args, sb) if en != "" and c_is_enum_name(em, en)
 
+	# A GENERIC ENUM'S TEMPLATE NAMES NO ENUM — it was removed in favour of its specializations
+	# — so this used to fall through to inference and come out as `undefined name `Side``, about
+	# a declaration seven lines up.
+	#
+	# A CONSTRUCTION THAT SOLVES EVERY PARAMETER DECIDES FOR ITSELF, and mints the
+	# specialization here: `Full(42)` names a `Box[int]` no source wrote. Only one that leaves a
+	# parameter needs a position, and only that one is refused.
+	if en != "" and c_is_gen_enum_name(em, en) {
+		ap := c_gen_enum_solved(em, en, meth, args)
+		return c_variant_ctor(em, ap, meth, args, sb) if ap != ""
+
+		c_gen_enum_no_position(em, en, meth, args)
+	}
+
 	# `Either.Left(v)` written where nothing says WHICH Either. The target names a built-in
 	# type rather than a value, so inference answers nothing about it and this used to come
 	# out as "the method `Left` on a ?" — the same shape the enum line above was written for.
@@ -10037,6 +10207,17 @@ fn c_call(mut &em: Emitter, name: str, args: list[ast.Expr], sb: Subst) -> str {
 		c_not_callable(em, name, bt)
 	}
 
+	# A BARE VARIANT OF A GENERIC ENUM. `Full(42)` names a `Box[int]` no source wrote, and the
+	# template's variants are in no row `c_is_variant` reads — so this fell to "undefined
+	# function `Full`", about a variant declared at the top of the same file.
+	gb := c_gen_variant_owner(em, name)
+	if gb != "" {
+		ap := c_gen_enum_solved(em, gb, name, args)
+		return c_variant_ctor(em, ap, name, args, sb) if ap != ""
+
+		c_gen_enum_no_position(em, gb, name, args)
+	}
+
 	if c_names_a_type(em, name) or c_is_variant(em, name) {
 		if c_is_variant(em, name) {
 			c_bare_variant(em, name)
@@ -10281,6 +10462,16 @@ fn c_record_apps(mut &em: Emitter, su: generic.TySubst) {
 		r := c_gen_struct_row(em, b.base)
 		if r >= 0 and not c_name_in(em.inst_tys, b.name) and not c_args_open(em, b.args) {
 			c_gen_type_on_demand(em, em.gen_structs[r], b.name, b.args)
+		}
+
+		# AND AN ENUM'S, for the same sentence one declaration kind over: `unwrap[T](b: Box[T])`
+		# at `int` names a `Box[int]` that no source wrote, and its VARIANT ROWS are what a
+		# pattern is checked against. Without this the arm `Full(v)` was told it "cannot match a
+		# subject of type Box[int]" — about the enum it matches, whose variants were a table
+		# nobody filled.
+		er := c_gen_enum_row(em, b.base)
+		if er >= 0 and not c_name_in(em.inst_tys, b.name) and not c_args_open(em, b.args) {
+			c_gen_enum_on_demand(em, em.gen_enums[er], b.name, b.args)
 		}
 		j = j + 1
 	}
@@ -12506,6 +12697,16 @@ fn c_infer_call(mut &em: Emitter, name: str, args: list[ast.Expr]) -> ast.Ty {
 	return ast.Ty.TNamed(c_gen_applied(em, name, args)) if c_gen_struct_row(em, name) >= 0
 
 	return c_intrinsic_ret(name) if c_is_intrinsic(em, name)
+
+	# A BARE VARIANT OF A GENERIC ENUM ANSWERS ITS SPECIALIZATION, which the construction has
+	# already solved and minted. Left to the line below it answered nothing, and `a := Full(42)`
+	# took the ARGUMENT's type: `int64_t zg_a = (zgg_Box_int_){…}`.
+	gvo := c_gen_variant_owner(em, name)
+	if gvo != "" {
+		gap := c_gen_enum_solved(em, gvo, name, args)
+		return ast.Ty.TNamed(gap) if gap != ""
+	}
+
 	return ast.Ty.TNamed(c_variant_enum(em, name)) if c_is_variant(em, name)
 
 	# a BUILT-IN ERROR constructor answers an `Err`, not a type of its own name. It reads as
@@ -16404,6 +16605,19 @@ fn c_fieldref(mut &em: Emitter, target: ast.Expr, fld: str, sb: Subst) -> str {
 	# so `c_infer` has nothing to say about it and the message was `undefined name `Color``.
 	en := c_qualified_variant(em, target, fld)
 	return "(" + c_ty_cname(en) + "){.tag = " + strconv.to_string(c_variant_tag_in(em, en, fld), 10) + "}" if en != ""
+
+	# and the same for a generic enum's template, whose payload-less variant is written in this
+	# shape rather than as a call. It carries no argument to solve anything from, so unless the
+	# enum has no parameters at all a position is the only thing that can say which
+	# specialization `Tree.Leaf` is.
+	mut noargs: list[ast.Expr] = []
+	gb := c_ident_name(target)
+	if gb != "" and c_is_gen_enum_name(em, gb) {
+		ap := c_gen_enum_solved(em, gb, fld, noargs)
+		return "(" + c_ty_cname(ap) + "){.tag = " + strconv.to_string(c_variant_tag_in(em, ap, fld), 10) + "}" if ap != ""
+
+		c_gen_enum_no_position(em, gb, fld, noargs)
+	}
 
 	# `lib.LIMIT` — a MODULE-QUALIFIED name. A module flattens into this unit, so the
 	# qualifier says where the name came from and the last segment IS the name — which is

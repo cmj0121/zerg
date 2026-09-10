@@ -352,6 +352,7 @@ shipping compiler rather than a part of it (the line
 | `E3153` | an array length names `…`, and no compile-time constant this build can fold answers to it             |
 | `E3154` | `into` on a type with several impls says which by nothing                                             |
 | `E3155` | a binary same-type member called on a boxed value                                                     |
+| `E3156` | a generic enum's variant written where nothing says which specialization                              |
 | `E4001` | `…` outside of a loop: it belongs to a `for`, and a `select` arm is not one                           |
 | `E4002` | a `from` cause is an `Err`, and … is not one                                                          |
 | `E4004` | `…(…)` names one side of an `Either`, which holds exactly one value                                   |

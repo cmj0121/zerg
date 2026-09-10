@@ -314,6 +314,7 @@ pub enum Rule {
 	# which file was loaded first.
 	AmbiguousSpecMethod = 3154
 	BinaryOnExistential = 3155
+	GenericVariantNoPosition = 3156
 	SpecDefaultReadsField = 3138
 
 	# emitting — a form this compiler will not lower

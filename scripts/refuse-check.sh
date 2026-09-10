@@ -2126,6 +2126,23 @@ enum Opt2[T] {
 fn main() { print 1 }
 EOF
 
+# A VARIANT SOLVES WHAT IT MENTIONS AND THE POSITION SUPPLIES THE REST, so a construction with
+# no position has nothing to decide the specialization. `Lft(1)` solves `X` and no variant of a
+# sum type mentions every parameter — that is what a sum type IS — so `Y` is named as the one
+# the position was going to answer.
+
+expect "$ZERG" a-generic-variant-with-no-position E3156 'leaves `Y` unsolved' <<'EOF'
+enum Side[X, Y] {
+	Lft(X)
+	Rgt(Y)
+}
+
+fn main() {
+	a := Side.Lft(1)
+	print 1
+}
+EOF
+
 expect "$ZERG" generic-method E9044 <<'EOF'
 struct P {
 	pub x: int

@@ -475,7 +475,6 @@ pub enum Rule {
 	NotYetTypedefNonScalar = 9042
 	NotYetJumpOutOfGuard = 9043
 	NotYetParamSpecAsType = 9115
-	NotYetRenderBoxed = 9116
 	NotYetCompileTimeBuiltin = 9046
 	NotYetImplOnBuiltin = 9047
 	NotYetMutateListRvalue = 9049

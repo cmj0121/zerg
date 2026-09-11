@@ -262,17 +262,17 @@ A variant solves the parameters it **mentions** and the position supplies the re
 nothing about `Y`, so it is written where the type is, and a construction with no position is _E3156_. A
 recursive `struct` is still `E4026` (below).
 
-> **[not yet]** A generic **`struct`** is built. The declaration is a **template**, and an application (`Box[int]`) is an
-> ordinary type under that name. A construction **solves its own parameters from the arguments**, which is
-> [Type System](type-system.md)'s rule for a call and a construction is one: `Box(7)` is a `Box[int]`
-> wherever it is written, and `b: Box[str] = Box(1)` solves `Box[int]` and is refused at the **binding** —
-> the same two steps `x: float = id(5)` takes. What a use can still get wrong is refused on its own terms:
-> the wrong number of arguments (`E4093`), the template named without them (`E4094`), and a parameter no
-> field's type mentions, so nothing can solve it (`E4095`).
->
-> A type parameter is carried **through** an application: `fn get[T](b: Box[T])` and a template whose field
-> names another (`struct Wrap[T] { inner: Box[T] }`) both specialize, and the type each produces is declared
-> where whoever spells it can see it.
+A generic **`struct`** is built. The declaration is a **template**, and an application (`Box[int]`) is an
+ordinary type under that name. A construction **solves its own parameters from the arguments**, which is
+[Type System](type-system.md)'s rule for a call and a construction is one: `Box(7)` is a `Box[int]`
+wherever it is written, and `b: Box[str] = Box(1)` solves `Box[int]` and is refused at the **binding** —
+the same two steps `x: float = id(5)` takes. What a use can still get wrong is refused on its own terms:
+the wrong number of arguments (`E4093`), the template named without them (`E4094`), and a parameter no
+field's type mentions, so nothing can solve it (`E4095`).
+
+A type parameter is carried **through** an application: `fn get[T](b: Box[T])` and a template whose field
+names another (`struct Wrap[T] { inner: Box[T] }`) both specialize, and the type each produces is declared
+where whoever spells it can see it.
 
 **Recursive and self-referential types** work directly — a `struct Node { next: Node? }`, an
 `enum Expr { Num(int); Add(Expr, Expr) }` — with **no pointer**: the compiler auto-boxes the self-referential

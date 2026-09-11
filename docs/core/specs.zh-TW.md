@@ -82,8 +82,24 @@ concrete bound 的 generic 會在產出的 C 裡 **monomorphize**——編譯器
 ——`T: Eq + Show` 是一個連言,而沒被滿足的那個 spec 就是拒絕訊息會指名的那個。一個帶著自己 `[U]` 的方法,寫在一個
 帶著自己 `[T]` 的型別上,兩份參數列都解得出來:`T` 由接收者決定(因為它就是第一個參數),`U` 由引數決定。
 
-> **[not yet]** 參數化的 spec 寫在 `impl` 以外的任何地方,是 _E9001 NotImplemented: a parameterized `S[…]`
-> as a bound — this compiler carries a spec's type arguments only on an `impl`_。
+> **[not yet]** 參數化的 spec 不能拿來 bound 一個 **spec 自己的**型別參數:`spec Ix[K: Same[int]]` 是
+> _E9001 NotImplemented: a parameterized `S[…]` as a bound — this compiler carries a spec's type arguments only
+> on an `impl`_。函式與 struct 的 bound 都收得下——`fn go[T: Conv[int]]` 與 `struct Holder[T: Conv[int]]` 都建得
+> 起來——所以那是**一個**位置,不是「任何地方」。
+
+```refused E9001
+spec Same[T] {
+ fn same(o: T) -> bool
+}
+
+spec Ix[K: Same[int]] {
+ fn at(k: K) -> int
+}
+
+fn main() {
+ print 1
+}
+```
 
 一個**實作**（型別滿足某 spec）本身不帶可見性標記：coherence 要求一組 `(型別, spec)`（含參數）到處都解析到同一個實作，
 因此實作既不能被藏、也不能被複製——它的作用範圍恰好是「型別與 spec 同時可見之處」。實作是為**具體或泛型型別**寫的
@@ -113,9 +129,10 @@ concrete bound 的 generic 會在產出的 C 裡 **monomorphize**——編譯器
 > 同一個命名空間——spec 宣告的與 inherent 的一視同仁——所以讓第二個 `impl X for A` 成為錯誤的不是 `(spec, 型別)`
 > 這組鍵,而是那次相撞;而兩個**不同的** spec 剛好宣告了同名方法時也會相撞:`impl Show for P` 旁邊放
 > `impl Tag for P`、兩者各有一個 `label`,得到的是 _E4025 `P` declares `label` twice_。這裡沒有任何東西是無聲地錯
-> ——每一種情形都帶著位置具名拒收——也沒有任何不該解析得到的東西解析得到。缺的是那把鍵:在一個方法以「宣告它的
-> spec 與該 spec 的引數」為鍵之前,`(spec, 型別)` 沒有更細的東西可以拿來當鍵。[型別](types.zh-TW.md)裡第二個
-> `Into` 需要的是同一把鍵,而那是一件工作、不是兩件。
+> ——每一種情形都帶著位置具名拒收——也沒有任何不該解析得到的東西解析得到。缺的是那把鍵的**一半**。方法已經以它的
+> spec 的**引數**為鍵了——那正是 `impl Ix[int]` 與 `impl Ix[str]` 能並存的原因,也是[型別](types.zh-TW.md)拿到第二個
+> `Into` 的原因。還沒以它為鍵的是「**宣告**它的那個 spec」,所以 `Show` 的 `label` 與 `Tag` 的 `label` 在一個型別上
+> 仍然是同一個名字。
 >
 > 這條規則有兩個鄰居不在等它。**orphan** 那一半往內落了一層——一個 `impl` 屬於 spec 的模組或型別的模組,因為模組是
 > 這個實作唯一有的範圍,而且沒有 package 層可供這條規則伸到。而鍵的**實例化**那一半根本走不到:帶型別引數的目標在
@@ -205,12 +222,39 @@ impl[T] Indexable[Range, list[T]] for list[T] { fn index(r: Range) -> list[T] { 
 泛型直接指名參數（`[X: Indexable[int]]`）、或當場綁定它（`[X: Indexable[K]]` 綁定 `K`），所以 **bound 永遠不歧義**
 ——只有「對一個有多個實作的值做裸使用」才會。要在**執行期**、而非依引數型別做選擇，就改用 `enum`。
 
-> **[not yet]** 一個帶參數的 spec 只能在**一個**引數上被實作,不能同時在好幾個上——而那正是本節存在的全部意義。
-> `impl Ix[int] for C` 與 `impl Ix[str] for C` 並列會被拒絕、報 _E4025 `C` declares `ix` twice — every method on a type
-> shares one namespace, spec or inherent alike, and a type has one canonical implementation of a spec_:method 是以
-> **名字**為鍵的,所以第二個 impl 的 `ix` 與第一個相撞,而不是被那個本來就該區分它們的引數分辨開來。上面那組
-> `Indexable[int, T]` / `Indexable[Range, list[T]]` 因此宣告不出來,它所餵養的三種結果解析也沒有東西可解析。這與
-> [型別](types.zh-TW.md#into--一個普通的轉換-spec) 裡「每個型別只能有一個 `Into`」是同一個根因。
+一個帶參數的 spec 可以在**好幾個**引數上被實作。`impl Ix[int] for C` 與 `impl Ix[str] for C` 兩者都宣告得出來:
+method 是以它的名字**加上它的 spec 的引數**為鍵的(`ast.spec_key`),所以那兩個 `ix` 正是被那個本來就該區分它們的
+引數分辨開來。上面那組 `Indexable[int, T]` / `Indexable[Range, list[T]]` 因此宣告得出來,第二個 `Into` 也是。
+
+> **[not yet]** 沒有答案的是**裸呼叫**:`c.ix(5)` 得到的是 _E3154 `ix` on a C is declared by more than one
+> parameterized spec implementation, and this call says which by nothing_。在泛型程式碼裡由 bound 固定目標;在它之外
+> 沒有東西可讀,而本節描述的那三種結果解析,正是要來回答這個問題的。
+
+```refused E3154
+spec Ix[K] {
+ fn ix(k: K) -> int
+}
+
+struct C {
+ pub n: int
+}
+
+impl Ix[int] for C {
+ fn ix(k: int) -> int {
+  return this.n + k
+ }
+}
+
+impl Ix[str] for C {
+ fn ix(k: str) -> int {
+  return this.n
+ }
+}
+
+fn main() {
+ print C(10).ix(5)
+}
+```
 
 ## 型別測試（Type tests）——`is`
 
@@ -289,11 +333,13 @@ spec 承載**行為,別的都不承載**。它不宣告 **associated type**—�
 spec 把同一件事往前講:associated type 是每個 impl 一個輸出,參數則是每個引數一個 impl(`Indexable[K, V]`,見上)。
 
 > **[not yet]** 兩半都是**按名字拒絕**，都不是等著被建的形式：在 `impl` 裡寫一個是 _E9015 NotImplemented: an
-> associated type binding `type … = …` in an `impl`_，投影一個是 _E9028 NotImplemented: an associated type
-> projection `T.Item` — GRAMMAR lets a spec name a type its implementer supplies_。`impl` 裡剩下的東西根本
-> 不是項目，而且它說出這件事、不承諾任何東西：
-> _E2077 `…` is not an `impl` item — GRAMMAR#impl-item derives a method, an associated value and an
-> associated type_。
+> associated type binding `type … = …` in an `impl`_，從 **spec** 上投影一個是 _E9028 NotImplemented: an
+> associated type projection `It.Item` — GRAMMAR lets a spec name a type its implementer supplies_。改從一個
+> 被 bound 的參數上投影——`fn take[T: It](x: T) -> T.Item`——答案是 `E3069 undefined name`T``，那是一個沒學到
+那個參數的型別位置，不是這條規則。`impl`裡剩下的東西根本
+不是項目，而且它說出這件事、不承諾任何東西：
+_E2077`…`is not an`impl` item — GRAMMAR#impl-item derives a method, an associated value and an
+> associated type\_。
 
 **`unsafe fn` 方法**不在其中。[`GRAMMAR#fn-decl`](../../GRAMMAR) 拼得出這個標記（`'pub'? 'unsafe'? 'mut'?
 'fn'`），而 [`GRAMMAR#impl-item`](../../GRAMMAR) 取一個 `fn-decl`，所以方法帶著它的方式和自由函式完全一樣——

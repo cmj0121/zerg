@@ -21,7 +21,7 @@
 
 .PHONY: suites test-runner stdlib-test install-check examples corpus fixpoint sanitize-conc sanitize-corpus \
 	mem-check refuse reject oracle lsp editor-align treesitter desugar gates reject-fuzz \
-	check-equal fmt-corpus fmt-self fmt-tokens fmt-roundtrip docs-links docs-mirror docs-zerg \
+	check-equal fmt-corpus fmt-self fmt-tokens fmt-roundtrip docs-links docs-mirror docs-zerg docs-refused \
 	grammar-cites grammar-cited grammar-keywords grammar-mirror refusal-cites docs-repeat generic-walks sha256 layering conformance productions \
 	counterexamples behaviour version-check cache-key-check error-codes-check seed-gaps lint-check \
 	deviation-check marker-codes \
@@ -579,7 +579,7 @@ gates:                          # every gate is on the board, and the board is r
 	./scripts/gates-check.sh
 
 # `version-check` sits straight after `build` because it reads bin/ rather than filling it.
-LINUX_GATES ?= build version-check suites test-runner stdlib-test examples corpus desugar lsp editor-align treesitter install-check refuse reject oracle reject-fuzz check-equal fmt-corpus fmt-tokens fmt-roundtrip fmt-self lint lint-check doc-check fixpoint docs-links docs-mirror docs-repeat docs-zerg generic-walks grammar-cites grammar-cited grammar-keywords grammar-mirror refusal-cites layering stmt-walk entry-path examples-index conformance productions counterexamples behaviour error-codes-check seed-gaps deviation-check marker-codes chapter-codes method-gaps build-deps-check cache-key-check sha256 gates mem-check mem-peak release-notes sanitize-conc sanitize-corpus
+LINUX_GATES ?= build version-check suites test-runner stdlib-test examples corpus desugar lsp editor-align treesitter install-check refuse reject oracle reject-fuzz check-equal fmt-corpus fmt-tokens fmt-roundtrip fmt-self lint lint-check doc-check fixpoint docs-links docs-mirror docs-repeat docs-zerg docs-refused generic-walks grammar-cites grammar-cited grammar-keywords grammar-mirror refusal-cites layering stmt-walk entry-path examples-index conformance productions counterexamples behaviour error-codes-check seed-gaps deviation-check marker-codes chapter-codes method-gaps build-deps-check cache-key-check sha256 gates mem-check mem-peak release-notes sanitize-conc sanitize-corpus
 
 # `reject` holds the mistakes somebody thought of; this holds the ones nobody did. It takes
 # the corpus's WELL-FORMED programs, breaks each in a way the language has a rule about,
@@ -614,6 +614,18 @@ docs-mirror:                    # a page and its zh-TW twin are the same documen
 docs-zerg:                      # every ```zerg block in the docs is a program that compiles
 	$(MAKE) build
 	./scripts/docs-zerg.sh
+
+# docs-zerg's third tag. ` ```zerg ` says the block compiles and ` ```text ` says nothing at
+# all; a marker beside an unbuilt form wants the one in between — a program, and the refusal
+# it earns. The code rides on the fence, so the claim cannot come apart from the sample.
+#
+# It exists because `docs/core/specs.md` carried a `[not yet]` whose four sentences were each
+# false for two releases, and every gate passed it: the code it quoted still existed, the
+# inventory agreed with the catalogue, and the translation said the same wrong thing. Nothing
+# ran the program, because the program was prose.
+docs-refused:                   # every ```refused block is turned away with the code it names
+	$(MAKE) build
+	./scripts/docs-refused.sh
 
 # docs-links's sibling, for the other half of the specification. It builds nothing and reads
 # no binary: a citation is text, and whether it resolves is a fact about the tree.

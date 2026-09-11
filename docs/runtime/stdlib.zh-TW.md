@@ -212,8 +212,9 @@ JSON 的讀與寫。它**刻意只有一份實作**:language server 與 logger �
 那一份,正好是沒人在讀 transcript 的那一份。在它有第二個呼叫者之前,它住在 `src/compiler/lsp/json.zg`。
 
 一個值是 `Val`,而 object 是 **`list[Field]`** 而不是 map。list 會保留欄位被放進去的順序,所以輸出的位元組只是
-值的函數——這正是讓 transcript 可以 diff、讓 log 行可以 grep 的性質。`Val` 的 variant 不是 public(enum 的
-variant 無法在它的 module 之外建構),所以進去的路是 constructor、出來的路是 accessor。沒有 `fields()`:
+值的函數——這正是讓 transcript 可以 diff、讓 log 行可以 grep 的性質。`Val` 的 variant 從外面拿得到——enum 的 variant 本來就
+拿得到——而這個模組仍然要求進去走 constructor、出來走 accessor,讓呼叫端寫的是它的意思,而不是一個得自己維持
+正確的 tag。沒有 `fields()`:
 `list[Field]` 不是 variant,所以呼叫端自己寫 `mut fs: list[json.Field] = []`。
 
 | 函式                                                  | 摘要                                 |

@@ -229,8 +229,9 @@ lived at `src/compiler/lsp/json.zg` until it had a second caller.
 
 A value is a `Val`, and an object is a **`list[Field]`** rather than a map. A list keeps the order the fields
 were put in, so the bytes are a function of the value alone — which is what makes a transcript diffable and a
-log line greppable. `Val`'s variants are not public (an enum's variants cannot be constructed from outside
-its module), so the way in is the constructors and the way out is the accessors. There is no `fields()`: a
+log line greppable. `Val`'s variants are reachable from outside — an enum's are — and this module still asks for the
+constructors going in and the accessors coming out, so a caller writes what it means rather than
+a tag it has to keep right. There is no `fields()`: a
 `list[Field]` is not a variant, so a caller writes `mut fs: list[json.Field] = []`.
 
 | Function                                              | Summary                                             |

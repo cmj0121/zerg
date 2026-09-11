@@ -323,6 +323,7 @@ own cell, so every field method, every level check and every writer exists once.
 | `at_level(lvl)`, `trace()` … `fatal()` | begin a line on the global logger — all six levels   |
 | `to_stderr() -> Sink`                  | the default destination — one write per line to fd 2 |
 | `to_chan(ch: chan[str]) -> Sink`       | each finished line as a value on a channel           |
+| `spec Sink { fn write(line: str) }`    | a destination — `Stderr` and `Chan` implement it     |
 
 `Logger` answers `level(l)`, `format(f)`, `colour(on)`, `to(sk)`, `with_str(k, v)`, `with_int(k, v)` and
 `enabled(l)`, each a **copy** — a logger handed to a component cannot reconfigure its caller's — plus
@@ -444,11 +445,13 @@ first, in that order.
 
 ### The destination
 
-A `Sink` is a **value carrying a mode**, not a spec and not a closure: a spec would need `#[dyn]` (there is a
-deferred gap around non-`#[dyn]` provided methods) and a closure naming an imported module is `E4069`. `to_chan`
-is what makes a logger testable — there is no reading a `write(2)` back, so this module's own suite asserts the
-bytes by receiving them. A channel sink needs capacity for what is written before it is drained, since a send
-to a full channel parks the sender.
+A `Sink` is a **spec**, and a destination is a type that implements it — `Stderr` and `Chan` are the two this
+module ships. It was a struct with one `chan[str]?` field used as a mode flag, and this page said why in its
+own words: a spec could not be a value's type. It can (0.4.0), so a third destination is one more struct and
+one more `impl`, and `emit` is one dispatch with no question in it. `to_chan` is what makes a logger testable
+— there is no reading a `write(2)` back, so this module's own suite asserts the bytes by receiving them. A
+channel sink needs capacity for what is written before it is drained, since a send to a full channel parks
+the sender.
 
 ## `time`
 

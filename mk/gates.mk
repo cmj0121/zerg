@@ -322,8 +322,7 @@ fmt-roundtrip:                  # what the formatter writes, the parser reads
 # structs were built, gated by nothing, while this file's own README said in prose that it
 # was built. So each skipped case is BUILT, and one that succeeds fails the gate.
 CORPUS_SKIP := \
-	derive_enum derive_ord \
-	dyn_witness
+	derive_enum derive_ord
 
 CORPUS_PASS := $(filter-out $(CORPUS_SKIP),$(basename $(notdir $(wildcard test-data/codegen/*.zg))))
 

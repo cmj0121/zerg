@@ -203,37 +203,63 @@ pub enum Format {
 # suite's is deep enough for the lines that test writes. A sink whose reader is another
 # coroutine needs no such care.
 
-# Sink is where finished lines go, and THE OPTIONAL IS THE MODE: a channel means send to it,
-# and `nil` means standard error. It carried an `int` tag beside the channel for one round and
-# that tag was dead — `emit` asked the optional, nothing ever read the tag, and
-# `Sink(TO_CHAN, nil)` would have been a stderr sink wearing the wrong label. One field that
-# cannot disagree with itself is the whole improvement.
-#
-# `lines` is `pub` for the reason `testing.Context.events` is: a module-private field must
-# carry a default (`E4045`), and there is no default channel to write — so the field is public
-# and `to_stderr` / `to_chan` are the way one is made.
-pub struct Sink {
-	pub lines: chan[str]?
+# Sink is WHERE FINISHED LINES GO, and it is a spec because that is what it always wanted to
+# be. It was a struct with one `chan[str]?` field used as a MODE — a channel meant send, `nil`
+# meant standard error — and `docs/runtime/stdlib.md` said in its own words why: a spec could
+# not be a value's type. It can (0.4.0), so a third destination is one more struct and one more
+# `impl`, and `emit` does not change.
+pub spec Sink {
+	fn write(line: str)
 }
 
-# to_stderr is the default destination: one `__zrt_write` per line to fd 2.
+# Stderr is the default destination: one `__zrt_write` per line to fd 2.
+pub struct Stderr {
+	pub at: int = 2
+}
+
+impl Sink for Stderr {
+	fn write(line: str) {
+		io.ewrite(line)
+	}
+}
+
+# Chan sends each finished line, newline included, to a channel. That is what makes a logger
+# testable — there is no reading a `write(2)` back, so this module's own suite asserts the
+# bytes by receiving them.
+pub struct Chan {
+	pub lines: chan[str]
+}
+
+impl Sink for Chan {
+	fn write(line: str) {
+		this.lines <- line
+	}
+}
+
+# to_stderr and to_chan are kept: a caller writes a destination, not a construction, and the
+# two names are what `docs/runtime/stdlib.md` documents.
 pub fn to_stderr() -> Sink {
-	return Sink(nil)
+	return Stderr(2)
 }
 
 # to_chan sends each finished line, newline included, to `ch`.
 pub fn to_chan(ch: chan[str]) -> Sink {
-	return Sink(ch)
+	return Chan(ch)
+}
+
+# ref_stderr is the field's default, and it is a function because a `Ref[Sink]` is built in two
+# steps: the box first — `Ref(Stderr(2))` is a `Ref[Stderr]`, since a spec-typed position
+# reaches the ARGUMENT of a `Ref` no more than any other call's — and the `Ref` around it.
+fn ref_stderr() -> Ref[Sink] {
+	sk: Sink = Stderr(2)
+	return Ref(sk)
 }
 
 # emit is the ONE place a line leaves this module, so "one write per line" is a property of
-# one function rather than a rule every path has to remember.
+# one function rather than a rule every path has to remember. It is now one dispatch and no
+# question: the destination answers for itself.
 fn emit(sk: Sink, line: str) {
-	if ch := sk.lines {
-		ch <- line
-		return
-	}
-	io.ewrite(line)
+	sk.write(line)
 }
 
 # --- what a logger is ----------------------------------------------------------------------
@@ -282,7 +308,14 @@ pub struct Logger {
 	lvl: Level = ENV_LEVEL
 	fmt: Format = ENV_FORMAT
 	col: bool = ENV_COLOUR
-	sink: Sink = to_stderr()
+
+	# A `Ref` BECAUSE THE DESTINATION IS SHARED, and this language makes you say so. A `Logger`
+	# is a value and every builder answers a copy, so a boxed `Sink` held by value would be
+	# DEEP-COPIED once per link of the chain — `mem-check`'s `log_dead` measured seven cells a
+	# round on a line the level had turned OFF, against a claim this module's whole design
+	# rests on. Copying a `Ref` retains; two loggers write to one destination, which is what a
+	# destination is.
+	sink: Ref[Sink] = ref_stderr()
 	base: list[json.Field] = []
 }
 
@@ -423,7 +456,7 @@ impl Logger {
 	# to answers a COPY writing to `sk`.
 	pub fn to(sk: Sink) -> This {
 		mut c := this
-		c.sink = sk
+		c.sink = Ref(sk)
 		return c
 	}
 
@@ -586,7 +619,7 @@ impl Entry {
 	pub fn msg(text: str) {
 		if this.live {
 			line := render(time.now(), this.lvl, this.lg, text)
-			emit(this.lg.sink, line)
+			emit(deref(this.lg.sink), line)
 		}
 
 		# THE EXIT IS NOT INSIDE THAT `if`. A `fatal` at a silenced level still ends the

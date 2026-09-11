@@ -87,6 +87,20 @@ concrete bound 的 generic 會在產出的 C 裡 **monomorphize**——編譯器
 > on an `impl`_。函式與 struct 的 bound 都收得下——`fn go[T: Conv[int]]` 與 `struct Holder[T: Conv[int]]` 都建得
 > 起來——所以那是**一個**位置,不是「任何地方」。
 
+```refused E9001
+spec Same[T] {
+ fn same(o: T) -> bool
+}
+
+spec Ix[K: Same[int]] {
+ fn at(k: K) -> int
+}
+
+fn main() {
+ print 1
+}
+```
+
 一個**實作**（型別滿足某 spec）本身不帶可見性標記：coherence 要求一組 `(型別, spec)`（含參數）到處都解析到同一個實作，
 因此實作既不能被藏、也不能被複製——它的作用範圍恰好是「型別與 spec 同時可見之處」。實作是為**具體或泛型型別**寫的
 ——`list[T]` 可以實作 `Iterator`。
@@ -215,6 +229,32 @@ method 是以它的名字**加上它的 spec 的引數**為鍵的(`ast.spec_key`
 > **[not yet]** 沒有答案的是**裸呼叫**:`c.ix(5)` 得到的是 _E3154 `ix` on a C is declared by more than one
 > parameterized spec implementation, and this call says which by nothing_。在泛型程式碼裡由 bound 固定目標;在它之外
 > 沒有東西可讀,而本節描述的那三種結果解析,正是要來回答這個問題的。
+
+```refused E3154
+spec Ix[K] {
+ fn ix(k: K) -> int
+}
+
+struct C {
+ pub n: int
+}
+
+impl Ix[int] for C {
+ fn ix(k: int) -> int {
+  return this.n + k
+ }
+}
+
+impl Ix[str] for C {
+ fn ix(k: str) -> int {
+  return this.n
+ }
+}
+
+fn main() {
+ print C(10).ix(5)
+}
+```
 
 ## 型別測試（Type tests）——`is`
 

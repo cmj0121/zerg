@@ -296,6 +296,13 @@ jobs:
       - name: Every ```zerg block in the docs is a program
         run: make docs-zerg
 
+      # And the third tag, which needs the compiler for the opposite answer: a
+      # ` ```refused E1234 ` block is a program that must be TURNED AWAY, with exactly
+      # that code. It sits beside docs-zerg because they are one pair — accepted and
+      # refused — and neither can be settled by reading.
+      - name: Every ```refused block earns the code its fence names
+        run: make docs-refused
+
       # The linter over the compiler and the stdlib — the only bodies of Zerg large
       # enough for a dead private function to hide in — and the check that every rule
       # it documents still has a program that makes it fire.

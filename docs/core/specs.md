@@ -110,6 +110,20 @@ lists: the receiver decides `T` because it is the first parameter, and the argum
 > only on an `impl`_. A function's and a struct's bound take one — `fn go[T: Conv[int]]` and
 > `struct Holder[T: Conv[int]]` both build — so the position is one, not "anywhere".
 
+```refused E9001
+spec Same[T] {
+ fn same(o: T) -> bool
+}
+
+spec Ix[K: Same[int]] {
+ fn at(k: K) -> int
+}
+
+fn main() {
+ print 1
+}
+```
+
 An **implementation** (a type satisfying a spec) carries no visibility marker of its own: coherence
 requires a `(type, spec)` pair — parameters included — to resolve to the same implementation everywhere,
 so an implementation can be neither hidden nor duplicated — it is in effect exactly where both its type
@@ -279,6 +293,32 @@ A parameterized spec may be implemented at **several** arguments. `impl Ix[int] 
 > is declared by more than one parameterized spec implementation, and this call says which by nothing_.
 > Inside generic code the bound fixes the target; outside one there is nothing to read, and the
 > three-outcome resolution this section describes is what would answer it.
+
+```refused E3154
+spec Ix[K] {
+ fn ix(k: K) -> int
+}
+
+struct C {
+ pub n: int
+}
+
+impl Ix[int] for C {
+ fn ix(k: int) -> int {
+  return this.n + k
+ }
+}
+
+impl Ix[str] for C {
+ fn ix(k: str) -> int {
+  return this.n
+ }
+}
+
+fn main() {
+ print C(10).ix(5)
+}
+```
 
 ## Type tests — `is`
 

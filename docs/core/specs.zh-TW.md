@@ -58,14 +58,12 @@ cell,它擁有自己的 payload:複製它會建出一個獨立的 cell——spec
 box 會 **render**。見證表在 copy 與 drop 旁邊帶著一個 rendering,填的是 payload 自己的那一份——所以 `print sk`
 對一個 `Sink` 會顯示它裝著的 `Stderr` 或 `Chan`,而 `list[Shape]` 會把每個元素印成它自己的型別。
 
-> **[not yet]** **參數化的 spec** 還不能當型別——_E9115_——那是三個角色裡最後一個還沒完成的;上面其餘的都
-> 建好了。
->
-> `fn go(c: Conv[int])` 會報 _E9115 NotImplemented: the parameterized `spec` `Conv[int]` used as a TYPE
-> (parameter `c` of `go`) — this compiler carries a spec's type arguments only on an `impl`_。見證表早就以
-> 名字**加上引數**為鍵了,所以缺的不是身分,而是把成員安置在那個應用過的鍵底下——那正是呼叫端讀回傳型別的地方。
->
-> box 服務不了的三種成員裡,兩種到得了、而且各自在呼叫處被拒:**二元同型別**成員是 _E3155_,**泛型方法**是
+**參數化的** spec 也是型別,那是第三個角色的完成:`fn go(c: Conv[int])` 收一個箱子,`list[Conv[int]]` 裝得下
+兩個實作者,而同一個型別可以在**兩個**引數上實作同一個 spec——`impl Conv[int] for A` 與 `impl Conv[str] for A`
+並列,兩個箱子各自分派到自己那一支。從頭到尾用的都是 `ast.spec_key` 這把鍵:見證表本來就以名字**加上引數**為
+鍵,而成員現在安置在同一把鍵底下。
+
+> **[not yet]** box 服務不了的三種成員裡,兩種到得了、而且各自在呼叫處被拒:**二元同型別**成員是 _E3155_,**泛型方法**是
 > _E3157_——一張表每個必要成員一個槽位,而泛型方法會需要每個型別引數一個。**associated fn** 在這裡不是 spec
 > 宣告得出來的東西,因為每個成員都帶著隱含的接收者。
 

@@ -506,7 +506,6 @@ shipping compiler rather than a part of it (the line
 | `E9110` | a NAMED rest in a list pattern                                                                        |
 | `E9111` | an array length reached through an import                                                             |
 | `E9112` | the array method `…`                                                                                  |
-| `E9115` | the parameterized `spec` `…` used as a TYPE (…)                                                       |
 
 They are reported the moment a file is **read**, before its imports are scanned — scanning
 them parses, and a parser handed unreadable text can only say something untrue about it.
@@ -703,6 +702,7 @@ name now is the prelude rule (`E2061`), which is about the name rather than abou
 | `E9104` | —       | the form was built: `atomic` imports and runs                          |
 | `E9037` | —       | the form was built: one impl per instantiation of its target           |
 | `E9114` | —       | the form was built: the box carries the action beside the value        |
+| `E9115` | —       | the form was built: a parameterized spec is a value's type             |
 | `E9116` | —       | the form was built: the witness table carries a rendering              |
 | `E9044` | —       | the form was built: a method carries its own type parameters           |
 | `E9003` | —       | the form was built: a generic enum, one specialization per application |

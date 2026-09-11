@@ -105,8 +105,10 @@ so is a bound naming more than one spec — `T: Eq + Show` is a conjunction, and
 the one the refusal names. A method carrying its own `[U]` on a type carrying its own `[T]` resolves both
 lists: the receiver decides `T` because it is the first parameter, and the arguments decide `U`.
 
-> **[not yet]** A parameterized spec written anywhere but on an `impl` is _E9001 NotImplemented: a
-> parameterized `S[…]` as a bound — this compiler carries a spec's type arguments only on an `impl`_.
+> **[not yet]** A parameterized spec bounds a **spec's own** type parameter nowhere: `spec Ix[K: Same[int]]`
+> is _E9001 NotImplemented: a parameterized `S[…]` as a bound — this compiler carries a spec's type arguments
+> only on an `impl`_. A function's and a struct's bound take one — `fn go[T: Conv[int]]` and
+> `struct Holder[T: Conv[int]]` both build — so the position is one, not "anywhere".
 
 An **implementation** (a type satisfying a spec) carries no visibility marker of its own: coherence
 requires a `(type, spec)` pair — parameters included — to resolve to the same implementation everywhere,
@@ -152,10 +154,10 @@ per-type opt-in `Eq` above included.
 > DIFFERENT specs that happen to declare the same method name collide too: `impl Show for P` beside
 > `impl Tag for P`, each with a `label`, is _E4025 `P` declares `label` twice_. Nothing here is silently
 > wrong — every case is refused by name, with a place — and nothing here is resolvable that should not be.
-> What is missing is the key: until a method is keyed by the spec that declared it and by that spec's
-> arguments, `(spec, type)` has nothing finer to be keyed on. The same key is what
-> [Types](types.md#into--an-ordinary-conversion-spec) needs for a second `Into`, and it is one piece of
-> work rather than two.
+> What is missing is HALF the key. A method is keyed by its spec's ARGUMENTS already — that is what lets
+> `impl Ix[int]` and `impl Ix[str]` coexist, and what gave [Types](types.md#into--an-ordinary-conversion-spec)
+> its second `Into`. What it is not keyed by is the spec that DECLARED it, so `Show`'s `label` and `Tag`'s
+> `label` are still one name on one type.
 >
 > Two neighbours of the rule are not waiting on it. The ORPHAN half is enforced one scope in — an `impl`
 > belongs in the spec's module or the type's, because a module is the only scope this implementation has
@@ -267,14 +269,16 @@ of several matches a use means. A concrete-bound generic names the parameter dir
 ambiguous** — only a bare use on a value with several impls is. For a choice made at **run time** rather
 than by the argument's type, use an `enum` instead.
 
-> **[not yet]** A parameterized spec may be implemented at **one** argument, not several, which is the whole
-> of what this section is for. `impl Ix[int] for C` beside `impl Ix[str] for C` is rejected with _E4025 `C`
-> declares `ix` twice — every method on a type shares one namespace, spec or inherent alike, and a type has one
-> canonical implementation of a spec_: a method is keyed by its **name**, so the second impl's `ix` collides
-> with the first instead of being told apart by the very argument that is supposed to distinguish them. The
-> `Indexable[int, T]` / `Indexable[Range, list[T]]` pair above therefore cannot be declared, and the
-> three-outcome resolution it feeds has nothing to resolve between. It is the same root cause as the one
-> `Into` per type in [Types](types.md#into--an-ordinary-conversion-spec).
+A parameterized spec may be implemented at **several** arguments. `impl Ix[int] for C` beside
+`impl Ix[str] for C` both declare: a method is keyed by its name **and its spec's arguments**
+(`ast.spec_key`), so the two `ix` are told apart by the very argument that distinguishes them. The
+`Indexable[int, T]` / `Indexable[Range, list[T]]` pair above is therefore declarable, and so is a second
+`Into`.
+
+> **[not yet]** What has no answer is a **bare call**: `c.ix(5)` is _E3155_'s neighbour, _E3154 `ix` on a C
+> is declared by more than one parameterized spec implementation, and this call says which by nothing_.
+> Inside generic code the bound fixes the target; outside one there is nothing to read, and the
+> three-outcome resolution this section describes is what would answer it.
 
 ## Type tests — `is`
 
@@ -369,10 +373,12 @@ impl per argument (`Indexable[K, V]`, above) where an associated type was one ou
 
 > **[not yet]** Both halves are refused by name and neither is a form waiting to be built: writing one
 > in an `impl` is _E9015 NotImplemented: an associated type binding `type … = …` in an `impl`_, and
-> projecting one is _E9028 NotImplemented: an associated type projection `T.Item` — GRAMMAR lets a spec
-> name a type its implementer supplies_. What is left in an `impl` is not an item at all and says so
-> without promising anything: _E2077 `…` is not an `impl` item — GRAMMAR#impl-item derives a method, an
-> associated value and an associated type_.
+> projecting one off the SPEC is _E9028 NotImplemented: an associated type projection `It.Item` — GRAMMAR
+> lets a spec name a type its implementer supplies_. Projected off a bounded parameter instead —
+> `fn take[T: It](x: T) -> T.Item` — the answer is `E3069 undefined name`T``, which is a type position
+that never learned the parameter and not this rule. What is left in an `impl`is not an item at all and says so
+without promising anything: _E2077`…`is not an`impl` item — GRAMMAR#impl-item derives a method, an
+> associated value and an associated type\_.
 
 An **`unsafe fn` method** is not among them. [`GRAMMAR#fn-decl`](../../GRAMMAR) spells the marker
 (`'pub'? 'unsafe'? 'mut'? 'fn'`) and [`GRAMMAR#impl-item`](../../GRAMMAR) takes a `fn-decl`, so a method

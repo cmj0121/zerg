@@ -3790,6 +3790,36 @@ fn c_build_sigs(mut &em: Emitter, f: ast.File) {
 			}
 		}
 	}
+
+	# AND ONE SEATING PER APPLICATION, because a PARAMETERIZED spec's members answer different
+	# types at different arguments: `Conv[int]`'s `to` answers an `int` and `Conv[str]`'s a
+	# `str`. The bare name seats nothing usable — `to` would answer `T` — so the key is
+	# `ast.spec_key`, which is what the witness tables have been keyed by since they became one
+	# per pair, and what `em.impl_on` already records.
+	#
+	# THE APPLICATIONS ARE THE IMPLS', because those are the ones that exist: a spec applied at
+	# arguments nothing implements has no table to dispatch through either, and a type position
+	# naming one is a name this program does not have.
+	for ip in f.impls {
+		at := c_derive_spec_at(f, ip.on)
+		continue if at < 0 or f.specs[at].params.len() == 0
+
+		sp := f.specs[at]
+		key := ast.spec_key(ip.on, ip.args)
+		mut notp: list[str] = []
+
+		# THE IMPL'S PLACE, not the spec's. The arguments are what this seating substitutes, and
+		# the impl is where they were written — so a finding about one of them (`chan[int?]`
+		# reached through `K`) belongs at the impl. Given the spec's coordinates it moved to the
+		# declaration, which says nothing about the argument that caused it.
+		app_ip := ast.ImplDecl(ip.on, ip.args, key, notp, ip.path, ip.line, ip.col)
+		for req in sp.reqs {
+			m := c_default_method(sp, app_ip, req)
+			continue if c_sig_seen(em, c_sig_key(key, m.name))
+
+			c_add_sig(em, m)
+		}
+	}
 }
 
 # c_first_with_key is the EARLIER declaration a key was already taken by — the half of a
@@ -4758,16 +4788,6 @@ fn c_check_type_name(mut &em: Emitter, nm: str, s: Site) {
 		return
 	}
 
-	# A PARAMETERIZED SPEC IS ONE OF THE THREE ROLES TOO, and this compiler carries a spec's
-	# arguments only on an `impl`. Saying "no type named `Conv[int]`" about a spec the reader
-	# declared three lines above is the sentence retiring E9048 was supposed to stop — one
-	# parameterization along.
-	#
-	# The witness tables are ALREADY keyed this way (`ast.spec_key`), so what is missing is not
-	# the identity: it is seating the spec's members under the applied key, which is where the
-	# call side reads a return type from.
-	raise c_diag(em, rule.Rule.NotYetParamSpecAsType, f"NotImplemented: the parameterized `spec` `{nm}` used as a TYPE ({site}) — this compiler carries a spec's type arguments only on an `impl`; a bare `{c_app_base(nm)}` names a type, and a bound fixes the arguments (GRAMMAR#type-name)") if c_is_applied(nm) and c_is_spec_name(em, c_app_base(nm))
-
 	# a TYPE PARAMETER of the template this signature belongs to. It names no declared type
 	# on purpose — that is what makes it a parameter — and it is gone by the time anything
 	# is emitted, because a specialization has a real type in its place.
@@ -4946,7 +4966,13 @@ fn c_ty_kind_word(mut &em: Emitter, nm: str) -> str {
 	return "a type"
 }
 
+# c_is_spec_name is whether a name denotes a spec, and an APPLIED one denotes the spec its base
+# names: `Conv[int]` is a `Conv`. The registry holds declarations, and a parameterized spec is
+# declared once — so asking it about the applied name answered TK_NONE, and `fn go(c: Conv[int])`
+# came out as a type nothing declares.
 pub fn c_is_spec_name(mut &em: Emitter, nm: str) -> bool {
+	return c_ty_kind(em, c_app_base(nm)) == TK_SPEC if c_is_applied(nm)
+
 	return c_ty_kind(em, nm) == TK_SPEC
 }
 
@@ -5622,8 +5648,21 @@ fn c_copy_helpers(mut &em: Emitter, f: ast.File) -> str {
 	# so `c_elem_vt_helper` writes its copy and its drop out of `c_copy_of` and `c_drop_fn`
 	# with nothing per-spec to generate — no field walk, because the fields are the payload's
 	# and the payload's own table already knows them.
+	mut spseen: list[str] = []
 	for sp in f.specs {
+		spseen.append(sp.name)
 		out = out + c_elem_vt_helper(em, ast.Ty.TNamed(sp.name))
+	}
+
+	# AND ONE TRIO PER APPLICATION, the same population `c_spec_typedefs` writes a typedef for:
+	# a `Conv[int]` binding owns a cell and owes it back exactly as a `Sink` does, and the
+	# helper is one word wide either way.
+	for ip in f.impls {
+		key := ast.spec_key(ip.on, ip.args)
+		continue if ip.args.len() == 0 or c_name_in(spseen, key) or c_derive_spec_at(f, ip.on) < 0
+
+		spseen.append(key)
+		out = out + c_elem_vt_helper(em, ast.Ty.TNamed(key))
 	}
 
 	# The enums, through the same three helpers and in the same order, because they are the
@@ -19149,8 +19188,21 @@ fn c_spec_vt_typedef(mut &em: Emitter, sp: ast.SpecDecl, ip: ast.ImplDecl) -> st
 # it asks `c_is_spec_name`, which is a question about the Zerg type and not about the C text.
 fn c_spec_typedefs(f: ast.File) -> str {
 	mut out := ""
+	mut seen: list[str] = []
 	for sp in f.specs {
+		seen.append(sp.name)
 		out = out + f"typedef void *{c_ty_cname(sp.name)};\n"
+	}
+
+	# AND ONE PER APPLICATION. A parameterized spec is declared once and applied per `impl`, so
+	# `Conv[int]` is a type the program has and `f.specs` does not name — the same population
+	# `c_build_sigs` seats its members under, read from the same place for the same reason.
+	for ip in f.impls {
+		key := ast.spec_key(ip.on, ip.args)
+		continue if ip.args.len() == 0 or c_name_in(seen, key) or c_derive_spec_at(f, ip.on) < 0
+
+		seen.append(key)
+		out = out + f"typedef void *{c_ty_cname(key)};\n"
 	}
 	return out if out == ""
 

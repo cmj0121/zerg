@@ -300,6 +300,7 @@ fn main() {
 | `at_level(lvl)`、`trace()` … `fatal()` | 在全域 logger 上開始一行——六個等級都有        |
 | `to_stderr() -> Sink`                  | 預設目的地——每行一次 write 到 fd 2            |
 | `to_chan(ch: chan[str]) -> Sink`       | 每一行寫完後當成值送進 channel                |
+| `spec Sink { fn write(line: str) }`    | 一個目的地——`Stderr` 與 `Chan` 實作它         |
 
 `Logger` 有 `level(l)`、`format(f)`、`colour(on)`、`to(sk)`、`with_str(k, v)`、`with_int(k, v)` 與
 `enabled(l)`，每一個都回傳**複本**——交給元件的 logger 沒辦法反過來改呼叫者的——再加上 `at_level(l)` 與等級方法。
@@ -404,10 +405,11 @@ JSON 行是透過 [`json`](#json) 組出來的，不是手工拼的。它固定�
 
 ### 目的地
 
-`Sink` 是一個**帶著 mode 的值**，不是 spec 也不是 closure：spec 需要 `#[dyn]`（non-`#[dyn]` 的 provided method 有一個
-已知延後的缺口），而 closure 只要提到被 import 的模組就是 `E4069`。`to_chan` 是讓 logger 可測的關鍵——`write(2)` 寫出去
-就讀不回來了，所以這個模組自己的 suite 是把那些位元組收下來斷言的。channel sink 需要事先有足夠的容量，因為送進滿的
-channel 會把送出的 coroutine 停住。
+`Sink` 是一個 **spec**，一個目的地就是實作它的型別——這個模組出貨的兩個是 `Stderr` 與 `Chan`。它本來是一個 struct、
+只有一個 `chan[str]?` 欄位被當成 mode 旗標用，而這一頁自己寫過原因：spec 不能當一個值的型別。現在可以了（0.4.0），
+所以第三個目的地就是多一個 struct 加一個 `impl`，而 `emit` 是一次分派、裡面沒有任何問句。`to_chan` 是讓 logger 可測的
+關鍵——`write(2)` 寫出去就讀不回來了，所以這個模組自己的 suite 是把那些位元組收下來斷言的。channel sink 需要事先有
+足夠的容量，因為送進滿的 channel 會把送出的 coroutine 停住。
 
 ## `time`
 

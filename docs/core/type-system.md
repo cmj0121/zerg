@@ -76,14 +76,13 @@ Five notes carry the rules into the language:
   variant left unsolved. It sits beside the wrap rule rather than against it: a position may already put a
   value into a carrier, and here it supplies a type the construction could not have known.
 
-> **[not yet]** One note runs ahead of the compiler: a **parameterized** spec used as a type is refused by
-> name, _E9115_ — the bare spec is built, and a spec-typed position boxes what is written into it. The
-> **untyped closure parameter** is not among them any more: it takes its type from the function type the
-> closure is checked against, and so does an omitted result type, at every typed position.
->
-> Both compilers hold the rest of this chapter, and say where: a position that converts, an operator
-> whose operands are two types, and a typeless form with no position to take one from are each refused
-> with a place.
+Nothing in this chapter runs ahead of the compiler any more. A spec used as a type is built, parameterized
+or not, and a spec-typed position boxes what is written into it; an untyped closure parameter takes its type
+from the function type the closure is checked against, and so does an omitted result type, at every typed
+position.
+
+Both compilers hold the rest, and say where: a position that converts, an operator whose operands are two
+types, and a typeless form with no position to take one from are each refused with a place.
 
 ## Why these nine
 

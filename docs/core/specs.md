@@ -78,15 +78,13 @@ A box **renders**. The witness table carries a rendering beside the copy and the
 payload's own — so `print sk` on a `Sink` shows the `Stderr` or the `Chan` it holds, and a `list[Shape]`
 prints each element as its own type.
 
-> **[not yet]** A **parameterized spec** cannot be the type — _E9115_ — and it is the last of the three
-> roles left unfinished; everything else above is built.
->
-> `fn go(c: Conv[int])` is _E9115 NotImplemented: the parameterized `spec` `Conv[int]` used as a TYPE
-> (parameter `c` of `go`) — this compiler carries a spec's type arguments only on an `impl`_. The witness
-> tables are already keyed by name **and arguments**, so what is missing is the members seated under the
-> applied key, which is where a call reads its return type.
->
-> Of the three member kinds a box cannot serve, two are reachable and each is refused at the call: a
+A **parameterized** spec is a type too, and it is the third role finished: `fn go(c: Conv[int])` takes a
+box, `list[Conv[int]]` holds two implementers, and one type may implement a spec at **two** arguments —
+`impl Conv[int] for A` beside `impl Conv[str] for A` gives two boxes that dispatch to their own. The key is
+`ast.spec_key`'s throughout: the witness tables were already keyed by name **and** arguments, and the
+members are seated under the same key.
+
+> **[not yet]** Of the three member kinds a box cannot serve, two are reachable and each is refused at the call: a
 > **binary same-type** member is _E3155_, and a **generic method** is _E3157_ — a table holds one slot per
 > required member and a generic one would need one per type argument. An **associated fn** is not something
 > a spec can declare here, because every member carries an implicit receiver.

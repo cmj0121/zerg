@@ -74,17 +74,17 @@ and `g is En` reads that same table. A box is a counted cell that owns its paylo
 independent cell — a spec value is a **value** — and it is given back when its scope ends, like every other
 owned value.
 
-> **[not yet]** A **parameterized spec** cannot be the type — _E9115_ — and rendering a box cannot be done
-> — _E9116_. Each is refused by name rather than answered wrongly; everything else above is built.
+A box **renders**. The witness table carries a rendering beside the copy and the drop, filled with the
+payload's own — so `print sk` on a `Sink` shows the `Stderr` or the `Chan` it holds, and a `list[Shape]`
+prints each element as its own type.
+
+> **[not yet]** A **parameterized spec** cannot be the type — _E9115_ — and it is the last of the three
+> roles left unfinished; everything else above is built.
 >
 > `fn go(c: Conv[int])` is _E9115 NotImplemented: the parameterized `spec` `Conv[int]` used as a TYPE
 > (parameter `c` of `go`) — this compiler carries a spec's type arguments only on an `impl`_. The witness
 > tables are already keyed by name **and arguments**, so what is missing is the members seated under the
 > applied key, which is where a call reads its return type.
->
-> **Rendering a box** is _E9116 NotImplemented: rendering a `…`, which is a boxed value — a witness table
-> holds one slot per required member and a rendering is not one_. `debug` is listed above among what a box
-> dispatches; until the table carries a rendering there is nothing to dispatch through.
 >
 > Of the three member kinds a box cannot serve, two are reachable and each is refused at the call: a
 > **binary same-type** member is _E3155_, and a **generic method** is _E3157_ — a table holds one slot per

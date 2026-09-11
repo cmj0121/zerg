@@ -9174,13 +9174,6 @@ fn c_display_check(mut &em: Emitter, t: ast.Ty, where: str) {
 	# propagated in the first place.
 	raise c_diag(em, rule.Rule.IdentityHasNoRendering, f"a {ast.ty_name(t)} is an identity rather than a value, and the language gives it no rendering — it is a place to send to or to jump to, and its address is not a rendering of anything the program wrote") if c_is_identity(t)
 
-	# A BOX HAS A RENDERING AND NO SLOT TO REACH IT THROUGH. docs/core/specs.md puts `debug`
-	# among the unary operations a boxed value dispatches, and a witness table holds one entry
-	# per required member — a rendering is not one, so there is nothing in the table to call.
-	# Left unsaid, `print t` rendered the CELL POINTER as an integer: a different number every
-	# run, of a value the program never wrote. Refused by name until the table carries it.
-	raise c_diag(em, rule.Rule.NotYetRenderBoxed, f"NotImplemented: rendering a {ast.ty_name(t)}, which is a boxed value — a witness table holds one slot per required member and a rendering is not one, so there is nothing to dispatch through; render the concrete type, or give the spec a member that answers a str (GRAMMAR#type-name)") if c_is_spec_name(em, c_named_of(t))
-
 	# NIL IS NOT A THING TO RENDER, and it is asked here because this is the one gate the
 	# three rendering positions share — `print x`, an f-string's `{x}` and `str(x)`. A `fn`
 	# with no `-> type` answers nil, so `print f()` cast a `void` to `long long` and cc
@@ -16052,6 +16045,11 @@ fn c_fill_value(e: ast.Expr) -> ast.Expr {
 # c_render_of is the rendering of one value: the override if the type declares one, the
 # structural renderer if it has parts, and the scalar spelling otherwise.
 fn c_render_of(mut &em: Emitter, t: ast.Ty, inner: str, quoted: bool) -> str {
+	# A BOX RENDERS THROUGH ITS TABLE, which is the one operand whose concrete type is not
+	# known here. Left to the arms below it fell to the integer one and printed the CELL
+	# POINTER — a different number every run, of a value the program never wrote.
+	return c_spec_render_disp(em, c_named_of(t), inner) if c_is_spec_name(em, c_named_of(t))
+
 	if meth := c_render_override(em, t) {
 		return f"{c_fn_cname(c_named_of(t), meth)}({inner})" if meth != ""
 		return "\"\""
@@ -16074,6 +16072,15 @@ fn c_render_of(mut &em: Emitter, t: ast.Ty, inner: str, quoted: bool) -> str {
 # identity has none (a channel, a function value), and a scalar is its own rendering.
 fn c_has_parts(mut &em: Emitter, t: ast.Ty) -> bool {
 	return c_is_list(t) or c_is_map(t) or c_is_tuple(t) or c_is_arr(t) or c_is_carrier(t) or c_is_enum_ty(em, t) or c_is_struct_name(em, c_named_of(t))
+}
+
+# c_renders_fresh is the question `print` actually asks: does rendering this build a CELL the
+# statement has to give back. It is c_has_parts plus a BOX, whose rendering is the payload's
+# and just as fresh — and it is a name of its own because the two questions had been one word
+# for as long as they had one answer. Asked as `c_has_parts`, `print t` on a spec-typed
+# binding took the scalar path and cast the cell pointer to `long long`.
+fn c_renders_fresh(mut &em: Emitter, t: ast.Ty) -> bool {
+	return c_has_parts(em, t) or c_is_spec_name(em, c_named_of(t))
 }
 
 # c_render_fn names the generated renderer for one shape and emits it once. The PARTS go
@@ -17559,7 +17566,7 @@ fn c_print(mut &em: Emitter, e: ast.Expr, ind: str) -> str {
 	# it. The arm below used to cast a struct, a list or a tuple to `long long` for cc to
 	# report — `print(a, b)` is the way into that a reader does not see coming, since there is
 	# no two-argument `print` and the pair builds a tuple.
-	if c_has_parts(em, ty) {
+	if c_renders_fresh(em, ty) {
 		em.used_rt = true
 		return f"{ind}{{ const char* zgt_ps = {c_render_of(em, ty, c_expr(em, e, c_nosub()), false)}; printf(\"%s\\n\", zgt_ps); zrt_str_release(zgt_ps); }}\n"
 	}
@@ -19096,6 +19103,18 @@ fn c_spec_vt_typedef(mut &em: Emitter, sp: ast.SpecDecl, ip: ast.ImplDecl) -> st
 	out = out + "    void (*copy)(void *dst, const void *src);\n"
 	out = out + "    void (*drop)(void *elem);\n"
 
+	# AND A RENDERING, which is not a required member and is what a box needs anyway:
+	# docs/core/specs.md lists `debug` among the unary operations a boxed value dispatches.
+	# Third and fixed, after the pair the RUNTIME reads — `zrt_dyn_copy` and `dyn_drop` cast
+	# this table to `zrt_elem_vt` and use slots 0 and 1, and nothing else in ref.c reads it, so
+	# a slot may be added here and nowhere above.
+	#
+	# ONE SLOT AND NO `quoted` FLAG. The two views part only on a `str` (c_render_meth), and a
+	# built-in cannot implement a spec — `impl S for str` is refused like `impl S for int` — so
+	# a payload is always a declared struct or enum, for which `debug` and `display` are one
+	# text.
+	out = out + "    const char *(*render)(const void *self);\n"
+
 	# EVERY SLOT FROM THE SAME SEATED MEMBER THE SHIM READS. `c_default_method` is the spec's
 	# declaration put on one target — `This` resolved to it, the spec's parameters to the
 	# impl's arguments — which is what makes one table per PAIR well-typed where one per spec
@@ -19145,6 +19164,42 @@ fn c_spec_slot_ret(sp: ast.SpecDecl, ip: ast.ImplDecl, req: ast.FnDecl, m: ast.F
 	return c_ty_cname(ast.spec_key(sp.name, ip.args)) if c_is_this_ty(req.ret)
 
 	return c_ret_type(m)
+}
+
+# c_spec_render_register is the rendering slot's thunk: the payload rendered as its own
+# concrete type, through `c_render_of` — the generator every other structural rendering in this
+# file goes through, so a boxed struct renders exactly as an unboxed one does.
+fn c_spec_render_register(mut &em: Emitter, key: str, target: str) -> str {
+	rn := c_spec_cname(f"specrender${key}${target}")
+	for n in em.svt_names {
+		return rn if n == rn
+	}
+	em.svt_names.append(rn)
+
+	ct := c_ty_cname(target)
+	body := c_render_of(em, ast.Ty.TNamed(target), f"(*(const {ct} *)zg_p)", true)
+	em.svt_decls.append(f"static const char *{rn}(const void *zg_p) {{\n    return {body};\n}}\n")
+	return rn
+}
+
+# c_spec_render_disp is what a RENDERING SITE calls, and it exists for c_spec_call's reason:
+# the operand would otherwise be spelled twice, once for the table and once for the payload.
+#
+# IT BORROWS. A rendering does not consume what it renders — `c_render_meth` hands `c_expr`'s
+# text straight in, and `zrt_str_concat` consumes neither operand — so this releases nothing
+# and answers a FRESH string the caller gives back, which is what every other rendering
+# answers.
+fn c_spec_render_disp(mut &em: Emitter, sp: str, inner: str) -> str {
+	dn := c_spec_cname(f"specrenderdisp${sp}")
+	for n in em.svt_names {
+		return f"{dn}({inner})" if n == dn
+	}
+	em.svt_names.append(dn)
+
+	mut out := f"static const char *{dn}({c_ty_cname(sp)} zg_self) {{\n"
+	out = out + f"    return ((const {c_spec_vt_type(sp)} *)zrt_dyn_vt(zg_self))->render(zrt_dyn_payload(zg_self));\n}}\n"
+	em.svt_decls.append(out)
+	return f"{dn}({inner})"
 }
 
 # c_spec_shim_register is the function a witness table's slot actually points at: the member
@@ -19292,6 +19347,7 @@ pub fn c_spec_vt_register(mut &em: Emitter, sp: ast.SpecDecl, ip: ast.ImplDecl) 
 	mut out := f"static const {tn} {vn} = {{ "
 	out = out + c_elem_copy_fn(em, ast.Ty.TNamed(target)) + ", "
 	out = out + c_elem_drop_fn(em, ast.Ty.TNamed(target))
+	out = f"{out}, {c_spec_render_register(em, key, target)}"
 	for req in sp.reqs {
 		if c_spec_boxable(req) {
 			out = f"{out}, {c_spec_shim_register(em, sp, ip, req)}"
@@ -19461,10 +19517,17 @@ fn c_build_impls(mut &em: Emitter, f: ast.File) {
 		em.impl_on.append(ast.spec_key(ip.on, ip.args))
 		em.impl_target.append(ip.target)
 
-		# AND ITS WITNESS TABLE, which is the same pair read for a different question: the
-		# rows above answer "does this type implement that spec", and the table answers "what
-		# does it DO" — the half a spec value needs, since a call through one knows the spec
-		# and not the type.
+	}
+}
+
+# c_build_spec_vts is the witness tables, and it is a pass of its own because of WHEN it can
+# run. The rows `c_build_impls` records answer "does this type implement that spec"; a table
+# answers "what does it DO", and one of its slots is a RENDERING — which `c_render_of` builds
+# out of the payload type's own parts. Registered from `c_build_impls`, which runs before
+# `c_build_structs`, the field registry was still empty and every struct payload rendered
+# through the integer arm: `zrt_display_int((int64_t)(*(const zg_Fd *)p))`, which cc refused.
+fn c_build_spec_vts(mut &em: Emitter, f: ast.File) {
+	for ip in f.impls {
 		at := c_derive_spec_at(f, ip.on)
 		if at >= 0 {
 			c_spec_vt_register(em, f.specs[at], ip)
@@ -19670,6 +19733,7 @@ fn c_emit_unit(prog0: ast.File, own0: ast.File, ms: Mods, whole: bool, want_lint
 	c_build_structs(em, f)
 	c_build_enums(em, f)
 	c_build_specs(em, f)
+	c_build_spec_vts(em, f)
 
 	# THE DECLARATION SITES, once. Three passes below ask the same question of them — what
 	# types a declaration spells — and the list answers all three (c_decl_sites says why it
@@ -19903,11 +19967,14 @@ fn c_emit_unit(prog0: ast.File, own0: ast.File, ms: Mods, whole: bool, want_lint
 	# `display` override, which is a program function the prototypes above declare.
 	# THE SPEC WITNESS TABLES go with them, and for the same reason twice over: a table's
 	# slots are program functions, so it has to follow the prototypes that declare them.
+	# THE RENDERERS COME FIRST of the two, because a witness table's rendering slot is filled
+	# by a thunk that CALLS one: a boxed `Fd` renders through `zg_render_Fd`. The tables used
+	# to lead, and cc reported an implicit declaration against generated C.
 	mut rnds := ""
-	for d in em.svt_decls {
+	for d in em.rnd_decls {
 		rnds = rnds + c_lowered(checking, d)
 	}
-	for d in em.rnd_decls {
+	for d in em.svt_decls {
 		rnds = rnds + c_lowered(checking, d)
 	}
 

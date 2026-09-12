@@ -185,16 +185,48 @@ printf 'gates-check: %s gates — each on the board, each run by CI\n' \
 # read the corpus and all three work without it, by design. So the ones that tolerate the
 # absence are NAMED here, with the reason, and anything else that reads it must be behind the
 # fetch. A gate added tomorrow is in one of the two sets or it is a finding.
-TOLERATES="entry-path examples install-check oracle treesitter"
+# `grammar-cited` joined the list the day this clause learned to follow a recipe into its
+# script: it reads `test-data/counterexamples/INVENTORY` and SKIPS when the file is not there,
+# which is the same arrangement the four above have and the only one that was never written
+# down. `gates` is here for a different reason — the only `test-data/` in gates-check.sh is
+# the pattern this clause matches WITH, and a rule must not find itself.
+TOLERATES="entry-path examples gates grammar-cited install-check oracle treesitter"
+
+# READS IT THROUGH ITS SCRIPT, TOO. The recipe was the whole window, and a gate whose recipe
+# is one `./scripts/x.sh` line reads the corpus INSIDE that script — ten of them do, and this
+# clause saw none. A rule that only looks where the reading happens to be spelled is the shape
+# this file exists to catch, one level down.
+reads_corpus() {
+	body=$(awk -v pat="^$1:" '$0 ~ pat { on = 1; next } on && /^[a-z-]+:/ { exit } on' "$GATES_MK" "$MAKEFILE" 2>/dev/null)
+	printf '%s' "$body" | grep -q 'test-data' && return 0
+
+	# A MENTION IS NOT A READ. Three scripts name `test-data/...` in a COMMENT — where a case
+	# lives, why one is written here instead — and counting those made the clause report gates
+	# that touch nothing. Comment lines are dropped, and what is left has to look like access:
+	# a path under `test-data/` that is not preceded by a word character.
+	for sc in $(printf '%s' "$body" | grep -oE '\./scripts/[a-z0-9-]+\.sh'); do
+		[ -f "${sc#./}" ] || continue
+		grep -v '^[[:space:]]*#' "${sc#./}" | grep -qE '(^|[^[:alnum:]_/])test-data/' && return 0
+	done
+	return 1
+}
 
 for t in $board; do
-	body=$(awk -v pat="^$t:" '$0 ~ pat { on = 1; next } on && /^[a-z-]+:/ { exit } on' "$GATES_MK" "$MAKEFILE" 2>/dev/null)
-	printf '%s' "$body" | grep -q 'test-data' || continue
+	reads_corpus "$t" || continue
 
 	case " $(printf '%s ' $conditional) " in *" $t "*) continue ;; esac
 	case " $TOLERATES " in *" $t "*) continue ;; esac
 
 	note "\`make $t\` reads the private corpus, is not behind the fetch, and is not named as tolerating its absence"
+done
+
+# AND THE OTHER DIRECTION, which nothing asked. A gate behind the fetch that reads nothing from
+# the corpus is held back by a guard it does not need — the reverse assertion `CORPUS_SKIP`
+# added for itself, here for the set beside it.
+for t in $conditional; do
+	reads_corpus "$t" && continue
+
+	note "\`make $t\` is behind the corpus fetch and reads nothing from the corpus — the guard costs it every job that does not fetch"
 done
 
 # CLAUSE 5 — a gate that SWEEPS a discovered set declares a floor.

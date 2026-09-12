@@ -23,6 +23,13 @@ set -uo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT" || exit 2
 
+# WHO IS SPEAKING, and about WHAT. This script serves two gates now — `sanitize-conc` over the
+# twenty `conc_*` cases and `sanitize-corpus` over the other 179 — and every message hardcoded
+# the first one's name. A reader of a failing `make sanitize-corpus` was told "the concurrency
+# corpus is not clean under the sanitizers", about 179 cases that are not it.
+GATE="${GATE:-sanitize-conc}"
+CORPUS="${CORPUS:-the concurrency corpus}"
+
 ZERG="${ZERG:-$ROOT/bin/zerg}"
 CC="${CC:-cc}"
 RT="src/runtime/csrc"
@@ -51,11 +58,11 @@ RUNS="${RUNS:-${REPS:-30}}"
 PARALLEL="${PARALLEL:-4}"
 
 [ -x "$ZERG" ] || {
-	printf 'sanitize-conc: %s is not built — run `make build` first\n' "$ZERG" >&2
+	printf "$GATE: %s is not built — run `make build` first\n" "$ZERG" >&2
 	exit 2
 }
 [ -d test-data/codegen ] || {
-	printf 'sanitize-conc: test-data submodule not initialized (git submodule update --init)\n' >&2
+	printf "$GATE: test-data submodule not initialized (git submodule update --init)\n" >&2
 	exit 2
 }
 
@@ -139,7 +146,7 @@ for rsrc in $(rt_sources); do
 	RT_OBJS="$RT_OBJS $robj"
 done
 
-printf 'sanitize-conc: address + undefined, leak detection %s, %s seeded single-worker schedules + %s multi-worker runs per case\n\n' "$LEAKS" "$SCHEDULES" "$RUNS"
+printf "$GATE: address + undefined, leak detection %s, %s seeded single-worker schedules + %s multi-worker runs per case\n\n" "$LEAKS" "$SCHEDULES" "$RUNS"
 
 fail=0
 cases=0
@@ -292,13 +299,13 @@ done
 if [ "$fail" -ne 0 ]; then
 	# A sanitizer report is longer than the twenty lines printed above, and the emitted C
 	# it points into is worth reading beside it, so the whole working set stays put.
-	printf '\nsanitize-conc: the concurrency corpus is not clean under the sanitizers\n' >&2
-	printf 'sanitize-conc: the C, the binaries and the full reports are kept in %s\n' "$WORK" >&2
+	printf "\n$GATE: $CORPUS is not clean under the sanitizers\n" >&2
+	printf "$GATE: the C, the binaries and the full reports are kept in %s\n" "$WORK" >&2
 	exit 1
 fi
 rm -rf "$WORK"
 if [ "$cases" -lt "$MIN_CASES" ]; then
-	printf '\nsanitize-conc: only %s cases were measured, and the floor is %s\n' "$cases" "$MIN_CASES" >&2
+	printf "\n$GATE: only %s cases were measured, and the floor is %s\n" "$cases" "$MIN_CASES" >&2
 	exit 1
 fi
 
@@ -327,12 +334,12 @@ if [ -n "$KNOWN" ]; then
 	done
 	if [ "$LEAKS" = "on" ]; then
 		if [ -n "$stale" ]; then
-			printf '\nsanitize-conc: these no longer report and their lines are still there —%s\n' "$stale" >&2
-			printf 'sanitize-conc: delete each from the list; that deletion IS the gate for the fix\n' >&2
+			printf "\n$GATE: these no longer report and their lines are still there —%s\n" "$stale" >&2
+			printf "$GATE: delete each from the list; that deletion IS the gate for the fix\n" >&2
 			exit 1
 		fi
 	else
-		printf 'sanitize-conc: the known-report list was NOT re-checked — leak detection is off here\n'
+		printf "$GATE: the known-report list was NOT re-checked — leak detection is off here\n"
 	fi
 fi
 # The leak state is named HERE and not only in the header. `clean` on its own is the word a
@@ -342,4 +349,4 @@ fi
 # which names what was measured rather than declaring an absence.
 known_note=""
 [ -n "$KNOWN" ] && known_note=", $(printf '%s' "$seen_known" | wc -w | tr -d ' ') of them reporting as listed"
-printf '\nsanitize-conc: %s cases x %s seeded schedules + %s multi-worker runs%s, clean under address + undefined, leak detection %s\n' "$cases" "$SCHEDULES" "$RUNS" "$known_note" "$LEAKS"
+printf "\n$GATE: %s cases x %s seeded schedules + %s multi-worker runs%s, clean under address + undefined, leak detection %s\n" "$cases" "$SCHEDULES" "$RUNS" "$known_note" "$LEAKS"

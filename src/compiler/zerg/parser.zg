@@ -2895,7 +2895,7 @@ fn p_is_rendering(name: str) -> bool {
 # put it. A method is an ordinary function whose first argument happens to be called `this`, and
 # everything below the parser depends on that being the first one.
 fn p_with_receiver(recv: str, recv_mut: bool, ps: list[ast.Param]) -> list[ast.Param] {
-	mut out: list[ast.Param] = [ast.Param("this", ast.Ty.TNamed(recv), recv_mut, false, ast.Expr.ENil)]
+	mut out: list[ast.Param] = [ast.Param("this", p_ty_of_name(recv), recv_mut, false, ast.Expr.ENil)]
 	for pm in ps {
 		out.append(pm)
 	}
@@ -2982,10 +2982,15 @@ fn parse_fn_head_at(mut &p: Parser, is_pub: bool, recv: str, recv_mut: bool, in_
 	mut params: list[ast.Param] = []
 	if recv != "" and want_recv {
 		# The receiver is not written in the parameter list — `this` is implicit — so it is
-		# added here. From this point on a method is an ordinary function whose first
+		# added here.
+		#
+		# THROUGH `p_ty_of_name`, because a receiver may be a BUILT-IN: `impl Into[E] for int`
+		# is a spec implementation on a type this program did not declare, and `TNamed("int")`
+		# is a name nothing declares — `no type named `int` (the receiver of `into$Into[E]`)`.
+		# A scalar's name and a scalar are two things, and that function is where they meet. From this point on a method is an ordinary function whose first
 		# argument happens to be called `this`, which is why nothing below the parser needs
 		# a notion of methods at all.
-		params.append(ast.Param("this", ast.Ty.TNamed(recv), recv_mut, false, ast.Expr.ENil))
+		params.append(ast.Param("this", p_ty_of_name(recv), recv_mut, false, ast.Expr.ENil))
 	}
 	for not p_at(p, token.Kind.RParen) and not p_at(p, token.Kind.Eof) {
 		# an optional `mut &` prefix marks a mutable-reference parameter
@@ -4244,7 +4249,7 @@ fn index_type_name(e: ast.Expr) -> str {
 # p_ty_of_name is a written type argument as a type. A scalar goes through the conversion
 # table the parser already has; anything else is a declared name, and whether such a type
 # exists is the instantiation's question rather than this one's.
-fn p_ty_of_name(nm: str) -> ast.Ty {
+pub fn p_ty_of_name(nm: str) -> ast.Ty {
 	return conv_ty(nm) if is_conv(nm)
 
 	return ast.Ty.TNamed(nm)

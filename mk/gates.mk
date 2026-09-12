@@ -462,7 +462,8 @@ SANITIZE_CORPUS_CASES := $(filter-out $(wildcard test-data/codegen/conc_*.zg) $(
 
 sanitize-corpus:                # the rest of the corpus under the sanitizers, against a named list
 	$(MAKE) build
-	@CASES="$(SANITIZE_CORPUS_CASES)" \
+	@GATE=sanitize-corpus CORPUS="the codegen corpus" \
+		CASES="$(SANITIZE_CORPUS_CASES)" \
 		KNOWN="scripts/sanitize-leaks.txt test-data/sanitize-leaks.txt" \
 		MIN_CASES=150 SCHEDULES=1 RUNS=1 PARALLEL=1 ./scripts/sanitize-conc.sh
 

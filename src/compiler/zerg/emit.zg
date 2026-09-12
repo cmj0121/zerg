@@ -15732,7 +15732,19 @@ fn c_slice(mut &em: Emitter, target: ast.Expr, idx: ast.Expr, tty: ast.Ty, sb: S
 	em.used_rt = true
 	mut out := "({ zrt_list zgt_ss = " + src + "; zrt_list zgt_sl;"
 	out = out + " zrt_list_slice(&zgt_sl, &zgt_ss, (size_t)(" + lo + "), (size_t)(" + hi + "));"
-	return out + " zgt_sl; })"
+
+	# AND THE MATERIALISED SOURCE GOES BACK, when it was materialised out of something that
+	# owns nothing afterwards. `mk()[1..3]` builds a list nobody names, and the temp was the
+	# only reference to it — measured under LeakSanitizer, one buffer per slice.
+	#
+	# ONLY WHEN THE TARGET IS NOT A PLACE, which is c_map_method's rule and for the same
+	# reason: `zrt_list zgt_ss = xs` is a HEADER copy that shares the buffer, so giving it
+	# back where `xs` still names it frees a buffer the caller is holding.
+	mut give := ""
+	if not c_is_place(em, target) {
+		give = " " + c_drop_stmt(em, tty, "zgt_ss")
+	}
+	return out + give + " zgt_sl; })"
 }
 
 # c_map_index lowers `m[k]`. The key is materialised into a temp because zrt_map_index

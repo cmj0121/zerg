@@ -1052,6 +1052,12 @@ fn c_no_builtin_into(mut &em: Emitter, meth: str, target: ast.Expr) {
 	t := c_infer(em, target)
 	return if not check.chk_is_scalar(t)
 
+	# UNLESS THIS PROGRAM GAVE IT ONE. The sentence below is about what ships, and a program
+	# may now write `impl Into[E] for int` — which is what `#[derive(From)]` generates for a
+	# variant carrying an `int`. The rule was true of every program until one could, and a
+	# rule whose reason has stopped holding is the shape this compiler keeps finding.
+	return if c_has_method(em, ast.ty_name(t), "into") or c_meth_resolved(em, ast.ty_name(t), "into") != "into"
+
 	raise c_diag(em, rule.Rule.IntoNotBuiltIn, f"`into` is a method of the `Into` spec, and no built-in type implements it — between numbers the conversion is written `{ast.ty_name(t)}(…)` at the target type, and a value's text is `str(x)`, which every type answers")
 }
 
@@ -4075,6 +4081,22 @@ pub fn c_has_gen_method(mut &em: Emitter, recv: str, name: str) -> bool {
 	return false
 }
 
+# c_recv_name is the receiver a method call keys by, and it is `c_named_of` PLUS a built-in:
+# `impl Into[E] for int` puts a scalar where every other receiver is a declared name, and
+# `c_named_of` answers "" for one — so the call found no method and said `the method `into` on
+# a int`, about the type whose impl was three lines up.
+#
+# It is the two call sites that compute a receiver, the lowering and the inference, which is
+# the pair that has to agree about which method a call names.
+fn c_recv_name(mut &em: Emitter, tty: ast.Ty) -> str {
+	nm := c_named_of(tty)
+
+	return nm if nm != ""
+	return ast.ty_name(tty) if check.chk_is_scalar(tty)
+
+	return ""
+}
+
 fn c_gen_meth_resolved(mut &em: Emitter, recv: str, meth: str, target: ast.Expr, args: list[ast.Expr]) -> str {
 	key := c_sig_key(recv, meth)
 	return meth if recv == "" or not c_is_generic(em, key)
@@ -4710,6 +4732,18 @@ fn c_check_named_types(mut &em: Emitter, f: ast.File, sites: list[Site]) {
 	# it was given — `… `int` (parameter `this` of `tag`)`. It is a question about the
 	# DECLARATION rather than about a type it spells, which is why it is not a site.
 	for fn_i in f.fns {
+		# A SPEC'S IMPL IS THE EXCEPTION, and orphan safety is why: an implementation needs the
+		# spec or the type to be this program's, and a built-in is never the type — so what
+		# makes `impl Into[E] for int` well-formed is that `Into` IS this program's. Every spec
+		# a Zerg program can name is, there being no package layer to import one from, so the
+		# condition reads as "the method came from a spec impl" and an INHERENT method on a
+		# built-in stays refused.
+		#
+		# It is the first caller of "an `impl` may sit on a type this program did not declare",
+		# and `#[derive(From)]` is what asked: it generates `impl Into[E] for int` for a variant
+		# carrying an `int`, which this rule turned away about a target rather than a payload.
+		continue if fn_i.spec_of != ""
+
 		raise c_diag_at(fn_i.path, fn_i.line, fn_i.col, rule.Rule.NotYetImplOnBuiltin, f"NotImplemented: an `impl` on the built-in type `{fn_i.recv}` — this compiler gives a method a declared struct or enum receiver (GRAMMAR#impl-decl)") if fn_i.recv != "" and parser.is_conv(fn_i.recv)
 	}
 
@@ -9632,7 +9666,7 @@ fn c_meth_kind(mut &em: Emitter, tty: ast.Ty, meth: str) -> MethKind {
 	# AN UNKNOWN RECEIVER IS LEFT ALONE. A module prefix and an ill-formed target both infer to
 	# nothing, and each has a rule of its own that is the whole finding (c_free_method reports
 	# both). `strings.display()` is a member no module declares, not a rendering.
-	nm := c_named_of(tty)
+	nm := c_recv_name(em, tty)
 	if not c_is_unknown(tty) and not c_has_method(em, nm, meth) and not c_is_fn(c_field_ty(em, nm, meth)) {
 		# THE TWO RENDERINGS ARE BUILT NOW, and they are the same generator the other three
 		# spellings reach. What is left of `E9107` for them is the class with no rendering at
@@ -9667,8 +9701,8 @@ fn c_meth_kind(mut &em: Emitter, tty: ast.Ty, meth: str) -> MethKind {
 	# on a type called `Greet` and emit a call to `zg_Greet_hello`, which nothing declares.
 	return MethKind.MSpec if c_is_spec_name(em, nm)
 
-	return MethKind.MRecv if c_has_method(em, c_named_of(tty), meth)
-	return MethKind.MFnField if c_is_fn(c_field_ty(em, c_named_of(tty), meth))
+	return MethKind.MRecv if c_has_method(em, nm, meth)
+	return MethKind.MFnField if c_is_fn(c_field_ty(em, nm, meth))
 
 	return MethKind.MFree
 }
@@ -9704,7 +9738,7 @@ fn c_method(mut &em: Emitter, target: ast.Expr, meth: str, args: list[ast.Expr],
 	}
 
 	tty := c_infer(em, target)
-	recv := c_named_of(tty)
+	recv := c_recv_name(em, tty)
 
 	# THE WRITTEN NAME BECOMES THE RECORDED KEY, here, once — before the family is picked and
 	# before anything downstream looks the name up. Every arm below keys by it.
@@ -12721,7 +12755,7 @@ fn c_infer_methcall(mut &em: Emitter, target: ast.Expr, meth: str, args: list[as
 	return c_lookup_sig_ret(em, c_sig_key(sn, meth)) if sn != "" and c_is_struct_name(em, sn)
 
 	tty := c_infer(em, target)
-	recv := c_named_of(tty)
+	recv := c_recv_name(em, tty)
 
 	# THE SAME RESOLUTION THE EMISSION PATH MAKES, because it is the same question: the name a
 	# reader wrote against the key it was recorded under. Applied at both ends or the two
@@ -19240,8 +19274,12 @@ fn c_spec_render_register(mut &em: Emitter, key: str, target: str) -> str {
 	}
 	em.svt_names.append(rn)
 
-	ct := c_ty_cname(target)
-	body := c_render_of(em, ast.Ty.TNamed(target), f"(*(const {ct} *)zg_p)", true)
+	ct := c_target_ctype(target)
+
+	# THE TARGET'S TYPE, not a name that spells it, and the const goes AFTER: a built-in target
+	# gives `ct` a `const char*`, so `const {ct} *` is `const const char* *` and `TNamed("str")`
+	# is not the str `c_render_of` knows how to render.
+	body := c_render_of(em, parser.p_ty_of_name(target), f"(*({ct} const *)zg_p)", true)
 	em.svt_decls.append(f"static const char *{rn}(const void *zg_p) {{\n    return {body};\n}}\n")
 	return rn
 }
@@ -19264,6 +19302,16 @@ fn c_spec_render_disp(mut &em: Emitter, sp: str, inner: str) -> str {
 	out = out + f"    return ((const {c_spec_vt_type(sp)} *)zrt_dyn_vt(zg_self))->render(zrt_dyn_payload(zg_self));\n}}\n"
 	em.svt_decls.append(out)
 	return f"{dn}({inner})"
+}
+
+# c_target_ctype is the C spelling of an impl TARGET, and it exists because a target may be a
+# BUILT-IN: `impl Into[E] for int` is a spec implementation on a type this program did not
+# declare, which is what `#[derive(From)]` generates for a variant carrying an `int`.
+# `c_ty_cname` mangles a NAME, and `int` names no declaration — the thunks came out spelling
+# `zg_int`. `p_ty_of_name` is where a scalar's name and the scalar meet, and it is the parser's
+# because that is where a written type argument already goes through it.
+fn c_target_ctype(nm: str) -> str {
+	return c_type(parser.p_ty_of_name(nm))
 }
 
 # c_spec_shim_register is the function a witness table's slot actually points at: the member
@@ -19293,7 +19341,7 @@ fn c_spec_shim_register(mut &em: Emitter, sp: ast.SpecDecl, ip: ast.ImplDecl, re
 	# `This` resolved to the target and the spec's parameters to the impl's arguments — so the
 	# shim's C signature and the slot's cannot come apart.
 	m := c_default_method(sp, ip, req)
-	ct := c_ty_cname(ip.target)
+	ct := c_target_ctype(ip.target)
 	mut ps := "void *zg_p"
 
 	# A `mut &this` RECEIVER IS ALREADY A POINTER, and the payload pointer is the one it wants
@@ -19356,7 +19404,7 @@ fn c_spec_box_register(mut &em: Emitter, key: str, target: str) -> str {
 	}
 	em.svt_names.append(bn)
 
-	ct := c_ty_cname(target)
+	ct := c_target_ctype(target)
 	vn := c_spec_vt_name(key, target)
 	mut out := f"static void *{bn}({ct} zg_v) {{\n"
 	out = out + f"    void *zg_c = zrt_dyn_alloc(sizeof({ct}), &{vn});\n"
@@ -19409,8 +19457,12 @@ pub fn c_spec_vt_register(mut &em: Emitter, sp: ast.SpecDecl, ip: ast.ImplDecl) 
 	em.svt_decls.append(f"static const {tn} {vn};\n")
 
 	mut out := f"static const {tn} {vn} = {{ "
-	out = out + c_elem_copy_fn(em, ast.Ty.TNamed(target)) + ", "
-	out = out + c_elem_drop_fn(em, ast.Ty.TNamed(target))
+
+	# THROUGH THE TARGET'S TYPE for the same reason: a `str` payload owes a retain and a
+	# release, and `TNamed("str")` is a name with neither.
+	tgt_ty := parser.p_ty_of_name(target)
+	out = out + c_elem_copy_fn(em, tgt_ty) + ", "
+	out = out + c_elem_drop_fn(em, tgt_ty)
 	out = f"{out}, {c_spec_render_register(em, key, target)}"
 	for req in sp.reqs {
 		if c_spec_boxable(req) {

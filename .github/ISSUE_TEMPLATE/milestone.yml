@@ -41,13 +41,15 @@ body:
       required: true
 
   - type: textarea
-    id: stories
+    id: issues
     attributes:
-      label: Stories
-      description: Child stories of this root. One purpose each. Fill numbers after those issues exist.
+      label: Issues
+      description: Related issues of this root, as a table. Role is subject, release, or leftover.
       value: |
-        - [ ] #
-        - [ ] #
+        | Issue | Purpose | Role |
+        | --- | --- | --- |
+        | # |  | subject |
+        | # |  | leftover |
     validations:
       required: true
 

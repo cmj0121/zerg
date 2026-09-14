@@ -1,0 +1,67 @@
+name: Story
+description: A body of work with one purpose, split into tasks.
+labels: ["story"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        A **story** is one purpose large enough to split. Its children are **tasks**.
+
+        Write **what becomes true** when the story closes. Do not write how — no files, no
+        algorithms, no representation. That belongs in the pull request.
+
+        After opening: write `Part of #<milestone-issue>` if it belongs to a version root,
+        and attach each task as a sub-issue.
+
+  - type: input
+    id: parent
+    attributes:
+      label: Milestone root
+      description: The milestone issue this story is part of, if any. Example — #133
+      placeholder: "#133"
+
+  - type: textarea
+    id: purpose
+    attributes:
+      label: Purpose
+      description: One purpose. What a user can do, or what the contract now holds, when this story closes.
+      placeholder: "A spec is a bound a value can have, so a parameter can say any destination."
+    validations:
+      required: true
+
+  - type: textarea
+    id: out
+    attributes:
+      label: Not this story
+      description: Neighbours, later work, and what would make this story a filing cabinet.
+      placeholder: "A generic method is a different purpose. #[dyn] is a compilation strategy, not a new thing a user can write."
+    validations:
+      required: true
+
+  - type: textarea
+    id: tasks
+    attributes:
+      label: Tasks
+      description: Child tasks. One observable purpose each. Fill numbers after those issues exist.
+      value: |
+        - [ ] #
+        - [ ] #
+    validations:
+      required: true
+
+  - type: textarea
+    id: done
+    attributes:
+      label: Done when
+      description: Observables only — a program that runs, a program that is refused by name, a diagnostic that retires. Not "the compiler does X internally".
+      placeholder: "fn emit(sk: Sink, line: str) takes any impl Sink. E9048 retires."
+    validations:
+      required: true
+
+  - type: checkboxes
+    id: purpose-only
+    attributes:
+      label: Purpose only
+      options:
+        - label: This issue states the purpose, not how to implement it.
+          required: true

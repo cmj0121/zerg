@@ -1,0 +1,71 @@
+name: Bug
+description: Specified behavior is not what happens — a [deviation], a silent wrong answer, or an untrue diagnostic.
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        A **bug** is a mismatch with the specification, measured on shipping `zerg`.
+
+        Write **what is specified** and **what happens instead**. Do not write the fix — no
+        files, no algorithms, no "route this through X". That belongs in the pull request.
+
+        A form the spec marks `[not yet]` and the compiler refuses by name is not a bug.
+        File a task against that marker instead.
+
+  - type: dropdown
+    id: kind
+    attributes:
+      label: Kind
+      options:
+        - "[deviation] — compiles, behaves differently from the spec"
+        - silent wrong answer — a program gets an answer and no diagnostic
+        - untrue diagnostic — the code or the sentence is wrong for the program
+        - other (say what in the body)
+    validations:
+      required: true
+
+  - type: textarea
+    id: specified
+    attributes:
+      label: Specified
+      description: The chapter (or GRAMMAR production) and the behavior it requires.
+      placeholder: "docs/code/collections.md — inside `for … in xs`, xs is frozen against structural change (E3089)."
+    validations:
+      required: true
+
+  - type: textarea
+    id: instead
+    attributes:
+      label: What happens instead
+      description: Measured on this tree, not remembered. Quote the diagnostic, the output, or the silence.
+      placeholder: "`for x in p.xs { grow(p, x) }` exits 0 and the list grows. `grow` takes `mut & Box`."
+    validations:
+      required: true
+
+  - type: textarea
+    id: program
+    attributes:
+      label: Program
+      description: The smallest program that shows it. A program, not a walk through the compiler.
+      value: |
+        ```zerg
+
+        ```
+    validations:
+      required: true
+
+  - type: input
+    id: parent
+    attributes:
+      label: Parent
+      description: Story or milestone issue this belongs to, if any. Example — #163
+      placeholder: "#163"
+
+  - type: checkboxes
+    id: purpose-only
+    attributes:
+      label: Purpose only
+      options:
+        - label: This issue states the mismatch, not how to fix it.
+          required: true

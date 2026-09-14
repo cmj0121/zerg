@@ -1,0 +1,54 @@
+name: Task
+description: One purpose. A single observable change.
+body:
+  - type: markdown
+    attributes:
+      value: |
+        A **task** is one purpose that can close on its own. If it has children, it is a story.
+
+        Write **what must be true**. Do not write how — no files to edit, no algorithms, no
+        representation, no "add a field then walk it". That belongs in the pull request.
+
+        After opening: start the body with `Part of #<story>` so the parent can link it.
+
+  - type: input
+    id: parent
+    attributes:
+      label: Story
+      description: The story this task is part of. Example — #16
+      placeholder: "#16"
+    validations:
+      required: true
+
+  - type: textarea
+    id: purpose
+    attributes:
+      label: Purpose
+      description: The single thing that becomes true. Name the form, the diagnostic, or the chapter — not the patch.
+      placeholder: "A generic enum can be declared, instantiated, and matched. E9003 retires."
+    validations:
+      required: true
+
+  - type: textarea
+    id: done
+    attributes:
+      label: Done when
+      description: Observables a gate can hold. A program, a refusal by name, a code that leaves the inventory.
+      placeholder: "enum Either[X, Y] declares and matches. Either.Left(1) with no position is refused by name. E9003 retires."
+    validations:
+      required: true
+
+  - type: textarea
+    id: out
+    attributes:
+      label: Not this task
+      description: What a reader might bundle in and must not.
+      placeholder: "A generic method is a different task. How a variant stores unmentioned parameters is the pull request."
+
+  - type: checkboxes
+    id: purpose-only
+    attributes:
+      label: Purpose only
+      options:
+        - label: This issue states the purpose, not how to implement it.
+          required: true

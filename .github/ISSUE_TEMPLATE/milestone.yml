@@ -1,0 +1,60 @@
+name: Milestone
+description: Root issue for a version — the sentence that release is judged by.
+title: "0.X.0: "
+labels: ["milestone"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        This is the **root** of a GitHub milestone. Its children are **stories**, not tasks.
+
+        Write the **purpose of the version**. Do not write how it is built — no files, no
+        algorithms, no representation, no "edit X then Y". That belongs in the pull request.
+
+        After opening: set the GitHub **Milestone**, and attach each story as a sub-issue.
+
+  - type: textarea
+    id: sentence
+    attributes:
+      label: Sentence
+      description: The one line this version is judged by. Contrast it with the version before.
+      placeholder: "0.3.0 let a user write generic DATA. 0.4.0 lets them write an ABSTRACTION."
+    validations:
+      required: true
+
+  - type: textarea
+    id: in
+    attributes:
+      label: In
+      description: What a user can do when this version ships that they could not do before. Observable, not internal.
+      placeholder: "A spec is a value's type. An enum can be generic. A method can carry its own type parameters."
+    validations:
+      required: true
+
+  - type: textarea
+    id: out
+    attributes:
+      label: Out
+      description: What this version deliberately does not do, and which later issue or version owns it.
+      placeholder: "The package layer is #60. Ergonomics (E9009, named arguments) are not this version."
+    validations:
+      required: true
+
+  - type: textarea
+    id: stories
+    attributes:
+      label: Stories
+      description: Child stories of this root. One purpose each. Fill numbers after those issues exist.
+      value: |
+        - [ ] #
+        - [ ] #
+    validations:
+      required: true
+
+  - type: checkboxes
+    id: purpose-only
+    attributes:
+      label: Purpose only
+      options:
+        - label: This issue states what the version is for, not how to implement it.
+          required: true

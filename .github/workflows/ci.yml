@@ -127,6 +127,12 @@ jobs:
       - name: A walk that reaches into a block reaches into a bare one
         run: make stmt-walk
 
+      # `zerg lint` answers the dead-code questions that are about a program. These two are
+      # about the repository: a public function of the compiler that the compiler never calls,
+      # and a script nothing invokes. Neither has anywhere else to be asked.
+      - name: What is written here is reached by something
+        run: make dead-code
+
       # The examples had no door for as long as they existed. This is the one direction the
       # drift goes once they have one: an example the glob builds and the index never names.
       - name: Every example is named in the index a reader opens

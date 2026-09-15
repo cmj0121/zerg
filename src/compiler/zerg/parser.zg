@@ -1634,31 +1634,16 @@ fn p_take_derives(name: str, mut &pending: list[str], mut &on: list[str], mut &s
 	pending = []
 }
 
-# imports_of_at returns just the import paths of a source, for the driver's module loader:
-# it resolves and loads a program's dependencies before anything is emitted, so it needs
-# the import list alone and not the cost of keeping a whole parse around.
-#
-# It is told which FILE it is reading, and there is deliberately no pathless twin. The scan
-# is a full parse, so it is the FIRST parse a source meets — a refusal the parser raises
-# with a place (p_place) escapes from HERE, before the pathed compile parse ever runs, and
-# a pathless caller made that place name a line of no file. The twin was kept for "a caller
-# with genuinely no path" and no such caller ever appeared; what its existence did keep is
-# the one mistake this signature was introduced to make impossible.
-pub fn imports_of_at(src: str, path: str) -> list[str] {
-	# the PATHS alone: the loader resolves a module to a file, and the name the import binds
-	# is a question about this file's scope, which the loader has no opinion about
-	f := parse_at(src, path)
-	mut out: list[str] = []
-	for im in f.imports {
-		out.append(im.path)
-	}
-	return out
-}
-
-# import_decls_at is imports_of_at with the DECLARATION kept, and it exists for the one thing
-# the path alone cannot buy: a place. A loader that holds only `"atomic"` can say a module is
+# import_decls_at returns a source's import DECLARATIONS, for the driver's module loader: it
+# resolves and loads a program's dependencies before anything is emitted, and it needs the one
+# thing a path alone cannot buy: a place. A loader that holds only `"atomic"` can say a module is
 # unavailable and cannot say which line asked for it, so its refusal is the one shape this
 # repo's gates turn away — a real error the reader has to go and find.
+#
+# It is told which FILE it is reading, and there is deliberately no pathless twin. The scan is
+# a full parse, so it is the FIRST parse a source meets — a refusal the parser raises with a
+# place (p_place) escapes from HERE, before the pathed compile parse ever runs, and a pathless
+# caller made that place name a line of no file.
 pub fn import_decls_at(src: str, path: str) -> list[ast.ImportDecl] {
 	f := parse_at(src, path)
 	return f.imports

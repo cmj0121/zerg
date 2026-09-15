@@ -713,7 +713,7 @@ EOF
 # `#[derive(Eq)]` + `==` used to be refused here. It is a FEATURE now, and what a working
 # form owes is a program that runs, so it moved to the codegen corpus. What is left refused
 # on this subject is the derive this compiler still does not write — see
-# derive-of-an-unbuilt-spec and payload-enum-equality below.
+# derive-of-an-unbuilt-spec below, and the two `Ord` preconditions beside it.
 
 expect "$ZERG" equality-with-no-eq E4020 <<'EOF'
 struct P {
@@ -788,14 +788,26 @@ fn main() {
 }
 EOF
 
-expect "$ZERG" payload-enum-equality E9055 <<'EOF'
-#[derive(Eq)]
-enum Shape {
-	Circle(int)
+expect "$ZERG" derive-ord-over-a-float E4098 <<'EOF'
+#[derive(Eq, Ord)]
+struct P {
+	pub a: int
+	pub r: float
 }
 
 fn main() {
-	print Shape.Circle(1) == Shape.Circle(1)
+	print P(1, 2.0) < P(2, 1.0)
+}
+EOF
+
+expect "$ZERG" derive-ord-without-eq E4099 <<'EOF'
+#[derive(Ord)]
+struct Q {
+	pub a: int
+}
+
+fn main() {
+	print Q(1) < Q(2)
 }
 EOF
 
@@ -1582,13 +1594,13 @@ fn main() {
 EOF
 
 expect "$ZERG" derive-of-an-unbuilt-spec E9054 <<'EOF'
-#[derive(Ord)]
+#[derive(Hash)]
 struct P {
 	pub x: int
 }
 
 fn main() {
-	print P(1) < P(2)
+	print P(1).x
 }
 EOF
 

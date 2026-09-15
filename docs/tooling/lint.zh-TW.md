@@ -89,6 +89,12 @@ L104 `_ :=` in `main` — the expression is already a statement, so the binder s
 不值得對它說的事。同一件冗餘的 select arm 寫法是 [`F407`](fmt.zh-TW.md) 的事，因為 `GRAMMAR` 讓那個 binder 是可選的，
 刪掉它之後剩下的仍然是一個 arm；敘述形式的 binder 沒有這種寫法。
 
+`L101` 問的是**檔案**，`L102` 問的是**整支程式**，而這個差別不是任一條規則的細節：一個 `import`
+綁定的 namespace 只屬於寫下它的那個檔案——不會遞移，也不會跟同一個 module 的鄰居共用（`E5007`）——
+而一個被同支程式其他 module 呼叫的私有函式，就是有被呼叫。拿整支程式去問一個 import，是編譯器
+並不存在的規則，而且它會把某個檔案自己從來沒用過的 import 當成有用，只因為同 module 的**兄弟檔案**
+寫了那個名字。
+
 `L101` 與 `L102` 是以**使用處**來判斷一個宣告，而使用處寫在哪裡都算——不是只有函式本體裡面才算。
 **型別位置**是其中一種（`ctx: testing.Context` 用到了 `testing` 這個 import，卻完全沒有寫下任何
 運算式），模組層級 `const` 的初始式、struct 欄位的預設值、參數的預設值也都是。這些都是屬於宣告而

@@ -99,6 +99,13 @@ read" is the one thing there is no point saying about it. The select-arm spellin
 redundancy is [`F407`](fmt.md)'s, because `GRAMMAR` makes that binder optional and
 dropping it leaves an arm. A statement's binder has no such spelling.
 
+`L101` asks the **file**, and `L102` asks the **program**, and the difference is not a
+detail of either rule: an `import` binds a namespace in the file that writes it — neither
+transitive nor shared with the file's neighbours (`E5007`) — while a private function called
+from another module of the same program is called. Asking the program about an import is a
+rule the compiler does not have, and it reads an import one file never wrote as used because
+a **sibling** in the same module wrote the name.
+
 `L101` and `L102` judge a declaration by its **uses**, and a use counts wherever it is
 written — not only inside a function body. A **type position** is one (`ctx: testing.Context`
 uses the `testing` import and writes no expression at all), and so is a module-level `const`

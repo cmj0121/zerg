@@ -8,8 +8,6 @@
 # constructed from outside the module (a bootstrap limitation on cross-module enum
 # variants), so the driver only calls the module's pub functions.
 
-import "ascii"
-
 # Kind enumerates the lexical categories a token can belong to. The set mirrors
 # GRAMMAR group 2 so the vocabulary is forward-compatible even where the current
 # lexer does not yet emit every kind (f-strings, decorators).

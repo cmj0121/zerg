@@ -130,9 +130,23 @@ while read -r name; do
 		fail=1
 		continue
 	}
-	code=$("$ZERG" build --emit bin -o "$tmp/skip" "$DIR/$name.zg" 2>&1 >/dev/null |
-		grep -oE 'E[0-9]{4}' | head -1)
-	[ -n "$code" ] && printf '%s\t%s\n' "$name" "$code" >>"$tmp/observed"
+	# THREE OUTCOMES, NOT TWO. It BUILDS — no observation, which is what makes the line STALE
+	# below. It is refused WITH A CODE — that is the observation, and the MOVED clause compares
+	# it. Or it fails with NO code at all, which is neither: `cc` absent, the case unparseable,
+	# the corpus at a commit this compiler cannot read. That third outcome used to be indexed
+	# as the second and read as "still waiting for its feature", which is the whole reason the
+	# line names a code rather than an exit status.
+	if say=$("$ZERG" build --emit bin -o "$tmp/skip" "$DIR/$name.zg" 2>&1 >/dev/null); then
+		continue
+	fi
+	code=$(printf '%s\n' "$say" | grep -oE 'E[0-9]{4}' | head -1)
+	if [ -z "$code" ]; then
+		printf 'SKIPPED-NO-CODE %s — it fails and names no rule: %s\n' \
+			"$name" "$(printf '%s' "$say" | head -1)"
+		fail=1
+		continue
+	fi
+	printf '%s\t%s\n' "$name" "$code" >>"$tmp/observed"
 done <"$tmp/skipped"
 
 while IFS="$(printf '\t')" read -r name code; do

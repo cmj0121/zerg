@@ -1618,21 +1618,6 @@ fn tgt_places_each(ts: list[Target]) -> list[Expr] {
 	return out
 }
 
-# tgt_kids — the sub-targets of a target, whatever shape it is.
-pub fn tgt_kids(t: Target) -> list[Target] {
-	return match t {
-		Target.TgtWild => tgt_kids_none()
-		Target.TgtPlace(_) => tgt_kids_none()
-		Target.TgtTuple(ts) => ts
-		Target.TgtStruct(_, _, ts, _) => ts
-	}
-}
-
-fn tgt_kids_none() -> list[Target] {
-	mut out: list[Target] = []
-	return out
-}
-
 pub fn stmt_exprs(s: Stmt) -> list[Expr] {
 	return match s {
 		Stmt.SLet(_, _, _, _, _, v) => [v]

@@ -125,14 +125,16 @@ Zero-dependency 分兩層。**runtime**——透過平台 C 函式庫碰 OS、�
 **編譯器沒做到的地方，規格會說**——在該特性所屬的章節裡標上 **[deviation]**。動筆前最該先知道的是**靜默的**那些:
 程式拿到一個答案,而沒有任何診斷。
 
-| 靜默偏差                                                  | 章節                                   |
-| --------------------------------------------------------- | -------------------------------------- |
-| `for x in p.xs { p.xs.append(v) }` 編得過，而且真的會長大 | [集合](docs/code/collections.zh-TW.md) |
-| 一次執行從沒碰到的模組，它的 `init()` 照樣會跑            | [模組](docs/runtime/package.zh-TW.md)  |
+| 靜默偏差                                                       | 章節                                   |
+| -------------------------------------------------------------- | -------------------------------------- |
+| `for x in p.xs { grow(p, x) }` 透過 `mut &` 長大它正在走的那個 | [集合](docs/code/collections.zh-TW.md) |
+| 一次執行從沒碰到的模組，它的 `init()` 照樣會跑                 | [模組](docs/runtime/package.zh-TW.md)  |
 
-另有兩項是結構性的，執行中的程式感受得到：排程器是**協作式、非搶佔式**，一條 CPU-bound 的 coroutine 在自己
-park 之前會一直佔住一個 worker（[coroutine](docs/code/coroutine.zh-TW.md)）；模組可見性只對函式與模組常數
-強制，型別與欄位尚未（[模組](docs/runtime/package.zh-TW.md)）。
+第一列指的是**間接**的那個形式。把 append 寫在迴圈看得見的地方——`for x in p.xs { p.xs.append(v) }`——會被拒絕
+（`E3089`）；透過一個 `mut &` 參數摸到同一個 list 則不會，而迴圈走的那塊 buffer 會在它腳下移動。
+
+另有一項是結構性的，執行中的程式感受得到：排程器是**協作式、非搶佔式**，一條 CPU-bound 的 coroutine 在自己
+park 之前會一直佔住一個 worker（[coroutine](docs/code/coroutine.zh-TW.md)）。
 
 其餘的一切——什麼已建置、什麼被指名拒絕、還有哪些偏差——都標在規格對應的位置。讓這些標記保持誠實的關卡，
 就是 `make help gates` 列出的那些 target；**`make test`** 跑整塊板，而 `make gates` 是用來擋下「只是掛在板上、

@@ -138,15 +138,18 @@ linker against generated code nobody wrote. A feature the specification marks **
 chapter the feature belongs to. The ones worth knowing before writing anything are the **silent**
 ones, where a program gets an answer and no diagnostic:
 
-| Silent deviation                                                     | Chapter                                 |
-| -------------------------------------------------------------------- | --------------------------------------- |
-| `for x in p.xs { p.xs.append(v) }` compiles, and grows what it walks | [collections](docs/code/collections.md) |
-| an `init()` in a module the run never touches still runs             | [modules](docs/runtime/package.md)      |
+| Silent deviation                                                      | Chapter                                 |
+| --------------------------------------------------------------------- | --------------------------------------- |
+| `for x in p.xs { grow(p, x) }` grows what it walks, through a `mut &` | [collections](docs/code/collections.md) |
+| an `init()` in a module the run never touches still runs              | [modules](docs/runtime/package.md)      |
 
-Two more are structural, and a running program feels them: the scheduler is **cooperative, not
+The first row is the INDIRECT form. Writing the append where the loop can see it —
+`for x in p.xs { p.xs.append(v) }` — is refused (`E3089`); reaching the same list through a
+`mut &` parameter is not, and the loop walks a buffer that moves underneath it.
+
+One more is structural, and a running program feels it: the scheduler is **cooperative, not
 preemptive**, so a CPU-bound coroutine occupies a worker until it parks
-([coroutines](docs/code/coroutine.md)); and module visibility is enforced on functions and module
-constants, not yet on types or fields ([modules](docs/runtime/package.md)).
+([coroutines](docs/code/coroutine.md)).
 
 Everything else — what is built, what is refused by name, and every remaining deviation — is marked
 where it belongs in the specification. The gates that keep those markers honest are the targets

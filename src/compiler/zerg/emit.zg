@@ -16086,10 +16086,18 @@ fn c_map_method(mut &em: Emitter, target: ast.Expr, meth: str, args: list[ast.Ex
 
 	# TWO ANSWERS BEHIND A NAME THIS FUNCTION DOES NOT LOWER. `insert`, `remove` and `get` are
 	# docs/code/collections.md's `[not yet]`: the chapter specifies them, so each retires the
-	# day it is built. Any other name is a method the LANGUAGE does not give a map, and there
-	# is no day on which it does.
+	# day it is built. Any other name is a method the LANGUAGE does not give a keyed container,
+	# and there is no day on which it does.
+	#
+	# THE SUBJECT IS `container` AND NOT `map`. This function answers for BOTH keyed containers,
+	# so a set reaching it was being told about a MAP — an untrue sentence, and the one thing a
+	# diagnostic may never be. The receiver is named after the hole and says which one it was.
+	# The word also has to tell this code's sentence from `E9107`'s, which names no container
+	# and is what a reader following the number would otherwise land on; `make method-gaps`
+	# reads these sentences out of the chapters, and two codes sharing one is a collision it
+	# reports rather than a wording nobody notices.
 	unbuilt := meth == "insert" or meth == "remove" or meth == "get"
-	raise c_diag(em, rule.Rule.NotYetMapMethod, f"NotImplemented: the method `{meth}` on a {ast.ty_name(tty)} (docs/code/collections.md)") if unbuilt
+	raise c_diag(em, rule.Rule.NotYetMapMethod, f"NotImplemented: the container method `{meth}` on a {ast.ty_name(tty)} (docs/code/collections.md)") if unbuilt
 
 	raise c_diag(em, rule.Rule.MapMethodUnknown, f"the method `{meth}` on a {ast.ty_name(tty)} — it answers `len` and `has`")
 }

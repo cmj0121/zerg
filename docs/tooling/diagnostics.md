@@ -330,7 +330,7 @@ shipping compiler rather than a part of it (the line
 | `E3131` | the method `…` on a …                                                                                 |
 | `E3132` | the pattern `…` on a Result[T] — it has Left and Right                                                |
 | `E3133` | `fn main() -> …` — the entry's shapes are `fn main()`, `-> int` and `-> Result[nil]`                  |
-| `E3134` | the map method `…` — a map answers `len` and `has`, and is read with `m[k]`                           |
+| `E3134` | the method `…` on a keyed container — it answers `len` and `has`, and is read with `m[k]`             |
 | `E3135` | the field `…` on an Err — it has `msg` and `kind`                                                     |
 | `E3136` | `..=` with no upper bound is not a range                                                              |
 | `E3137` | the list method `…` — a list answers `len` and `append`, and is read with `xs[i]`                     |
@@ -498,7 +498,7 @@ shipping compiler rather than a part of it (the line
 | `E9079` | the decorator `#[sealed]` — reserved                                                                  |
 | `E9097` | main(args) in a program that uses concurrency                                                         |
 | `E9099` | … of the method `…` on a built-in receiver, which a thunk does not reach                              |
-| `E9100` | the map method `…`                                                                                    |
+| `E9100` | the container method `…` on a map or a set                                                            |
 | `E9103` | a `spawn`/`defer` of `…`, a binding that HOLDS a function                                             |
 | `E9105` | a remote package — the path names a host, and resolving one needs a package layer                     |
 | `E9106` | module `…` declares the function `…`, and a module's function is not a value here                     |

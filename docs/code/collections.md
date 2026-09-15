@@ -46,8 +46,8 @@ collection can modify its elements**.
 > **[not yet]** Of the growth methods named above, only `append` is built: `insert` and `remove` are each
 > refused by name on both `list` and `map`, and each container answers with its own code — _E9056
 > NotImplemented: the list method `insert` — this compiler has `len` and `append`_ and _NotImplemented: the
-> list method `remove`_ on a `list`, _E9100 NotImplemented: the map method `insert`_ and _E9100
-> NotImplemented: the map method `remove`_ on a `map`. So a collection grows at its end and does not shrink
+> list method `remove`_ on a `list`, _E9100 NotImplemented: the container method `insert`_ and _E9100
+> NotImplemented: the container method `remove`_ on a `map`. So a collection grows at its end and does not shrink
 > at all. Each name is quoted rather than described, because each container's code is split by a list of
 > names — `E9056`'s and `E9100`'s alike, one half a form that is coming and the other a method the language
 > does not have — and `make method-gaps` reads these markers to hold both lists to them: a method promised
@@ -115,7 +115,7 @@ name  := m.get(id) ?? "anon"   # checked, then default
 
 > **[not yet]** The checked path does not exist: `xs.get(i)` is _E9056 NotImplemented: the list method
 > `get`_ and `m.get(k)` is _E9100
-> NotImplemented: the map method `get`_, so the `m.get(id) ?? "anon"` line above does not compile and
+> NotImplemented: the container method `get`_, so the `m.get(id) ?? "anon"` line above does not compile and
 > indexing — which aborts — is the only way into a container. Expected absence is therefore not a question a
 > program can ask; it is one it has to head off with `k in m` before indexing.
 

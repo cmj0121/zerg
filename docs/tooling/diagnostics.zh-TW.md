@@ -306,7 +306,7 @@ seed 全程維持句子比對:代碼是語言的契約,而 seed 是建置正式�
 | `E3131` | … 上的方法 `…`                                                                                        |
 | `E3132` | 在 Result[T] 上用 pattern `…` — 它只有 Left 與 Right                                                  |
 | `E3133` | `fn main() -> …` — 進入點的形狀是 `fn main()`、`-> int` 與 `-> Result[nil]`                           |
-| `E3134` | map 的方法 `…` — 一個 map 只回答 `len` 與 `has`,並且用 `m[k]` 讀                                      |
+| `E3134` | keyed container 上的方法 `…` — 它只回答 `len` 與 `has`,並且用 `m[k]` 讀                               |
 | `E3135` | Err 上的欄位 `…` — 它只有 `msg` 與 `kind`                                                             |
 | `E3136` | 沒有上界的 `..=` 不是 range                                                                           |
 | `E3137` | list 的方法 `…` — 一個 list 只回答 `len` 與 `append`,並且用 `xs[i]` 讀                                |
@@ -474,7 +474,7 @@ seed 全程維持句子比對:代碼是語言的契約,而 seed 是建置正式�
 | `E9079` | decorator `#[sealed]` — 保留                                                                          |
 | `E9097` | 在用到並行的程式裡寫 main(args)                                                                       |
 | `E9099` | 對內建接收者上的方法 `…` 做 … — thunk 到不了那條 dispatch                                             |
-| `E9100` | map 的方法 `…`                                                                                        |
+| `E9100` | map 或 set 上的 container 方法 `…`                                                                    |
 | `E9103` | 對 `…` 做 `spawn`/`defer`,但它是一個「持有」函式的繫結                                                |
 | `E9105` | 遠端套件 —— 路徑指名一個 host,而解析它需要這個編譯器尚未建置的 package layer                          |
 | `E9106` | module `…` 宣告了函式 `…`,而模組的函式在這裡不是一個值                                                |

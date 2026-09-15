@@ -43,7 +43,7 @@ reference-counted 的部分被共享（見 [值與記憶體](../core/memory.zh-T
 > **[not yet]** 上面點名的增長 method 裡只有 `append` 建置了：`insert` 與 `remove` 在 `list` 與 `map` 上都會被
 > 指名拒絕，而且兩種容器各自回答自己的代碼——`list` 上是 _E9056 NotImplemented: the list method `insert` — this
 > compiler has `len` and `append`_ 與 _NotImplemented: the list method `remove`_,`map` 上是
-> _E9100 NotImplemented: the map method `insert`_ 與 _E9100 NotImplemented: the map method `remove`_。所以一個
+> _E9100 NotImplemented: the container method `insert`_ 與 _E9100 NotImplemented: the container method `remove`_。所以一個
 > collection 只能從尾端增長、完全不能縮短。每個名字都是引用而非描述,因為每個容器的代碼都是靠一份名字清單
 > 分成兩半——`E9056` 與 `E9100` 都一樣，一半是即將到來的形式、另一半是語言沒有的 method——而
 > `make method-gaps` 會讀這些標記來把兩份清單都釘住：在這裡被承諾、在那裡卻缺席的 method 會被永久拒絕,
@@ -102,7 +102,7 @@ name  := m.get(id) ?? "anon"   # 檢查後給預設
 ```
 
 > **[not yet]** 檢查路徑並不存在：`xs.get(i)` 是 _E9056 NotImplemented: the list method `get`_,而 `m.get(k)`
-> 是 _E9100 NotImplemented: the map method `get`_，所以上面那行 `m.get(id) ?? "anon"` 編不過，而會 abort 的索引是進入容器的唯一途徑。於是「預期內
+> 是 _E9100 NotImplemented: the container method `get`_，所以上面那行 `m.get(id) ?? "anon"` 編不過，而會 abort 的索引是進入容器的唯一途徑。於是「預期內
 > 的不存在」不是程式問得出口的問題，而是它必須在索引之前先用 `k in m` 迴避掉的事。
 
 ## 切片——唯讀子區間

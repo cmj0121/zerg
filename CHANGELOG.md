@@ -7,6 +7,35 @@ The full account of a release, broken out by area and with its gaps named, lives
 The number a build reports comes from [`VERSION`](VERSION), the single source both compilers are generated from.
 **A release's date is its tag's**, so no entry here writes one down.
 
+## 0.4.0
+
+The release in which the type system grows into something you can write a **library** with. →
+[full notes](notes/0.4/0.4.0_CHANGELOG.md)
+
+> **0.3.0 let a user write generic DATA. 0.4.0 lets them write an ABSTRACTION.**
+
+- **A `spec` is a value's type.** A spec-typed position builds a counted box carrying the value and a witness
+  table; a call dispatches through it, `is` works on it, and the table carries a rendering so `print` says
+  what the value says. A parameterized spec is a type too. `E9115`, `E9116` and `E9048` retire.
+- **An `enum` can be generic** — `E9003` retires — with a variant's parameters solved from the payload,
+  supplied at the application, or refused by name when neither reaches them. **A method carries its own type
+  parameters**, and `E9044` retires with it.
+- **`log`'s `Sink` is the acceptance test**, and that module is written the way it wanted to be: a parameter
+  can say _any destination_ rather than naming one.
+- **Two doctrines were being restated, not provided.** Four ledgers and six run-and-compare loops each had
+  their own copy; each is one implementation now. Collecting them found two `gates-check` clauses that could
+  report and not fail, two sites that ran a program with `2>/dev/null`, a gate that never asked the exit
+  status, and a skip list that checked an exit status where it meant a rule.
+- **Three dead-code questions had no gate.** `make dead-code` asks the two that are about the repository —
+  a `pub` function of the compiler nothing calls, and a script nothing invokes — and the third turned out to
+  be a defect in `L101`: an import belongs to the FILE that wrote it, and the rule was asking the merged
+  program.
+- **60 gates**, up from 58.
+
+**Two leftovers ship unfixed**, which is the milestone's rule for a find from the previous release:
+[#123](https://github.com/cmj0121/zerg/issues/123) (an `unsafe fn` as a `spec` requirement) and
+[#127](https://github.com/cmj0121/zerg/issues/127) (`fmt` ordering a run of bindings).
+
 ## 0.3.0
 
 The release in which the **grammar stops being a promise**: the forms `GRAMMAR` derives are lowered, not

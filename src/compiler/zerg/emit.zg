@@ -756,6 +756,7 @@ fn c_type(t: ast.Ty) -> str {
 		Ty.TTuple(ts) => c_tuple_cname(ts)
 		Ty.TArr(e, n) => c_arr_cname(e, n)
 		Ty.TMap(_, _) => "zrt_map"
+		Ty.TSet(_) => "zrt_map"
 		Ty.TChan(_, _) => "zrt_chan*"
 		Ty.TEither(l, r) => c_carrier_cname(l, r)
 		Ty.TOpt(el) => c_opt_cname(el)
@@ -3230,6 +3231,7 @@ fn c_ty_names_undeclared(f: ast.File, t: ast.Ty) -> bool {
 		Ty.TPtr(e) => c_ty_names_undeclared(f, e)
 		Ty.TUnsafe(e) => c_ty_names_undeclared(f, e)
 		Ty.TMap(k, v) => c_ty_names_undeclared(f, k) or c_ty_names_undeclared(f, v)
+		Ty.TSet(e) => c_ty_names_undeclared(f, e)
 		Ty.TEither(l, r) => c_ty_names_undeclared(f, l) or c_ty_names_undeclared(f, r)
 		Ty.TTuple(es) => c_tys_name_undeclared(f, es)
 		_ => false
@@ -3282,6 +3284,7 @@ fn c_ty_has_app(t: ast.Ty) -> bool {
 		Ty.TPtr(e) => c_ty_has_app(e)
 		Ty.TUnsafe(e) => c_ty_has_app(e)
 		Ty.TMap(k, v) => c_ty_has_app(k) or c_ty_has_app(v)
+		Ty.TSet(e) => c_ty_has_app(e)
 		Ty.TEither(l, r) => c_ty_has_app(l) or c_ty_has_app(r)
 		Ty.TTuple(es) => c_tys_have_app(es)
 		_ => false
@@ -4222,10 +4225,6 @@ pub fn c_builtin_check(mut &em: Emitter, n0: str) {
 
 	raise c_diag(em, rule.Rule.NotYetCompileTimeBuiltin, f"NotImplemented: the compile-time built-in `{n}[T]` — this compiler does not compute a type's layout (docs/runtime/builtins.md)") if n == "sizeof" or n == "alignof"
 
-	# `set([1, 2])` read as "undefined function `set`", the message a misspelled call gets.
-	# Why a set is spelled as a CONSTRUCTOR and not as a brace literal is GRAMMAR#map-lit's
-	# note: `{1}` cannot be told from a one-statement block.
-	raise c_diag(em, rule.Rule.NotYetSetBuiltin, "NotImplemented: the built-in `set` — a set is built through its constructor (`set([1, 2])`, `set()` for the empty one) because `{1}` cannot be told from a block, and this compiler has `list[T]` and `map[K, V]` only (docs/code/collections.md)") if n == "set"
 }
 
 # c_fixed_width_check names the fixed-width ladder rather than letting it read as a typo.
@@ -4643,6 +4642,7 @@ fn c_decl_collect(t: ast.Ty, mut &tups: list[ast.Ty], mut &cars: list[ast.Ty]) {
 		Ty.TList(el) => c_decl_collect(el, tups, cars)
 		Ty.TChan(el, _) => c_decl_collect(el, tups, cars)
 		Ty.TMap(k, v) => c_decl_collect_two(k, v, tups, cars)
+		Ty.TSet(e) => c_decl_collect(e, tups, cars)
 		_ => c_skip()
 	}
 }
@@ -4771,6 +4771,7 @@ pub fn c_check_named_ty(mut &em: Emitter, t: ast.Ty, s: Site) {
 		Ty.TList(el) => c_check_named_ty(em, el, s)
 		Ty.TChan(el, _) => c_check_named_ty(em, el, s)
 		Ty.TMap(k, v) => c_check_named_ty_two(em, k, v, s)
+		Ty.TSet(e) => c_check_named_ty(em, e, s)
 		Ty.TEither(l, r) => c_check_named_ty_two(em, l, r, s)
 		Ty.TOpt(el) => c_check_named_ty(em, el, s)
 		Ty.TTuple(ts) => c_check_named_ty_list(em, ts, s)
@@ -4778,6 +4779,15 @@ pub fn c_check_named_ty(mut &em: Emitter, t: ast.Ty, s: Site) {
 		_ => c_skip()
 	}
 }
+
+# c_check_set_ty refuses `set[T]` wherever a type is written, and it is the half that keeps the
+# standing contract true while the VALUE side is unbuilt. The type parses — that is what makes
+# `set[int]` say `set[int]` in a message rather than `no type named set` — and a form that
+# parses and cannot be built is exactly the shape the contract forbids: `fn f(s: set[int])`
+# compiled and nothing could ever call it.
+#
+# It goes when a set can be CONSTRUCTED. Until then the refusal is the same one the
+# constructor gives, because it is the same gap seen from the other position.
 
 fn c_check_named_ty_two(mut &em: Emitter, a: ast.Ty, b: ast.Ty, s: Site) {
 	c_check_named_ty(em, a, s)
@@ -5521,7 +5531,7 @@ fn c_needs_copy(mut &em: Emitter, t: ast.Ty) -> bool {
 	# holders' releases balance (docs/runtime/builtins.md).
 	return true if c_is_ref_box(t)
 
-	return true if c_is_list(t) or c_is_map(t)
+	return true if c_is_list(t) or c_is_map(t) or c_is_set(t)
 
 	# A SPEC VALUE IS A BOX, and copying one builds an INDEPENDENT cell rather than sharing
 	# this one: a spec value is a VALUE (docs/core/type-system.md), so two names for one boxed
@@ -5636,7 +5646,7 @@ fn c_copy_of(mut &em: Emitter, t: ast.Ty, x: str) -> str {
 	# rvalue of type 'zrt_list'", against C nobody wrote. Binding costs one header copy,
 	# which is a handful of words, and it makes the addressability question go away rather
 	# than answering it at each call site.
-	if c_is_list(t) or c_is_map(t) {
+	if c_is_list(t) or c_is_map(t) or c_is_set(t) {
 		em.used_rt = true
 
 		# `c_type` of either is exactly the runtime type name, and the copy is that plus
@@ -5826,7 +5836,7 @@ fn c_elem_drop_fn(mut &em: Emitter, t: ast.Ty) -> str {
 # mechanism exists to prevent.
 fn c_elem_kind(mut &em: Emitter, t: ast.Ty) -> str {
 	return "list" if c_is_list(t)
-	return "map" if c_is_map(t)
+	return "map" if c_is_map(t) or c_is_set(t)
 
 	# A str is a refcounted CELL, so a list of them holds references and owes them back. It
 	# reached c_named_of below and answered "" — the memcpy path — so `list[str]` retained
@@ -5935,7 +5945,7 @@ fn c_drop_fn(mut &em: Emitter, t: ast.Ty) -> str {
 	return "zrt_release" if c_is_spec_name(em, c_named_of(t))
 
 	return "zrt_list_drop" if c_is_list(t)
-	return "zrt_map_drop" if c_is_map(t)
+	return "zrt_map_drop" if c_is_map(t) or c_is_set(t)
 	return "zrt_str_release" if c_is_str(t)
 
 	# the tuple's, named after the SHAPE the way its copy is — c_tuple_decl generates the
@@ -8528,7 +8538,7 @@ fn c_in_container(mut &em: Emitter, x: ast.Expr, set: ast.Expr, st: ast.Ty, sb: 
 
 	head := f"{c_type(st)} {sv} = {c_expr(em, set, sb)}; {et} {kv} = {c_fit_copied(em, "the value looked for by `in`", elem, x, sb)};"
 
-	return f"({{ {head} {bt} {rv} = zrt_map_has(&{sv}, &{kv});{give} {rv}; }})" if c_is_map(st)
+	return f"({{ {head} {bt} {rv} = zrt_map_has(&{sv}, &{kv});{give} {rv}; }})" if c_is_map(st) or c_is_set(st)
 
 	iv := n + "i"
 	at := f"(*({et} *)zrt_list_at_ref(&{sv}, {iv}))"
@@ -8558,6 +8568,7 @@ fn c_in_elem_owes_eq(mut &em: Emitter, elem: ast.Ty) -> bool {
 # about its keys, because that is what `m[k]` needs to know before it reads.
 fn c_in_elem_ty(st: ast.Ty) -> ast.Ty {
 	return c_list_elem(st) if c_is_list(st)
+	return c_set_elem(st) if c_is_set(st)
 
 	return c_map_key_ty(st)
 }
@@ -8714,7 +8725,7 @@ fn c_in_test(mut &em: Emitter, x: ast.Expr, set: ast.Expr, sb: Subst) -> str {
 		return c_in_range(em, x, set, sb) if c_is_range(set)
 
 		st := c_infer(em, set)
-		return c_in_container(em, x, set, st, sb) if c_is_list(st) or c_is_map(st)
+		return c_in_container(em, x, set, st, sb) if c_is_list(st) or c_is_map(st) or c_is_set(st)
 
 		return c_in_not_a_set(em, set)
 	}
@@ -8742,7 +8753,7 @@ fn c_is_aggregate(mut &em: Emitter, t: ast.Ty) -> bool {
 	# because a NAME for the variant is what `Display` would give and there is none.
 	return true if c_is_enum_ty(em, t)
 
-	return c_is_struct_name(em, c_named_of(t)) or c_is_list(t) or c_is_map(t) or c_is_tuple(t) or c_is_arr(t)
+	return c_is_struct_name(em, c_named_of(t)) or c_is_list(t) or c_is_map(t) or c_is_set(t) or c_is_tuple(t) or c_is_arr(t)
 }
 
 # c_is_enum_ty reports whether a type is a declared enum (a TNamed matching an enum).
@@ -9590,7 +9601,7 @@ enum MethKind {
 # that have one. Narrower than this and a `map`'s `iter` is refused permanently for a loop the
 # language gives it; wider and an `int` is promised a loop nothing walks.
 fn c_ty_is_iterable(tty: ast.Ty) -> bool {
-	return c_is_list(tty) or c_is_arr(tty) or c_is_map(tty) or c_is_str(tty) or ast.ty_is_chan(tty)
+	return c_is_list(tty) or c_is_arr(tty) or c_is_map(tty) or c_is_set(tty) or c_is_str(tty) or ast.ty_is_chan(tty)
 }
 
 # c_renders_as_text answers whether this value HAS a rendering, and it is asked because a
@@ -9742,7 +9753,7 @@ fn c_meth_kind(mut &em: Emitter, tty: ast.Ty, meth: str) -> MethKind {
 	return MethKind.MList if c_is_list(tty)
 	return MethKind.MArr if c_is_arr(tty)
 	return MethKind.MPtr if c_is_ptr(tty)
-	return MethKind.MMap if c_is_map(tty)
+	return MethKind.MMap if c_is_map(tty) or c_is_set(tty)
 
 	# EVERY method on an `Err`, not only the three that exist. An `Err` has no declaration
 	# to carry a method, so anything else would fall to the namespaced-call arm and be
@@ -10378,6 +10389,11 @@ fn c_infer_call_written(mut &em: Emitter, name: str, args: list[ast.Expr], ts: l
 }
 
 fn c_call(mut &em: Emitter, name: str, args: list[ast.Expr], sb: Subst) -> str {
+	# `set(xs)` IS A CONSTRUCTOR, and it is read here rather than anywhere a type is read,
+	# because `set` is not a declared name: GRAMMAR#map-lit's note is that a set has no literal
+	# — `{1}` cannot be told from a one-statement block — so the call IS the spelling.
+	return c_set_call(em, args, sb) if name == "set"
+
 	# `addr(x)` IS AN INTRINSIC AND NOT A FUNCTION (GRAMMAR#ptr-type). It takes the storage
 	# behind a name, which nothing written in Zerg can do, so it is answered here — above the
 	# name lookup, since a program that declares its own `addr` would otherwise shadow the one
@@ -12893,6 +12909,11 @@ fn c_list_method_ret(mut &em: Emitter, meth: str) -> ast.Ty {
 }
 
 fn c_infer_call(mut &em: Emitter, name: str, args: list[ast.Expr]) -> ast.Ty {
+	# `set(xs)` answers a set of the list's element. An EMPTY one answers nothing here and is
+	# refused where it is written: the element would have to come from the position, which is
+	# the same machinery `{:}` needs and does not have for this form yet.
+	return c_infer_set(em, args) if name == "set"
+
 	# `addr(x)` answers a pointer TO WHAT IS THERE, which is the whole reason it is typed
 	# rather than a bare address: `p.load()` reads the pointee back, and something has to have
 	# said what a pointee is.
@@ -15662,6 +15683,20 @@ fn c_needs_loop_unwind(mut &em: Emitter) -> bool {
 # A map is the runtime's `zrt_map` by value, plus one static vtable per distinct shape
 # saying how to hash and compare its key. The runtime provides the hash/eq leaves for the
 # two key types the language builds in.
+# c_hashed_check is the ONE place that says what this compiler can hash, and it is asked by
+# both things that hash: a map's key and a set's element. They are the same question and the
+# same two codes — a set element IS a map key here, and a second pair of numbers for it would
+# be one gap wearing four.
+#
+# WHAT DIFFERS IS THE WORD, because a program written with `set([1.5])` contains no map and a
+# reader told about a map key goes looking for one. The citation stays in the FIRST argument
+# of each raise: `refusal-cites` reads that literal and nothing after it.
+fn c_hashed_check(mut &em: Emitter, kt: ast.Ty, site: str) {
+	raise c_diag(em, rule.Rule.MapKeyHasNoHash, f"{site} of type {ast.ty_name(kt)} — it needs `Hash`, and a `float` has no equality a hash can agree with (docs/core/derive.md), so it can never be one") if c_is_float(kt)
+
+	raise c_diag(em, rule.Rule.NotYetMapKeyType, f"NotImplemented: {site} of type {ast.ty_name(kt)} — it needs `Hash`, and this compiler has one for `int` and for `str` (docs/code/collections.md)") if not c_is_int(kt) and not c_is_str(kt) and not c_is_unknown(kt)
+}
+
 fn c_map_vt(mut &em: Emitter, kt: ast.Ty, vt: ast.Ty) -> str {
 	name := f"zg_mapvt_{c_ident_safe(c_type(kt))}_{c_ident_safe(c_type(vt))}"
 	for n in em.mvt_names {
@@ -15680,9 +15715,7 @@ fn c_map_vt(mut &em: Emitter, kt: ast.Ty, vt: ast.Ty) -> str {
 	# retires on, and `NotImplemented:` promised one. The rest of the range really is unbuilt:
 	# a `byte`, a `rune` and a `derive(Hash)` type are `collections.md`'s intended rule, and
 	# they keep the number (#87).
-	raise c_diag(em, rule.Rule.MapKeyHasNoHash, f"a map key of type {ast.ty_name(kt)} — a key needs `Hash`, and a `float` has no equality a hash can agree with (docs/core/derive.md), so it can never be one") if c_is_float(kt)
-
-	raise c_diag(em, rule.Rule.NotYetMapKeyType, f"NotImplemented: a map key of type {ast.ty_name(kt)} — a key needs `Hash`, and this compiler has one for `int` and for `str` (docs/code/collections.md)") if not c_is_int(kt) and not c_is_str(kt) and not c_is_unknown(kt)
+	c_hashed_check(em, kt, "a map key")
 
 	mut hash := "zrt_hash_int"
 	mut eq := "zrt_eq_int"
@@ -15782,6 +15815,107 @@ fn c_map_lit_at(mut &em: Emitter, kt: ast.Ty, vt: ast.Ty, ks: list[ast.Expr], vs
 		i = i + 1
 	}
 	return out + " zgt_mm; })"
+}
+
+# c_set_ctor lowers `set(xs)` — the constructor GRAMMAR#map-lit's note explains: a set is
+# spelled as a call because `{1}` cannot be told from a one-statement block.
+#
+# IT IS A MAP WITH A `bool` VALUE, and that is the whole representation. Hashing, insertion
+# order, value semantics and the teardown are the map's already, so a set that reused them
+# needed none of its own — what a set adds is a TYPE that says `set[T]`, and the member is the
+# map's key.
+#
+# The list it is built from is scanned exactly as `in` scans one, and given back on the way
+# out if this expression owns it: `set(f())` hands over a list nobody else holds.
+fn c_set_ctor(mut &em: Emitter, et: ast.Ty, src: ast.Expr, sb: Subst) -> str {
+	em.used_rt = true
+
+	c_set_elem_check(em, et)
+
+	vtn := c_map_vt(em, et, ast.Ty.TBool)
+	ec := c_type(et)
+	st := c_infer(em, src)
+
+	n := c_tmp(em, "zgt_sc")
+	sm := n + "m"
+	sl := n + "l"
+	si := n + "i"
+	sn := n + "n"
+
+	give := c_in_give(em, src, st, sl)
+	head := f"zrt_map {sm}; zrt_map_init(&{sm}, sizeof({ec}), sizeof(bool), &{vtn}); {c_type(st)} {sl} = {c_expr(em, src, sb)};"
+	loop := f" size_t {sn} = zrt_list_len(&{sl}); for (size_t {si} = 0; {si} < {sn}; {si}++) {{ {ec} zgt_sk = (*({ec} *)zrt_list_at_ref(&{sl}, {si})); bool zgt_sv = true; zrt_map_set(&{sm}, &zgt_sk, &zgt_sv); }}"
+
+	return f"({{ {head}{loop}{give} {sm}; }})"
+}
+
+# c_infer_set answers what `set(…)` IS without judging it. An empty one has no element to
+# read, and inference is not where that is reported: the declaration it lands in may say
+# `set[int]`, and a raise here would fire before the position was ever looked at. The emit
+# path asks `c_set_arg_elem`, which is the one that refuses.
+fn c_infer_set(mut &em: Emitter, args: list[ast.Expr]) -> ast.Ty {
+	return ast.Ty.TSet(ast.Ty.TUnknown) if args.len() != 1
+
+	at := c_infer(em, args[0])
+	return ast.Ty.TSet(ast.Ty.TUnknown) if not c_is_list(at)
+
+	return ast.Ty.TSet(c_list_elem(at))
+}
+
+# c_is_empty_set_ctor is `set()` written with nothing in it, which is the one form whose type
+# has to come from the position it lands in.
+pub fn c_is_empty_set_ctor(e: ast.Expr) -> bool {
+	return match e {
+		Expr.ECall(nm, args, _) => nm == "set" and args.len() == 0
+		_ => false
+	}
+}
+
+# c_set_empty builds the empty set at a declared element type. It is the constructor's body
+# with the loop taken out, and it is a separate function rather than a flag because what makes
+# it different is where the TYPE came from, not what it does.
+fn c_set_empty(mut &em: Emitter, et: ast.Ty) -> str {
+	em.used_rt = true
+	c_set_elem_check(em, et)
+
+	vtn := c_map_vt(em, et, ast.Ty.TBool)
+	n := c_tmp(em, "zgt_se")
+	return f"({{ zrt_map {n}; zrt_map_init(&{n}, sizeof({c_type(et)}), sizeof(bool), &{vtn}); {n}; }})"
+}
+
+# c_set_call is `set(…)` as the reader wrote it: one list argument, or a refusal that says so.
+fn c_set_call(mut &em: Emitter, args: list[ast.Expr], sb: Subst) -> str {
+	et := c_set_arg_elem(em, args)
+	return c_set_ctor(em, et, args[0], sb)
+}
+
+# c_set_arg_elem is the element type `set(xs)` answers, and the one place that says what the
+# constructor takes. An EMPTY `set()` has no element to read and is refused by name: the type
+# would have to come from the position it lands in, which is the rule `{:}` has and this form
+# does not.
+fn c_set_arg_elem(mut &em: Emitter, args: list[ast.Expr]) -> ast.Ty {
+	# ONE RAISE, three sentences. The three ways of writing the constructor wrongly are one
+	# rule — `set` takes one list — and three raise sites would be three rules under one
+	# number, which `error-codes-check` reports.
+	mut why := ""
+	if args.len() == 0 {
+		why = "`set()` has no element to read a type out of, so it is built where the type is written — `s: set[int] = set()`"
+	} else if args.len() != 1 {
+		why = f"`set` builds a set from ONE list, and this gives {strconv.to_string(args.len(), 10)}"
+	} else if not c_is_list(c_infer(em, args[0])) {
+		why = f"`set` builds a set from a list, and this gives {ast.ty_name(c_infer(em, args[0]))}"
+	}
+
+	raise c_diag(em, rule.Rule.SetCtorTakesOneList, why) if why != ""
+
+	return c_list_elem(c_infer(em, args[0]))
+}
+
+# c_set_elem_check holds a set's member to what this compiler can hash, which is the same
+# answer a map key gets and reached through the same two sentences — a set element IS a map
+# key here, and a second pair of codes for it would be one gap wearing four.
+fn c_set_elem_check(mut &em: Emitter, et: ast.Ty) {
+	c_hashed_check(em, et, "a set element")
 }
 
 # c_slice_bound is one end of a slice range. A `nil` bound is the open form, which
@@ -15940,8 +16074,8 @@ fn c_map_method(mut &em: Emitter, target: ast.Expr, meth: str, args: list[ast.Ex
 	if meth == "has" {
 		raise c_diag(em, rule.Rule.HasTakesOneKey, f"`has` asks about one key, and this gives {strconv.to_string(args.len(), 10)}") if args.len() != 1
 
-		kt := c_map_key_ty(tty)
-		check.chk_slot_fits(em, f"a key of this {ast.ty_name(tty)}", kt, args[0])
+		kt := c_keyed_elem(tty)
+		check.chk_slot_fits(em, f"a member of this {ast.ty_name(tty)}", kt, args[0])
 		k := c_expr(em, args[0], sb)
 		return f"({{ {bind}{c_type(kt)} zgt_mk = {k}; zrt_map_has({recv}, &zgt_mk); }})" if place
 
@@ -15955,9 +16089,9 @@ fn c_map_method(mut &em: Emitter, target: ast.Expr, meth: str, args: list[ast.Ex
 	# day it is built. Any other name is a method the LANGUAGE does not give a map, and there
 	# is no day on which it does.
 	unbuilt := meth == "insert" or meth == "remove" or meth == "get"
-	raise c_diag(em, rule.Rule.NotYetMapMethod, f"NotImplemented: the map method `{meth}` (docs/code/collections.md)") if unbuilt
+	raise c_diag(em, rule.Rule.NotYetMapMethod, f"NotImplemented: the method `{meth}` on a {ast.ty_name(tty)} (docs/code/collections.md)") if unbuilt
 
-	raise c_diag(em, rule.Rule.MapMethodUnknown, f"the map method `{meth}` — a map answers `len` and `has`, and is read with `m[k]`")
+	raise c_diag(em, rule.Rule.MapMethodUnknown, f"the method `{meth}` on a {ast.ty_name(tty)} — it answers `len` and `has`")
 }
 
 fn c_index_target(e: ast.Expr) -> ast.Expr {
@@ -15978,6 +16112,33 @@ pub fn c_is_index(e: ast.Expr) -> bool {
 	return match e {
 		Expr.EIndex(_, _) => true
 		_ => false
+	}
+}
+
+# c_is_set is the set's own predicate. Every site that groups containers asks BOTH now, and
+# which sites those are was found by reading the callers of `c_is_map` — a `match` over `Ty`
+# in this tree carries a `_`, so the compiler answered the fallback and said nothing.
+# c_keyed_elem is the type the HASHED half of a container holds: a map's key, a set's member.
+# One function because every site that reaches for it wants the same thing — what `in` looks
+# for, what `for` binds, what `has` takes — and a set's member is a map's key in every one.
+pub fn c_keyed_elem(t: ast.Ty) -> ast.Ty {
+	return c_set_elem(t) if c_is_set(t)
+
+	return c_map_key_ty(t)
+}
+
+pub fn c_is_set(t: ast.Ty) -> bool {
+	return match t {
+		Ty.TSet(_) => true
+		_          => false
+	}
+}
+
+# c_set_elem is what a member of a set is, the way c_map_key_ty is what a map is keyed on.
+pub fn c_set_elem(t: ast.Ty) -> ast.Ty {
+	return match t {
+		Ty.TSet(e) => e
+		_          => ast.Ty.TUnknown
 	}
 }
 
@@ -16215,7 +16376,7 @@ fn c_render_of(mut &em: Emitter, t: ast.Ty, inner: str, quoted: bool) -> str {
 # c_has_parts is the class the generator answers for: a value made OF other values. An
 # identity has none (a channel, a function value), and a scalar is its own rendering.
 fn c_has_parts(mut &em: Emitter, t: ast.Ty) -> bool {
-	return c_is_list(t) or c_is_map(t) or c_is_tuple(t) or c_is_arr(t) or c_is_carrier(t) or c_is_enum_ty(em, t) or c_is_struct_name(em, c_named_of(t))
+	return c_is_list(t) or c_is_map(t) or c_is_set(t) or c_is_tuple(t) or c_is_arr(t) or c_is_carrier(t) or c_is_enum_ty(em, t) or c_is_struct_name(em, c_named_of(t))
 }
 
 # c_renders_fresh is the question `print` actually asks: does rendering this build a CELL the
@@ -16264,6 +16425,7 @@ fn c_render_body(mut &em: Emitter, name: str, t: ast.Ty) -> str {
 
 	return head + c_render_list_body(em, t) + "}\n\n" if c_is_list(t) or c_is_arr(t)
 	return head + c_render_map_body(em, t) + "}\n\n" if c_is_map(t)
+	return head + c_render_set_body(em, t) + "}\n\n" if c_is_set(t)
 	return head + c_render_tuple_body(em, t) + "}\n\n" if c_is_tuple(t)
 	return head + c_render_carrier_body(em, t) + "}\n\n" if c_is_carrier(t)
 	return head + c_render_enum_body(em, c_named_of(t)) + "}\n\n" if c_is_enum_ty(em, t)
@@ -16330,6 +16492,21 @@ fn c_render_map_body(mut &em: Emitter, t: ast.Ty) -> str {
 	out = out + c_render_join("        ", c_render_of(em, kt, ks, true), true)
 	out = out + c_render_join("        ", "\": \"", false)
 	out = out + c_render_join("        ", c_render_of(em, vt, vs, true), true)
+	out = out + "    }\n"
+	return out + c_render_close("}")
+}
+
+# c_render_set_body is the map's body with the value half dropped: `{1, 2}`, in insertion
+# order, which is the order a `for` walks it in. A set is a map whose value nobody wrote, so
+# rendering the pair would show a `true` no reader put there.
+fn c_render_set_body(mut &em: Emitter, t: ast.Ty) -> str {
+	et := c_set_elem(t)
+	es := f"(*({c_type(et)}*)zrt_map_key_at(&v, i))"
+
+	mut out := "    const char *s = zrt_str_dup(\"{\");\n"
+	out = out + "    for (size_t i = 0; i < zrt_map_len(&v); i++) {\n"
+	out = out + "        if (i > 0) " + c_render_join("", "\", \"", false)
+	out = out + c_render_join("        ", c_render_of(em, et, es, true), true)
 	out = out + "    }\n"
 	return out + c_render_close("}")
 }
@@ -17258,7 +17435,7 @@ fn c_forin(mut &em: Emitter, var: str, iter: ast.Expr, body: list[ast.Stmt], ind
 	# A MAP binds the KEY, walked in insertion order (docs/code/collections.md) — the value
 	# is reached with `m[k]`. It used to fall through to the list path below, which handed
 	# cc a `zrt_map` where a `zrt_list` was declared.
-	return c_formap(em, var, iter, ct, body, ind) if c_is_map(ct)
+	return c_formap(em, var, iter, ct, body, ind) if c_is_map(ct) or c_is_set(ct)
 
 	# `for c in s` walks a str's CODE POINTS (docs/core/types.md: a str "iterates as `rune`
 	# and is not indexable"), so it is the rune bridge and then the ordinary list walk. It
@@ -17333,7 +17510,7 @@ fn c_let_decl(mut &em: Emitter, cname: str, eff: ast.Ty, val: str, ind: str) -> 
 
 # address, and two sequential loops must not clash on the temp name.
 fn c_formap(mut &em: Emitter, var: str, iter: ast.Expr, ct: ast.Ty, body: list[ast.Stmt], ind: str) -> str {
-	kt := c_map_key_ty(ct)
+	kt := c_keyed_elem(ct)
 	kc := c_type(kt)
 	it := c_expr(em, iter, c_nosub())
 	outer_scope := c_scope_open(em)
@@ -17422,6 +17599,15 @@ fn c_let(mut &em: Emitter, name: str, ty: ast.Ty, has_type: bool, is_mut: bool, 
 		# difference between a map that gives its entry table back and one that does not.
 		# The carrier arm below records the same omission being closed on its own slot.
 		return c_let_decl(em, c_var_cname(em, name), eff, mval, ind)
+	}
+
+	# AN EMPTY SET TAKES ITS ELEMENT FROM THE DECLARATION, the same way an empty map literal
+	# takes its two. `set()` has no argument to read a type out of, which is exactly why the
+	# constructor alone cannot answer it — and a position that says `set[int]` can.
+	if has_type and c_is_set(eff) and c_is_empty_set_ctor(ival) {
+		sval := c_set_empty(em, c_set_elem(eff))
+		c_add_var(em, name, eff, is_mut, is_const)
+		return c_let_decl(em, c_var_cname(em, name), eff, sval, ind)
 	}
 
 	return c_let_list(em, name, eff, is_mut, is_const, ival, ind) if c_is_list(eff)
@@ -18285,6 +18471,7 @@ pub fn c_holds_nil(t: ast.Ty) -> bool {
 		Ty.TList(e)   => c_holds_nil(e)
 		Ty.TTuple(es) => c_holds_nil_any(es)
 		Ty.TMap(k, v) => c_holds_nil(k) or c_holds_nil(v)
+		Ty.TSet(e)    => c_holds_nil(e)
 		_             => false
 	}
 }
@@ -18863,6 +19050,7 @@ pub fn c_spec_subst(t: ast.Ty, sp: ast.SpecDecl, ip: ast.ImplDecl) -> ast.Ty {
 		Ty.TList(e) => ast.Ty.TList(c_spec_subst(e, sp, ip))
 		Ty.TOpt(e) => ast.Ty.TOpt(c_spec_subst(e, sp, ip))
 		Ty.TMap(k, v) => ast.Ty.TMap(c_spec_subst(k, sp, ip), c_spec_subst(v, sp, ip))
+		Ty.TSet(e) => ast.Ty.TSet(c_spec_subst(e, sp, ip))
 		Ty.TChan(e, d) => ast.ty_chan(c_spec_subst(e, sp, ip), d, "\n" + ast.place_line(ip.path, ip.line, ip.col))
 		Ty.TEither(l, r) => ast.Ty.TEither(c_spec_subst(l, sp, ip), c_spec_subst(r, sp, ip))
 		Ty.TTuple(es) => ast.Ty.TTuple(c_subst_all(es, sp, ip))

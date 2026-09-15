@@ -153,6 +153,7 @@ fn gen_parts(apps: list[ast.TyApp], t: ast.Ty) -> list[ast.Ty] {
 		Ty.TOpt(e) => [e]
 		Ty.TChan(e, d) => [e]
 		Ty.TMap(k, v) => [k, v]
+		Ty.TSet(e) => [e]
 		Ty.TTuple(es) => es
 		Ty.TEither(x, y) => [x, y]
 		Ty.TArr(e, n) => [e]
@@ -423,6 +424,7 @@ fn subst_ty(su: TySubst, t: ast.Ty) -> ast.Ty {
 		Ty.TOpt(e) => ast.Ty.TOpt(subst_ty(su, e))
 		Ty.TChan(e, d) => ast.ty_chan(subst_ty(su, e), d, su.at)
 		Ty.TMap(k, v) => ast.Ty.TMap(subst_ty(su, k), subst_ty(su, v))
+		Ty.TSet(e) => ast.Ty.TSet(subst_ty(su, e))
 		Ty.TTuple(es) => ast.Ty.TTuple(subst_tys(su, es))
 		Ty.TEither(x, y) => ast.Ty.TEither(subst_ty(su, x), subst_ty(su, y))
 		Ty.TArr(e, n) => ast.Ty.TArr(subst_ty(su, e), subst_key(su, n))

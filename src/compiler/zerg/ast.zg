@@ -52,6 +52,16 @@ pub enum Ty {
 	TTuple(list[Ty])
 	TMap(Ty, Ty)
 
+	# TSet carries its ELEMENT type. It is its own variant rather than a `TMap(T, bool)` with a
+	# flag, because a type a reader wrote `set[int]` for has to SAY `set[int]` in every message
+	# and answer `is set[int]` — sharing a representation with a map is the emitter's business
+	# and not the type system's.
+	#
+	# WHAT IT COSTS is one arm at every site that asks about a map, and the compiler cannot
+	# find them: every `match` over `Ty` in this tree carries a `_`, so adding a variant builds
+	# clean and answers the fallback. They were found by reading the callers of `c_is_map`.
+	TSet(Ty)
+
 	# TChan carries its element type and its DIRECTION — 0 bidirectional, 1 send-only
 	# (`chan[T]<-`), 2 receive-only (`<-chan[T]`). A direction is a purely compile-time
 	# property: all three are the same `zrt_chan*` at runtime, so it rides as a field
@@ -1755,6 +1765,7 @@ pub fn ty_eq(a: Ty, b: Ty) -> bool {
 		Ty.TList(ae)       => ty_eq_list(ae, b)
 		Ty.TOpt(ae)        => ty_eq_opt(ae, b)
 		Ty.TMap(ak, av)    => ty_eq_map(ak, av, b)
+		Ty.TSet(ae)        => ty_eq_set(ae, b)
 		Ty.TChan(ae, ad)   => ty_eq_chan(ae, ad, b)
 		Ty.TEither(al, ar) => ty_eq_either(al, ar, b)
 		Ty.TFn(aps, ar)    => ty_eq_fn(aps, ar, b)
@@ -1870,6 +1881,13 @@ fn ty_eq_map(ak: Ty, av: Ty, b: Ty) -> bool {
 		_ => false
 	}
 }
+# ty_eq_set is the same question for a set: one element type, and nothing else is a set.
+fn ty_eq_set(ae: Ty, b: Ty) -> bool {
+	return match b {
+		Ty.TSet(be) => ty_eq(ae, be)
+		_           => false
+	}
+}
 
 # A DIRECTION is part of a channel's type: `chan[int]<-` and `<-chan[int]` are not
 # interchangeable, and the emitter has its own direction check that says so more precisely.
@@ -1940,6 +1958,7 @@ pub fn ty_name(t: Ty) -> str {
 		Ty.TArr(e, n)    => f"[{ty_name(e)}; {n}]"
 		Ty.TErr          => "Err"
 		Ty.TMap(k, v)    => f"map[{ty_name(k)}, {ty_name(v)}]"
+		Ty.TSet(e)       => f"set[{ty_name(e)}]"
 
 		# spelled, because a diagnostic that says "a ?" tells the reader nothing — and
 		# `print(a, b)` reaches one, since there is no two-argument `print` and the pair
@@ -2082,6 +2101,7 @@ pub fn ty_owning_kind(t: Ty) -> str {
 	return match t {
 		Ty.TList(_)   => "list"
 		Ty.TMap(_, _) => "map"
+		Ty.TSet(_)    => "set"
 		_             => ""
 	}
 }

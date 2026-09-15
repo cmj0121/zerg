@@ -1726,6 +1726,12 @@ pub fn chk_fits_expr(mut &em: emit.Emitter, want: ast.Ty, got: ast.Ty, e: ast.Ex
 	# compared like everything else, by chk_map_fits.
 	return true if emit.c_is_map(want) and emit.c_is_maplit(e)
 
+	# AND THE EMPTY SET, for the same reason and with the same shape: `set()` has no element
+	# to read, so it answers `set[?]` until a position says what it is. The carve-out is
+	# narrowed to that one form — two sets that already exist are compared like everything
+	# else.
+	return true if emit.c_is_set(want) and emit.c_is_empty_set_ctor(e)
+
 	# A CLOSURE ADOPTS what the position declares — carve-out (c). A closure that omitted a
 	# parameter's type has `fn(?) -> void` for a type, which is not `fn(int) -> int` and
 	# never becomes one by comparison: asking chk_fits directly refuses the form GRAMMAR

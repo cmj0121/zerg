@@ -2459,6 +2459,35 @@ fn main() {
 }
 EOF
 
+# AND THE THREE THAT ARE NOT AN AGGREGATE, each pinned to the SENTENCE rather than only to
+# the code. `in` asks the equality rule, and the rule used to answer in the words of `==` — an
+# operator the source does not contain — and to offer `??` / `!` / `if v := …`, three
+# unwrappings that can be written where a value is compared and nowhere at an `in` whose
+# COLLECTION has the wrong element type. The code was already right; the sentence was the
+# defect, so the sentence is what these cases hold.
+expect "$ZERG" in-over-a-list-of-optionals E4038 '`in` over a collection of int? compares its elements for equality' <<'EOF'
+fn main() {
+	xs: list[int?] = [1, nil]
+	print str(1 in xs)
+}
+EOF
+
+expect "$ZERG" in-over-a-list-of-channels E4034 '`in` over a collection of chan[int] compares its elements for equality' <<'EOF'
+fn main() {
+	mut cs: list[chan[int]] = []
+	ch := chan[int](1)
+	cs.append(ch)
+	print str(ch in cs)
+}
+EOF
+
+expect "$ZERG" in-over-a-list-of-lists E9061 '`in` over list[list[int]] compares its elements for equality' <<'EOF'
+fn main() {
+	xs: list[list[int]] = [[1]]
+	print str([1] in xs)
+}
+EOF
+
 # A range of NUMBERS is built — the corpus case in_range_once is that half — and what is
 # left is a range whose bounds the bounds test cannot compare. A `str` one is the shape that
 # matters: C's `>=` on two `const char *` compares the POINTERS and answers, so lowering it

@@ -11,10 +11,14 @@
 # be fixed while another arrives and read as no change, which is the failure `reject-fuzz` has
 # per-kind ceilings to avoid. A named set with a reason each cannot hide that trade.
 #
-# Format is <case>TAB<the first runtime frame that allocated>. The gate fails on a case that
-# reports and is not listed, on a listed case that no longer reports, and on a listed case
-# whose allocator moved — the last being the one worth having, since a case that starts
-# leaking somewhere else is a new defect wearing an old name.
+# Format is <case>TAB<the first runtime frame that allocated>. The three clauses it is held to
+# — UNLISTED, STALE and MOVED — are scripts/lib/ledger.sh's, which is where every ledger in
+# this repository gets them: a case that reports and is not listed, a listed case that no
+# longer reports, and a listed case whose allocator moved, the last being the one worth having,
+# since a case that starts leaking somewhere else is a new defect wearing an old name.
+#
+# THE QUALIFIER `?` IS THAT FILE'S TOO. A reason opening with one is exempt from STALE, and it
+# was a rule only this gate's script knew.
 #
 # WHAT THE LIST IS NOT ALLOWED TO DO IS GROW. A line comes off it when the leak is fixed; a
 # line is added only by a person who has decided to accept a new one, and the diff says so.

@@ -19,6 +19,13 @@
 # asks it.
 set -uo pipefail
 
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+# shellcheck source=scripts/lib/ledger.sh
+. "$ROOT/scripts/lib/ledger.sh"
+
+tmp=$(mktemp -d) || exit 2
+trap 'rm -rf "$tmp"' EXIT
+
 MAKEFILE=${MAKEFILE:-Makefile}
 GATES_MK=${GATES_MK:-mk/gates.mk}
 WORKFLOW=${WORKFLOW:-.github/workflows/ci.yml}
@@ -70,31 +77,33 @@ for inc in $(sed -n 's/^include  *//p' "$MAKEFILE"); do
 done
 
 # NOT A GATE. Each of these is a command rather than an assertion, and the reason is
-# per-entry rather than a pattern — which is why they are listed and not matched:
+# per-entry rather than a pattern — which is why it is a LEDGER and not a pattern: a name
+# with the sentence that earned it, held in both directions by scripts/lib/ledger.sh.
 #
-#   all clean run help upgrade   — the ordinary verbs of a Makefile
-#   install uninstall            — they CHANGE the machine; `install-check` is the gate
-#   fmt                          — it rewrites sources; `fmt-self` is the gate
-#   test linux-ci                — they ARE the board, and a board on the board recurses
-#   release release-tarball      — they BUILD an artifact, and the board builds nothing to keep
-#   release-smoke                — the board asks about this repository; `release-smoke` asks
-#                                  about a tarball on a machine that has no repository, which
-#                                  is a question only a release can put. It is the gate on the
-#                                  artifact and `make release` runs it, so a tarball cannot be
-#                                  produced without it — but it has no place on a board that
-#                                  runs on every commit, because there is no tarball then.
-#   build-deps                 — DATA, not a question. It prints the prerequisite list `bin/zerg`
-#                                  is rebuilt for, one file per line, so `build-deps-check` can
-#                                  hold the rule to it without keeping a second copy. It asserts
-#                                  nothing itself; the gate that reads it is on the board.
-#   install-editors, uninstall-editors
-#                                — the half of an install that belongs to a PERSON rather than
-#                                  to a prefix: nvim's syntax and LSP client, and the cloc
-#                                  definition registered where cloc reads it. Both write under
-#                                  the user's home, which is why they are not `install` — and
-#                                  a board that ran them would rewrite the editor configuration
-#                                  of whoever is running the board.
-NOT_A_GATE="all clean run help upgrade build-deps install install-editors uninstall uninstall-editors fmt test linux-ci release release-tarball release-smoke"
+# THE SECOND DIRECTION IS THE NEW HALF. This was a space-separated list with its reasons in
+# the prose above it, so a name could outlive the target it excused: delete `release-smoke`
+# and its exemption sits here forever, silently excusing the next target somebody gives that
+# name. Three lists in this file had that shape and none of them had a stale clause.
+ledger_self_test || exit 1
+
+cat >"$tmp/not-a-gate" <<'LEDGER'
+all	an ordinary verb of a Makefile
+clean	an ordinary verb of a Makefile
+run	an ordinary verb of a Makefile
+help	an ordinary verb of a Makefile
+upgrade	an ordinary verb of a Makefile
+install	it CHANGES the machine; `install-check` is the gate
+uninstall	it CHANGES the machine; `install-check` is the gate
+fmt	it rewrites sources; `fmt-self` is the gate
+test	it IS the board, and a board on the board recurses
+linux-ci	it IS the board, and a board on the board recurses
+release	it BUILDS an artifact, and the board builds nothing to keep
+release-tarball	it BUILDS an artifact, and the board builds nothing to keep
+release-smoke	it asks about a tarball on a machine that has no repository, which is a question only a release can put; `make release` runs it, so a tarball cannot be produced without it, and there is no tarball on every commit
+build-deps	DATA, not a question: it prints the prerequisite list `bin/zerg` is rebuilt for, one file per line, so `build-deps-check` can hold the rule to it without a second copy
+install-editors	the half of an install that belongs to a PERSON rather than to a prefix — nvim's syntax and LSP client, and the cloc definition — and a board that ran it would rewrite the editor configuration of whoever is running the board
+uninstall-editors	the other half of that, and the same reason
+LEDGER
 
 # shellcheck disable=SC2086 # $MAKEFILES is a list of paths and is meant to split
 targets=$(grep -hoE '^[a-z][a-z0-9-]*:' $MAKEFILES | tr -d ':' | sort -u)
@@ -109,10 +118,18 @@ fi
 
 # 1. every gate the Makefile defines is on the board.
 for t in $targets; do
-	case " $NOT_A_GATE " in *" $t "*) continue ;; esac
+	ledger_lookup "$t" "$tmp/not-a-gate" >/dev/null && continue
 	printf '%s\n' "$board" | grep -qx "$t" ||
 		note "\`make $t\` is a gate the board does not name — add it to LINUX_GATES, or to the not-a-gate list with its reason"
 done
+
+# 1b. AND THE OTHER DIRECTION: a name excused from the board still names a target. Without
+#     this the exemption outlives the thing it excused, and the next target given that name
+#     inherits an excuse nobody wrote for it.
+printf '%s\n' "$targets" | sed 's/$/\tdefined/' >"$tmp/targets"
+while IFS="$(printf '\t')" read -r name reason; do
+	note "\`$name\` is excused from the board — \"$reason\" — and no makefile defines it any more"
+done < <(ledger_stale "$tmp/targets" - "$tmp/not-a-gate")
 
 # 2. everything on the board is run by CI. The workflow spells a gate as its own step,
 #    `run: make <target>`, so that a failure names the gate rather than the board.
@@ -181,16 +198,20 @@ printf 'gates-check: %s gates — each on the board, each run by CI\n' \
 # the corpus answered `NO-OUT` for a file that was there, one repository over — and the fix
 # went into the recipe rather than into the rule.
 #
-# THE RULE IS NOT "reads it ⇒ must be conditional". `treesitter`, `oracle` and `examples` all
-# read the corpus and all three work without it, by design. So the ones that tolerate the
-# absence are NAMED here, with the reason, and anything else that reads it must be behind the
-# fetch. A gate added tomorrow is in one of the two sets or it is a finding.
-# `grammar-cited` joined the list the day this clause learned to follow a recipe into its
-# script: it reads `test-data/counterexamples/INVENTORY` and SKIPS when the file is not there,
-# which is the same arrangement the four above have and the only one that was never written
-# down. `gates` is here for a different reason — the only `test-data/` in gates-check.sh is
-# the pattern this clause matches WITH, and a rule must not find itself.
-TOLERATES="entry-path examples gates grammar-cited install-check oracle treesitter"
+# THE RULE IS NOT "reads it ⇒ must be conditional". Several gates read the corpus and work
+# without it, by design. So the ones that tolerate the absence are a LEDGER, with the reason
+# per entry, and anything else that reads it must be behind the fetch. A gate added tomorrow
+# is in one of the two sets or it is a finding — and a name here that no longer reads the
+# corpus, or that has since moved behind the fetch, is a finding too, which is the direction
+# a bare list could not be asked.
+cat >"$tmp/tolerates" <<'LEDGER'
+entry-path	it reads the corpus and skips when the file is not there
+examples	every example builds, is checked and is run without the corpus; only the comparison is missing
+gates	the only `test-data/` in gates-check.sh is the pattern this clause matches WITH, and a rule must not find itself
+grammar-cited	it reads `test-data/counterexamples/INVENTORY` and SKIPS when the file is not there
+oracle	it compares the two compilers over whatever programs it is handed
+treesitter	it parses the sources it is given, and the corpus only widens the set
+LEDGER
 
 # READS IT THROUGH ITS SCRIPT, TOO. The recipe was the whole window, and a gate whose recipe
 # is one `./scripts/x.sh` line reads the corpus INSIDE that script — ten of them do, and this
@@ -211,14 +232,21 @@ reads_corpus() {
 	return 1
 }
 
+: >"$tmp/unguarded"
 for t in $board; do
 	reads_corpus "$t" || continue
 
 	case " $(printf '%s ' $conditional) " in *" $t "*) continue ;; esac
-	case " $TOLERATES " in *" $t "*) continue ;; esac
+	printf '%s\tunguarded\n' "$t" >>"$tmp/unguarded"
+
+	ledger_lookup "$t" "$tmp/tolerates" >/dev/null && continue
 
 	note "\`make $t\` reads the private corpus, is not behind the fetch, and is not named as tolerating its absence"
 done
+
+while IFS="$(printf '\t')" read -r name reason; do
+	note "\`make $name\` is named as tolerating an absent corpus — \"$reason\" — and it no longer reads the corpus outside the fetch"
+done < <(ledger_stale "$tmp/unguarded" - "$tmp/tolerates")
 
 # AND THE OTHER DIRECTION, which nothing asked. A gate behind the fetch that reads nothing from
 # the corpus is held back by a guard it does not need — the reverse assertion `CORPUS_SKIP`
@@ -235,16 +263,22 @@ done
 # prose at seven sites and checked at none. The doctrine belongs here, where the board is
 # already read.
 #
-# NOT EVERY GATE OWES ONE, and forcing a number onto the two that do not is how a floor becomes
-# decoration: `cache-key-check` asserts that two keys DIFFER and `install-check` that named
-# files are where `make install` put them — neither sweeps a set that could come back empty.
-# They are named, with that as the reason, the way the tolerating gates above are.
-# `build` is here for a different reason: the script its recipe reaches is `gen-version.sh`,
-# a GENERATOR rather than a check, and a generator has nothing to measure.
-NO_FLOOR="cache-key-check install-check build"
+# NOT EVERY GATE OWES ONE, and forcing a number onto the ones that do not is how a floor
+# becomes decoration. They are a LEDGER with the reason each, like the two above, and held the
+# same way: a name that has left the board is excusing nothing and says so.
+cat >"$tmp/no-floor" <<'LEDGER'
+cache-key-check	it asserts that two keys DIFFER, and sweeps no set that could come back empty
+install-check	it asserts that named files are where `make install` put them, and sweeps no set either
+build	the script its recipe reaches is `gen-version.sh`, a GENERATOR rather than a check, and a generator has nothing to measure
+LEDGER
+
+printf '%s\n' "$board" | sed 's/$/\ton the board/' >"$tmp/board"
+while IFS="$(printf '\t')" read -r name reason; do
+	note "\`make $name\` is excused from declaring a floor — \"$reason\" — and it is not on the board any more"
+done < <(ledger_stale "$tmp/board" - "$tmp/no-floor")
 
 for t in $board; do
-	case " $NO_FLOOR " in *" $t "*) continue ;; esac
+	ledger_lookup "$t" "$tmp/no-floor" >/dev/null && continue
 
 	body=$(awk -v pat="^$t:" '$0 ~ pat { on = 1; next } on && /^[a-z-]+:/ { exit } on' "$GATES_MK" "$MAKEFILE" 2>/dev/null)
 	gscript=$(printf '%s' "$body" | grep -oE '\./scripts/[a-z0-9-]+\.sh' | head -1)
@@ -257,3 +291,13 @@ done
 
 printf 'gates-check: %s of them run only when the private corpus was fetched — %s\n' \
 	"$n_cond" "$(printf '%s\n' "$conditional" | tr '\n' ' ')"
+
+# AND THE LAST WORD IS THE EXIT STATUS. There was a `$fail` check in the middle of this script
+# and none at the end, so clauses 4 and 5 — and every ledger clause added since — wrote their
+# findings to stderr and left with 0. Two clauses that report and cannot fail are two clauses
+# nobody would have noticed were wrong, which is the failure this whole script is against, in
+# the script itself.
+if [ "$fail" -ne 0 ]; then
+	printf 'gates-check: a gate is defined, or listed, but not run\n' >&2
+	exit 1
+fi

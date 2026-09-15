@@ -152,21 +152,21 @@ make refuse     # every form this compiler has not built is named, not emitted
 make reject     # every program that is not Zerg is rejected — by the compiler, not by cc
 ```
 
-Each case is a `.zg` program beside the stdout it must produce. `mk/gates.mk`'s
-`CORPUS_PASS` is the set `zerg` gets right today and is the **gate**: a case that leaves it
-is a regression and fails the target. `CORPUS_SKIP` holds back the rest, and deleting a name
-from it **is** the gate for the feature that name waits on.
+Each case is a `.zg` program beside the stdout it must produce, the stderr it must write,
+and the status it must leave with. Every case is the **gate** except the ones
+[`scripts/corpus-skips.txt`](../../scripts/corpus-skips.txt) names: a case that stops
+passing is a regression and fails the target, and deleting a name from that file **is** the
+gate for the feature that name waits on.
 
-What is held back is refused **by name** rather than mis-emitted — `gen_enum` answers
-_E9003 NotImplemented: a generic enum `Either[…]` — a generic `struct` is instantiated once
-per application and an `enum` is not_ — and the list waits on a generic `enum`, `#[dyn]`, and
-`derive` beyond `Eq` on a fieldless enum.
+What is held back is refused **by name** rather than mis-emitted, and the name's line says
+with which **code** — `derive_ord` waits on _E9054_, `derive_enum` on _E9055_.
 
 Deleting a name is the gate in one direction only, and for a while that was the whole
 mechanism: `gen_struct` stayed on the list after generic structs were built, and this
-paragraph said so in prose while the list still held the case back. The recipe now BUILDS
-every skipped case and fails if one succeeds, so the claim a name makes — that the case
-still cannot be built — is checked rather than remembered.
+paragraph said so in prose while the list still held the case back. So every skipped case is
+put to the compiler again, and a case that BUILDS fails the target — as does one refused by a
+code its line does not name, which is the half an exit status could never see: any failure
+read as "still waiting for its feature", including a case that had stopped parsing.
 
 ## What a program has to be, and who says so
 

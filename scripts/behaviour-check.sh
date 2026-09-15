@@ -36,6 +36,8 @@ cd "$ROOT" || exit 2
 
 # shellcheck source=scripts/lib/grammar.sh
 . "$ROOT/scripts/lib/grammar.sh"
+# shellcheck source=scripts/lib/runcmp.sh
+. "$ROOT/scripts/lib/runcmp.sh"
 
 ZERG=${ZERG:-./bin/zerg}
 DIR=${DIR:-test-data/behaviour}
@@ -68,6 +70,7 @@ ran=0
 refused=0
 
 grammar_self_test || exit 1
+runcmp_self_test || exit 1
 grammar_productions "$GRAMMAR" | cut -f1 | sort -u >"$tmp/productions"
 n_prod=$(grep -c . "$tmp/productions")
 
@@ -121,10 +124,18 @@ while IFS=$'\t' read -r name verdict code; do
 			fail=$((fail + 1))
 			continue
 		fi
-		"$tmp/case" >"$tmp/got" 2>&1
-		if ! diff -u "$want" "$tmp/got" >"$tmp/diff"; then
-			printf 'behaviour-check: %s prints something else now\n' "$name" >&2
-			sed '1,2d;s/^/          /' "$tmp/diff" >&2
+		# ALL THREE ANSWERS. The two streams were merged into one file and compared against
+		# the recorded stdout, so a case that started writing to stderr failed as though its
+		# OUTPUT had changed — and the exit status was not asked at all, which is how a case
+		# that began aborting after printing the right thing would have passed. A `.err` file
+		# beside the case is compared where there is one, and its absence is the claim that
+		# the case is silent on stderr; scripts/lib/runcmp.sh is where both rules live.
+		run_capture "$tmp/run" "$tmp/case"
+		rc=$?
+		if ! cmp_verdict=$(run_compare "$tmp/run" "$rc" "$want" "$DIR/$name.err" 0); then
+			printf 'behaviour-check: %s — %s: %s\n' "$name" \
+				"$(printf '%s' "$cmp_verdict" | cut -f1)" "$(printf '%s' "$cmp_verdict" | cut -f2-)" >&2
+			diff -u "$want" "$tmp/run.out" 2>/dev/null | sed '1,2d;s/^/          /' >&2
 			fail=$((fail + 1))
 			continue
 		fi

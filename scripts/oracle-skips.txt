@@ -8,9 +8,11 @@
 # cannot tell those apart. A sentence beside each program can.
 #
 # Format is <path>TAB<the seed's own first line, with the file and position stripped>. The
-# gate fails on a program skipped that is not listed, on a listed program the seed now builds,
-# and on a listed program whose reason moved — the last being the one worth having, since a
-# seed that starts refusing something for a NEW rule is exactly the signal this is for.
+# three clauses it is held to — UNLISTED, STALE and MOVED — are scripts/lib/ledger.sh's, which
+# is where every ledger in this repository gets them: a program skipped that is not listed, a
+# listed program the seed now builds, and a listed program whose reason moved, the last being
+# the one worth having, since a seed that starts refusing something for a NEW rule is exactly
+# the signal this is for.
 #
 # The private corpus keeps its own half of this file, inside the submodule.
 

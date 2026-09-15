@@ -48,6 +48,9 @@ set -uo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT" || exit 2
 
+# shellcheck source=scripts/lib/ledger.sh
+. "$ROOT/scripts/lib/ledger.sh"
+
 SRCS=${SRCS:-"src/compiler/zerg src/compiler/cmd src/compiler/lsp"}
 
 # A FLOOR under the walks examined. Ten is what this found and fixed; the tree has more than
@@ -55,12 +58,19 @@ SRCS=${SRCS:-"src/compiler/zerg src/compiler/cmd src/compiler/lsp"}
 # above that a glob matching one file cannot pass.
 WALK_MIN=${WALK_MIN:-12}
 
-# <file>:<function>	the sentence saying why it is not a walk.
-#
-# `p_jump_is_guarded` CLASSIFIES ONE STATEMENT — it answers whether a jump was written under
-# a guard, and `SIf` is one of the two shapes that means yes. It descends into nothing, so a
-# bare block is not a case it is missing; it is a case whose answer is no.
-EXCEPTIONS='src/compiler/zerg/parser.zg:p_jump_is_guarded'
+# THE EXCEPTIONS, `<file>:<function>TAB<the sentence saying why it is not a walk>`. It is a
+# LEDGER in the sense scripts/lib/ledger.sh defines, and it is one because the sentence had
+# nowhere to go: the format was documented as a tab-separated pair and the value held bare
+# names, so the reason lived in this comment and a second entry would have had nowhere to put
+# its own.
+ledger_self_test || exit 1
+
+tmp=$(mktemp -d) || exit 2
+trap 'rm -rf "$tmp"' EXIT
+
+cat >"$tmp/exceptions" <<'LEDGER'
+src/compiler/zerg/parser.zg:p_jump_is_guarded	it CLASSIFIES ONE STATEMENT — whether a jump was written under a guard, and `SIf` is one of the two shapes that means yes. It descends into nothing, so a bare block is not a case it is missing; it is a case whose answer is no
+LEDGER
 
 fail=0
 
@@ -102,9 +112,7 @@ fi
 while IFS=$'\t' read -r where _ ssc; do
 	[ -n "$where" ] || continue
 	listed=0
-	case ":$EXCEPTIONS:" in
-	*":$where:"*) listed=1 ;;
-	esac
+	ledger_lookup "$where" "$tmp/exceptions" >/dev/null && listed=1
 
 	if [ "$ssc" -eq 0 ] && [ "$listed" -eq 0 ]; then
 		note "$where walks statements and has no \`Stmt.SScope\` arm — a bare block hides everything written inside it from this walk"
@@ -116,12 +124,12 @@ done <<EOF
 $walks
 EOF
 
-# and a listed function that no longer carries the arm at all: renamed, deleted, or rewritten
-for ex in $EXCEPTIONS; do
-	if ! printf '%s' "$walks" | grep -q "^$ex	"; then
-		note "$ex is listed as an exception and carries no \`Stmt.SIf(…) =>\` arm — the rule does not reach it, so the line says nothing"
-	fi
-done
+# and a listed function that no longer carries the arm at all: renamed, deleted, or rewritten.
+# That is the ledger's STALE clause, and the observation is the walks this run found.
+printf '%s\n' "$walks" | cut -f1 | sed 's/$/\tcarries the arm/' >"$tmp/observed"
+while IFS="$(printf '\t')" read -r ex reason; do
+	note "$ex is listed as an exception — \"$reason\" — and carries no \`Stmt.SIf(…) =>\` arm, so the line says nothing"
+done < <(ledger_stale "$tmp/observed" - "$tmp/exceptions")
 
 if [ $fail -ne 0 ]; then
 	exit 1

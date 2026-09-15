@@ -29,6 +29,10 @@
 
 set -u
 
+ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+# shellcheck source=scripts/lib/ledger.sh
+. "$ROOT/scripts/lib/ledger.sh"
+
 ZERG=${ZERG:-./bin/zerg}
 ZERG0=${ZERG0:-./bin/zerg0}
 # The skip inventory, one file per corpus. Each lives WITH the programs it accounts for:
@@ -37,6 +41,8 @@ ZERG0=${ZERG0:-./bin/zerg0}
 # A checkout without the submodule is not passed those programs either, so the two halves stay
 # in step.
 SKIPS=${SKIPS:-"scripts/oracle-skips.txt test-data/oracle-skips.txt"}
+
+ledger_self_test || exit 1
 
 tmp=$(mktemp -d)
 trap 'rm -rf "$tmp"' EXIT
@@ -123,45 +129,40 @@ done
 # allowed to have or a rule `zerg` LOST — and one number at the bottom of the run cannot tell
 # them apart. Thirty-four programs sat in it, unread, while every gate was green.
 #
-# So the set is written down, with the seed's own sentence beside each one, and this asks
-# three things of it:
+# So the set is written down, with the seed's own sentence beside each one, and it is held to
+# the three clauses every ledger in this repository is held to. Those clauses used to be
+# spelled out here, in this script's own words, which is the arrangement scripts/lib/ledger.sh
+# was written to end: four gates keeping the same kind of list had four implementations of the
+# same three questions and four different sets of gaps.
 #
-#   a program skipped that is NOT in the file — something changed and nobody looked
-#   a program in the file that now BUILDS — the entry has rotted
-#   a program whose REASON moved — the seed turned it away for a different rule
-#
-# An entry is only asked about if THIS RUN looked at the program: the two inventories cover
+# An entry is only asked about if THIS RUN looked at the program — the two inventories cover
 # two corpora, and a developer running the gate over examples/ alone would otherwise be told
-# that thirty test-data cases had started building. `make oracle` passes both.
-: >"$tmp/listed"
-for f in $SKIPS; do
-	[ -f "$f" ] && grep -v '^#' "$f" | grep -v '^[[:space:]]*$' >>"$tmp/listed"
-done
+# that thirty test-data cases had started building. That is what `$tmp/seen` is, and `make
+# oracle` passes both inventories.
 
+# shellcheck disable=SC2086 # $SKIPS is a list of inventory paths and is meant to split
 while IFS="$(printf '\t')" read -r path reason; do
-	grep -Fqx "$path" "$tmp/seen" || continue
-
-	grep -Fqx "$(printf '%s\t%s' "$path" "$reason")" "$tmp/skipped" && continue
-
-	if grep -Fq "$(printf '%s\t' "$path")" "$tmp/skipped"; then
-		echo "REASON    $path — the seed turns it away for a different rule now"
-		echo "  was: $reason"
-		echo "  now: $(grep -F "$(printf '%s\t' "$path")" "$tmp/skipped" | head -1 | cut -f2-)"
-	else
-		echo "STALE     $path — the seed builds it now; drop its line from the skip inventory"
-	fi
+	echo "STALE     $path — the seed builds it now; drop its line from the skip inventory"
+	echo "  was: $reason"
 	fail=$((fail + 1))
-done <"$tmp/listed"
+done < <(ledger_stale "$tmp/skipped" "$tmp/seen" $SKIPS)
 
+# shellcheck disable=SC2086 # ditto
+while IFS="$(printf '\t')" read -r path was now; do
+	echo "REASON    $path — the seed turns it away for a different rule now"
+	echo "  was: $was"
+	echo "  now: $now"
+	fail=$((fail + 1))
+done < <(ledger_moved "$tmp/skipped" "$tmp/seen" $SKIPS)
+
+# shellcheck disable=SC2086 # ditto
 while IFS="$(printf '\t')" read -r path reason; do
-	grep -Fq "$(printf '%s\t' "$path")" "$tmp/listed" && continue
-
 	echo "UNLISTED  $path — the seed refuses it and nothing says why"
 	echo "  $reason"
 	echo "  if that is a gap the seed is allowed to have, add the line to the skip inventory;"
 	echo "  if it is a rule the shipping compiler lost, it belongs in reject-check.sh"
 	fail=$((fail + 1))
-done <"$tmp/skipped"
+done < <(ledger_unlisted "$tmp/skipped" $SKIPS)
 
 if [ $fail -ne 0 ]; then
 	echo "oracle-check: $fail program(s) mean different things to the two compilers"

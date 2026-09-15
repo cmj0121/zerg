@@ -23,6 +23,9 @@ set -uo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT" || exit 2
 
+# shellcheck source=scripts/lib/ledger.sh
+. "$ROOT/scripts/lib/ledger.sh"
+
 # WHO IS SPEAKING, and about WHAT. This script serves two gates now — `sanitize-conc` over the
 # twenty `conc_*` cases and `sanitize-corpus` over the other 179 — and every message hardcoded
 # the first one's name. A reader of a failing `make sanitize-corpus` was told "the concurrency
@@ -156,15 +159,20 @@ seen_known=""
 # line. Unset — which is how `sanitize-conc` runs — every report is a failure and nothing below
 # changes. Set, the reports are held to the list instead, and the list is held back: see
 # scripts/sanitize-leaks.txt for why it is a named set with a reason each rather than a count.
+#
+# It is a LEDGER, in the sense scripts/lib/ledger.sh defines and three other gates keep one:
+# a tolerated set, held in both directions, with a reason per line and a qualifier for the
+# lines no host can be promised. The three clauses were written out here in this script's own
+# words, and the `?` was a rule only this file knew; both are that library's now.
 KNOWN=${KNOWN:-}
 
-known_reason() {
-	for kf in $KNOWN; do
-		[ -f "$kf" ] || continue
-		awk -F'\t' -v n="$1" '$1 == n { print $2; found = 1 } END { exit !found }' "$kf" && return 0
-	done
-	return 0
-}
+ledger_self_test || exit 1
+
+# What this run REPORTED, `<case>TAB<allocator>`, and what it MEASURED, one case per line —
+# the observation and the scope the clauses at the bottom are asked against. CASES narrows a
+# run to one case, and a narrowed run must not be told that every other line has been fixed.
+: >"$WORK/reported"
+: >"$WORK/measured"
 
 # How many cases must actually be measured, checked at the bottom. The submodule guard above
 # catches an ABSENT test-data and nothing else: a shallow, partial or wrong-commit checkout
@@ -184,6 +192,7 @@ MIN_CASES=${MIN_CASES:-12}
 for src in ${CASES:-test-data/codegen/conc_*.zg}; do
 	name="$(basename "$src" .zg)"
 	cases=$((cases + 1))
+	printf '%s\n' "$name" >>"$WORK/measured"
 
 	if ! "$ZERG" build --emit c "$src" >"$WORK/$name.c" 2>"$WORK/$name.emit.log"; then
 		printf 'EMIT   %s\n' "$name"
@@ -266,18 +275,19 @@ for src in ${CASES:-test-data/codegen/conc_*.zg}; do
 				#
 				# The reason is the first runtime frame that allocated, because a case that
 				# starts leaking somewhere else is a new defect wearing an old name.
-				listed=$(known_reason "$name")
-
-				# the `?` that marks a host-dependent line is not part of the allocator
-				listed=${listed#\?}
-				if [ -n "$listed" ]; then
+				# shellcheck disable=SC2086 # $KNOWN is a list of ledger paths and is meant to split
+				if listed=$(ledger_lookup "$name" $KNOWN); then
+					# The allocator is recorded, not judged here: whether it MOVED is the
+					# ledger's third clause and it is asked at the bottom, over every case
+					# this run reported, rather than one at a time from inside the sweep.
+					#
+					# An extraction that finds nothing records the listed reason instead, so
+					# that a report this script cannot read the allocator out of is not also a
+					# claim that the allocator changed.
 					why=$(grep -oE "in (zrt_[a-z_]+|buf_alloc|str_alloc) [^ ]*csrc/(fmt|str|map|list|ref|unwind)\.c:" "$WORK/$name.err" | head -1 | awk '{ print $2 }')
-					if [ -n "$why" ] && [ "$why" != "$listed" ]; then
-						printf 'REASON %s — listed as %s, and it now allocates in %s\n' "$name" "$listed" "$why"
-						fail=1
-					else
-						seen_known="$seen_known $name"
-					fi
+					[ -n "$why" ] || why=$listed
+					printf '%s\t%s\n' "$name" "$why" >>"$WORK/reported"
+					seen_known="$seen_known $name"
 					break 2
 				fi
 				printf 'SAN    %s (%s workers, run %s) — %s\n' "$name" "$mode" "$n" "$repro"
@@ -303,45 +313,43 @@ if [ "$fail" -ne 0 ]; then
 	printf "$GATE: the C, the binaries and the full reports are kept in %s\n" "$WORK" >&2
 	exit 1
 fi
-rm -rf "$WORK"
-if [ "$cases" -lt "$MIN_CASES" ]; then
-	printf "\n$GATE: only %s cases were measured, and the floor is %s\n" "$cases" "$MIN_CASES" >&2
-	exit 1
-fi
-
-# THE OTHER DIRECTION, and the half that makes the list shrink. A line whose case no longer
+# THE OTHER TWO CLAUSES, and the half that makes the list shrink. A line whose case no longer
 # reports is a leak somebody fixed, and leaving it there means the next one to arrive under
-# that name passes. It is checked only where LEAK DETECTION RAN: on macOS every line would
-# read as fixed, which is a report about the platform and not about the code.
+# that name passes; a line whose case reports somewhere ELSE is a new defect wearing an old
+# name. Both are scripts/lib/ledger.sh's, asked over what this run measured.
+#
+# STALE is checked only where LEAK DETECTION RAN: on macOS every line would read as fixed,
+# which is a report about the platform and not about the code. MOVED is not conditional — a
+# case that reports here at all reports under address or undefined behaviour too, and where it
+# allocates is the same question on either host.
 if [ -n "$KNOWN" ]; then
-	stale=""
-	for kf in $KNOWN; do
-		[ -f "$kf" ] || continue
-		while IFS="$(printf '\t')" read -r kname kwhy; do
-			case $kname in '' | '#'*) continue ;; esac
-			case " $seen_known " in *" $kname "*) continue ;; esac
+	# shellcheck disable=SC2086 # $KNOWN is a list of ledger paths and is meant to split
+	while IFS="$(printf '\t')" read -r kname was now; do
+		printf '%s: REASON %s — listed as %s, and it now allocates in %s\n' "$GATE" "$kname" "$was" "$now" >&2
+		fail=1
+	done < <(ledger_moved "$WORK/reported" "$WORK/measured" $KNOWN)
 
-			# A REASON THAT OPENS WITH `?` IS NOT HELD BY THIS HALF. The list is a set of
-			# cases and it cannot say "on some hosts": `assert_claim` reports on linux/arm64
-			# and not on linux/amd64, so a strict STALE turns a true line into a red board on
-			# whichever architecture is not the one it was measured on. UNLISTED still covers
-			# it — nothing new may leak anywhere — and what is given up is only the claim that
-			# this particular line is still earning its place.
-			case $kwhy in '?'*) continue ;; esac
-
-			stale="$stale $kname"
-		done <"$kf"
-	done
 	if [ "$LEAKS" = "on" ]; then
+		# shellcheck disable=SC2086 # ditto
+		stale=$(ledger_stale "$WORK/reported" "$WORK/measured" $KNOWN | cut -f1 | tr '\n' ' ')
 		if [ -n "$stale" ]; then
-			printf "\n$GATE: these no longer report and their lines are still there —%s\n" "$stale" >&2
+			printf "\n$GATE: these no longer report and their lines are still there — %s\n" "$stale" >&2
 			printf "$GATE: delete each from the list; that deletion IS the gate for the fix\n" >&2
-			exit 1
+			fail=1
 		fi
 	else
 		printf "$GATE: the known-report list was NOT re-checked — leak detection is off here\n"
 	fi
 fi
+rm -rf "$WORK"
+if [ "$fail" -ne 0 ]; then
+	exit 1
+fi
+if [ "$cases" -lt "$MIN_CASES" ]; then
+	printf "\n$GATE: only %s cases were measured, and the floor is %s\n" "$cases" "$MIN_CASES" >&2
+	exit 1
+fi
+
 # The leak state is named HERE and not only in the header. `clean` on its own is the word a
 # reader takes away, and on macOS it means clean of what address and undefined behaviour see,
 # with leak detection off — the header that said so has scrolled past by then, and on the

@@ -3230,6 +3230,13 @@ pub fn chk_binary(mut &em: emit.Emitter, oper: str, ta: ast.Ty, tb: ast.Ty, ea: 
 
 	if chk_is_order(oper) {
 		return if emit.c_is_str(ta) and emit.c_is_str(tb)
+
+		# AND A TYPE THAT IMPLEMENTS `Ord`, which is where a declared type's order comes
+		# from (docs/core/specs.md). The rule below is about the operands the LANGUAGE
+		# orders; an `Ord` impl is the program saying it orders its own, and the emitter
+		# lowers the operator onto the `less` that impl provides.
+		return if ast.ty_eq(ta, tb) and emit.c_has_ord(em, ta)
+
 		if chk_wrong_num(ta) or chk_wrong_num(tb) {
 			chk_at(em, rule.Rule.OpWantsOrdered, f"operator `{oper}` orders two numbers or two strs, and these are {ast.ty_name(ta)} and {ast.ty_name(tb)}")
 			return

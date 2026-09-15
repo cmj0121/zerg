@@ -125,7 +125,7 @@ impl Show for Shape {
 ## 可 derive 的 spec 清單
 
 這組受祝福的 spec——每個都有一份 compiler 擁有的 canonical 結構解讀。每一個都經由 `derive` **opt-in**;
-**沒有**自動導出的相等,也沒有隱含的 `Object` spec。**`Eq`** 與 **`From`** 已建;**`Ord`**、**`Hash`**、
+**沒有**自動導出的相等,也沒有隱含的 `Object` spec。**`Eq`**、**`From`** 與 **`Ord`** 已建;**`Hash`**、
 **`Encode`** 與 **`Decode`** 在此規範、但 **[not yet]**——指名其一是 `E9054`。
 
 標在**泛型**目標上的 derive,會為它的每一次實例化各推導一份:`#[derive(Eq)] struct Box[T]` 是一個用該型別自己的
@@ -144,10 +144,10 @@ enum。這個轉換仍然是**寫出來的**:位置從不做轉換,所以 `?` �
 回答的通用描述。要它的理由是「一份被多個 derive 共用的描述,比多個各自去讀結構的 derive 便宜」;在呼叫者出現
 之前,那是一筆沒有人可省的節省。
 
-> **[not yet]** 在**帶 payload 的** `enum` 上的 `#[derive(Eq)]` 尚未實作,並由它自己的代碼拒絕——_E9055 … it
-> carries a payload (`A`), and this compiler derives equality for a fieldless enum, whose variants differ
-> exactly as their discriminants do; write `impl Eq for E` with a `match`_。它的規則需要同時比對兩側的 tag
-> **與** payload。
+在**帶 payload 的** `enum` 上,`#[derive(Eq)]` 與 `#[derive(Ord)]` 會同時比對兩側的 tag **與** payload:每個
+variant 一個 arm,arm 裡面再對另一個運算元做第二層 `match`。tag 不同時,相等回答 `false`;順序則依**宣告順序**
+回答,而那是逐對寫成字面值的——帶值 variant 的 enum,它的 tag 是不透明、只能 match 的(`E4006`),沒有 discriminant
+可以相減。
 
 | Spec     | 結構規則                                      | 要求（每欄位） | 排除                           |
 | -------- | --------------------------------------------- | -------------- | ------------------------------ |
@@ -189,7 +189,7 @@ canonical `±0.0`、把 `NaN` 放在一端來處理）。
 ## Serialization——完整範例
 
 > **[not yet]** `Encode` / `Decode`——以及下方用到的 `Sink` / `Source` spec——都已規範、但尚未實作;
-> 今天 `#[derive(Encode, Decode)]` 是編譯錯誤,因為這個 compiler 唯一會寫出的 derive 是 `Eq`。以下範例展示的是
+> 今天 `#[derive(Encode, Decode)]` 是 _E9054_,`Hash` 也是同一個答案。以下範例展示的是
 > 結構化 derive **意圖中**的樣貌。
 
 serialization 正是 structural derive 存在的目的：一種機械式、逐欄位的對映，沒人該為每個型別手寫，但它

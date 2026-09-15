@@ -135,7 +135,7 @@ Two shapes are **refused**, and both for the same reason — the rewrite does no
 
 The blessed set — each with a canonical structural reading the compiler owns. Every one is **opt-in**
 via `derive`; there is **no auto-derived equality** and no implicit `Object` spec. **`Eq`** and **`From`**
-are built; **`Ord`**, **`Hash`**, **`Encode`** and **`Decode`** are specified here and **[not yet]** —
+and **`Ord`** are built; **`Hash`**, **`Encode`** and **`Decode`** are specified here and **[not yet]** —
 naming one is `E9054`.
 
 A derive on a **generic** target derives for every instantiation of it: `#[derive(Eq)] struct Box[T]` is
@@ -158,10 +158,11 @@ nothing yet needs a general description that `Encode` / `Decode` do not answer m
 one is that a description several derives share is cheaper than several derives that each read structure;
 until a caller exists, that is a saving with nobody to save.
 
-> **[not yet]** `#[derive(Eq)]` on a **payload** `enum` is unbuilt and refused by its own code — _E9055 …
-> it carries a payload (`A`), and this compiler derives equality for a fieldless enum, whose variants
-> differ exactly as their discriminants do; write `impl Eq for E` with a `match`_. Its rule needs the tag
-> **and** the payload matched on both sides at once.
+`#[derive(Eq)]` and `#[derive(Ord)]` on a **payload** `enum` match the tag **and** the payload on both
+sides at once: an arm per variant, and inside it a second `match` on the other operand. Equality answers
+`false` where the tags differ; the order answers by **declaration order**, which is written out as a
+literal per pair — the tag of an enum whose variants carry values is opaque and match-only (`E4006`), so
+there is no discriminant to subtract.
 
 | Spec     | Structural rule                               | Requires (each field) | Excludes                 |
 | -------- | --------------------------------------------- | --------------------- | ------------------------ |
@@ -171,10 +172,16 @@ until a caller exists, that is a saving with nobody to save.
 | `Encode` | product per field; sum: tag then payload      | `Encode`              | `chan`/`Ref`/`fn`/handle |
 | `Decode` | rebuild per field / from tag + payload        | `Decode`              | `chan`/`Ref`/`fn`/handle |
 
-`Eq` is the sole source of `==` / `!=` on a `struct` or `enum`: a type with neither `#[derive(Eq)]` nor a
-hand-written `impl Eq` **cannot** be compared with `==` — that is a compile error, not a silent structural
-default. `Ord` requires `Eq` (the super-spec `spec Ord: Eq`), so `#[derive(Ord)]` obliges you to derive —
-or hand-write — `Eq` as well.
+`Eq` is the sole source of `==` / `!=` on a `struct` or `enum`, and `Ord` is the sole source of
+`<` `<=` `>` `>=`: a type with neither the derive nor a hand-written impl **cannot** be compared — that is
+a compile error, not a silent structural default. `Ord` requires `Eq` (the super-spec `spec Ord: Eq`), so
+`#[derive(Ord)]` obliges you to derive — or hand-write — `Eq` as well, and a derive without it is refused
+where the decorator is written (`E4099`). A `float` field is refused the same way (`E4098`): `NaN` is
+neither less than, equal to nor greater than anything, so no order over one is total.
+
+`Ord` requires a single method, `less`. The other three orderings are written out of it at the operator
+rather than required of an implementer — and each operand appears once, `a <= b` lowering to
+`not (b < a)` rather than to `a < b or a == b`, so a call on either side runs once.
 
 A field that fails the requirement makes the derive a **compile error naming that field**, never a
 silent skip — `#[derive(Ord)]` on a `T` with a `float` field is rejected exactly as the hand-written rule in
@@ -207,9 +214,8 @@ Cross-cutting cases fall out of the existing memory model, no new rule:
 ## Serialization — the worked example
 
 > **[not yet]** `Encode` / `Decode` — and the `Sink` / `Source` specs used below — are specified
-> but not implemented; `#[derive(Encode, Decode)]` is _E9054_ today, since the only derive this
-> compiler writes is `Eq`. The example below illustrates the **intended** shape of structural derivation
-> for when they land.
+> but not implemented; `#[derive(Encode, Decode)]` is _E9054_ today, which is also what `Hash` answers.
+> The example below illustrates the **intended** shape of structural derivation for when they land.
 
 Serialization is the case structural derive exists to serve: a mechanical, field-by-field mapping no
 one should hand-write per type, yet one that needs neither reflection nor a macro.

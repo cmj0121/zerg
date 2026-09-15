@@ -33,8 +33,8 @@ inherent methods are invisible. So:
   `derive(Hash)` (both **[not yet]** — _E9054_); comparing two values of a type that has no `Eq` impl is a compile
   error. The structural memory operations above are the exception, because they are properties of the
   representation rather than behavior a spec abstracts. The compiler-owned **structural derivation** that
-  backs `derive` (built for **`Eq`** on a `struct` and on a fieldless `enum`; **[not yet]** for `Ord`,
-  `Hash`, `Encode`, `Decode` — _E9054_ — and for `Eq` on a payload `enum` — _E9055_) is the
+  backs `derive` (built for **`Eq`** and **`Ord`** on a `struct` and on an `enum`, payload or not;
+  **[not yet]** for `Hash`, `Encode`, `Decode` — _E9054_) is the
   [Derive & Default Behavior](derive.md) reference.
 
 A `spec` may also be used **as a type**, not only a bound: a spec-typed value holds any implementing

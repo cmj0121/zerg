@@ -314,7 +314,7 @@ shipping compiler rather than a part of it (the line
 | `E3115` | a bare type name is declared in another file of this module                                           |
 | `E3116` | a bare module constant is declared in another file of this module                                     |
 | `E3117` | `if … := …` over a … — it binds the Left of a Result[T] or a T?                                       |
-| `E3118` | `in` over … — its elements are compared with `==`, and … has none                                     |
+| `E3118` | `in` over … compares its elements for equality, and … has none                                        |
 | `E3119` | `in` over … — a set names a list's elements, a map's keys, a range's members or an error kind         |
 | `E3120` | `?` on a … — it unwraps the Left of a carrier                                                         |
 | `E3121` | `!` on a … — it forces a Result[T] or a T?                                                            |
@@ -481,7 +481,7 @@ shipping compiler rather than a part of it (the line
 | `E9054` | `#[derive(…)]`                                                                                        |
 | `E9056` | the list method `…`                                                                                   |
 | `E9057` | structural equality over a container                                                                  |
-| `E9061` | `in` over … — its elements are compared with `==`, and this compiler does not write that comparison   |
+| `E9061` | `in` over … compares its elements for equality, and this compiler does not write that comparison      |
 | `E9062` | `in` over … — a range's members are found by comparing its bounds                                     |
 | `E9063` | `…` is part of the fixed-width ladder                                                                 |
 | `E9064` | the built-in `set`                                                                                    |

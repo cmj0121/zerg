@@ -305,104 +305,19 @@ fmt-roundtrip:                  # what the formatter writes, the parser reads
 	@[ -d test-data/fmt ] || { echo "test-data submodule not initialized (git submodule update --init)"; exit 1; }
 	@MIN_SOURCES=$(FMT_ROUNDTRIP_MIN) ./scripts/fmt-roundtrip.sh
 
-# The test-data corpus belongs to the self-hosting compiler: it describes the LANGUAGE,
-# which is what `zerg` is growing toward, while the seed is covered by its own unit tests.
+# The corpus gate lives in scripts/corpus-check.sh, because a recipe cannot source a library
+# and two of them now decide what this loop does: scripts/lib/runcmp.sh for what comparing a
+# run means, and scripts/lib/ledger.sh for the three clauses a tolerated set is held to.
 #
-# The gate is EVERY case except the ones named below, and it is that way round on purpose.
-# An allowlist makes "not gated" the default for a new case: adding one and forgetting to
-# register it leaves it silently unenforced, which is the one failure a test corpus must
-# not have. Naming what CANNOT pass instead makes a new case gated the moment it exists,
-# and gives the list an end state — it shrinks toward empty as the features land, rather
-# than growing forever.
+# The skip list moved with it, from a variable here to scripts/corpus-skips.txt, and gained a
+# reason per line — the CODE the compiler refuses each case with. This target still needs the
+# names, because `sanitize-corpus` below subtracts them from its own sweep, so it reads the
+# same file rather than keeping a second copy of the list.
+CORPUS_SKIP := $(shell cat scripts/corpus-skips.txt test-data/corpus-skips.txt 2>/dev/null | grep -v '^\#' | cut -f1 | grep .)
 
-# Cases awaiting a feature `zerg` does not have. Delete a name when its feature lands;
-# that deletion IS the gate for the feature — and the recipe now checks the OTHER direction,
-# because nothing did. A name here is a claim that the case still cannot be built, and a case
-# that quietly starts building stays skipped forever: `gen_struct` sat here after generic
-# structs were built, gated by nothing, while this file's own README said in prose that it
-# was built. So each skipped case is BUILT, and one that succeeds fails the gate.
-CORPUS_SKIP := \
-	derive_enum derive_ord
-
-CORPUS_PASS := $(filter-out $(CORPUS_SKIP),$(basename $(notdir $(wildcard test-data/codegen/*.zg))))
-
-# A FLOOR under how many cases the gate has to have run, of the kind fmt-tokens and
-# reject-fuzz carry. The `[ -d test-data/codegen ]` guard in the recipe catches an ABSENT
-# submodule and nothing else; a shallow, partial or wrong-commit checkout leaves the
-# directory THERE with a handful of cases in it, the wildcard above shrinks to match, and the
-# gate reports `1/1 cases pass` and exits 0 — success for having measured almost nothing,
-# which is the one failure that still looks like a corpus.
-#
-# 60 against the 168 that pass today, and the sentence that number sat in was stale by half a
-# corpus: it said 80. The gap is room for cases to move into CORPUS_SKIP while they wait for a
-# feature, so that adding a case for something `zerg` cannot build yet is not also a chore
-# here; it is nowhere near the two or three a broken checkout leaves behind. A figure quoted in
-# a comment beside the thing it describes is a claim, and this one had drifted far enough that
-# a reader would have taken the floor for tight.
-CORPUS_MIN ?= 60
-
-# A `conc_` case is run more than once. Every other case is a function of its source, so
-# one run answers the question; a concurrent one is a function of its source AND of an
-# interleaving the scheduler picks fresh each time, and a race that shows up one run in
-# twenty would sail through a single attempt. Repetition is what makes it a gate rather
-# than a coin toss. They are milliseconds each, so the whole corpus stays quick.
-CORPUS_CONC_REPS ?= 10
-
-# A case's EXIT STATUS is checked as well as its stdout, against `<name>.rc` where there is
-# one and against 0 where there is not. Only stdout was compared before, so a program that
-# stopped aborting — or started — passed unchanged: the abort contract's third step (exit 1)
-# was a thing the corpus could not see, which is a poor property for a corpus that holds
-# cases whose whole subject is aborting.
-#
-# Its FIRST step, the message on stderr, is checked now too, and against `<name>.err` where
-# there is one — but the absence of that file is the half worth stating. It is not "this case
-# is excused"; it is the claim that the case writes NOTHING to stderr, and the gate holds it
-# to that. Seven cases aborted with a message no file recorded, so the whole of what a reader
-# sees when a Zerg program dies could have changed in either compiler and every gate on this
-# board would have stayed green.
-#
-# BOTH streams are compared with `diff`, and stdout was not. It went through `$$(...)`, which
-# strips every trailing newline from the command's output AND from the file it is compared
-# with, so a case whose program stopped ending in a newline — or started ending in three —
-# passed unchanged. The two halves of the same recipe disagreed about what "the same output"
-# means, and the byte-exact half was the one written last.
-#
-# Nothing was relying on it: all 199 passing cases already matched byte for byte, so the
-# comparison had been loose without ever being needed, which is the state a loose comparison
-# is usually in.
 corpus:                         # run zerg against the test-data corpus it now owns
 	$(MAKE) build
-	@[ -d test-data/codegen ] || { echo "test-data submodule not initialized (git submodule update --init)"; exit 1; }
-	@fail=0; ran=0; \
-	for name in $(CORPUS_PASS); do \
-		src=test-data/codegen/$$name.zg; \
-		./bin/zerg build --emit bin -o ./bin/corpus-case $$src >/dev/null 2>&1 || { echo "BUILD  $$name"; fail=1; continue; }; \
-		want_rc=0; [ -f test-data/codegen/$$name.rc ] && want_rc=$$(cat test-data/codegen/$$name.rc); \
-		want_out=test-data/codegen/$$name.out; want_err=test-data/codegen/$$name.err; \
-		reps=1; case $$name in conc_*) reps=$(CORPUS_CONC_REPS);; esac; \
-		n=0; \
-		while [ $$n -lt $$reps ]; do \
-			./bin/corpus-case >./bin/corpus-case.out 2>./bin/corpus-case.err; rc=$$?; \
-			cmp -s $$want_out ./bin/corpus-case.out || { echo "OUTPUT $$name (run $$n)"; fail=1; break; }; \
-			[ "$$rc" = "$$want_rc" ] || { echo "STATUS $$name (run $$n): want $$want_rc, got $$rc"; fail=1; break; }; \
-			if [ -f $$want_err ]; then \
-				cmp -s $$want_err ./bin/corpus-case.err || { echo "STDERR $$name (run $$n): $$(head -1 ./bin/corpus-case.err)"; fail=1; break; }; \
-			elif [ -s ./bin/corpus-case.err ]; then \
-				echo "UNPINNED-STDERR $$name (run $$n): $$(head -1 ./bin/corpus-case.err) — put it in $$name.err"; fail=1; break; \
-			fi; \
-			n=$$((n+1)); \
-		done; \
-		if [ $$n -eq $$reps ]; then ran=$$((ran+1)); fi; \
-	done; \
-	rm -f ./bin/corpus-case ./bin/corpus-case.c ./bin/corpus-case.out ./bin/corpus-case.err; \
-	[ $$fail -eq 0 ] || { echo "corpus: a case that used to pass regressed"; exit 1; }; \
-	[ $$ran -ge $(CORPUS_MIN) ] || { echo "corpus: only $$ran cases were run, and the floor is $(CORPUS_MIN)"; exit 1; }; \
-	for name in $(CORPUS_SKIP); do \
-		! ./bin/zerg build --emit bin -o ./bin/corpus-skip test-data/codegen/$$name.zg >/dev/null 2>&1 || { echo "SKIPPED-BUT-BUILDS $$name"; fail=1; }; \
-	done; \
-	rm -f ./bin/corpus-skip ./bin/corpus-skip.c; \
-	[ $$fail -eq 0 ] || { echo "corpus: a case in CORPUS_SKIP builds now — delete its name, which IS the gate for its feature"; exit 1; }; \
-	echo "corpus: $$ran/$$(ls test-data/codegen/*.zg | wc -l | tr -d ' ') cases pass, and $(words $(CORPUS_SKIP)) are still refused (the rest await features zerg does not have yet)"
+	./scripts/corpus-check.sh
 
 # The compiler compiles itself, so the one program big enough to find a rare emitter path
 # is the compiler — and until now nothing compared the two stages `build` already makes.

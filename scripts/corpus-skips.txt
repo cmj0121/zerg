@@ -1,0 +1,26 @@
+# corpus-skips — the corpus cases `zerg` cannot build yet, and the code it refuses each with.
+#
+# The gate is EVERY case except the ones named here, and it is that way round on purpose. An
+# allowlist makes "not gated" the default for a new case: adding one and forgetting to register
+# it leaves it silently unenforced, which is the one failure a test corpus must not have. Naming
+# what CANNOT pass instead makes a new case gated the moment it exists, and gives the list an
+# end state — it shrinks toward empty as the features land, rather than growing forever.
+#
+# DELETING A NAME FROM HERE IS THE GATE FOR ITS FEATURE. That is why this list is public while
+# the leak list and the seed's skips keep their entries in the private submodule: a case name is
+# corpus content, and those two are inventories of thirty-odd, but this one is a handful that
+# this repository's own README already names in prose, and the deletion is the thing a reader
+# should be able to find in the history. `test-data/corpus-skips.txt` is read as well, for a
+# name that cannot be public.
+#
+# Format is <case>TAB<the code the compiler refuses it with, then the sentence>. It is a ledger
+# in the sense scripts/lib/ledger.sh defines, and it is held to all three of that file's
+# clauses — which is two more than it had. The one it had checked an EXIT STATUS: a case here
+# was required to fail, and any failure would do, so a case that stopped being refused for its
+# feature and started failing to parse — or failing because the corpus moved, or because `cc`
+# was missing — went on reading as "still waiting for generics". The code is what says WHICH
+# rule turned it away, and a code that moves is the MOVED clause finding a new defect under an
+# old name.
+
+derive_enum	E9055 `#[derive(Eq)]` on an enum that carries a payload; this compiler derives equality for a fieldless one
+derive_ord	E9054 `#[derive(Ord)]`; this compiler derives `Eq`, and `Ord`, `Hash`, `Encode` and `Decode` are specified and unbuilt

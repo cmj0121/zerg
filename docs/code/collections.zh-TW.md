@@ -4,15 +4,19 @@ Zerg 的內建容器——**`list`**、**`map`**、**`set`**，外加定長的 *
 型別，不弄變體動物園。它們就是普通的 **scope-owned 值**，建立在 [語言參考](../language.zh-TW.md) 之上。也有
 [English](collections.md) 版本。
 
-| 型別        | 角色                 | 元素／key 需求       | iteration 順序 | 狀態          |
-| ----------- | -------------------- | -------------------- | -------------- | ------------- |
-| `list[T]`   | 一個**有序序列**     | 任意 `T`（無 bound） | 索引序         |               |
-| `map[K, V]` | 一張**關聯**表       | `K: Eq + Hash`       | **插入**序     |               |
-| `set[T]`    | 一個**唯一成員**集合 | `T: Eq + Hash`       | **插入**序     | **[not yet]** |
-| `[T; N]`    | 一個**定長陣列**     | 任意 `T`（無 bound） | 索引序         |               |
+| 型別        | 角色                 | 元素／key 需求       | iteration 順序 | 狀態 |
+| ----------- | -------------------- | -------------------- | -------------- | ---- |
+| `list[T]`   | 一個**有序序列**     | 任意 `T`（無 bound） | 索引序         |      |
+| `map[K, V]` | 一張**關聯**表       | `K: Eq + Hash`       | **插入**序     |      |
+| `set[T]`    | 一個**唯一成員**集合 | `T: Eq + Hash`       | **插入**序     |      |
+| `[T; N]`    | 一個**定長陣列**     | 任意 `T`（無 bound） | 索引序         |      |
 
-上表的 `map` key 需求是預期的那一種；這個階段 key 僅限 **`int`** 或 **`str`**（見下方 [key](#keyeq-免費hash-顯式)）。
-唯一 **[not yet]** 的那一列指名自己:`set[T]` 在型別或值任一位置都是 _E9064 NotImplemented: the built-in `set`_。
+上表的 `map` key 需求是預期的那一種；這個階段 key——以及 **set 的成員**，那是同一個問題——僅限 **`int`** 或 **`str`**
+（見下方 [key](#keyeq-免費hash-顯式)）。
+
+**set 沒有字面值**：`{1}` 沒辦法跟只有一個語句的 block 分辨，所以它經由**建構子**建出來——`set([1, 2])` 從一個 list，
+以及在有型別說明它裝什麼的地方寫 `set()`（`s: set[int] = set()`）。寫在沒有東西說明的地方，`set()` 是 _E4100_。
+它就是一個沒有人寫值的 `map`：同樣的雜湊、同樣的插入序、同樣的值語意，而它印出來是 `{1, 2}`。
 
 更豐富的形狀都是組合出來的，不是新的內建型別。`list[byte]` 是原始位元組序列（可索引、可含 NUL）；`str` 還是獨立的
 immutable primitive（見下）。
@@ -43,7 +47,7 @@ reference-counted 的部分被共享（見 [值與記憶體](../core/memory.zh-T
 > **[not yet]** 上面點名的增長 method 裡只有 `append` 建置了：`insert` 與 `remove` 在 `list` 與 `map` 上都會被
 > 指名拒絕，而且兩種容器各自回答自己的代碼——`list` 上是 _E9056 NotImplemented: the list method `insert` — this
 > compiler has `len` and `append`_ 與 _NotImplemented: the list method `remove`_,`map` 上是
-> _E9100 NotImplemented: the map method `insert`_ 與 _E9100 NotImplemented: the map method `remove`_。所以一個
+> _E9100 NotImplemented: the container method `insert`_ 與 _E9100 NotImplemented: the container method `remove`_。所以一個
 > collection 只能從尾端增長、完全不能縮短。每個名字都是引用而非描述,因為每個容器的代碼都是靠一份名字清單
 > 分成兩半——`E9056` 與 `E9100` 都一樣，一半是即將到來的形式、另一半是語言沒有的 method——而
 > `make method-gaps` 會讀這些標記來把兩份清單都釘住：在這裡被承諾、在那裡卻缺席的 method 會被永久拒絕,
@@ -102,7 +106,7 @@ name  := m.get(id) ?? "anon"   # 檢查後給預設
 ```
 
 > **[not yet]** 檢查路徑並不存在：`xs.get(i)` 是 _E9056 NotImplemented: the list method `get`_,而 `m.get(k)`
-> 是 _E9100 NotImplemented: the map method `get`_，所以上面那行 `m.get(id) ?? "anon"` 編不過，而會 abort 的索引是進入容器的唯一途徑。於是「預期內
+> 是 _E9100 NotImplemented: the container method `get`_，所以上面那行 `m.get(id) ?? "anon"` 編不過，而會 abort 的索引是進入容器的唯一途徑。於是「預期內
 > 的不存在」不是程式問得出口的問題，而是它必須在索引之前先用 `k in m` 迴避掉的事。
 
 ## 切片——唯讀子區間

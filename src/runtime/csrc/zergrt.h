@@ -246,8 +246,11 @@ typedef struct {
 } zrt_map_vt;
 
 /* zrt_map is a map's BY-VALUE header. `entries` is an insertion-order array of `cap`
- * records each `entrysz = sizeof(size_t)+keysz+valsz` bytes, laid out
- * `[ hash | key | val ]`, `len` of them live — walked in order for iteration. `buckets`
+ * records laid out `[ hash | key | val ]`, `len` of them live — walked in order for
+ * iteration. Each field is padded up to a multiple of `sizeof(size_t)`, so `entrysz` is
+ * not `sizeof(size_t)+keysz+valsz`: a one-byte value (every `set[T]` has one) would
+ * otherwise put the next entry's hash on an odd address. `keysz` and `valsz` are the
+ * UNPADDED widths, because they are what a copy of a key or a value moves. `buckets`
  * is a linear-probe hash index of `nbuckets` slots, each a 1-based entry index (0 =
  * empty). The header is embedded inline in its holder, so copying/dropping it is the
  * compiler's job; this runtime owns only the two heap buffers. Layout is INTERNAL

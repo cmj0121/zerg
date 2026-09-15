@@ -980,6 +980,16 @@ fn parse_base_type(mut &p: Parser) -> ast.Ty {
 		expect(p, token.Kind.RBrack)
 		return ast.Ty.TMap(kt, vt)
 	}
+
+	# `set[T]` takes ONE argument, which is the whole difference from the map above: a set has
+	# an element where a map has a key and a value, and it hashes that element the way a map
+	# hashes its key.
+	if name == "set" and p_at(p, token.Kind.LBrack) {
+		p_advance(p)
+		et := parse_type(p)
+		expect(p, token.Kind.RBrack)
+		return ast.Ty.TSet(et)
+	}
 	if name == "list" and p_at(p, token.Kind.LBrack) {
 		p_advance(p)
 		elem := parse_type(p)

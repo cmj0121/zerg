@@ -4,16 +4,20 @@ Zerg's built-in containers — **`list`**, **`map`**, **`set`**, plus the fixed-
 one canonical type per role, no variant zoo. They're just ordinary **scope-owned values**, built on the
 [Language Reference](../language.md). Also in [繁體中文](collections.zh-TW.md).
 
-| Type        | Role                        | Element / key requirement | Iteration order     | Status                |
-| ----------- | --------------------------- | ------------------------- | ------------------- | --------------------- |
-| `list[T]`   | an **ordered sequence**     | any `T` (no bound)        | index order         |                       |
-| `map[K, V]` | an **associative** table    | `K: Eq + Hash`            | **insertion** order |                       |
-| `set[T]`    | a **unique-membership** set | `T: Eq + Hash`            | **insertion** order | **[not yet]** _E9064_ |
-| `[T; N]`    | a **fixed-size array**      | any `T` (no bound)        | index order         |                       |
+| Type        | Role                        | Element / key requirement | Iteration order     | Status |
+| ----------- | --------------------------- | ------------------------- | ------------------- | ------ |
+| `list[T]`   | an **ordered sequence**     | any `T` (no bound)        | index order         |        |
+| `map[K, V]` | an **associative** table    | `K: Eq + Hash`            | **insertion** order |        |
+| `set[T]`    | a **unique-membership** set | `T: Eq + Hash`            | **insertion** order |        |
+| `[T; N]`    | a **fixed-size array**      | any `T` (no bound)        | index order         |        |
 
-The `map` key requirement above is the intended one; this phase a key is restricted to **`int`** or **`str`**
-(see [Keys](#keys--eq-free-hash-explicit) below). The one **[not yet]** row names itself: `set[T]` in either
-type or value position is _E9064 NotImplemented: the built-in `set`_.
+The `map` key requirement above is the intended one; this phase a key — and a **set element**, which is the
+same question — is restricted to **`int`** or **`str`** (see [Keys](#keys--eq-free-hash-explicit) below).
+
+A **set has no literal**: `{1}` cannot be told from a one-statement block, so it is built through its
+**constructor** — `set([1, 2])` from a list, and `set()` where a type says what it holds
+(`s: set[int] = set()`). Written where nothing says, `set()` is _E4100_. It is a `map` whose value nobody
+wrote: the same hashing, the same insertion order, the same value semantics, and it renders as `{1, 2}`.
 
 Richer shapes are compositions, not new built-ins. `list[byte]` is the raw byte sequence (indexable, may
 hold a NUL); `str` stays a separate immutable primitive (below).
@@ -46,8 +50,8 @@ collection can modify its elements**.
 > **[not yet]** Of the growth methods named above, only `append` is built: `insert` and `remove` are each
 > refused by name on both `list` and `map`, and each container answers with its own code — _E9056
 > NotImplemented: the list method `insert` — this compiler has `len` and `append`_ and _NotImplemented: the
-> list method `remove`_ on a `list`, _E9100 NotImplemented: the map method `insert`_ and _E9100
-> NotImplemented: the map method `remove`_ on a `map`. So a collection grows at its end and does not shrink
+> list method `remove`_ on a `list`, _E9100 NotImplemented: the container method `insert`_ and _E9100
+> NotImplemented: the container method `remove`_ on a `map`. So a collection grows at its end and does not shrink
 > at all. Each name is quoted rather than described, because each container's code is split by a list of
 > names — `E9056`'s and `E9100`'s alike, one half a form that is coming and the other a method the language
 > does not have — and `make method-gaps` reads these markers to hold both lists to them: a method promised
@@ -115,7 +119,7 @@ name  := m.get(id) ?? "anon"   # checked, then default
 
 > **[not yet]** The checked path does not exist: `xs.get(i)` is _E9056 NotImplemented: the list method
 > `get`_ and `m.get(k)` is _E9100
-> NotImplemented: the map method `get`_, so the `m.get(id) ?? "anon"` line above does not compile and
+> NotImplemented: the container method `get`_, so the `m.get(id) ?? "anon"` line above does not compile and
 > indexing — which aborts — is the only way into a container. Expected absence is therefore not a question a
 > program can ask; it is one it has to head off with `k in m` before indexing.
 

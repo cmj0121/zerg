@@ -411,6 +411,7 @@ pub enum Rule {
 	RefDropNotAFunction = 4097
 	DeriveOrdFloat = 4098
 	DeriveOrdWithoutEq = 4099
+	SetCtorTakesOneList = 4100
 	ListPatternNotAList = 4084
 	MutateAValueNotAPlace = 4081
 
@@ -487,7 +488,6 @@ pub enum Rule {
 	NotYetInOverNoEq = 9061
 	NotYetInOverType = 9062
 	NotYetFixedWidthLadder = 9063
-	NotYetSetBuiltin = 9064
 	NotYetDelChannel = 9066
 	NotYetGenericConstructor = 9067
 	NotYetNilPattern = 9068

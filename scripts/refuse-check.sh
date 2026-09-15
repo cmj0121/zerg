@@ -1673,7 +1673,7 @@ fn main() {
 }
 EOF
 
-expect "$ZERG" map-insert E9100 'the map method `insert`' <<'EOF'
+expect "$ZERG" map-insert E9100 'the container method `insert` on a map[int, int]' <<'EOF'
 fn main() {
 	m := {1: 2}
 	m.insert(3, 4)
@@ -1681,7 +1681,7 @@ fn main() {
 }
 EOF
 
-expect "$ZERG" map-remove E9100 'the map method `remove`' <<'EOF'
+expect "$ZERG" map-remove E9100 'the container method `remove` on a map[int, int]' <<'EOF'
 fn main() {
 	m := {1: 2}
 	m.remove(1)
@@ -1689,7 +1689,7 @@ fn main() {
 }
 EOF
 
-expect "$ZERG" map-get E9100 'the map method `get`' <<'EOF'
+expect "$ZERG" map-get E9100 'the container method `get` on a map[int, int]' <<'EOF'
 fn main() {
 	m := {1: 2}
 	print m.get(1)
@@ -2911,23 +2911,24 @@ fn main() {
 }
 EOF
 
-expect "$ZERG" set-constructor E9064 <<'EOF'
+# `set()` HAS NO ELEMENT TO READ, so it is built where the type is written. Inference answers
+# `set[?]` rather than refusing, because the position it lands in may say what it is — the
+# refusal belongs to the spelling that has no position, not to the form.
+expect "$ZERG" empty-set-with-no-position E4100 <<'EOF'
 fn main() {
-	s := set([1, 2])
-	print s.len()
+	s := set()
+	print 1
 }
 EOF
 
-# `set[T]` IS TWO FORMS, and only the constructor above had a case. docs/code/collections.md
-# marks the set "[not yet] in both type and value", and a type position is reached by a
-# different path — a declaration's type is read before any expression is lowered — so a rule
-# that held for the constructor says nothing about the annotation.
-expect "$ZERG" set-as-a-type E9064 <<'EOF'
-fn f(s: set[int]) -> int {
-	return 1
+expect "$ZERG" set-of-something-unhashable E9052 'a set element of type P' <<'EOF'
+struct P {
+	pub a: int
 }
 
-fn main() { print f(1) }
+fn main() {
+	print set([P(1)]).len()
+}
 EOF
 
 # --- forms whose failure used to escape this compiler ----------------------------------

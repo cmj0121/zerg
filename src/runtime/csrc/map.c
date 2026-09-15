@@ -9,7 +9,16 @@
  * The table is INSERTION-ORDERED open-addressing (docs/code/collections.md: map iterates
  * in insertion order):
  *   - `entries` is an insertion-order array of `entrysz`-byte records, each laid out
- *     `[ size_t hash | key (keysz) | val (valsz) ]`. Iteration walks it 0..len.
+ *     `[ size_t hash | key (keysz) | val (valsz) ]`, EACH FIELD PADDED UP to a multiple
+ *     of `sizeof(size_t)`. Iteration walks it 0..len.
+ *
+ *     THE PADDING IS NOT A LAYOUT PREFERENCE. Without it an entry is as wide as its
+ *     contents happen to be, so `map[int, bool]` gives 8+8+1 = 17 and entry 1 starts on
+ *     an odd address — where `*zrt_map_ehash()` writes a `size_t` through a misaligned
+ *     pointer, which is undefined behaviour and what UBSan reports. A one-byte VALUE is
+ *     not an exotic case: it is every `set[T]`, whose value is the `bool` nobody names.
+ *     The unpadded `keysz`/`valsz` stay in the header because they are what a `memcpy`
+ *     of a key or a value must move; only the OFFSETS are padded.
  *   - `buckets` is a linear-probe hash index of `nbuckets` slots, each holding a
  *     1-based entry index (0 = empty). A lookup hashes the key, probes buckets, and
  *     compares against the entry's stored hash then vt->eq. There is NO tombstone —
@@ -28,7 +37,15 @@
 
 #include <string.h>
 
-/* entry field accessors: an entry is [ size_t hash | key | val ]. */
+/* zrt_map_pad rounds a field width up to a multiple of `sizeof(size_t)` — the widest
+ * alignment anything this runtime stores in an entry needs (a pointer, an int64_t, a
+ * double, an embedded container header). It is what keeps every field of every entry
+ * aligned however narrow the key and the value are. */
+static size_t zrt_map_pad(size_t n) {
+	return (n + sizeof(size_t) - 1u) & ~(sizeof(size_t) - 1u);
+}
+
+/* entry field accessors: an entry is [ size_t hash | key | val ], each field padded. */
 static size_t *zrt_map_ehash(zrt_map *m, size_t i) {
 	return (size_t *)(m->entries + i * m->entrysz);
 }
@@ -38,7 +55,7 @@ static void *zrt_map_ekey(zrt_map *m, size_t i) {
 }
 
 static void *zrt_map_eval(zrt_map *m, size_t i) {
-	return m->entries + i * m->entrysz + sizeof(size_t) + m->keysz;
+	return m->entries + i * m->entrysz + sizeof(size_t) + zrt_map_pad(m->keysz);
 }
 
 void zrt_map_init(zrt_map *m, size_t keysz, size_t valsz, const zrt_map_vt *vt) {
@@ -49,7 +66,7 @@ void zrt_map_init(zrt_map *m, size_t keysz, size_t valsz, const zrt_map_vt *vt) 
 	m->nbuckets = 0;
 	m->keysz = keysz;
 	m->valsz = valsz;
-	m->entrysz = sizeof(size_t) + keysz + valsz;
+	m->entrysz = sizeof(size_t) + zrt_map_pad(keysz) + zrt_map_pad(valsz);
 	m->vt = vt;
 }
 

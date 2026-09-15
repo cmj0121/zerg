@@ -645,6 +645,76 @@ case $spec_out in
 	;;
 esac
 
+# --- an import is the FILE's, not the module's -----------------------------------------
+#
+# `import` binds a namespace in the file that writes it: it is neither transitive nor shared
+# with the file's neighbours, and the compiler says so out loud (`E5007`). The rule that judges
+# an import by what reaches through its namespace was asking the whole MERGED program, so an
+# import one file wrote and never used read as used because a SIBLING in the same module wrote
+# the name. Three lines in this repository's own compiler were dead that way.
+#
+# It is two files of one module rather than one file, because one file cannot pose the question.
+mkdir -p "$tmp/sib/pair"
+cat >"$tmp/sib/pair/mod.zg" <<'EOF'
+import (
+	pub "./a"
+	pub "./b"
+)
+EOF
+cat >"$tmp/sib/pair/a.zg" <<'EOF'
+import "strings"
+
+pub fn shout(s: str) -> str {
+	return strings.repeat(s, 2)
+}
+EOF
+cat >"$tmp/sib/pair/b.zg" <<'EOF'
+import "strings"
+
+pub fn plain(s: str) -> str {
+	return s
+}
+EOF
+cat >"$tmp/sib/main.zg" <<'EOF'
+import "./pair"
+
+fn main() {
+	print pair.shout("x")
+	print pair.plain("y")
+}
+EOF
+
+# THE SIBLING'S USE IS REAL, and this is what says so: `a.zg` does not compile without its own
+# import. Without that, `b.zg` being reported would prove only that nothing in the program used
+# `strings` at all, which is the weaker claim the old rule already made.
+grep -v '^import "strings"$' "$tmp/sib/pair/a.zg" >"$tmp/sib/pair/a.without" &&
+	mv "$tmp/sib/pair/a.zg" "$tmp/sib/pair/a.kept" &&
+	mv "$tmp/sib/pair/a.without" "$tmp/sib/pair/a.zg"
+if "$ZERG" build "$tmp/sib/main.zg" --emit check >/dev/null 2>&1; then
+	echo "NEEDLESS  the sibling fixture builds without the import a.zg writes, so the finding below proves nothing"
+	fail=$((fail + 1))
+else
+	pass=$((pass + 1))
+fi
+mv "$tmp/sib/pair/a.kept" "$tmp/sib/pair/a.zg"
+
+sib_out=$("$ZERG" lint "$tmp/sib/main.zg" 2>&1)
+case $sib_out in
+*"b.zg"*L101*)
+	case $sib_out in
+	*"a.zg"*)
+		echo "SPOKE     l101-is-the-file's — L101 fired on a.zg, which uses what it imports: $(echo "$sib_out" | head -1)"
+		fail=$((fail + 1))
+		;;
+	*) pass=$((pass + 1)) ;;
+	esac
+	;;
+*)
+	echo "QUIET     l101-is-the-file's — b.zg imports \`strings\` and never writes it, and only its SIBLING does: $sib_out"
+	fail=$((fail + 1))
+	;;
+esac
+
 # --- every documented rule has a case ----------------------------------------------
 #
 # BOTH LISTS BELOW ARE READ OUT OF ONE FILE BY ONE ANCHOR, and an anchor that stops matching

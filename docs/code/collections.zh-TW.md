@@ -82,10 +82,14 @@ collection 也能拿來當 key。
   [有型別的位置](../core/types.zh-TW.md#有型別的位置typed-positions)一樣去符合元素型別，所以 `72 in bytearray(…)` 是一個 byte。
 
 > **[not yet]** `x in xs` 只對這個編譯器寫得出 `==` 的元素型別建置了。容器元素、以及已經帶著 `Eq` 的宣告型別都不
-> 在其中：`P(1) in [P(1)]` 是 _E9061 NotImplemented: `in` over list[P] — its elements are compared with `==`,
+> 在其中：`P(1) in [P(1)]` 是 _E9061 NotImplemented: `in` over list[P] compares its elements for equality,
 > and this compiler does not write that comparison for P_。那是[順序與相等性](#順序與相等性)那個缺口從 `in` 這一
 > 側看過去的樣子，也會跟它一起退場。元素型別**沒有** `Eq` 則是另一個答案——`E3118`，那個缺口是程式自己用
 > `#[derive(Eq)]` 補上的。
+>
+> **這些訊息每一個都說 `in`，沒有一個說 `==`。** `in` 問的規則**就是**相等性規則——所以代碼跟 `a == b` 共用而不是
+> 各生一份——但一支寫著 `x in xs` 的程式裡沒有 `==`，訊息引用一個不在檔案裡的運算子，只會讓讀者回去翻自己的檔案找
+> 它。解法也隨位置不同：比較一個值的地方可以先 unwrap，而在 `in` 這裡，元素型別不對的那個東西是**集合**。
 >
 > 語言**根本沒給相等性**的元素是第三個答案,而且是永久的,也是 `==` 自己的答案:一個 **channel** 或一個**函式
 > 值**是身分——_E4034 a chan[int] is an identity rather than a value, and the language gives it no

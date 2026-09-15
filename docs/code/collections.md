@@ -91,10 +91,16 @@ Indexing mirrors the force-vs-check split of `!` / `?`:
 
 > **[not yet]** `x in xs` is built only for the element types this compiler writes a `==` for. A
 > container element, or a declared type that already carries an `Eq`, is not one of them: `P(1) in [P(1)]`
-> is _E9061 NotImplemented: `in` over list[P] — its elements are compared with `==`, and this compiler does
+> is _E9061 NotImplemented: `in` over list[P] compares its elements for equality, and this compiler does
 > not write that comparison for P_. That is [container equality](#order--equality)'s gap reached through
 > `in`, and it retires with it. An element type carrying **no** `Eq` is a different answer — `E3118`, which
 > the program closes itself by writing `#[derive(Eq)]` on the type.
+>
+> **Every one of these says `in`, and none of them says `==`.** The rule `in` asks IS the equality rule —
+> which is why the codes are shared with `a == b` rather than doubled — but a program containing `x in xs`
+> contains no `==`, and a message quoting one sends its reader through their own file looking for it. The
+> remedy differs with the site too: where a value is compared you can unwrap it, and at an `in` the thing
+> with the wrong element type is the COLLECTION.
 >
 > An element the language gives **no equality at all** is a third answer and a permanent one, and it is
 > `==`'s own: a **channel** or a **function value** is an identity — _E4034 a chan[int] is an identity

@@ -159,8 +159,17 @@ pub fn lint_program(srcs: list[str], paths: list[str], ms: emit.Mods) -> list[Fi
 	mut ids: list[str] = []
 	mut calls: list[str] = []
 	mut ns: list[str] = []
-	walk_program(f, ids, calls, ns)
-	lint_imports(f, ns, ids, ms, out)
+
+	# AND THE SAME NAMES KEYED BY THE FILE THAT WROTE THEM, which is what an import is judged
+	# by. `ids` and `ns` above are the whole program's, because a private function called from
+	# another module of the same program is used — that is L102's question. L101's is not the
+	# same question, and asking it of the merged program is a rule the compiler does not have:
+	# an import binds a namespace in the FILE that writes it, neither transitive nor shared
+	# with the file's neighbours (E5007, #57), so `import "ascii"` in one file of a module was
+	# read as used because a SIBLING wrote `ascii.`.
+	mut used_at: list[str] = []
+	walk_program(f, ids, calls, ns, used_at)
+	lint_imports(f, used_at, ms, out)
 	lint_dead_fns(f, calls, ids, out)
 	lint_unread_bindings(f, out)
 	lint_captures(f, out)
@@ -858,7 +867,7 @@ fn ref_arg(nm: str, args: list[ast.Expr], n: str, refs: list[str]) -> bool {
 }
 
 # lint_imports reports an import whose namespace nothing reaches through.
-fn lint_imports(f: ast.File, ns: list[str], ids: list[str], ms: emit.Mods, mut &out: list[Finding]) {
+fn lint_imports(f: ast.File, used_at: list[str], ms: emit.Mods, mut &out: list[Finding]) {
 	for im in f.imports {
 		# AN `import pub` IS USED BY BEING WRITTEN. It is a RE-EXPORT (#57 decision 5): what it
 		# does is put another file's public names on this module's surface, and a `mod.zg` whose
@@ -876,7 +885,11 @@ fn lint_imports(f: ast.File, ns: list[str], ids: list[str], ms: emit.Mods, mut &
 		# the BINDING, not the path's last segment: an `as` rename is the name this file
 		# reaches the module by, so asking about anything else calls every renamed import
 		# unused and lets one that genuinely is go unreported
-		if not has_str(ns, im.name) and not has_str(ids, im.name) {
+		#
+		# AND IN THIS FILE. `im.at` is the file that wrote the line, and the namespace it binds
+		# reaches no further than that file, so the question is whether THIS file wrote the
+		# name — not whether the program did.
+		if not has_str(used_at, used_key(im.at, im.name)) {
 			out.append(Finding("", im.at, im.line, im.col, "L101", f"unused import \"{im.path}\""))
 		}
 	}
@@ -1129,23 +1142,66 @@ fn collect_binds_iflet(name: str, then_b: list[ast.Stmt], else_b: list[ast.Stmt]
 # The three cost `src/stdlib/log.zg` three `#[allow(L102)]` that suppressed a false positive
 # for as long as the walk was short — a suppression standing in for a linter defect, which
 # is the outcome an allow must never be used for.
-fn walk_program(f: ast.File, mut &ids: list[str], mut &calls: list[str], mut &ns: list[str]) {
-	for fd in f.fns {
-		walk_body(fd.body, ids, calls, ns)
-		walk_defaults(fd.params, ids, calls, ns)
-	}
-	for c in f.consts {
-		walk_expr(c.value, ids, calls, ns)
-	}
-	for sd in f.structs {
-		walk_field_defaults(sd.fields, ids, calls, ns)
+fn walk_program(f: ast.File, mut &ids: list[str], mut &calls: list[str], mut &ns: list[str], mut &used_at: list[str]) {
+	# ONLY THE NAMES AN IMPORT COULD BIND are keyed by file. Every identifier the program reads
+	# would be tens of thousands of entries for one question about two hundred lines, and the
+	# question is only ever asked about a namespace an import brought in.
+	mut bound: list[str] = []
+	for im in f.imports {
+		if not has_str(bound, im.name) {
+			bound.append(im.name)
+		}
 	}
 
-	# the qualifier, not the type name: `testing.Context` says the program reaches the
+	for fd in f.fns {
+		mut lids: list[str] = []
+		mut lns: list[str] = []
+		walk_body(fd.body, lids, calls, lns)
+		walk_defaults(fd.params, lids, calls, lns)
+		keep_used(fd.path, lids, bound, ids, used_at)
+		keep_used(fd.path, lns, bound, ns, used_at)
+	}
+	for c in f.consts {
+		mut lids: list[str] = []
+		mut lns: list[str] = []
+		walk_expr(c.value, lids, calls, lns)
+		keep_used(c.path, lids, bound, ids, used_at)
+		keep_used(c.path, lns, bound, ns, used_at)
+	}
+	for sd in f.structs {
+		mut lids: list[str] = []
+		mut lns: list[str] = []
+		walk_field_defaults(sd.fields, lids, calls, lns)
+		keep_used(sd.path, lids, bound, ids, used_at)
+		keep_used(sd.path, lns, bound, ns, used_at)
+	}
+
+	# the qualifier, not the type name: `testing.Context` says the file reaches the
 	# `testing` NAMESPACE, which is the only half an import is judged by
 	for q in f.ty_quals {
 		ns.append(q.ns)
+		if has_str(bound, q.ns) {
+			used_at.append(used_key(q.path, q.ns))
+		}
 	}
+}
+
+# keep_used merges one declaration's names into the program-wide list, and records the ones an
+# import could have bound against the FILE the declaration was written in.
+fn keep_used(path: str, local: list[str], bound: list[str], mut &all: list[str], mut &used_at: list[str]) {
+	for n in local {
+		all.append(n)
+		if has_str(bound, n) {
+			used_at.append(used_key(path, n))
+		}
+	}
+}
+
+# used_key is the pair `<file>#<name>`, spelled once so the two ends cannot disagree. `#` is
+# the separator `ref_arg` already uses for the same kind of compound key, and no module path
+# or identifier contains one.
+fn used_key(path: str, name: str) -> str {
+	return f"{path}#{name}"
 }
 
 # walk_defaults visits the default value of every parameter that has one.

@@ -18,7 +18,6 @@ import "./lexer"
 import "./lint"
 import "./parser"
 import "./rule"
-import "./token"
 import (
 	"ascii"
 	"strconv"

@@ -1673,7 +1673,7 @@ fn main() {
 }
 EOF
 
-expect "$ZERG" map-insert E9100 'the method `insert` on a map[int, int]' <<'EOF'
+expect "$ZERG" map-insert E9100 'the container method `insert` on a map[int, int]' <<'EOF'
 fn main() {
 	m := {1: 2}
 	m.insert(3, 4)
@@ -1681,7 +1681,7 @@ fn main() {
 }
 EOF
 
-expect "$ZERG" map-remove E9100 'the method `remove` on a map[int, int]' <<'EOF'
+expect "$ZERG" map-remove E9100 'the container method `remove` on a map[int, int]' <<'EOF'
 fn main() {
 	m := {1: 2}
 	m.remove(1)
@@ -1689,7 +1689,7 @@ fn main() {
 }
 EOF
 
-expect "$ZERG" map-get E9100 'the method `get` on a map[int, int]' <<'EOF'
+expect "$ZERG" map-get E9100 'the container method `get` on a map[int, int]' <<'EOF'
 fn main() {
 	m := {1: 2}
 	print m.get(1)

@@ -14,11 +14,18 @@
 # permanent rejection for a form the chapter promises — a green board over a marker that lies.
 #
 # WHAT IS COMPARED, AND WHY THERE IS NO THIRD COPY. The chapters' convention is to quote the
-# compiler's sentence verbatim — _E9100 NotImplemented: the map method `insert`_ — so the
-# names a chapter promises can be read out of that quotation, using the message's own literal
-# prefix as the needle. The prefix is not written here: it is cut out of the f-string at the
-# raise site, up to the `{meth}` hole. Rename the method or reword the sentence and this gate
-# follows; write a third spelling of it and there is nowhere for one to go.
+# compiler's sentence verbatim — _E9100 NotImplemented: the container method `insert`_ — so
+# the names a chapter promises can be read out of that quotation, using the message's own
+# literal prefix as the needle. The prefix is not written here: it is cut out of the f-string
+# at the raise site, up to the `{meth}` hole. Rename the method or reword the sentence and this
+# gate follows; write a third spelling of it and there is nowhere for one to go.
+#
+# WHICH MAKES THE PREFIX A NAME, and two codes may not share one. `E9100`'s sentence was
+# reworded to name its receiver — a set reaching the map's dispatch was being told about a map
+# — and landed on `E9107`'s word for word. The needle then read both lists out of the chapters
+# at once and everything disagreed with everything: MISCODED, PROMISED and REJECTED together.
+# That report is the gate working. A reader meeting one sentence under two numbers has no way
+# to tell which rule turned their program away, and the fix is a subject word each raise owns.
 #
 # BOTH DIRECTIONS FAIL. A name the compiler calls unbuilt and no chapter quotes is a promise
 # the compiler is making alone (PROMISED). A name a chapter quotes and the compiler does not
@@ -57,9 +64,10 @@ find docs -name '*.md' ! -name '*.zh-TW.md' ! -name 'diagnostics*.md' -exec cat 
 	sed -e 's/^[[:space:]]*>[[:space:]]*//' | tr '\n' ' ' >"$tmp/chapters"
 
 # THE METHOD-GAP RAISES, read out of the messages rather than listed here. One is a raise
-# whose SUBJECT is the name — `NotImplemented: the method `{meth}`` or `the map method
+# whose SUBJECT is the name — `NotImplemented: the method `{meth}`` or `the container method
 # `{meth}`` — which is what tells it from the other `NotImplemented:` raises that happen to
-# carry a `{meth}` hole (an rvalue mutation, an associated function).
+# carry a `{meth}` hole (an rvalue mutation, an associated function). The optional word is
+# what each raise is distinguished BY, so the pattern allows one and does not name them.
 #
 # THE ANCHOR USED TO REQUIRE A CONDITION, and that is how #74 shipped its own defect. It read
 # `.*\) if `, so only a raise that was ALREADY split was visible, and the one that was not —

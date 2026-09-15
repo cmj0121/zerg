@@ -56,10 +56,17 @@ LIST=docs/.markers-uncoded
 fail=0
 
 # THE FLOOR. Every assertion below compares the documents against a list, and an extractor
-# that stopped matching compares an empty set to an empty set and reports success. The
-# English documents held 157 markers when this was written and the language has a long way
-# to go before they thin out; 100 is that number with room to close a chapter's worth.
-MIN_MARKERS=${MIN_MARKERS:-100}
+# that stopped matching compares an empty set to an empty set and reports success. What it
+# guards against is the EXTRACTOR going blind, and nothing else — so it belongs far below what
+# the documents hold rather than just under it.
+#
+# It was 100 against a count of 157 "when this was written", and the documents have been
+# thinning ever since: `set[T]` closing took them to 98 and turned this gate red for a marker
+# being legitimately DISCHARGED, which is the opposite of what it is for. A floor set beside
+# the measurement it guards becomes a second copy of that measurement, and the count in the
+# sentence above had been wrong for several releases — which is why this one names no number
+# it is not enforcing.
+MIN_MARKERS=${MIN_MARKERS:-60}
 
 pages() {
 	find docs -name '*.md' ! -name '*.zh-TW.md' | sort

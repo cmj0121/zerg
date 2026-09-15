@@ -4,16 +4,20 @@ Zerg's built-in containers — **`list`**, **`map`**, **`set`**, plus the fixed-
 one canonical type per role, no variant zoo. They're just ordinary **scope-owned values**, built on the
 [Language Reference](../language.md). Also in [繁體中文](collections.zh-TW.md).
 
-| Type        | Role                        | Element / key requirement | Iteration order     | Status                |
-| ----------- | --------------------------- | ------------------------- | ------------------- | --------------------- |
-| `list[T]`   | an **ordered sequence**     | any `T` (no bound)        | index order         |                       |
-| `map[K, V]` | an **associative** table    | `K: Eq + Hash`            | **insertion** order |                       |
-| `set[T]`    | a **unique-membership** set | `T: Eq + Hash`            | **insertion** order | **[not yet]** _E9064_ |
-| `[T; N]`    | a **fixed-size array**      | any `T` (no bound)        | index order         |                       |
+| Type        | Role                        | Element / key requirement | Iteration order     | Status |
+| ----------- | --------------------------- | ------------------------- | ------------------- | ------ |
+| `list[T]`   | an **ordered sequence**     | any `T` (no bound)        | index order         |        |
+| `map[K, V]` | an **associative** table    | `K: Eq + Hash`            | **insertion** order |        |
+| `set[T]`    | a **unique-membership** set | `T: Eq + Hash`            | **insertion** order |        |
+| `[T; N]`    | a **fixed-size array**      | any `T` (no bound)        | index order         |        |
 
-The `map` key requirement above is the intended one; this phase a key is restricted to **`int`** or **`str`**
-(see [Keys](#keys--eq-free-hash-explicit) below). The one **[not yet]** row names itself: `set[T]` in either
-type or value position is _E9064 NotImplemented: the built-in `set`_.
+The `map` key requirement above is the intended one; this phase a key — and a **set element**, which is the
+same question — is restricted to **`int`** or **`str`** (see [Keys](#keys--eq-free-hash-explicit) below).
+
+A **set has no literal**: `{1}` cannot be told from a one-statement block, so it is built through its
+**constructor** — `set([1, 2])` from a list, and `set()` where a type says what it holds
+(`s: set[int] = set()`). Written where nothing says, `set()` is _E4100_. It is a `map` whose value nobody
+wrote: the same hashing, the same insertion order, the same value semantics, and it renders as `{1, 2}`.
 
 Richer shapes are compositions, not new built-ins. `list[byte]` is the raw byte sequence (indexable, may
 hold a NUL); `str` stays a separate immutable primitive (below).

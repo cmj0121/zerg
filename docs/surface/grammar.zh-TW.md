@@ -786,7 +786,6 @@ asm-operand ::= 'in' '(' str-lit ')' expr | 'out' '(' str-lit ')' lvalue
 | 7     | `E9075` | 泛型別名 `type X[T] = …`                                                                 |
 | 7     | `E9038` | 對內建型別的 `impl`                                                                      |
 | 7     | `E9046` | `alignof[T]`                                                                             |
-| 7     | `E9064` | `set`                                                                                    |
 | 7     | `E9063` | 定寬階梯 `i8`…`f64`                                                                      |
 | 7     | `E2076` | 除 `#[derive(…)]`、`#[obj]`、`#[test]`、`#[fixture]`、`#[allow(…)]` 以外的每個 decorator |
 | 12    | `E9036` | `unsafe` 的 `spec` 簽名                                                                  |

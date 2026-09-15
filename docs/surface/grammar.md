@@ -919,7 +919,6 @@ production, not the one that first mentions it.
 | 7     | `E9075` | a generic `type X[T] = …` alias                                                         |
 | 7     | `E9038` | an `impl` on a built-in type                                                            |
 | 7     | `E9046` | `alignof[T]`                                                                            |
-| 7     | `E9064` | `set`                                                                                   |
 | 7     | `E9063` | the fixed-width ladder `i8`…`f64`                                                       |
 | 7     | `E2076` | every decorator but `#[derive(…)]`, `#[obj]`, `#[test]`, `#[fixture]` and `#[allow(…)]` |
 | 12    | `E9036` | an `unsafe` `spec` signature                                                            |

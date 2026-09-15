@@ -444,6 +444,7 @@ shipping compiler rather than a part of it (the line
 | `E4097` | `Ref`'s drop action is not a named function                                                           |
 | `E4098` | `#[derive(Ord)]` on a type with a `float` field                                                       |
 | `E4099` | `#[derive(Ord)]` with no `Eq` beside it                                                               |
+| `E4100` | `set()` written where no type says what it holds                                                      |
 | `E5001` | this entry file declares no `fn main`                                                                 |
 | `E5002` | cannot resolve import `…`, and where it was looked for                                                |
 | `E5007` | `…` is a module this build compiles and this module did not import                                    |
@@ -484,7 +485,6 @@ shipping compiler rather than a part of it (the line
 | `E9061` | `in` over … compares its elements for equality, and this compiler does not write that comparison      |
 | `E9062` | `in` over … — a range's members are found by comparing its bounds                                     |
 | `E9063` | `…` is part of the fixed-width ladder                                                                 |
-| `E9064` | the built-in `set`                                                                                    |
 | `E9066` | `del …` on a CHANNEL                                                                                  |
 | `E9067` | `…[…](…)` as a constructor                                                                            |
 | `E9068` | `nil` as a `match` pattern                                                                            |
@@ -709,6 +709,7 @@ name now is the prelude rule (`E2061`), which is about the name rather than abou
 | `E9003` | —       | the form was built: a generic enum, one specialization per application |
 | `E9048` | —       | the form was built: a spec names a type, and a box dispatches          |
 | `E9055` | —       | the form was built: `Eq` derives over a payload enum's tag and payload |
+| `E9064` | —       | the form was built: `set[T]`, its constructor and its members          |
 
 **One of them moved nowhere**, and it is the only row whose second column is empty. `E3047`
 reported a prefix operator on a `type X = Y` — _operator `not` has no meaning on `Flag`_ — on

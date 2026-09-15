@@ -32,9 +32,12 @@ The release in which the type system grows into something you can write a **libr
   program.
 - **60 gates**, up from 58.
 
-**Two leftovers ship unfixed**, which is the milestone's rule for a find from the previous release:
-[#123](https://github.com/cmj0121/zerg/issues/123) (an `unsafe fn` as a `spec` requirement) and
-[#127](https://github.com/cmj0121/zerg/issues/127) (`fmt` ordering a run of bindings).
+**One leftover ships unfixed** — [#123](https://github.com/cmj0121/zerg/issues/123), an `unsafe fn` as a
+`spec` requirement — and so do **two defects this release's own subject has**, found by putting the
+milestone's sentence to the compiler rather than by re-reading the tickets that closed:
+[#165](https://github.com/cmj0121/zerg/issues/165), where `E3079` names a spelling `E3069` refuses, and
+[#166](https://github.com/cmj0121/zerg/issues/166), where a generic method's receiver decides a later
+payload-free variant's parameter. Both are loud; neither miscompiles.
 
 ## 0.3.0
 

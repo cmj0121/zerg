@@ -35,6 +35,21 @@ if [ "$(printf '%s' "$body" | grep -c .)" -lt 5 ]; then
 	exit 1
 fi
 
+# THE LINK AT THE BOTTOM IS DERIVED AND THEN CHECKED. It was written out with the SERIES
+# hardcoded — `notes/0.1/` — and the version interpolated beside it, so it was right for the
+# release it was written during and for no other: the published 0.2.0 and 0.3.0 bodies both
+# point at a file that is not there. Nothing saw it, because the only thing this gate asked was
+# whether the CHANGELOG had a section, and a dead link in a release body is not a broken build.
+#
+# The series is the version without its patch, which is how `notes/` is laid out, and the file
+# has to EXIST — deriving a path is what put the wrong one there, so the derivation is held to
+# the tree rather than trusted.
+NOTES="notes/${VERSION%.*}/${VERSION}_CHANGELOG.md"
+if [ ! -f "$NOTES" ]; then
+	printf 'release-notes: the body would link %s and it is not there\n' "$NOTES" >&2
+	exit 1
+fi
+
 printf '%s\n' "$body"
 cat <<EOF
 ## Install
@@ -60,5 +75,5 @@ and hands it to \`cc\`.
 There is no Intel-Mac binary — Rosetta runs x86_64 on Apple Silicon and not the reverse, so an
 Intel Mac builds from source, which needs Go as well as \`cc\`.
 
-→ [the full account, with every gap named](notes/0.1/${VERSION}_CHANGELOG.md)
+→ [the full account, with every gap named]($NOTES)
 EOF

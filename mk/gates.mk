@@ -553,7 +553,7 @@ mem-peak:                       # the compiler emits its own C under a memory ce
 # written, turns this red on the commit that did it rather than on release day.
 release-notes:                  # the changelog has a section for the version being built
 	@./scripts/release-notes.sh >/dev/null
-	@echo "release-notes: CHANGELOG.md has a section for $$(cat VERSION)"
+	@echo "release-notes: CHANGELOG.md has a section for $$(cat VERSION), and the notes it links are there"
 
 # `zerg build src/…/zergc.zg` and `zerg build /abs/…/zergc.zg` are one program, and nothing
 # about it changed between the two commands — only the string a person typed. The C used to

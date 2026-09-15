@@ -32,6 +32,8 @@ set -u
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 # shellcheck source=scripts/lib/ledger.sh
 . "$ROOT/scripts/lib/ledger.sh"
+# shellcheck source=scripts/lib/runcmp.sh
+. "$ROOT/scripts/lib/runcmp.sh"
 
 ZERG=${ZERG:-./bin/zerg}
 ZERG0=${ZERG0:-./bin/zerg0}
@@ -43,6 +45,7 @@ ZERG0=${ZERG0:-./bin/zerg0}
 SKIPS=${SKIPS:-"scripts/oracle-skips.txt test-data/oracle-skips.txt"}
 
 ledger_self_test || exit 1
+runcmp_self_test || exit 1
 
 tmp=$(mktemp -d)
 trap 'rm -rf "$tmp"' EXIT
@@ -105,18 +108,18 @@ for src in "$@"; do
 	# point with different words disagree about which check fired. The comparison is `diff`
 	# rather than `$(...)` for the reason its neighbours are — `$(...)` strips trailing
 	# newlines from both sides at once, so a program that stopped ending in one still matched.
-	"$tmp/$name.0" >"$tmp/out0" 2>"$tmp/err0"
+	run_capture "$tmp/run0" "$tmp/$name.0"
 	rc0=$?
-	"$tmp/$name.1" >"$tmp/out1" 2>"$tmp/err1"
+	run_capture "$tmp/run1" "$tmp/$name.1"
 	rc1=$?
 
-	if diff -q "$tmp/out0" "$tmp/out1" >/dev/null 2>&1 && diff -q "$tmp/err0" "$tmp/err1" >/dev/null 2>&1 && [ "$rc0" -eq "$rc1" ]; then
+	if verdict=$(run_same "$tmp/run0" "$rc0" "$tmp/run1" "$rc1"); then
 		same=$((same + 1))
 		continue
 	fi
-	echo "DIFFER    $src — the two compilers do not agree"
-	echo "  zerg0 (rc $rc0): $(head -3 "$tmp/out0" | tr '\n' '|')$(head -1 "$tmp/err0" | sed 's/^/ !/')"
-	echo "  zerg  (rc $rc1): $(head -3 "$tmp/out1" | tr '\n' '|')$(head -1 "$tmp/err1" | sed 's/^/ !/')"
+	echo "DIFFER    $src — the two compilers do not agree on $(printf '%s' "$verdict" | cut -f1)"
+	echo "  zerg0 (rc $rc0): $(head -3 "$tmp/run0.out" | tr '\n' '|')$(head -1 "$tmp/run0.err" | sed 's/^/ !/')"
+	echo "  zerg  (rc $rc1): $(head -3 "$tmp/run1.out" | tr '\n' '|')$(head -1 "$tmp/run1.err" | sed 's/^/ !/')"
 	fail=$((fail + 1))
 done
 

@@ -19,6 +19,12 @@
 
 set -u
 
+ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+# shellcheck source=scripts/lib/runcmp.sh
+. "$ROOT/scripts/lib/runcmp.sh"
+
+runcmp_self_test || exit 1
+
 PREFIX=${PREFIX:-}
 if [ -z "$PREFIX" ]; then
 	PREFIX=$(mktemp -d)/prefix
@@ -87,9 +93,17 @@ if ! (cd "$work" && "$PREFIX/bin/zerg" build --emit bin -o "$work/t" "$work/t.zg
 	tail -5 "$work/build.log" | sed 's/^/  /'
 	fail=$((fail + 1))
 else
-	got=$("$work/t" 2>/dev/null)
-	if [ "$got" != "42" ]; then
-		echo "RUN       the installed compiler built a program that prints '$got', not 42"
+	# ALL THREE ANSWERS, and stderr used to go to /dev/null right here. An installed toolchain
+	# whose programs had started writing to stderr — a runtime warning, a diagnostic that
+	# escaped, anything at all — passed this gate, and this is the one place in the repository
+	# that runs a program the INSTALLED compiler built. scripts/lib/runcmp.sh is what the
+	# question is asked through now, so it is the same question the corpus asks.
+	printf '42\n' >"$work/want.out"
+	run_capture "$work/run" "$work/t"
+	rc=$?
+	if ! verdict=$(run_compare "$work/run" "$rc" "$work/want.out" "$work/want.err" 0); then
+		echo "RUN       the installed compiler built a program that does not print 42 —" \
+			"$(printf '%s' "$verdict" | cut -f1): $(printf '%s' "$verdict" | cut -f2-)"
 		fail=$((fail + 1))
 	fi
 fi

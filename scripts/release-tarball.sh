@@ -26,6 +26,11 @@ set -uo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT" || exit 2
 
+# shellcheck source=scripts/lib/runcmp.sh
+. "$ROOT/scripts/lib/runcmp.sh"
+
+runcmp_self_test || exit 1
+
 # `DIST` AND NOT `OUT`, and that is not taste. `scripts/gen-version.sh` reads $OUT for the
 # path it writes `version.zg` to, and this script runs `make install`, which runs `make build`,
 # which runs that script — so an exported OUT=dist made the generator write the compiler's own
@@ -60,7 +65,26 @@ fn main() {
 	print __zrt_platform() + "-" + __zrt_arch()
 }
 ZG
-slug=$(cd "$work" && "$stage/bin/zerg" build probe.zg -o probe 2>/dev/null && ./probe 2>/dev/null)
+#
+# STDERR IS READ, and it used to go to /dev/null on both the build and the run. The name of
+# the artifact every user downloads is derived from what this one program prints, and a staged
+# compiler that had started writing a word to stderr would have had that word thrown away and
+# the tarball named from whatever was left on stdout. The comparison is
+# scripts/lib/runcmp.sh's, the same one the corpus and `install-check` ask through.
+if (cd "$work" && "$stage/bin/zerg" build probe.zg -o probe >"$work/probe.build.log" 2>&1); then
+	run_capture "$work/probe.run" "$work/probe"
+	probe_rc=$?
+else
+	echo "release-tarball: the staged compiler could not build the platform probe" >&2
+	sed 's/^/    /' "$work/probe.build.log" >&2
+	exit 1
+fi
+if ! verdict=$(run_compare "$work/probe.run" "$probe_rc" - "$work/probe.want.err" 0); then
+	echo "release-tarball: the platform probe did not run cleanly —" \
+		"$(printf '%s' "$verdict" | cut -f1): $(printf '%s' "$verdict" | cut -f2-)" >&2
+	exit 1
+fi
+slug=$(cat "$work/probe.run.out")
 case $slug in
 [a-z0-9_]*-[a-z0-9_]*) ;;
 *)

@@ -30,7 +30,13 @@
 
 set -u
 
+ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+# shellcheck source=scripts/lib/runcmp.sh
+. "$ROOT/scripts/lib/runcmp.sh"
+
 ZERG=${ZERG:-./bin/zerg}
+
+runcmp_self_test || exit 1
 
 tmp=$(mktemp -d)
 trap 'rm -rf "$tmp"' EXIT
@@ -106,29 +112,30 @@ for src in "$@"; do
 		continue
 	fi
 
-	# Both streams, into files, compared with `diff`. They went through `$(...)` before, which
-	# strips trailing newlines from both sides at once — so a sugar form that stopped ending in
-	# a newline matched a core form that still did — and stderr went to /dev/null on both, which
-	# left the MESSAGE a program dies with out of a gate whose whole subject is whether two
-	# spellings do the same thing. An abort travels on stderr; the exit status alone says only
-	# that both died.
-	"$tmp/$name.sugar" >"$tmp/out0" 2>"$tmp/err0"
+	# All three answers, through scripts/lib/runcmp.sh. They went through `$(...)` before,
+	# which strips trailing newlines from both sides at once — so a sugar form that stopped
+	# ending in a newline matched a core form that still did — and stderr went to /dev/null on
+	# both, which left the MESSAGE a program dies with out of a gate whose whole subject is
+	# whether two spellings do the same thing. An abort travels on stderr; the exit status
+	# alone says only that both died.
+	run_capture "$tmp/$name.sugar.run" "$tmp/$name.sugar"
 	rc0=$?
-	"$tmp/$name.core" >"$tmp/out1" 2>"$tmp/err1"
+	run_capture "$tmp/$name.core.run" "$tmp/$name.core"
 	rc1=$?
 
-	if ! diff -q "$tmp/out0" "$tmp/out1" >/dev/null 2>&1 || [ "$rc0" -ne "$rc1" ]; then
-		echo "DIFFER    $src — the sugar and the core form do not do the same thing"
-		echo "  as written (rc $rc0): $(head -3 "$tmp/out0" | tr '\n' '|')"
-		echo "  desugared  (rc $rc1): $(head -3 "$tmp/out1" | tr '\n' '|')"
-		fail=$((fail + 1))
-		continue
-	fi
-
-	if ! diff -q "$tmp/err0" "$tmp/err1" >/dev/null 2>&1; then
-		echo "STDERR    $src — the two spellings die with different words"
-		echo "  as written: $(head -3 "$tmp/err0" | tr '\n' '|')"
-		echo "  desugared : $(head -3 "$tmp/err1" | tr '\n' '|')"
+	if ! verdict=$(run_same "$tmp/$name.sugar.run" "$rc0" "$tmp/$name.core.run" "$rc1"); then
+		case $(printf '%s' "$verdict" | cut -f1) in
+		STDERR)
+			echo "STDERR    $src — the two spellings die with different words"
+			echo "  as written: $(head -3 "$tmp/$name.sugar.run.err" | tr '\n' '|')"
+			echo "  desugared : $(head -3 "$tmp/$name.core.run.err" | tr '\n' '|')"
+			;;
+		*)
+			echo "DIFFER    $src — the sugar and the core form do not do the same thing"
+			echo "  as written (rc $rc0): $(head -3 "$tmp/$name.sugar.run.out" | tr '\n' '|')"
+			echo "  desugared  (rc $rc1): $(head -3 "$tmp/$name.core.run.out" | tr '\n' '|')"
+			;;
+		esac
 		fail=$((fail + 1))
 		continue
 	fi

@@ -7980,10 +7980,16 @@ fn c_binexpr(mut &em: Emitter, oper: str, a: ast.Expr, b: ast.Expr, sb: Subst) -
 	if c_is_cmp_op(oper) {
 		return c_eq_call(em, oper, a, b, sb) if (oper == "==" or oper == "!=") and c_has_eq(em, ta)
 
+		# AND ORDERING COMES FROM `Ord`, the same way. `less` is the one method the spec
+		# requires (docs/core/specs.md) and the other three orderings are written out of it
+		# here rather than required of an implementer.
+		return c_ord_call(em, oper, a, b, sb) if c_is_order_op(oper) and c_has_ord(em, ta)
+
 		# EQUALITY and ORDERING are two questions. `c_eq_legal` answers the first — and is
 		# the same answer the `T: Eq` bound gives, which is the point of it being one
-		# function. An ORDERING additionally has nothing on any aggregate, `Ord` being what
-		# would supply it, so a `#[derive(Eq)]` struct answers `==` and still not `<`.
+		# function. An ORDERING additionally has nothing on any aggregate WITHOUT an `Ord`,
+		# which is what would supply it, so a `#[derive(Eq)]` struct answers `==` and still
+		# not `<`.
 		#
 		# ONLY WHEN THE TWO SIDES ARE THE SAME TYPE. `Color == Fruit` and `Color == 1` are
 		# already reported by chk_binary above, and they are the better sentence — what is
@@ -8071,6 +8077,29 @@ fn c_eq_call(mut &em: Emitter, oper: str, a: ast.Expr, b: ast.Expr, sb: Subst) -
 	return c_expr(em, ast.Expr.EMethod(a, "eq", [b]), sb) if oper == "=="
 
 	return c_expr(em, ast.Expr.EMethod(a, "ne", [b]), sb)
+}
+
+# c_is_order_op is the half of the comparison operators `Ord` answers. `==` and `!=` are
+# `Eq`'s and are asked first, so this names the other four rather than subtracting them.
+fn c_is_order_op(oper: str) -> bool {
+	return oper == "<" or oper == ">" or oper == "<=" or oper == ">="
+}
+
+# c_ord_call lowers the four orderings onto the ONE method `Ord` requires, the way `c_eq_call`
+# lowers two onto `eq` and `ne`.
+#
+# EACH OPERAND IS WRITTEN ONCE, and that is what decides the spelling. `a <= b` reads
+# naturally as `a.less(b) or a.eq(b)`, and that puts both trees in the output twice — so a
+# call on either side would run twice, which is a silent wrong answer for any operand that
+# does anything. `Ord` is specified as a TOTAL order consistent with `Eq`
+# (docs/core/specs.md), and under totality `a <= b` is exactly `not (b < a)`, which spends
+# each operand once.
+fn c_ord_call(mut &em: Emitter, oper: str, a: ast.Expr, b: ast.Expr, sb: Subst) -> str {
+	return c_expr(em, ast.Expr.EMethod(a, "less", [b]), sb) if oper == "<"
+	return c_expr(em, ast.Expr.EMethod(b, "less", [a]), sb) if oper == ">"
+	return c_expr(em, ast.Expr.EUnary("not", ast.Expr.EMethod(b, "less", [a])), sb) if oper == "<="
+
+	return c_expr(em, ast.Expr.EUnary("not", ast.Expr.EMethod(a, "less", [b])), sb)
 }
 
 # c_eq_refuse names what is missing, and there are four different sentences under one gap —
@@ -18749,7 +18778,7 @@ fn c_emit_file_at(f: ast.File, ms: Mods, mut &diags: list[ast.Diag]) -> str {
 # point of doing it this way — a hand-built one is a second spelling of what the parser
 # produces, and the two drift the day a spec grows a field. Three lines through the real
 # parser cannot disagree with the real parser.
-const ZG_BUILTIN_SPECS := "spec Into[T] {\n\tfn into() -> T\n}\n\nspec Eq {\n\tfn eq(o: This) -> bool\n\tfn ne(o: This) -> bool\n}\n"
+const ZG_BUILTIN_SPECS := "spec Into[T] {\n\tfn into() -> T\n}\n\nspec Eq {\n\tfn eq(o: This) -> bool\n\tfn ne(o: This) -> bool\n}\n\nspec Ord: Eq {\n\tfn less(o: This) -> bool\n}\n"
 
 # c_with_builtin_specs adds them to a program that does not declare them itself. A program IS
 # allowed to declare its own `Into` or `Eq` — the check is by name, so a spec by that name
@@ -18935,8 +18964,9 @@ pub fn c_with_derived(prog: ast.File) -> ast.File {
 fn c_derive_src(prog: ast.File, target: str, nm: str) -> str {
 	return c_obj_src(prog, target) if nm == "#obj"
 
-	raise c_derive_diag(prog, target, rule.Rule.NotYetDerive, f"NotImplemented: `#[derive({nm})]` — this compiler derives `Eq`; `Ord`, `Hash`, `Encode` and `Decode` are specified and unbuilt (docs/core/derive.md)") if nm == "Ord" or nm == "Hash" or nm == "Encode" or nm == "Decode"
+	raise c_derive_diag(prog, target, rule.Rule.NotYetDerive, f"NotImplemented: `#[derive({nm})]` — this compiler derives `Eq`, `Ord` and `From`; `Hash`, `Encode` and `Decode` are specified and unbuilt (docs/core/derive.md)") if nm == "Hash" or nm == "Encode" or nm == "Decode"
 	return c_derive_eq(prog, target) if nm == "Eq"
+	return c_derive_ord(prog, target) if nm == "Ord"
 	return c_derive_from(prog, target) if nm == "From"
 
 	# A `spec` YOU WROTE, on an ENUM. The two halves of `derive` answer to different rules
@@ -19572,6 +19602,191 @@ fn c_derive_applied(prog: ast.File, target: str) -> str {
 	return f"{target}[{parser.join_commas(tps)}]"
 }
 
+# c_derive_ord writes the impl `#[derive(Ord)]` stands for. `Ord` requires exactly one method
+# — `less` — and the other three orderings are written out of it at the operator
+# (`c_ord_call`), so this generates one body and not four.
+#
+# THE RULE IS LEXICOGRAPHIC (docs/core/derive.md): a product compares field by field in
+# declaration order, and a sum by variant order. Written out, each field is "less here, or
+# equal here and less further on", which recurses into the field's own `<` exactly as the `Eq`
+# derive recurses into its `==`.
+#
+# `Eq` IS NOT DERIVED ALONGSIDE. `spec Ord: Eq` makes the super-spec a precondition an impl
+# must satisfy, and generating one silently would be this compiler deciding a second derive the
+# author did not write — the chapter says `#[derive(Ord)]` obliges you to derive or hand-write
+# `Eq` as well, and the missing-super rule is what says so.
+fn c_derive_ord(prog: ast.File, target: str) -> str {
+	c_derive_ord_needs_eq(prog, target)
+
+	body := c_derive_ord_body(prog, target)
+	head := c_derive_head(prog, target)
+	ty := c_derive_applied(prog, target)
+	return f"{head}Ord for {ty} {{\n\tfn less(o: {ty}) -> bool {{\n\t\treturn {body}\n\t}}\n}}\n"
+}
+
+# c_derive_ord_needs_eq says the precondition in the reader's own file. `spec Ord: Eq` makes
+# the super-spec a requirement of every `impl Ord`, so a derive with no `Eq` beside it is
+# refused either way — but refused by the SUPER-SPEC rule it reads `<derive>:1:1` and names
+# `eq` and `ne`, two methods the reader never heard of, at a file they cannot open.
+#
+# So it is asked here, where the decorator the reader wrote is the thing being judged.
+fn c_derive_ord_needs_eq(prog: ast.File, target: str) {
+	mut i := 0
+	for i < prog.derive_on.len() {
+		return if prog.derive_on[i] == target and prog.derive_spec[i] == "Eq"
+		i = i + 1
+	}
+	for ip in prog.impls {
+		return if ip.target == target and ip.on == "Eq"
+	}
+
+	raise c_derive_diag(prog, target, rule.Rule.DeriveOrdWithoutEq, f"cannot derive `Ord` for `{target}` without `Eq`: `spec Ord: Eq` makes equality a precondition of the order, and an order that disagrees with it is not the total one `Ord` means. Write `#[derive(Eq, Ord)]`, or `impl Eq for {target}` beside the derive (docs/core/derive.md)")
+}
+
+fn c_derive_ord_body(prog: ast.File, target: str) -> str {
+	for sd in prog.structs {
+		if sd.name == target {
+			c_derive_ord_fields_ok(prog, sd)
+			return c_derive_ord_fields(sd.fields, 0)
+		}
+	}
+	for ed in prog.enums {
+		return c_derive_ord_variants(ed, target) if ed.name == target
+	}
+
+	return c_derive_structureless(prog, target, "Ord")
+}
+
+# c_derive_ord_fields_ok holds the derive to what the chapter EXCLUDES: a `float` field. The
+# refusal names the field rather than the type, because a reader with a six-field struct needs
+# to know which one, and it is a refusal rather than a skip for the reason the chapter gives —
+# a field that fails the requirement makes the derive an error, never a silent omission.
+#
+# `float` is excluded from `Ord` because `NaN` is neither less than, equal to, nor greater than
+# anything, so a lexicographic order over one is not a total order and `Ord` is specified as
+# total.
+fn c_derive_ord_fields_ok(prog: ast.File, sd: ast.StructDecl) {
+	for fl in sd.fields {
+		raise c_diag_at(sd.path, sd.line, sd.col, rule.Rule.DeriveOrdFloat, f"cannot derive `Ord` for `{sd.name}`: the field `{fl.name}` is a `float`, and `float` opts out of `Ord` — `NaN` is neither less than, equal to nor greater than anything, so no order over it is total (docs/core/derive.md). Write `impl Ord for {sd.name}` and say what the comparison means") if c_derive_ty_is_float(fl.ty)
+	}
+}
+
+fn c_derive_ty_is_float(t: ast.Ty) -> bool {
+	return match t {
+		Ty.TFloat => true
+		_         => false
+	}
+}
+
+# c_derive_ord_fields is the lexicographic body, written from the field at `i` rightwards. A
+# FIELDLESS struct is not less than itself: there is nothing that could differ.
+fn c_derive_ord_fields(fields: list[ast.FieldDef], i: int) -> str {
+	return "false" if i >= fields.len()
+
+	nm := fields[i].name
+	return f"this.{nm} < o.{nm}" if i == fields.len() - 1
+
+	return f"this.{nm} < o.{nm} or (this.{nm} == o.{nm} and {c_derive_ord_fields(fields, i + 1)})"
+}
+
+# c_derive_ord_variants is the sum's rule, and it is the declaration order the chapter names.
+# A fieldless enum has a native integer repr whose discriminants ARE that order, so `int(v)`
+# is the whole comparison — the same reading the `Eq` derive uses one operator over.
+fn c_derive_ord_variants(ed: ast.EnumDecl, target: str) -> str {
+	return "int(this) < int(o)" if not c_derive_has_payload(ed)
+
+	return c_derive_payload_ord(ed, target)
+}
+
+# c_derive_payload_ord is the same nested shape `c_derive_payload_eq` uses, and the one line
+# that differs is the one that carries the whole rule: where equality answers `false` for a
+# tag mismatch, an order answers by the TAGS — variant order first, then the payload — which is
+# what the chapter means by "lexicographic by field, then by variant order".
+#
+# The payload comparison is lexicographic in the same way the struct one is, and written by the
+# same recursion so that the two cannot disagree about what "then the next field" means.
+fn c_derive_payload_ord(ed: ast.EnumDecl, target: str) -> str {
+	mut arms := ""
+	mut li := 0
+	for li < ed.variants.len() {
+		v := ed.variants[li]
+		mut lhs := ""
+		mut i := 0
+		for i < v.fields.len() {
+			if i > 0 {
+				lhs = lhs + ", "
+			}
+			lhs = lhs + f"zgd_l{strconv.to_string(i, 10)}"
+			i = i + 1
+		}
+		mut pat_l := f"{target}.{v.name}"
+		if v.fields.len() > 0 {
+			pat_l = f"{target}.{v.name}({lhs})"
+		}
+
+		# EVERY OTHER VARIANT IS NAMED, with a LITERAL answer — `true` when the other tag is
+		# later in declaration order and `false` when it is earlier. A `_` arm would need the
+		# two tags as numbers, and `int(v)` is match-only on a payload enum (E4006): the tag
+		# of one whose variants carry values is opaque by design. So the order the tags have
+		# is written out here, where the arms are already in that order.
+		mut inner := ""
+		mut ri := 0
+		for ri < ed.variants.len() {
+			w := ed.variants[ri]
+			mut rhs := ""
+			mut j := 0
+			for j < w.fields.len() {
+				if j > 0 {
+					rhs = rhs + ", "
+				}
+				rhs = rhs + "_"
+				j = j + 1
+			}
+			mut pat_r := f"{target}.{w.name}"
+			if w.fields.len() > 0 {
+				pat_r = f"{target}.{w.name}({rhs})"
+			}
+			mut ans := "false"
+			if li < ri {
+				ans = "true"
+			}
+			if ri == li {
+				pat_r = c_derive_ord_rhs_pat(target, w)
+				ans = c_derive_ord_payload_cmp(w.fields.len(), 0)
+			}
+			inner = inner + f"\t\t\t\t{pat_r} => {ans}\n"
+			ri = ri + 1
+		}
+		arms = arms + f"\t\t\t{pat_l} => match o {{\n{inner}\t\t\t}}\n"
+		li = li + 1
+	}
+	return f"match this {{\n{arms}\t\t}}"
+}
+
+fn c_derive_ord_rhs_pat(target: str, v: ast.VariantDef) -> str {
+	return f"{target}.{v.name}" if v.fields.len() == 0
+
+	mut rhs := ""
+	mut i := 0
+	for i < v.fields.len() {
+		if i > 0 {
+			rhs = rhs + ", "
+		}
+		rhs = rhs + f"zgd_r{strconv.to_string(i, 10)}"
+		i = i + 1
+	}
+	return f"{target}.{v.name}({rhs})"
+}
+
+fn c_derive_ord_payload_cmp(n: int, i: int) -> str {
+	return "false" if i >= n
+
+	k := strconv.to_string(i, 10)
+	return f"zgd_l{k} < zgd_r{k}" if i == n - 1
+
+	return f"zgd_l{k} < zgd_r{k} or (zgd_l{k} == zgd_r{k} and {c_derive_ord_payload_cmp(n, i + 1)})"
+}
+
 fn c_derive_eq(prog: ast.File, target: str) -> str {
 	body := c_derive_eq_body(prog, target)
 	head := c_derive_head(prog, target)
@@ -19587,7 +19802,15 @@ fn c_derive_eq_body(prog: ast.File, target: str) -> str {
 		return c_derive_variants(ed, target) if ed.name == target
 	}
 
-	raise c_derive_diag(prog, target, rule.Rule.DeriveOnStructureless, f"cannot derive `Eq` for `{target}` — a derive reads a type's STRUCTURE, and no struct or enum by that name is declared here (a `spec` has no structure to read: `#[obj]` is what goes on one)")
+	return c_derive_structureless(prog, target, "Eq")
+}
+
+# c_derive_structureless is the one place that says a derive found no structure to read. It is
+# one function rather than a sentence per spec because the rule is one rule, and a code
+# reported from two sites is two rules wearing one identity — which `error-codes-check` reports
+# and this file has been on the wrong side of before.
+fn c_derive_structureless(prog: ast.File, target: str, nm: str) -> str {
+	raise c_derive_diag(prog, target, rule.Rule.DeriveOnStructureless, f"cannot derive `{nm}` for `{target}` — a derive reads a type's STRUCTURE, and no struct or enum by that name is declared here (a `spec` has no structure to read: `#[obj]` is what goes on one)")
 }
 
 # c_derive_fields is the conjunction of the fields' own equalities, recursing into each
@@ -19613,16 +19836,64 @@ fn c_derive_fields(fields: list[ast.FieldDef]) -> str {
 # named rather than written: comparing tags alone is the wrong answer this derive exists to
 # replace, and half of it is worse than none.
 fn c_derive_variants(ed: ast.EnumDecl, target: str) -> str {
-	for v in ed.variants {
-		raise c_diag_at(ed.path, ed.line, ed.col, rule.Rule.NotYetDeriveEq, f"NotImplemented: `#[derive(Eq)]` on `{target}` — it carries a payload (`{v.name}`), and this compiler derives equality for a fieldless enum, whose variants differ exactly as their discriminants do; write `impl Eq for {target}` with a `match` (docs/core/derive.md)") if v.fields.len() > 0
-	}
-	return "int(this) == int(o)"
+	return "int(this) == int(o)" if not c_derive_has_payload(ed)
+
+	return c_derive_payload_eq(ed, target)
 }
 
-# c_build_impls records every `impl <Spec> for <Type>`. It is the same shape as the Into
-# registry and for the same reason: `==` asks this question at every use and a generic asks
-# it at every instantiation, and answering either by walking the program's impls would make
-# the cost the size of the program.
+fn c_derive_has_payload(ed: ast.EnumDecl) -> bool {
+	for v in ed.variants {
+		return true if v.fields.len() > 0
+	}
+	return false
+}
+
+# c_derive_payload_eq is the sum's rule where a variant carries something: the tag AND the
+# payload, matched on both sides at once, which is what the fieldless reading above cannot do.
+#
+# THE SHAPE IS UNIFORM ACROSS VARIANTS — an outer `match` on `this`, and inside each arm a
+# second `match` on `o` whose one named arm compares the payloads pairwise and whose `_`
+# answers false. A variant carrying nothing takes the same shape with nothing to compare, so
+# there is one rule here and not two; and the nested `_` is what makes a tag mismatch false,
+# so no separate tag comparison is written in front of it.
+#
+# THE BINDINGS ARE MINTED, `zgd_l0` / `zgd_r0`, because a payload is positional and has no name
+# of its own. The prefix is the one this compiler uses for every name it invents, so a rule
+# that ever quoted one would be caught by the gate that says a diagnostic may only speak of
+# names the reader wrote.
+fn c_derive_payload_eq(ed: ast.EnumDecl, target: str) -> str {
+	mut arms := ""
+	for v in ed.variants {
+		mut lhs := ""
+		mut rhs := ""
+		mut cmp := ""
+		mut i := 0
+		for i < v.fields.len() {
+			if i > 0 {
+				lhs = lhs + ", "
+				rhs = rhs + ", "
+				cmp = cmp + " and "
+			}
+			n := strconv.to_string(i, 10)
+			lhs = lhs + f"zgd_l{n}"
+			rhs = rhs + f"zgd_r{n}"
+			cmp = cmp + f"zgd_l{n} == zgd_r{n}"
+			i = i + 1
+		}
+
+		mut pat_l := f"{target}.{v.name}"
+		mut pat_r := f"{target}.{v.name}"
+		if v.fields.len() == 0 {
+			cmp = "true"
+		} else {
+			pat_l = f"{target}.{v.name}({lhs})"
+			pat_r = f"{target}.{v.name}({rhs})"
+		}
+		arms = arms + f"\t\t\t{pat_l} => match o {{\n\t\t\t\t{pat_r} => {cmp}\n\t\t\t\t_ => false\n\t\t\t}}\n"
+	}
+	return f"match this {{\n{arms}\t\t}}"
+}
+
 fn c_build_impls(mut &em: Emitter, f: ast.File) {
 	for ip in f.impls {
 		# THE KEY IS THE SPEC AND ITS ARGUMENTS, which is what docs/core/specs.md says a
@@ -19667,6 +19938,17 @@ fn c_has_eq(mut &em: Emitter, t: ast.Ty) -> bool {
 	return false if nm == ""
 
 	return c_impls(em, nm, "Eq")
+}
+
+# c_has_ord is the same question for the order. It is a separate predicate rather than a
+# parameter on the one above because the two answer different operators and the pair
+# `(Eq, Ord)` is not symmetric: `Ord` requires `Eq` as a super-spec, so a type answering `<`
+# answers `==` too, and a type answering `==` says nothing about `<`.
+pub fn c_has_ord(mut &em: Emitter, t: ast.Ty) -> bool {
+	nm := c_named_of(t)
+	return false if nm == ""
+
+	return c_impls(em, nm, "Ord")
 }
 
 # c_lowered is the C a step produced — or NOTHING, when this walk is checking rather than

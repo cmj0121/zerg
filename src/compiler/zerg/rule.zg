@@ -409,6 +409,8 @@ pub enum Rule {
 	TypeArgUndecided = 4095
 	DerefNotARef = 4096
 	RefDropNotAFunction = 4097
+	DeriveOrdFloat = 4098
+	DeriveOrdWithoutEq = 4099
 	ListPatternNotAList = 4084
 	MutateAValueNotAPlace = 4081
 
@@ -480,7 +482,6 @@ pub enum Rule {
 	NotYetOpenRangeHere = 9050
 	NotYetMapKeyType = 9052
 	NotYetDerive = 9054
-	NotYetDeriveEq = 9055
 	NotYetListMethod = 9056
 	NotYetContainerEquality = 9057
 	NotYetInOverNoEq = 9061

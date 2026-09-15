@@ -37,10 +37,10 @@ other one — `#[sealed]`, the layout directives — is **[not yet]** and refuse
 - **`#[derive(Spec, …)]`** — on a `struct` / `enum`. Generates the canonical impl of each named blessed spec
   from the type's **structure**. The blessed set is **`Eq`** — built, generating a correct `==` / `!=` on a
   `struct` and on a fieldless `enum` — together with **`Ord`**, **`Hash`**, **`Encode`** and **`Decode`**,
-  each specified here and **[not yet]**: naming one is a clean refusal, _E9054 NotImplemented:
-  `#[derive(Ord)]` — this compiler derives `Eq`; `Ord`, `Hash`, `Encode` and `Decode` are specified and
-  unbuilt_. `Eq` on a **payload** `enum` is **[not yet]** by a code of its own, _E9055 … it carries a payload
-  (`A`), and this compiler derives equality for a fieldless enum_. There is **no auto-derived `Object`**.
+  each specified here, and `Hash`, `Encode` and `Decode` are **[not yet]**: naming one is a clean refusal,
+  _E9054 NotImplemented: `#[derive(Hash)]` — this compiler derives `Eq`, `Ord` and `From`; `Hash`,
+  `Encode` and `Decode` are specified and unbuilt_. `Eq` and `Ord` both reach a **payload** `enum`, by
+  matching the tag and the payload on both sides at once. There is **no auto-derived `Object`**.
   A user spec can never be derived **on a struct** — `E4024` — while on an **`enum`** any spec may be,
   because the generated impl is delegation to the payload rather than a reading of structure. See
   **[Derive & Default Behavior](derive.md)**.

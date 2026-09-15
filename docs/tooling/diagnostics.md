@@ -442,6 +442,8 @@ shipping compiler rather than a part of it (the line
 | `E4095` | a type parameter no field mentions, so a construction cannot solve it                                 |
 | `E4096` | `deref` on something that is not a `Ref[T]`                                                           |
 | `E4097` | `Ref`'s drop action is not a named function                                                           |
+| `E4098` | `#[derive(Ord)]` on a type with a `float` field                                                       |
+| `E4099` | `#[derive(Ord)]` with no `Eq` beside it                                                               |
 | `E5001` | this entry file declares no `fn main`                                                                 |
 | `E5002` | cannot resolve import `…`, and where it was looked for                                                |
 | `E5007` | `…` is a module this build compiles and this module did not import                                    |
@@ -477,7 +479,6 @@ shipping compiler rather than a part of it (the line
 | `E9050` | an open-ended range has no upper bound here                                                           |
 | `E9052` | a map key of type …                                                                                   |
 | `E9054` | `#[derive(…)]`                                                                                        |
-| `E9055` | `#[derive(Eq)]` on `…`                                                                                |
 | `E9056` | the list method `…`                                                                                   |
 | `E9057` | structural equality over a container                                                                  |
 | `E9061` | `in` over … — its elements are compared with `==`, and this compiler does not write that comparison   |
@@ -707,6 +708,7 @@ name now is the prelude rule (`E2061`), which is about the name rather than abou
 | `E9044` | —       | the form was built: a method carries its own type parameters           |
 | `E9003` | —       | the form was built: a generic enum, one specialization per application |
 | `E9048` | —       | the form was built: a spec names a type, and a box dispatches          |
+| `E9055` | —       | the form was built: `Eq` derives over a payload enum's tag and payload |
 
 **One of them moved nowhere**, and it is the only row whose second column is empty. `E3047`
 reported a prefix operator on a `type X = Y` — _operator `not` has no meaning on `Flag`_ — on

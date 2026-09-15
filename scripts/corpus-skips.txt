@@ -21,6 +21,3 @@
 # was missing — went on reading as "still waiting for generics". The code is what says WHICH
 # rule turned it away, and a code that moves is the MOVED clause finding a new defect under an
 # old name.
-
-derive_enum	E9055 `#[derive(Eq)]` on an enum that carries a payload; this compiler derives equality for a fieldless one
-derive_ord	E9054 `#[derive(Ord)]`; this compiler derives `Eq`, and `Ord`, `Hash`, `Encode` and `Decode` are specified and unbuilt

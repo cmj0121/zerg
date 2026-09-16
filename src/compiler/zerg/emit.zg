@@ -17923,7 +17923,34 @@ fn c_fieldref(mut &em: Emitter, target: ast.Expr, fld: str, sb: Subst) -> str {
 	# covered the half nobody tries first.
 	check.chk_fld_visible(em, nm, fld)
 
+	# A FIELD READ OUT OF AN OWNED RVALUE HAS TO GIVE THE RVALUE BACK. `S([1, 2], 7).n` builds
+	# a struct, reads a POD field out of it and walks away from the list — nobody registered a
+	# release for the temporary, because nothing owns it: a binding registers one at its
+	# declaration and a projected temporary has no binding. It leaked whatever the value held
+	# (#178), and macOS has no LeakSanitizer to say so.
+	#
+	# The temp is materialised, the field is TAKEN — copied when it owns something, so what
+	# comes back outlives the drop below — and the temporary is dropped. An lvalue is untouched:
+	# `s.n` reads storage somebody else registered, and dropping that would be the opposite
+	# defect.
+	return c_field_of_temp(em, target, tgt, tt, fld) if c_owns_value(target) and c_needs_copy(em, tt)
+
 	return f"{tgt}.zg_{fld}"
+}
+
+# c_field_of_temp reads one field out of a value this expression made and gives the value back.
+# It is the field path's version of c_carrier_temp_drop, and it is a statement expression for
+# the same reason: the temporary is read twice — once for the field, once to drop it.
+fn c_field_of_temp(mut &em: Emitter, target: ast.Expr, tgt: str, tt: ast.Ty, fld: str) -> str {
+	ft := c_field_ty(em, c_named_of(tt), fld)
+	tv := c_tmp(em, "zgt_ft")
+	rv := c_tmp(em, "zgt_fv")
+
+	mut take := f"{c_type(ft)} {rv} = {tv}.zg_{fld};"
+	if c_needs_copy(em, ft) {
+		take = f"{c_type(ft)} {rv} = {c_copy_of(em, ft, f"{tv}.zg_{fld}")};"
+	}
+	return f"({{ {c_type(tt)} {tv} = {tgt}; {take} {c_drop_stmt(em, tt, tv)} {rv}; }})"
 }
 
 # c_tuple_index_ok is the two halves of `t.N`: the target is a tuple, and N is one of its

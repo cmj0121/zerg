@@ -298,13 +298,19 @@ provided body 的 field-blind 是在**寫下它的 spec 上**被檢查的：在�
 _E3138 `Greet.hello` reads `this.n`, and a spec is field-blind_。錯在 spec 而不在任何一個 implementer——這個 body
 對每個型別都是錯的，包含剛好帶著 `n` 的那個——所以它只被報一次，而且就算還沒有任何型別實作這個 spec 也會被報。
 
-> **[not yet]** 一個簽章可以是 **`unsafe`** 的——`GRAMMAR` 推導出 `fn-sig ::= 'unsafe'? 'mut'? 'fn' …`，所以
-> `spec` 裡的 `unsafe fn peek() -> int` 就是一個成員——而這個編譯器沒有建出它。它會被讀到簽章結束、然後被指名
-> 拒絕：_E9036 NotImplemented: the `unsafe` `spec` signature `peek`_，並帶上位置。獨立的 `unsafe fn` 與 `unsafe fn` 型別
-> 都已經建好——標記坐在宣告上、也坐在型別裡（見 [FFI](../runtime/ffi.zh-TW.md)）——而還沒定案的是一個 spec 的
-> **要求**該是什麼意思：實作者拿一個安全的 `fn` 去供給一個 unsafe 的要求（或反過來），是這個編譯器還沒有的
-> 規則。把簽章當成安全的來讀，等於抹掉 `unsafe` 唯一說的那件事。至於**完全不**開啟任何成員的東西——`spec` 內文裡的 `unsafe { … }` 也
-> 在其中——仍然拿到 `E2036`。
+**一個 `spec` 成員永遠不是 `unsafe` 的。** `GRAMMAR` 推導出 `fn-sig ::= 'unsafe'? 'mut'? 'fn' …`，所以這個形式
+寫得出來；它被**帶著理由**拒絕，而不是擱在未建置狀態：_E4111 a `spec` member is never `unsafe`_。這兩個字是
+不同種類的陳述。`unsafe` 說的是**誰簽字**——編譯器不做保證，由某個人負責（見 [FFI](../runtime/ffi.zh-TW.md)）。
+`spec` 說的是**一個方法做什麼**。實作怎麼守住自己這一側——一次外部呼叫、一次 raw load——是實作自己的事，在它
+發生的地方用 `unsafe { … }` 簽掉，而不是公告在介面上。
+
+**所以實作也不得供給一個 unsafe 的方法**——_E4112_，位置在 `impl` 上。這是同一條規則從另一端讀，而它必須落在
+**宣告處**，理由是 **box**：在具體型別上、或經由 bound 呼叫時標記看得見，呼叫者規則找得到它；但 box 會抹除型別，
+witness table 會直接放著那個 unsafe 函式。安全程式碼曾經就這樣呼叫到它、印出答案，而**沒有任何診斷**。一個實作
+不得承諾得比它所供給的介面更少;要求才是呼叫者讀的東西,而讀它的人根本看不到那個具體型別。
+
+一個 **inherent** 的 `unsafe fn` 方法不受影響:它沒有供給任何契約,也就沒有東西可以違背。至於**完全不**開啟任何
+成員的東西——`spec` 內文裡的 `unsafe { … }` 也在其中——仍然拿到 `E2036`。
 
 於是一個只有 1 個 required method 的 spec，能免費給 implementer 一堆衍生 method——`Iterator` 由 `next` 衍生
 `map`、`filter`、`count`……——而「spec bound 就是完整介面」這條規則便讓它們**全部**（required 與 provided）都能對

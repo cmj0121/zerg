@@ -370,15 +370,23 @@ _E3138 `Greet.hello` reads `this.n`, and a spec is field-blind_. The mistake is 
 implementer — the body is wrong for every type, including one that happens to carry an `n` — so it is reported
 once, and reported even when nothing implements the spec yet.
 
-> **[not yet]** A signature may be **`unsafe`** — `GRAMMAR` derives `fn-sig ::= 'unsafe'? 'mut'? 'fn' …`, so
-> `unsafe fn peek() -> int` inside a `spec` is a member — and this compiler does not build it. It is read to
-> the end of the signature and refused as itself: _E9036 NotImplemented: the `unsafe` `spec` signature `peek`_,
-> with the place. A standalone `unsafe fn` and an `unsafe fn` TYPE are both built — the marker rides on the
-> declaration and in the type ([FFI](../runtime/ffi.md)) — and what a spec's REQUIREMENT would mean is the
-> part that is not settled: an implementer supplying a safe `fn` for an unsafe requirement, or the other way
-> round, is a rule this compiler has not got. Reading the signature as a safe one would erase the only thing
-> `unsafe` says. Everything that starts **no** member at all — `unsafe { … }` in a spec body among
-> them — still gets `E2036`.
+**A `spec` member is never `unsafe`.** `GRAMMAR` derives `fn-sig ::= 'unsafe'? 'mut'? 'fn' …`, so the form
+can be written, and it is refused with a reason rather than left unbuilt: _E4111 a `spec` member is never
+`unsafe`_. The two words are different kinds of statement. `unsafe` says **who vouches** — the compiler makes
+no guarantee and somebody takes responsibility ([FFI](../runtime/ffi.md)). A `spec` says **what a method
+does**. How an implementation keeps its side — a foreign call, a raw load — is the implementation's business,
+discharged where it happens with `unsafe { … }` in the body and not announced in the interface.
+
+**So an implementation may not supply one either** — _E4112_, at the `impl`, with the place. That is the
+same rule read from the other end, and it has to be at the declaration because of the **box**: reached on the
+concrete type or through a bound the marker is visible and the caller rule finds it, but a box erases the
+type and the witness table would hold the unsafe function directly. Safe code called one and printed its
+answer with no diagnostic anywhere. An implementation may not promise less than the interface it supplies;
+the requirement is what a caller reads, and a caller reading it never sees the concrete type at all.
+
+An **inherent** `unsafe fn` method is untouched: it supplies no contract, so there is nothing for it to
+break. Everything that starts **no** member at all — `unsafe { … }` in a spec body among them — still gets
+`E2036`.
 
 So a spec with one required method can hand implementers many derived ones for free — `Iterator` derives
 `map`, `filter`, `count`, … from `next` — and the `spec bound is the complete interface` rule then makes

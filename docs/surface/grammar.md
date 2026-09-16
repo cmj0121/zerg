@@ -919,7 +919,6 @@ production, not the one that first mentions it.
 | 7     | `E9046` | `alignof[T]`                                                                            |
 | 7     | `E9063` | the fixed-width ladder `i8`…`f64`                                                       |
 | 7     | `E2076` | every decorator but `#[derive(…)]`, `#[obj]`, `#[test]`, `#[fixture]` and `#[allow(…)]` |
-| 12    | `E9036` | an `unsafe` `spec` signature                                                            |
 
 THE CODE COLUMN IS THE POINT. This table said "`scripts/refuse-check.sh` holds a case for
 each row" and named no code, so a row could outlive the form it described: seventeen forms

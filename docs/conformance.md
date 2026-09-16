@@ -105,8 +105,8 @@ sentence and — when the site had a place to hand — the trailer, with neither
 quoted line and caret under it:
 
 ```text
-E9036 NotImplemented: the `unsafe` `spec` signature `peek` — GRAMMAR#fn-sig opens a member with
-`'unsafe'? 'mut'? 'fn'`, and the trust boundary the keyword marks is not enforced on one
+E4111 a `spec` member is never `unsafe` — `unsafe` says who vouches and a `spec` says what a
+method DOES, so `peek` states a contract and how an implementation keeps it is its own business
   --> demo.zg:2:7
 ```
 

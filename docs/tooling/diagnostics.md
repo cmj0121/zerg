@@ -455,6 +455,8 @@ shipping compiler rather than a part of it (the line
 | `E4108` | a positional argument after a named one                                                               |
 | `E4109` | names that skip a parameter with no default                                                           |
 | `E4110` | an open-ended range used as a value                                                                   |
+| `E4111` | an `unsafe` `spec` member                                                                             |
+| `E4112` | an `unsafe` method supplied for a spec requirement                                                    |
 | `E5001` | this entry file declares no `fn main`                                                                 |
 | `E5002` | cannot resolve import `…`, and where it was looked for                                                |
 | `E5007` | `…` is a module this build compiles and this module did not import                                    |
@@ -478,7 +480,6 @@ shipping compiler rather than a part of it (the line
 | `E9031` | an `if` EXPRESSION whose branch has more than one statement                                           |
 | `E9032` | a binding head in an `if` EXPRESSION                                                                  |
 | `E9034` | a default on a closure parameter                                                                      |
-| `E9036` | an `unsafe` `spec` signature                                                                          |
 | `E9038` | an `impl` on a built-in container target                                                              |
 | `E9041` | a match arm's body is an expression, and this one is a statement                                      |
 | `E9042` | `type … = …` over a non-scalar                                                                        |
@@ -611,6 +612,12 @@ built. A type's arguments are carried inside its name and substitution cannot se
 true, and what was missing was the table saying what an application is made of. With the table, a parameter
 passes through an application.
 
+**One retired because the language took a position (#123).** `E9036` refused an `unsafe` `spec`
+signature as a form this compiler had not built. It is not a form that gets built: `unsafe` says who
+vouches and a `spec` says what a method does, so a requirement states a contract and how an
+implementation keeps it is its own business. The number moved to `E4111`, which is a rule rather than a
+gap, and `E4112` is the same rule read from the implementation's end.
+
 **Three retired the day their forms were built (#173).** `E9010` refused a named argument, and it is the
 whole of GRAMMAR#arg now: a name picks a parameter in a call and a field in a construction, which is what
 lets a defaulted one in the MIDDLE be skipped. `E9068` refused `nil` as a pattern, and `nil` names an
@@ -728,6 +735,7 @@ name now is the prelude rule (`E2061`), which is about the name rather than abou
 | `E9064` | —       | the form was built: `set[T]`, its constructor and its members          |
 | `E9010` | —       | the form was built: a named argument, in a call and a construction     |
 | `E9068` | —       | the form was built: `nil` names an optional's absent side              |
+| `E9036` | `E4111` | not an unbuilt form: a `spec` member is never `unsafe`                 |
 
 **One of them moved nowhere**, and it is the only row whose second column is empty. `E3047`
 reported a prefix operator on a `type X = Y` — _operator `not` has no meaning on `Flag`_ — on

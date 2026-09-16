@@ -643,6 +643,13 @@ module.exports = grammar({
 
 		// `list[byte](s)` is a conversion, and its callee is a TYPE — including a generic one,
 		// which is the form every `str`/`list` conversion in this tree is written in.
+		//
+		// AND A CALLEE IS ANY POSTFIX EXPRESSION, which is what GRAMMAR#postfix says: `(` is a
+		// postfix operator on whatever precedes it, exactly as `[` and `.` are. `fs[0](1)` calls
+		// the element and `(fn (x: int) -> int { … })(1)` calls the lambda where it is written,
+		// and this grammar could read neither while the compiler built both (#172). The type
+		// spellings stay listed because a conversion's callee is a TYPE and a type is not a
+		// postfix expression — `list[byte]` is a generic_type here, not an index.
 		call_expression: ($) =>
 			prec(
 				PREC.postfix,
@@ -650,8 +657,7 @@ module.exports = grammar({
 					field(
 						"function",
 						choice(
-							$.identifier,
-							$.field_expression,
+							$._postfix_expression,
 							$.type_identifier,
 							$.generic_type,
 							$.qualified_type,

@@ -1280,6 +1280,25 @@ fn chk_super_impl(sp: ast.SpecDecl, ip: ast.ImplDecl, args: list[ast.Ty]) -> ast
 }
 
 # chk_impl_member finds what the impl supplies for one required member, and compares it.
+# chk_impl_not_unsafe refuses an `unsafe fn` supplied for a spec requirement. A member may not
+# ASK for `unsafe` (the parser's `E4111`) and an implementation may not SUPPLY it; the two are
+# one rule read from either end.
+#
+# THE BOX IS WHY IT HAS TO BE AT THE IMPL. Reached on the concrete type or through a bound, the
+# marker is visible and the caller rule finds it — `E3083`, at the call. Through a spec BOX it
+# is not: the box erases the type and the witness table holds the unsafe function directly, so
+# safe code called one and printed its answer with no diagnostic anywhere (#183). A rule at the
+# CALL cannot see what the box erased; a rule at the declaration does not have to.
+#
+# AND IT IS A CONTRACT BREAK BEFORE IT IS A SAFETY ONE. The spec promised a safe method. What
+# the implementation may not do is promise less than the interface it is supplying — the
+# requirement is what a caller reads, and a caller reading it never sees this type at all.
+fn chk_impl_not_unsafe(mut &em: emit.Emitter, ip: ast.ImplDecl, sp: ast.SpecDecl, req: ast.FnDecl, sup: ast.FnDecl) {
+	return if not sup.in_unsafe
+
+	chk_at_place(em, sup.path, sup.line, sup.col, rule.Rule.UnsafeImplMethod, f"`{ip.target}.{req.name}` is an unsafe fn and `{sp.name}` requires a safe one — a `spec` member is never `unsafe`, so an implementation discharges what it needs with `unsafe {{ … }}` in the BODY and supplies the safe signature the contract promised (docs/core/specs.md)")
+}
+
 fn chk_impl_member(mut &em: emit.Emitter, f: ast.File, ip: ast.ImplDecl, sp: ast.SpecDecl, req: ast.FnDecl) {
 	for sup in f.fns {
 		# BY THE KEY, NOT THE NAME. A parameterized spec's arguments are folded into its
@@ -1290,6 +1309,8 @@ fn chk_impl_member(mut &em: emit.Emitter, f: ast.File, ip: ast.ImplDecl, sp: ast
 		# written in is the outer spec's, and that clause is what leaves `spec Keyed: Into[str]`
 		# behaving exactly as it did.
 		if sup.recv == ip.target and emit.c_spec_base(sup.name) == req.name and (sup.spec_of == "" or sup.spec_of == ast.spec_key(ip.on, ip.args)) {
+			chk_impl_not_unsafe(em, ip, sp, req, sup)
+
 			why := chk_sig_differs(sp, ip, req, sup)
 			if why != "" {
 				chk_at_place(em, sup.path, sup.line, sup.col, rule.Rule.SpecMethodMismatch, f"`{ip.target}.{req.name}` does not match what `{sp.name}` requires: {why}")

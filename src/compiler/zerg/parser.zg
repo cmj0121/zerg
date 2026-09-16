@@ -2065,13 +2065,18 @@ fn parse_spec(mut &p: Parser, is_pub: bool) -> ast.SpecDecl {
 			# discarded by the raise below in any case.
 			sig := parse_fn_head(p, false, "This", u_mut, false)
 
-			# THE REASON IS NOT THE BOUNDARY ANY MORE. It said "`unsafe` marks a trust
-			# boundary this compiler does not enforce yet", which was true until group 12
-			# built it — a declaration carries the marker and the caller rule reads it. What
-			# is missing is one step further in: a spec's signature is a REQUIREMENT, and
-			# what an implementer owes for an unsafe one — whether a safe `fn` satisfies it,
-			# or the other way round — is a rule this compiler has not got.
-			raise p_diag_at(p, u.line, u.col, rule.Rule.NotYetUnsafeSpecSignature, f"NotImplemented: the `unsafe` `spec` signature `{sig.name}` — GRAMMAR#fn-sig derives `'unsafe'? 'mut'? 'fn'`, so this IS a spec member; what an implementer owes for an unsafe REQUIREMENT is a rule this compiler has not got (docs/core/specs.md), so the signature is refused rather than read as a safe one and its `unsafe` dropped")
+			# IT IS NOT AN UNBUILT FORM ANY MORE, and it never becomes one. `unsafe` says
+			# the compiler makes no guarantee and somebody vouches; a `spec` says what a
+			# method DOES. Those are different kinds of statement: a requirement is the
+			# CONTRACT, and how an implementation keeps it — a foreign call, a raw load —
+			# is the implementation's business, discharged where it happens with
+			# `unsafe { … }` and not announced in the interface.
+			#
+			# THE OTHER HALF IS c_impl_unsafe_method, and the two are one rule: a member may
+			# not ask for `unsafe` and an implementation may not supply it, because a spec
+			# BOX erases the concrete type and the marker would go with it — safe code would
+			# then reach an unsafe function through a contract that promised it would not.
+			raise p_diag_at(p, u.line, u.col, rule.Rule.UnsafeSpecMember, f"a `spec` member is never `unsafe` — `unsafe` says who vouches and a `spec` says what a method DOES, so `{sig.name}` states a contract and how an implementation keeps it is its own business, discharged with `unsafe {{ … }}` in the body (docs/core/specs.md)")
 		}
 
 		# `mut fn` is part of a fn-sig (GRAMMAR#fn-sig), and it is INTERFACE: a `mut fn` method

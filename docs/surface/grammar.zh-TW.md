@@ -786,7 +786,6 @@ asm-operand ::= 'in' '(' str-lit ')' expr | 'out' '(' str-lit ')' lvalue
 | 7     | `E9046` | `alignof[T]`                                                                             |
 | 7     | `E9063` | 定寬階梯 `i8`…`f64`                                                                      |
 | 7     | `E2076` | 除 `#[derive(…)]`、`#[obj]`、`#[test]`、`#[fixture]`、`#[allow(…)]` 以外的每個 decorator |
-| 12    | `E9036` | `unsafe` 的 `spec` 簽名                                                                  |
 
 CODE 欄才是重點。這張表原本寫著「`scripts/refuse-check.sh` 每一列都有對應案例」卻沒有指名任何代碼,於是
 一列可以活得比它描述的形式更久:**十七個形式已經建好而它們的列還留著** —— command literal、雙向解構、

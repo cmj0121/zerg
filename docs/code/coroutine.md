@@ -12,15 +12,15 @@ handle, no join/await; you observe results and completion **only through channel
 call — a plain function, a **method** (`spawn obj.run()`), or a **namespaced** function (`spawn mod.work()`),
 mirroring `defer`, which takes the same callee forms (`defer f.close()`).
 
-> A **closure literal** is not one of the three callee forms, and is refused by name — `E9009
-NotImplemented: calling fn-expr — a callee is a plain name in this compiler`. The reason is the callee
-> shape and nothing about closures: a lambda **does** capture (`add := fn (x: int) -> int { return x + n }`
-> reads `n` and runs), so an environment exists; what is missing is a call through anything but a name.
-> Bind the closure to a name and `spawn` it by that name.
+> A **closure literal** is not one of the three callee forms, and is refused by name — _E4078 `spawn` of
+> anything but a function, a method, or a namespaced function_. The reason is the callee shape and nothing
+> about closures: a lambda **does** capture (`add := fn (x: int) -> int { return x + n }` reads `n` and
+> runs), so an environment exists, and calling one where it is written is built (`(fn (x: int) -> int { …
+})(1)`). What `spawn` needs and a function value has not got is a SYMBOL: both keywords lower to a C
+> thunk whose body names one. Bind the closure to a name and `spawn` it by that name.
 >
-> Anything else in callee position is refused by the same rule, and by a code that names no unbuilt form:
-> everything call-shaped has left earlier, so _E4078 `spawn` of anything but a function, a method, or a
-> namespaced function_ answers a shape that is not a call at all. A method the receiver's type does not
+> Anything else in callee position is refused by that same code, which names no unbuilt form: everything
+> call-shaped has left earlier, so it answers a shape that is not a call at all. A method the receiver's type does not
 > declare is a wrong program and reads as one — _E3131 the method `nope` on a P_, the same sentence an
 > ordinary call gets. **The one gap left here is the receiver**: a method on a `list`, a `map`, a `str` or
 > an `Err` answers through a dispatch a thunk does not reach, so `defer xs.append(3)` is _E9099

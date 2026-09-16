@@ -173,8 +173,8 @@ for x in xs {
 ```
 
 > **[not yet]** 這個迴圈的 coroutine 寫法用不了。closure **literal** 不在 `spawn` 的三種 callee 形式之列——
-> `spawn fn () { … }()` 是 _E9009 NotImplemented: calling fn-expr_——而對上面那個**具名** closure 寫
-> `spawn work()` 是 _E9103_,帶著位置:這兩個關鍵字都降階成一個 C thunk,而 thunk 的 body 指名的是一個符號,
-> 函式值沒有符號。(它以前會把 `zg_work()` 寫進那個 thunk 裡,建置死在 `cc`——那正是總則明文禁止的結局。)
+> `spawn fn () { … }()` 是 _E4078_——而對上面那個**具名** closure 寫 `spawn work()` 是 _E9103_,帶著位置:
+> 這兩個關鍵字都降階成一個 C thunk,而 thunk 的 body 指名的是一個符號,函式值沒有符號。不加 `spawn`、就地
+> 呼叫那個 literal 是建得起來的。(它以前會把 `zg_work()` 寫進那個 thunk 裡,建置死在 `cc`——那正是總則明文禁止的結局。)
 > 行得通的寫法是 `spawn handle(x)`,它在 `spawn` 當下對引數取快照,以另一條路徑拿到同樣的逐輪值。見
 > [Coroutines 與 Channels](coroutine.zh-TW.md)。

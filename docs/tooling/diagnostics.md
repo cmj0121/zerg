@@ -445,6 +445,7 @@ shipping compiler rather than a part of it (the line
 | `E4098` | `#[derive(Ord)]` on a type with a `float` field                                                       |
 | `E4099` | `#[derive(Ord)]` with no `Eq` beside it                                                               |
 | `E4100` | `set()` written where no type says what it holds                                                      |
+| `E4101` | a value callee that is not a function                                                                 |
 | `E5001` | this entry file declares no `fn main`                                                                 |
 | `E5002` | cannot resolve import `…`, and where it was looked for                                                |
 | `E5007` | `…` is a module this build compiles and this module did not import                                    |
@@ -460,7 +461,7 @@ shipping compiler rather than a part of it (the line
 | `E5017` | an import reaches past a folder that declares a surface                                               |
 | `E9001` | a parameterized `…[…]` as …                                                                           |
 | `E9005` | the decorator `#[…]`                                                                                  |
-| `E9009` | calling …                                                                                             |
+| `E9009` | calling an optional chain — `p?.m(…)`                                                                 |
 | `E9010` | the named argument `…:`                                                                               |
 | `E9015` | an associated type binding `type … = …` in an `impl`                                                  |
 | `E9025` | `for mut v in …`                                                                                      |

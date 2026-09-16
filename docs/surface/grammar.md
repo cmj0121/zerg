@@ -904,7 +904,7 @@ production, not the one that first mentions it.
 
 | Group | Code    | Form                                                                                    |
 | ----- | ------- | --------------------------------------------------------------------------------------- |
-| 4     | `E9009` | a callee that is not a name — `fs[0](…)`, `p?.m(…)`                                     |
+| 4     | `E9009` | an optional method call — `p?.m(…)`                                                     |
 | 4     | `E2071` | a range with no **lower** bound — `xs[..n]`, and the list pattern `[a, ..rest]` with it |
 | 4     | `E9050` | an **open-ended** range where a bound is needed — `xs[a..]`, `for i in n..`             |
 | 4     | `E9077` | a range as a **value** — `r := 0..3`; it is a `for … in` iterable and nothing else      |

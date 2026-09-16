@@ -11,10 +11,12 @@ join/await；結果與完成**只能靠 channel** 觀察。被呼叫者可以是
 obj.run()`)、或一個**帶命名空間**的函式(`spawn mod.work()`),與 `defer` 一致,後者接受相同的被呼叫者形式
 (`defer f.close()`)。
 
-> 一個 **closure literal** 不在那三種 callee 形式之列,會被指名拒絕——`E9009 NotImplemented: calling
-fn-expr — a callee is a plain name in this compiler`。理由出在 callee 的形狀,與 closure 無關:lambda
-> **捕獲得了**(`add := fn (x: int) -> int { return x + n }` 讀得到 `n` 也跑得動),所以環境是有的;缺的是
-> 「透過名字以外的東西呼叫」。把 closure 綁到一個名字上,再用那個名字 `spawn`。
+> 一個 **closure literal** 不在那三種 callee 形式之列,會被指名拒絕—— _E4078 `spawn` of anything but a
+> function, a method, or a namespaced function_。理由出在 callee 的形狀,與 closure 無關:lambda
+> **捕獲得了**(`add := fn (x: int) -> int { return x + n }` 讀得到 `n` 也跑得動),所以環境是有的,而且就地
+> 呼叫一個 literal 也建得起來(`(fn (x: int) -> int { … })(1)`)。`spawn` 要而函式值沒有的是一個**符號**:
+> 這兩個關鍵字都降階成一個 C thunk,而 thunk 的 body 指名的正是符號。把 closure 綁到一個名字上,再用那個
+> 名字 `spawn`。
 
 - **引數是一份快照**——在 `spawn` **被寫下**的那一行取得，不是在呼叫執行的那一刻。之後才寫入的 `mut` 綁定
   不會被 coroutine 看到（它可能根本還沒開始跑）；`list`、`map`、`struct` 在那一刻成為 coroutine **自己的值**。

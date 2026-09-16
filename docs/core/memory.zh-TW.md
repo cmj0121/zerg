@@ -48,13 +48,9 @@ copy-by-value 是語意；編譯器會在安全時省略複製：
 
 ---
 
-> **[not yet]** 遞迴 **`struct`** 根本宣告不出來,所以上面那條界限不可能經由它到達。
-> `struct Node { value: int; next: Node? }` 會被拒絕、報 _E4026 `Node` is part of a cycle of by-value declarations —
-> a type holding itself, however indirectly, has no size_:算大小這件事跑在宣告圖上、早於任何裝箱決定,所以那個自我
-> 參照的槽從來沒拿到那個會給它一個大小的 cell。建得起來的是遞迴 **`enum`** 那一半,它的裝箱與 refcount 共享如上
-> 所述。下面〈複製語意 vs 參照語意〉用到的那個 `Node`——它正是唯一能
-> 觀察到共享變動之處——是規範中的形式,今天編不過。它同時還帶著第二個未建置的形式:那些**具名引數**
-> (`Node(value: 1, …)`)是 `E9010`,因為這裡的引數依位置綁定(見[型別](types.zh-TW.md))。
+> **[not yet]** 下面〈複製語意 vs 參照語意〉用到的那個 `Node`——它正是唯一能觀察到共享變動之處——寫的是
+> **具名引數**(`Node(value: 1, …)`),而那些是 `E9010`:這裡的引數依位置綁定(見[型別](types.zh-TW.md))。
+> 遞迴 **`struct`** 本身宣告得出來也建得起來,裝箱與 refcount 共享完全如本篇所述,所以上面那條界限經由它是到得了的。
 
 **一個 `struct` 的佈局就是它的宣告。** 欄位照**宣告序**排、值 **inline** 嵌在它的擁有者裡（除了上述遞迴 auto-boxing
 之外沒有間接），而且編譯器**絕不重排**——所以一個 Zerg `struct` _就是_ 一個 C `struct`、field-for-field、自然對齊

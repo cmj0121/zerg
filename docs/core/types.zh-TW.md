@@ -221,7 +221,7 @@ enum Either[X, Y] {         # 泛型 sum type
 泛型 **`enum`** 建好了,每一次應用一份特化,而且遞迴的那種不需要指標:
 `enum Tree[T] { Leaf; Node(T, Tree[T], Tree[T]) }` 會像任何遞迴型別一樣把自己那個槽自動裝箱。一個變體解出它
 **提到**的參數,其餘由位置補上——`Either.Left(1)` 對 `Y` 什麼都沒說,所以它寫在型別所在的地方,而沒有位置的
-建構是 _E3156_。遞迴 `struct` 仍然是 `E4026`(見下)。
+建構是 _E3156_。
 
 泛型 **`struct`** 建好了。宣告是一個 **template**,一次應用(`Box[int]`)是一個以那個名字存在的普通型別。
 一次建構**從它自己的引數解出參數**,那是[型別系統](type-system.zh-TW.md)對一次呼叫定的規則,而建構就是一次
@@ -235,12 +235,6 @@ template 卻沒寫引數(`E4094`),以及一個沒有任何欄位型別提到的�
 **遞迴與自我參照型別**可直接運作——一個 `struct Node { next: Node? }`、一個 `enum Expr { Num(int); Add(Expr,
 Expr) }`——**不需 pointer**:編譯器把那個自我參照的槽自動裝箱在一個 refcounted cell 之後,所以這種值的複製是**按
 參照**(refcount 共享),不是深拷貝。它不做的是釋放那條鏈,那是[值與記憶體](memory.zh-TW.md)自己那條 deviation。
-
-> **[not yet]** 遞迴 **`struct`** 宣告不出來。上面寫的那個 `Node` 會被拒絕、報 _`Node` is part of a cycle of
-> by-value declarations — a type holding itself, however indirectly, has no size_:算大小這件事跑在宣告圖上、早於
-> 任何裝箱決定,所以那個自我參照的槽從來沒拿到這段文字答應它的 cell。能運作的是遞迴 **`enum`** 那一半,它的 payload
-> 就是編譯器裝箱的那個槽——這也是為什麼 `Expr` 建得起來而 `Node` 建不起來,以及為什麼
-> [值與記憶體](memory.zh-TW.md) 裡同一個例子同樣編不過。
 
 其實 `Either`、`Result[T]`、`T?` 並不特殊——它們就是建立在 `enum` 上面的普通 stdlib 型別
 （見 [Null-safety 與錯誤處理](../code/errors.zh-TW.md)）。一個 `enum`

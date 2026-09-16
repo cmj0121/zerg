@@ -259,8 +259,7 @@ enum Either[X, Y] {         # generic sum type
 A generic **`enum`** is built, one specialization per application, and a recursive one needs no pointer:
 `enum Tree[T] { Leaf; Node(T, Tree[T], Tree[T]) }` auto-boxes its own slot the way any recursive type does.
 A variant solves the parameters it **mentions** and the position supplies the rest — `Either.Left(1)` says
-nothing about `Y`, so it is written where the type is, and a construction with no position is _E3156_. A
-recursive `struct` is still `E4026` (below).
+nothing about `Y`, so it is written where the type is, and a construction with no position is _E3156_.
 
 A generic **`struct`** is built. The declaration is a **template**, and an application (`Box[int]`) is an
 ordinary type under that name. A construction **solves its own parameters from the arguments**, which is
@@ -278,13 +277,6 @@ where whoever spells it can see it.
 `enum Expr { Num(int); Add(Expr, Expr) }` — with **no pointer**: the compiler auto-boxes the self-referential
 slot behind a refcounted cell, so such a value copies **by reference** (refcount-shared), not by deep clone.
 What it does not do is free the chain, which is the [Values & Memory](memory.md) reference's own deviation.
-
-> **[not yet]** A recursive **`struct`** cannot be declared. The `Node` written above is rejected with
-> _E4026 `Node` is part of a cycle of by-value declarations — a type holding itself, however indirectly, has no
-> size_: sizing runs over the declaration graph before any boxing decision is reached, so the self-referential
-> slot never gets the cell the paragraph promises it. The recursive **`enum`** is the half that works, its
-> payload being the slot the compiler boxes — which is why `Expr` builds and `Node` does not, and why the same
-> example in [Values & Memory](memory.md) does not compile either.
 
 `Either`, `Result[T]`, and `T?` aren't special — they're ordinary stdlib types built on `enum`
 (see [Null-safety & Errors](../code/errors.md)). An `enum`'s **variants share the type's visibility** — a

@@ -1472,29 +1472,78 @@ fn main() {
 EOF
 
 # A NAMED ARGUMENT is GRAMMAR#arg's `( identifier ':' )? expr`, the sanctioned way to skip
-# the middle (docs/code/functions.md). This compiler is positional-only, and the `:` used to
-# reach parse_primary, which answered "`:` is not an expression this compiler reads" — a
-# token, about a form the language specifies and the seed builds.
+# the middle (docs/code/functions.md). It is BUILT (#173), in a call and in a construction
+# alike, so both of its cases have left this file for the corpus — where a form that works is
+# pinned. What stays here is every way the names can fail to pick a parameter, which is a
+# wrong program rather than a missing form.
 
-expect "$ZERG" named-argument-in-a-call E9010 <<'EOF'
+expect "$ZERG" named-argument-unknown E4106 'names no parameter' <<'EOF'
 fn f(a: int, b: int) -> int {
 	return a - b
 }
 
 fn main() {
-	print f(b: 1, a: 5)
+	print f(a: 1, z: 5)
 }
 EOF
 
-expect "$ZERG" named-field-in-a-construction E9010 <<'EOF'
+expect "$ZERG" named-argument-twice E4107 'already gives' <<'EOF'
+fn f(a: int, b: int) -> int {
+	return a - b
+}
+
+fn main() {
+	print f(1, a: 5)
+}
+EOF
+
+expect "$ZERG" positional-after-a-named-argument E4108 'no longer readable' <<'EOF'
+fn f(a: int, b: int) -> int {
+	return a - b
+}
+
+fn main() {
+	print f(a: 1, 5)
+}
+EOF
+
+expect "$ZERG" named-argument-skips-a-required-one E4109 'no default' <<'EOF'
+fn f(a: int, b: int) -> int {
+	return a - b
+}
+
+fn main() {
+	print f(b: 5)
+}
+EOF
+
+expect "$ZERG" named-field-unknown E4106 'names no field' <<'EOF'
 struct P {
 	pub x: int
 	pub y: int
 }
 
 fn main() {
-	p := P(y: 2, x: 1)
+	p := P(x: 1, z: 2)
 	print p.x
+}
+EOF
+
+# A NAME IS ONLY A NAME WHERE THERE ARE PARAMETERS TO BIND TO. A CONVERSION has none — it
+# reads one value as another — and neither does a built-in receiver's method, so neither runs
+# the reorder that unwraps a named argument and one that reaches the general lowering is in a
+# position that has no parameter for it.
+expect "$ZERG" named-argument-in-a-conversion E4105 'not an argument position' <<'EOF'
+fn main() {
+	print int(x: 1)
+}
+EOF
+
+expect "$ZERG" named-argument-on-a-builtin-method E4105 'not an argument position' <<'EOF'
+fn main() {
+	mut xs := [1, 2]
+	xs.append(v: 3)
+	print xs.len()
 }
 EOF
 
@@ -3210,15 +3259,41 @@ fn main() {
 EOF
 
 
-# `nil` AS A PATTERN. GRAMMAR#literal makes `nil` a literal and GRAMMAR#literal-pat makes a
-# literal a pattern, so this is a well-formed program and belongs here rather than in
-# reject-check, where it sat: it was asserting "an optional is not an operand of `==`" —
-# the synthesised comparison the arm lowers to, and an operator the program never wrote.
-expect "$ZERG" nil-as-a-match-pattern E9068 <<'EOF'
-fn f(x: int?) -> int {
+# `nil` AS A PATTERN IS BUILT (#173) and its case is in the corpus. What is left of `E9068` is
+# `nil` written over something with no absent side to name, which is a wrong program: the rule
+# is about an OPTIONAL, and a scrutinee that is not one has no absence for it to mean.
+expect "$ZERG" nil-pattern-on-a-plain-value E4102 'there is no absence to name' <<'EOF'
+fn f(x: int) -> int {
 	return match x {
 		nil => 0
 		_ => 1
+	}
+}
+
+fn main() {
+	print f(1)
+}
+EOF
+
+# AND A `match` OVER AN OPTIONAL COVERS BOTH SIDES. A name binds what the optional HOLDS, so
+# the arm it heads cannot match the side that holds nothing — without this the lowering's
+# untested final `else` answered the payload slot of an absent carrier, with no diagnostic.
+expect "$ZERG" match-optional-missing-nil E4103 'missing the `nil` case' <<'EOF'
+fn f(x: int?) -> int {
+	return match x {
+		v => v
+	}
+}
+
+fn main() {
+	print f(nil)
+}
+EOF
+
+expect "$ZERG" match-optional-missing-present E4104 'missing the present case' <<'EOF'
+fn f(x: int?) -> int {
+	return match x {
+		nil => 0
 	}
 }
 
@@ -3427,11 +3502,27 @@ fn main() {
 }
 EOF
 
-# A range is an iterable and a membership test, and not a value that can be bound.
-expect "$ZERG" a-range-bound-as-a-value E9077 <<'EOF'
+# A RANGE IS A VALUE NOW (#173) — it binds, passes and returns, and its case is in the corpus.
+# What is left of `E9077` is a range whose BOUNDS this compiler cannot compare, which is the
+# same clause `in` has always had: the comparison is C's own, and a `str` bound would compare
+# two pointers.
+expect "$ZERG" a-range-of-str-as-a-value E9077 'is not a type this compiler compares' <<'EOF'
 fn main() {
-	r := 2..5
-	print 3 in r
+	r := "a".."z"
+	print 1
+}
+EOF
+
+# AND AN OPEN-ENDED RANGE IS NOT ONE. A value that could be unbounded would make every walk
+# and every test ask about it, for a form whose only use is the loop it is written in — where
+# the loop is the thing that never ends. The loop form keeps its own code.
+expect "$ZERG" an-open-range-as-a-value E4110 'has no upper bound to carry' <<'EOF'
+fn take(r: range[int]) -> int {
+	return 1
+}
+
+fn main() {
+	print take(2..)
 }
 EOF
 
@@ -3441,7 +3532,7 @@ EOF
 # path, and the answer was the array's own length for ANY range (`xs[2..2].len()` was 4).
 # An array has no `x[a..b]` spelling at all (docs/code/collections.md gives it `a.slice(p, q)`,
 # itself [not yet]), so the refusal above is the right one and this pins that it arrives.
-expect "$ZERG" a-range-index-on-an-array E9077 <<'EOF'
+expect "$ZERG" a-range-index-on-an-array E9117 'not yet specified' <<'EOF'
 fn main() {
 	xs: [int; 4] = [1, 2, 3, 4]
 	print xs[1..3].len()

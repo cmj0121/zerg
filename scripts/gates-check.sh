@@ -289,6 +289,46 @@ for t in $board; do
 		note "\`make $t\` sweeps through ${gscript#./} and that script declares no floor — a walk that stops matching would report success"
 done
 
+# --- a gate that runs an external tool shows that tool's output --------------------------
+#
+# A GATE IS A DIAGNOSTIC ABOUT THIS REPOSITORY, and the standing rule for a diagnostic is that
+# it is either true or absent. Two of them were neither: `treesitter-check` swallowed the
+# `tree-sitter` output and reported "grammar.js does not generate" — a CAUSE — when what had
+# happened was that the runner could not fetch the tool, and `ci-fetch-testdata.sh` reported
+# that the fetch failed WITH credentials when the runner's DNS was down. Each sent a reader
+# after the wrong thing, on `main`, inside one day (#181).
+#
+# WHAT IS CHECKED IS THE SHAPE, because the sentence is prose and the shape is not: the command
+# runs with its output CAPTURED rather than discarded, and the failure branch PRINTS what it
+# captured. A gate that does both cannot assert a cause it did not establish, whatever its
+# wording says, and one that stops doing either is a finding here.
+#
+# IT IS A NAMED PAIR AND NOT A SWEEP. "Which gates run an external tool" is not a question this
+# script can answer — a tool is any command — so the honest scope is the two that were wrong,
+# and a third joins them when somebody decides it should.
+cat >"$tmp/shows-output" <<'LEDGER'
+scripts/treesitter-check.sh	runs `tree-sitter generate`, whose failure and whose absence look nothing alike
+scripts/ci-fetch-testdata.sh	runs `git submodule update`, where a bad token, an unpushed commit and no network all land
+LEDGER
+
+: >"$tmp/shows-not"
+while IFS="$(printf '\t')" read -r sc why; do
+	[ -n "$sc" ] || continue
+	if [ ! -f "$sc" ]; then
+		printf '%s\tthe file is gone\n' "$sc" >>"$tmp/shows-not"
+		continue
+	fi
+
+	# captured into a variable, and printed back out on the failing path
+	grep -qE '^[[:space:]]*[a-z_]+=\$\(.*2>&1' "$sc" && grep -qE 'printf .*"\$(gen|fetch)"' "$sc" && continue
+
+	printf '%s\tit runs a tool and does not show what the tool said\n' "$sc" >>"$tmp/shows-not"
+done < <(ledger_read "$tmp/shows-output")
+
+while IFS="$(printf '\t')" read -r sc why; do
+	note "$sc runs an external tool and its failure does not carry the tool's own output — \"$why\""
+done <"$tmp/shows-not"
+
 printf 'gates-check: %s of them run only when the private corpus was fetched — %s\n' \
 	"$n_cond" "$(printf '%s\n' "$conditional" | tr '\n' ' ')"
 

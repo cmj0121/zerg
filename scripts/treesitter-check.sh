@@ -70,8 +70,16 @@ fi
 # The generated parser is not in the repository (see the directory's .gitignore), so it is
 # written here. That also makes this the check that grammar.js still GENERATES, which is a
 # failure mode of its own: a conflict introduced by an edit stops the parser existing.
-( cd "$DIR" && $TS generate ) >/dev/null 2>&1 || {
-	echo "treesitter-check: grammar.js does not generate — run \`$TS generate\` in $DIR for the conflict"
+#
+# THE TOOL'S OWN OUTPUT IS SHOWN, and the sentence says only what was observed. It used to
+# swallow stderr and report "grammar.js does not generate", which is a CAUSE — and on a CI
+# runner that could not fetch `tree-sitter-cli` it was the wrong one: the reader was sent
+# looking for a grammar conflict in a file that generates on every other machine. A gate is a
+# diagnostic about this repository, and the standing rule for one is that it is either true or
+# absent (#181).
+gen=$( cd "$DIR" && $TS generate 2>&1 ) || {
+	echo "treesitter-check: \`$TS generate\` failed in $DIR — its output follows; a grammar conflict and a tool that could not be fetched both land here and they do not look alike"
+	printf '%s\n' "$gen" | head -20
 	exit 1
 }
 

@@ -30,11 +30,18 @@ if [ -n "${TESTDATA_TOKEN:-}" ]; then
 	git config --global url."https://x-access-token:${TESTDATA_TOKEN}@github.com/".insteadOf "git@github.com:"
 	# The status is CHECKED. Running the command and then announcing success regardless
 	# is the exact shape of the defect this script exists to remove.
-	if ! git submodule update --init --recursive; then
+	#
+	# AND WHAT IS REPORTED IS WHAT HAPPENED. The sentence used to say the fetch failed WITH
+	# credentials, which points a reader at the token or at the submodule pointer — and on a
+	# runner whose DNS was down it was neither. `git`'s own output is kept and shown, because
+	# "could not resolve host" and "not our ref" are different findings and this gate is the
+	# only thing that sees either (#181).
+	fetch=$(git submodule update --init --recursive 2>&1) || {
 		echo "available=false" >>"$out"
-		echo "::error title=${gate} cannot run::TESTDATA_TOKEN is set but the test-data fetch failed — the ${gate} gate has credentials and still could not get its cases"
+		echo "::error title=${gate} cannot run::the test-data fetch failed with TESTDATA_TOKEN set — git's own output follows; a bad token, an unpushed submodule commit and a runner with no network all land here"
+		printf '%s\n' "$fetch" | tail -20
 		exit 1
-	fi
+	}
 	echo "available=true" >>"$out"
 	exit 0
 fi

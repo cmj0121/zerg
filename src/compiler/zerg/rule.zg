@@ -417,6 +417,28 @@ pub enum Rule {
 	# an `int`. The name form's own version of this is a lookup that fails; a value's is a type
 	# that is not a `fn`, and there is nothing to look up.
 	CalleeNotAFunction = 4101
+
+	# `nil` names the absent side of an OPTIONAL, and a scrutinee that is not a carrier has no
+	# absent side for it to name. `E9068` was the whole form being unbuilt; this is what is
+	# left of it once the form is built, and it is a wrong program rather than a missing one.
+	NilPatternNeedsCarrier = 4102
+
+	# an optional has two sides and a `match` over one covers both, the way it covers an
+	# Either's two and a bool's two. `nil` names the absent side; a name binds the present one.
+	MatchMissingNil = 4103
+	MatchMissingPresent = 4104
+
+	# a named argument written where nothing has parameters. `E9010` was the whole form being
+	# unbuilt; this is what is left once it is built, and it is a wrong program, not a gap.
+	NamedArgOutsideACall = 4105
+	NamedArgUnknown = 4106
+	NamedArgTwice = 4107
+	PositionalAfterNamed = 4108
+	NamedArgSkipsRequired = 4109
+
+	# a range VALUE is bounded: `lo..` has no upper bound to carry, and a value that could be
+	# unbounded would make every walk and every test ask about it. The loop form keeps its own.
+	RangeValueIsBounded = 4110
 	ListPatternNotAList = 4084
 	MutateAValueNotAPlace = 4081
 
@@ -469,7 +491,6 @@ pub enum Rule {
 	NotYetParameterizedSpec = 9001
 	NotYetDecoratorLayout = 9005
 	NotYetCallee = 9009
-	NotYetNamedArgument = 9010
 	NotYetImplAssocType = 9015
 	NotYetForMutBinding = 9025
 	NotYetAssocTypeProjection = 9028
@@ -495,13 +516,17 @@ pub enum Rule {
 	NotYetFixedWidthLadder = 9063
 	NotYetDelChannel = 9066
 	NotYetGenericConstructor = 9067
-	NotYetNilPattern = 9068
 	NotYetValueUnnameableType = 9069
 	NotYetRebindMatchBinding = 9070
 	NotYetDefaultReadsField = 9071
 	NotYetGenericTypedef = 9075
 	NotYetSubPatternInPayload = 9076
-	NotYetRangeAsValue = 9077
+	NotYetRangeOfKind = 9077
+
+	# an ARRAY has no slice: its length is part of its type, so the result of slicing one is a
+	# type that depends on the bounds, and the language has not said what that is. It used to
+	# share `E9077` with "a range as a value", which is built now and is a different finding.
+	NotYetArraySlice = 9117
 	NotYetIsErrorKind = 9078
 	NotYetSealed = 9079
 	NotYetMainArgsWithConcurrency = 9097

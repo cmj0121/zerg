@@ -990,6 +990,16 @@ fn parse_base_type(mut &p: Parser) -> ast.Ty {
 		expect(p, token.Kind.RBrack)
 		return ast.Ty.TSet(et)
 	}
+
+	# `range[T]` is the TYPE of a bound `x..y` read as a value (GRAMMAR#range-expr). Its
+	# argument is what the bounds are, which is what a walk over it binds and what a
+	# membership test compares.
+	if name == "range" and p_at(p, token.Kind.LBrack) {
+		p_advance(p)
+		et := parse_type(p)
+		expect(p, token.Kind.RBrack)
+		return ast.Ty.TRange(et)
+	}
 	if name == "list" and p_at(p, token.Kind.LBrack) {
 		p_advance(p)
 		elem := parse_type(p)
@@ -4452,7 +4462,7 @@ fn p_written_type_args(mut &p: Parser, name: str, tn: str) {
 # rather than a call's. GRAMMAR#base-type gives them type-args; they are not generic
 # functions and a program cannot declare one.
 fn p_builtin_type_ctor(name: str) -> bool {
-	return name == "map" or name == "set" or name == "list" or name == "chan" or name == "ptr" or name == "array"
+	return name == "map" or name == "set" or name == "list" or name == "chan" or name == "ptr" or name == "array" or name == "range"
 }
 
 fn parse_call_args(mut &p: Parser) -> list[ast.Expr] {
@@ -4464,7 +4474,17 @@ fn parse_call_args(mut &p: Parser) -> list[ast.Expr] {
 		# positional-only, and the `:` reached parse_primary, which answered "`:` is not an
 		# expression this compiler reads" — a token, about a form the language specifies and
 		# the seed builds. An argument list is where the form is recognizable.
-		raise p_diag(p, rule.Rule.NotYetNamedArgument, f"NotImplemented: the named argument `{token.says(cur(p))}:` — this compiler binds arguments by position only (GRAMMAR#arg)") if p_at(p, token.Kind.Ident) and peek_kind(p, 1) == token.Kind.Colon
+		# A NAMED ARGUMENT — `f(loud: true)`, GRAMMAR#arg. The NAME is kept and nothing is
+		# decided here: which parameter it is, whether there is one, and where it goes are all
+		# questions about the CALLEE, which the parser does not have. The call site reorders.
+		if p_at(p, token.Kind.Ident) and peek_kind(p, 1) == token.Kind.Colon {
+			nm := token.says(cur(p))
+			p_advance(p)
+			p_advance(p)
+			args.append(ast.Expr.ENamedArg(nm, parse_expr(p)))
+			p_list_sep(p, token.Kind.RParen, ")", "an argument list")
+			continue
+		}
 
 		args.append(parse_expr(p))
 		p_list_sep(p, token.Kind.RParen, ")", "an argument list")

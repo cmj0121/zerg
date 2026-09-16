@@ -378,7 +378,7 @@ shipping compiler rather than a part of it (the line
 | `E4023` | `…` is declared to answer …, and its body falls off the end                                           |
 | `E4024` | cannot derive `…`: the derivable specs are compiler-owned, and a `spec` you write is …                |
 | `E4025` | `…` declares `…` twice                                                                                |
-| `E4026` | `…` is part of a cycle of by-value declarations                                                       |
+| `E4026` | `…` is in a by-value cycle with no carrier on it                                                      |
 | `E4027` | `…` declares … named `…` twice                                                                        |
 | `E4028` | this expression chains more than … levels deep                                                        |
 | `E4029` | `…(…)` converts a scalar, and … is not one                                                            |

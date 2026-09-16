@@ -180,6 +180,18 @@ pub struct Emitter {
 	pub vf_index: list[int]
 	pub vf_boxed: list[bool]
 	pub vf_ty: list[ast.Ty]
+
+	# boxed_carriers are the carriers whose payload is held BEHIND A COUNTED CELL instead of
+	# inline, by C name — `zgc_opt_Node` for the `Node?` a `Node` holds. A struct that
+	# reaches itself through a carrier is a linked list, a tree or a parent pointer, and it
+	# has a size the moment one edge of the cycle is a pointer; which edge is decided by the
+	# dependency sweep in c_type_decls, where the cycle is what is already being found.
+	#
+	# The enum's self-recursive payload is the same mechanism (`vf_boxed` above) and this is
+	# deliberately not shared with it: an enum boxes a field it declares by NAME, and a
+	# carrier is a structural type nobody declares, so the two are keyed differently and the
+	# one list that could hold both would be keyed by neither.
+	pub boxed_carriers: list[str]
 	pub used_rt: bool
 	pub used_str: bool
 
@@ -258,6 +270,14 @@ pub struct Emitter {
 	# where they have to land: a renderer may call a type's own `display` override, so it
 	# follows the PROTOTYPES — the typedef stream above is written before them.
 	pub rnd_decls: list[str]
+
+	# rnd_protos are the same renderers' PROTOTYPES, and they exist because the met-order
+	# above is not always an order. A self-recursive struct and the carrier that breaks its
+	# cycle each name the other's renderer, so whichever is met first is written first and
+	# calls a function cc has not seen. Every renderer is declared before any is defined,
+	# which is the only ordering that holds for a cycle — and is what the typedef sweep does
+	# for the copy and drop of the same pair.
+	pub rnd_protos: list[str]
 
 	# mvt_names / mvt_decls are the map VTABLES — one static per distinct key/value shape,
 	# holding the hash and equality for the key type.
@@ -821,7 +841,14 @@ fn c_opt_wrap(mut &em: Emitter, where: str, elem: ast.Ty, e: ast.Expr, sb: Subst
 	# report()` — into a quiet nil, which is the rule chk_slot_fits below is for.
 	return f"({{ {c_expr(em, e, sb)}; ({cn}){{ .tag = 1 }}; }})" if c_is_block_expr(e) and c_is_nil_ty(c_infer(em, e))
 
-	return "(" + cn + "){ .tag = 0, .ok = " + c_fit_copied(em, where, elem, e, sb) + " }"
+	# THE PRESENT SIDE, and where a BOXED carrier puts the value in its cell. The payload is
+	# copied into the box exactly as it was copied into the slot — what changes is where the
+	# bytes land, not who owns them.
+	v := c_fit_copied(em, where, elem, e, sb)
+	ot := ast.Ty.TOpt(elem)
+	return f"({cn}){{ .tag = 0, .ok = zg_boxnew_{c_carrier_ty_cname(ot)}({v}) }}" if c_carrier_boxed(em, ot)
+
+	return "(" + cn + "){ .tag = 0, .ok = " + v + " }"
 }
 
 fn c_is_block_expr(e: ast.Expr) -> bool {
@@ -1286,8 +1313,13 @@ fn c_optchain(mut &em: Emitter, target: ast.Expr, fld: str, sb: Subst) -> str {
 	tv := "zgt_oc" + tag
 	rv := "zgt_ocr" + tag
 	mut out := f"({{ {src} {tv} = {c_expr(em, target, sb)}; {dst} {rv};"
-	acc := f"{c_res_ok(tv)}.zg_{fld}"
-	mut take := f"{c_res_mark_left(rv)} {c_res_ok(rv)} = {acc};"
+
+	# THROUGH c_res_val, because the operand's payload may be BOXED — `n?.next` on a
+	# self-recursive struct reads the field out of a counted cell rather than out of the
+	# carrier. The write side is c_res_put for the same reason: the answer is a carrier too,
+	# and it may be a boxed one.
+	acc := f"{c_res_val(em, t, tv)}.zg_{fld}"
+	mut take := f"{c_res_mark_left(rv)} {c_res_put(em, ast.Ty.TOpt(oft), rv, acc)}"
 	if ast.ty_is_opt(ft) {
 		# the field carries its own tag, so the answer IS the field
 		take = f"{rv} = {acc};"
@@ -1336,7 +1368,7 @@ fn c_try(mut &em: Emitter, x: ast.Expr, sb: Subst) -> str {
 	if not ast.ty_is_opt(em.fn_ret) {
 		right = f"({rcn}){{ .tag = 1, .err = {c_res_err(tv)} }}"
 	}
-	return out + " return " + right + "; } " + c_res_ok(tv) + "; })"
+	return out + " return " + right + "; } " + c_res_val(em, t, tv) + "; })"
 }
 
 # c_right_matches reports whether two carriers propagate the same thing: an optional's
@@ -1447,9 +1479,27 @@ fn c_res_ok(r: str) -> str {
 # a `list[int]?` handed back the carrier's own header, uncounted, and a write through `c`
 # was read back through `a`. The temp the payload comes out of is about to die, so the copy
 # is what gives the result a reference of its own.
-fn c_res_taken(mut &em: Emitter, r: str, elem: ast.Ty) -> str {
-	return c_res_ok(r) if not c_needs_copy(em, elem)
-	return c_copy_of(em, elem, c_res_ok(r))
+fn c_res_taken(mut &em: Emitter, cty: ast.Ty, r: str, elem: ast.Ty) -> str {
+	v := c_res_val(em, cty, r)
+	return v if not c_needs_copy(em, elem)
+	return c_copy_of(em, elem, v)
+}
+
+# c_res_val is the carrier's payload AS AN LVALUE — `r.ok` where the payload sits inline,
+# and the cell's contents where it is boxed. Every reader goes through it, which is what
+# makes the box a fact of the layout rather than a case each operator has to know: `??`,
+# `!`, `if let`, `match`, `?.` and the receive helper all ask for the payload and get one.
+pub fn c_res_val(mut &em: Emitter, cty: ast.Ty, r: str) -> str {
+	return c_res_ok(r) if not c_carrier_boxed(em, cty)
+	return f"(*({c_type(c_carrier_left(cty))}*)zrt_ref_payload({c_res_ok(r)}))"
+}
+
+# c_res_put is the payload WRITE, and the box's other half: filling a boxed carrier
+# allocates the cell the pointer points at. It is a whole assignment rather than an lvalue
+# because those are two different statements, not one lvalue written two ways.
+pub fn c_res_put(mut &em: Emitter, cty: ast.Ty, r: str, v: str) -> str {
+	return f"{c_res_ok(r)} = {v};" if not c_carrier_boxed(em, cty)
+	return f"{c_res_ok(r)} = zg_boxnew_{c_carrier_ty_cname(cty)}({v});"
 }
 
 # c_carrier_temp_drop names the drop for a carrier THIS EXPRESSION OWNS, or "" for one it
@@ -1479,6 +1529,12 @@ fn c_carrier_temp_drop(mut &em: Emitter, t: ast.Ty, e: ast.Expr) -> str {
 # A `Result[T]` is unaffected either way: its Right is an `Err`, whose storage belongs to the
 # runtime, so `c_needs_copy` answers no for it exactly as it did.
 fn c_carrier_owns(mut &em: Emitter, t: ast.Ty) -> bool {
+	# A BOXED CARRIER OWNS THE CELL, and asking its payload is the question that does not
+	# terminate: the payload is the struct that holds this carrier, so `c_needs_copy` would
+	# walk back into the field it came from. The counted cell is owned whatever is inside it,
+	# which is both the true answer and the one that stops.
+	return true if c_carrier_boxed(em, t)
+
 	return c_needs_copy(em, c_carrier_elem(t)) if ast.ty_is_opt(t)
 
 	return c_needs_copy(em, c_either_left(t)) or c_needs_copy(em, c_either_right(t))
@@ -1639,6 +1695,13 @@ fn c_carrier_decl(mut &em: Emitter, c: ast.Ty) -> str {
 	# nil` wrote `zgt_tup_…` into this struct with nobody having written the tuple, and cc
 	# reported it against generated C
 	mut d := c_spelled_pre(em, left)
+
+	# A BOXED CARRIER IS THE WHOLE OF THIS FUNCTION'S OTHER SHAPE, and it is written out
+	# rather than threaded through the arms below: every line of the inline form reads the
+	# payload where it sits, and every line of this one reads it through the cell. The two
+	# agree on the TAG, which is the half the rest of the compiler touches.
+	return d + c_carrier_boxed_head(name) if c_carrier_boxed(em, c)
+
 	if ast.ty_is_opt(c) {
 		d = d + f"typedef struct {{ int32_t tag; {ct} ok; }} {name};\n"
 	} else {
@@ -1667,7 +1730,7 @@ fn c_carrier_decl(mut &em: Emitter, c: ast.Ty) -> str {
 	# the payload is TAKEN OUT, so it comes out as a value of its own — `r` is a by-value
 	# parameter about to die, and returning its header uncounted made `a!` a second name
 	# for the carrier's buffer
-	d = d + "    return " + c_res_taken(em, "r", left) + ";\n}\n"
+	d = d + "    return " + c_res_taken(em, c, "r", left) + ";\n}\n"
 
 	# and the PAIR, for a carrier whose payload owns something: a drop, and — this is the
 	# half that was missing — a copy.
@@ -1716,6 +1779,66 @@ fn c_carrier_decl(mut &em: Emitter, c: ast.Ty) -> str {
 	# c_drop_thunk, which is what a binding's `zrt_defer` is given. Nothing else would
 	# generate one: a carrier is not in `f.structs`, so a missing thunk is cc reporting an
 	# undefined symbol against generated code.
+	return d + c_elem_vt_helper(em, c)
+}
+
+# c_carrier_boxed_decl writes a carrier whose payload sits in a COUNTED CELL: the tag as
+# always, and a `void *` where the value would have been. It is what makes
+# `struct Node { next: Node? }` a type with a size — the struct holds a tag and a pointer,
+# and the pointer is what the cycle needed one of.
+#
+# THE ABSENT SIDE HOLDS NO CELL. `tag != 0` is `nil`, and there is nothing to retain or
+# release for it, which is why every helper here tests the tag first — the same test the
+# inline form's copy and drop make, for the same reason.
+#
+# THE SEED'S LAYOUT IS NOT BROKEN BY THIS. `emit_result.go` and this file have to agree
+# byte for byte, and they still do for every carrier the seed can build: the seed refuses a
+# self-recursive struct outright, so a boxed carrier is a shape it never emits and never
+# reads. That is a claim about what the two compilers SHARE, not an exception to it.
+# THE TYPEDEF AND THE BODIES ARE EMITTED APART, and that is not a style choice. A boxed
+# carrier's typedef needs nothing complete — it is a tag and a pointer — which is the whole
+# point of boxing it, but its FORCE returns the payload by value and its drop calls the
+# payload's, so the bodies need the struct the cycle is about. The typedef goes out in the
+# sweep where it breaks the cycle, the bodies go out after every struct has, and the
+# bodies go out after every struct has.
+#
+# THERE ARE NO PROTOTYPES IN BETWEEN, and there is nothing for them to serve: the struct arm
+# of the same sweep writes ITS copy/drop prototypes there, so what a boxed carrier's body
+# calls is already declared — while nothing emitted between the two points calls a carrier
+# helper, because the only things emitted there are typedefs and prototypes. A prototype for
+# these could not have been written anyway: `zg_force_` returns the payload BY VALUE, and at
+# the typedef the payload is not yet a name cc knows.
+fn c_carrier_boxed_head(name: str) -> str {
+	return f"typedef struct {{ int32_t tag; void *ok; }} {name};\n"
+}
+
+fn c_carrier_boxed_body(mut &em: Emitter, c: ast.Ty, name: str, left: ast.Ty, ct: str) -> str {
+	mut d := ""
+
+	# the payload comes out as a value of its own, exactly as the inline form's does — the
+	# cell is shared, so what is handed back is a copy of what is in it
+	d = d + f"static {ct} zg_force_{name}({name} r) {{\n"
+	d = d + "    if (" + c_res_is_right("r") + ") { zrt_raise_err(zrt_err_new(\"force-unwrap of nil\")); }\n"
+	d = d + f"    return {c_copy_of(em, left, f"(*({ct}*)zrt_ref_payload(r.ok))")};\n}}\n"
+
+	d = d + f"static void zg_drop_{name}({name} *r) {{\n"
+	d = d + "    if (" + c_res_is_left("(*r)") + ") { zrt_release(r->ok); }\n}\n"
+
+	d = d + f"static {name} zg_copy_{name}({name} v) {{\n"
+	d = d + "    if (" + c_res_is_left("v") + ") { v.ok = zrt_ref_copy(v.ok); }\n    return v;\n}\n"
+
+	# the CELL'S OWN drop, and the allocator that fills one. They are the enum's
+	# `c_refbox_helpers` written for a carrier, and they are here rather than shared with it
+	# because an enum boxes a field of a type it declares and a carrier is a structural type
+	# nobody declares — the two are named from different places.
+	# THE CELL'S PAYLOAD IS AN LVALUE HERE, spelled `*(T*)p` and not `(T*)p`: c_drop_stmt
+	# takes the VALUE to give back and writes the `&` itself, so handing it the pointer asked
+	# cc for the address of a cast.
+	d = d + f"static void zg_dropbox_{name}(void *p) {{ {c_drop_stmt(em, left, f"(*({ct}*)p)")} }}\n"
+	d = d + f"static void *zg_boxnew_{name}({ct} v) {{\n"
+	d = d + f"    void *r = zrt_ref_alloc(sizeof({ct}), &zg_dropbox_{name});\n"
+	d = d + f"    *({ct}*)zrt_ref_payload(r) = v;\n    return r;\n}}\n"
+
 	return d + c_elem_vt_helper(em, c)
 }
 
@@ -4258,6 +4381,94 @@ fn c_fixed_width_check(mut &em: Emitter, n: str) {
 #
 # A group that can never be emitted is a CYCLE — `struct A { b: B }` with `struct B { a: A }`
 # — a type of infinite size rather than an ordering problem, and it is named as such.
+# c_decide_boxes settles WHICH CARRIERS ARE BOXED, once, before anything is emitted.
+#
+# IT USED TO BE A SIDE EFFECT OF THE SWEEP BELOW, decided as the sweep discovered it was
+# stuck, and that was a defect the moment anything asked the question EARLIER than the sweep
+# runs. A spec's witness table is emitted ahead of the type declarations — it registers a
+# rendering thunk, a copy and a drop for the target — so `impl S for Node` asked whether a
+# `Node` owns anything while the answer was still being computed. `c_carrier_owns` then walked
+# `Node` to `Node?` to `Node` and the compiler died of its own stack on a fifteen-line program.
+#
+# So the ordering is the fix and not a guard: whether a carrier is boxed is a fact about the
+# PROGRAM, and a fact about the program is settled before the program is written out. This
+# runs the same dependency walk the sweep runs, emits nothing, and stops when it can make no
+# more progress — leaving the refusal to the sweep, which is where the name to report is.
+fn c_decide_boxes(mut &em: Emitter, f: ast.File, carriers: list[ast.Ty], tuples: list[ast.Ty]) {
+	mut all: list[str] = []
+	for ed in f.enums {
+		all.append(ed.name)
+	}
+	for sd in f.structs {
+		all.append(sd.name)
+	}
+	for c in carriers {
+		all.append(c_carrier_ty_cname(c))
+	}
+	for t in tuples {
+		all.append(c_shape_cname(t))
+	}
+
+	mut done: list[str] = []
+	for td in f.types {
+		done.append(td.name)
+	}
+
+	mut es := f.enums
+	mut ss := f.structs
+	mut cs := carriers
+	mut ts := tuples
+
+	for es.len() > 0 or ss.len() > 0 or cs.len() > 0 or ts.len() > 0 {
+		n0 := done.len()
+
+		mut es2: list[ast.EnumDecl] = []
+		for ed in es {
+			if c_deps_done(c_enum_deps(ed), done, all) {
+				done.append(ed.name)
+			} else {
+				es2.append(ed)
+			}
+		}
+		es = es2
+
+		mut ss2: list[ast.StructDecl] = []
+		for sd in ss {
+			if c_deps_done(c_struct_deps(sd), done, all) {
+				done.append(sd.name)
+			} else {
+				ss2.append(sd)
+			}
+		}
+		ss = ss2
+
+		mut cs2: list[ast.Ty] = []
+		for c in cs {
+			if c_deps_done(c_carrier_deps_of(em, c), done, all) {
+				done.append(c_carrier_ty_cname(c))
+			} else {
+				cs2.append(c)
+			}
+		}
+		cs = cs2
+
+		mut ts2: list[ast.Ty] = []
+		for t in ts {
+			if c_deps_done(c_ty_list_deps(c_shape_deps(t)), done, all) {
+				done.append(c_shape_cname(t))
+			} else {
+				ts2.append(t)
+			}
+		}
+		ts = ts2
+
+		if done.len() == n0 {
+			# no carrier left to break the cycle at — the sweep will say so, by name
+			return if not c_box_a_carrier(em, cs, done, all)
+		}
+	}
+}
+
 fn c_type_decls(mut &em: Emitter, f: ast.File, carriers: list[ast.Ty], tuples: list[ast.Ty]) -> str {
 	mut out := ""
 
@@ -4354,7 +4565,7 @@ fn c_type_decls(mut &em: Emitter, f: ast.File, carriers: list[ast.Ty], tuples: l
 		mut cs2: list[ast.Ty] = []
 		for c in cs {
 			cn := c_carrier_ty_cname(c)
-			if c_deps_done(c_carrier_deps(c), done, all) {
+			if c_deps_done(c_carrier_deps_of(em, c), done, all) {
 				# through the emit gate, not c_carrier_decl directly: a carrier already
 				# written inline by a tuple that spells it answers "" here instead of a
 				# second `zg_force_…` definition
@@ -4387,9 +4598,80 @@ fn c_type_decls(mut &em: Emitter, f: ast.File, carriers: list[ast.Ty], tuples: l
 		# to point at — and unlike every rule about a statement, a cycle is a property of the
 		# declarations and of nothing that runs, so no marker has been set either. The NAME is
 		# what a reader searches for, which is why the sentence leads with it.
-		raise c_diag(em, rule.Rule.ByValueCycle, f"`{c_stuck_name(es, ss, cs)}` is part of a cycle of by-value declarations — a type holding itself, however indirectly, has no size; hold it behind a `list`, or box it as a self-recursive enum payload") if done.len() == n0
+		# STUCK IS NOT YET A REFUSAL. What is left is a cycle, and a cycle through a CARRIER
+		# has a size the moment that edge is a pointer: `struct Node { next: Node? }` is a
+		# linked list, and the `nil` the carrier already carries is what ends it. So the
+		# sweep breaks the cycle at a carrier when there is one to break it at, records that
+		# the carrier holds its payload behind a counted cell, and goes round again.
+		#
+		# WHICH EDGE IS NOT A CHOICE THIS MAKES TWICE. It boxes ONE carrier per round and
+		# lets the sweep re-derive what is still stuck, so a cycle with several carriers in
+		# it costs exactly as many pointers as it takes to break — rather than every carrier
+		# in the group being boxed for being present at the finding.
+		if done.len() == n0 {
+			continue if c_box_a_carrier(em, cs, done, all)
+
+			# AND ONLY THEN. What is left is a cycle no pointer in it can break: every edge
+			# is a field held by value, so the type has no size and no `nil` ends it. That
+			# is what `E4026` means now, and it is narrower than what it used to mean — the
+			# linked list it also turned away is built.
+			raise c_diag(em, rule.Rule.ByValueCycle, f"`{c_stuck_name(es, ss, cs)}` is part of a cycle of by-value declarations, and no edge of it is a carrier — a type holding itself with nothing that can be absent has no size and no end; write the self-reference as `T?`, hold it behind a `list`, or box it as a self-recursive enum payload")
+		}
+	}
+
+	# AND THE BOXED CARRIERS' BODIES LAST, after every struct in the program is complete —
+	# each one returns its payload by value and drops it by name, so none of them could be
+	# written where its typedef was. Nothing has read them before here: the prototypes went
+	# out with the typedefs.
+	for c in carriers {
+		if c_carrier_boxed(em, c) {
+			nm := c_carrier_ty_cname(c)
+			lf := c_carrier_left(c)
+			out = out + c_carrier_boxed_body(em, c, nm, lf, c_type(lf))
+		}
 	}
 	return out
+}
+
+# c_box_a_carrier breaks a stuck cycle at one carrier, and reports whether it found one.
+#
+# THE CANDIDATE IS A CARRIER STILL WAITING ON A DEPENDENCY THAT IS ALSO STILL WAITING, which
+# is what being part of the stuck group means — the sweep has already emitted everything whose
+# dependencies came out, so anything left is in a cycle or behind one. Boxing it makes its
+# payload a pointer, so it depends on nothing and comes out next round, and whatever was
+# waiting on IT follows.
+#
+# ALREADY-BOXED IS NOT A CANDIDATE, or a cycle no pointer can break would be "broken" forever
+# and the sweep would spin instead of refusing. A carrier is boxed once and then it is a
+# pointer; if the group is still stuck after that, it is stuck for another reason.
+fn c_box_a_carrier(mut &em: Emitter, cs: list[ast.Ty], mut &done: list[str], mut &all: list[str]) -> bool {
+	for c in cs {
+		cn := c_carrier_ty_cname(c)
+		continue if c_name_in(em.boxed_carriers, cn)
+
+		for dep in c_carrier_deps(c) {
+			if c_name_in(all, dep) and not c_name_in(done, dep) {
+				em.boxed_carriers.append(cn)
+				return true
+			}
+		}
+	}
+	return false
+}
+
+# c_carrier_deps_of is c_carrier_deps with the emitter's answer about the box applied: a
+# boxed carrier spells a `void *` where its payload went, and a pointer needs nothing
+# complete ahead of it. It is the carrier's half of the omission c_enum_deps makes for a
+# self-recursive enum, and it is made HERE rather than inside c_carrier_deps because whether
+# a carrier is boxed is a fact about the program being emitted, not about the type.
+fn c_carrier_deps_of(mut &em: Emitter, c: ast.Ty) -> list[str] {
+	return [] if c_name_in(em.boxed_carriers, c_carrier_ty_cname(c))
+	return c_carrier_deps(c)
+}
+
+# c_carrier_boxed is the one question every reader of a carrier's payload asks.
+pub fn c_carrier_boxed(mut &em: Emitter, t: ast.Ty) -> bool {
+	return c_name_in(em.boxed_carriers, c_carrier_ty_cname(t))
 }
 
 # c_deps_done reports whether every DECLARED type a declaration names by value is already
@@ -7305,10 +7587,10 @@ fn c_coalesce(mut &em: Emitter, a: ast.Expr, b: ast.Expr, jump: list[ast.Stmt], 
 	df := c_carrier_temp_drop(em, t, a)
 	if jump.len() == 0 {
 		alt := c_fit_copied(em, "the `??` fallback", elem, b, sb)
-		return head + " " + c_res_is_left(tmp) + " ? " + c_res_taken(em, tmp, elem) + " : (" + alt + "); })" if df == ""
+		return head + " " + c_res_is_left(tmp) + " ? " + c_res_taken(em, t, tmp, elem) + " : (" + alt + "); })" if df == ""
 
 		v0 := "zgt_cov" + tag
-		pick := f"{c_res_is_left(tmp)} ? {c_res_taken(em, tmp, elem)} : ({alt})"
+		pick := f"{c_res_is_left(tmp)} ? {c_res_taken(em, t, tmp, elem)} : ({alt})"
 		return f"{head} {c_type(elem)} {v0} = {pick}; {df}(&{tmp}); {v0}; }})"
 	}
 
@@ -7318,7 +7600,7 @@ fn c_coalesce(mut &em: Emitter, a: ast.Expr, b: ast.Expr, jump: list[ast.Stmt], 
 	if df != "" {
 		give = f" {df}(&{tmp});"
 	}
-	out = out + " if (" + c_res_is_left(tmp) + ") { " + val + " = " + c_res_taken(em, tmp, elem) + ";" + give + " } else { "
+	out = out + " if (" + c_res_is_left(tmp) + ") { " + val + " = " + c_res_taken(em, t, tmp, elem) + ";" + give + " } else { "
 	for s in jump {
 		out = out + c_stmt(em, s, "")
 	}
@@ -7598,7 +7880,7 @@ fn c_guard(mut &em: Emitter, body: list[ast.Stmt], sb: Subst) -> str {
 		inner = inner + c_stmt(em, body[i], "")
 		i = i + 1
 	}
-	inner = inner + c_guard_ok(em, body, upto, vt, res, sb)
+	inner = inner + c_guard_ok(em, body, upto, ast.Ty.TEither(c_guard_elem(vt), ast.Ty.TErr), vt, res, sb)
 
 	# The guard's own frame mark is what gives its bindings back, on BOTH ways out: the
 	# normal path unwinds to it below, and the catch path is unwound by the runtime before
@@ -7614,7 +7896,7 @@ fn c_guard(mut &em: Emitter, body: list[ast.Stmt], sb: Subst) -> str {
 }
 
 # c_guard_ok writes the Left: the block ran to its end, so its value is the answer.
-fn c_guard_ok(mut &em: Emitter, body: list[ast.Stmt], upto: int, vt: ast.Ty, res: str, sb: Subst) -> str {
+fn c_guard_ok(mut &em: Emitter, body: list[ast.Stmt], upto: int, ct: ast.Ty, vt: ast.Ty, res: str, sb: Subst) -> str {
 	# a block whose last statement is not an expression has no value at all (GRAMMAR: it
 	# is `nil`), so the tag alone is what there is to say
 	return c_res_mark_left(res) if upto == body.len()
@@ -7631,7 +7913,7 @@ fn c_guard_ok(mut &em: Emitter, body: list[ast.Stmt], upto: int, vt: ast.Ty, res
 	# COPIED, not aliased: the answer outlives the block, and the block now gives back what
 	# its bindings own on the way out. `guard { xs := […]; xs }` handed the result a second
 	# name for a buffer the release below was about to free.
-	return f"{c_res_mark_left(res)} {c_res_ok(res)} = {c_copied(em, vt, c_expr_stmt_of(body[upto]), sb)};"
+	return f"{c_res_mark_left(res)} {c_res_put(em, ct, res, c_copied(em, vt, c_expr_stmt_of(body[upto]), sb))}"
 }
 
 # c_guard_val_ty is the guarded BLOCK's value type, and it is c_last_val_ty because a guard's
@@ -9920,7 +10202,7 @@ fn c_carrier_method(mut &em: Emitter, target: ast.Expr, meth: str, args: list[as
 		e := c_tmp(em, "zgt_ke")
 		mut out := "({ " + c_type(ast.Ty.TErr) + " " + e + " = " + c_expr(em, args[0], sb) + "; "
 		out = out + on + " " + t + " = " + c_expr(em, target, sb) + "; " + rn + " " + r + ";"
-		out = out + " if (" + c_res_is_left(t) + ") { " + c_res_mark_left(r) + " " + c_res_ok(r) + " = " + c_res_taken(em, t, elem) + "; }"
+		out = out + " if (" + c_res_is_left(t) + ") { " + c_res_mark_left(r) + " " + c_res_put(em, ast.Ty.TEither(elem, ast.Ty.TErr), r, c_res_taken(em, tty, t, elem)) + " }"
 		out = out + " else { " + c_res_mark_right(r) + " " + c_res_err(r) + " = " + e + "; }"
 		return out + " " + r + "; })"
 	}
@@ -9933,7 +10215,7 @@ fn c_carrier_method(mut &em: Emitter, target: ast.Expr, meth: str, args: list[as
 		t := c_tmp(em, "zgt_ko")
 		o := c_tmp(em, "zgt_kv")
 		mut out := "({ " + cn + " " + t + " = " + c_expr(em, target, sb) + "; " + on + " " + o + ";"
-		out = out + " if (" + c_res_is_left(t) + ") { " + c_res_mark_left(o) + " " + c_res_ok(o) + " = " + c_res_taken(em, t, left) + "; }"
+		out = out + " if (" + c_res_is_left(t) + ") { " + c_res_mark_left(o) + " " + c_res_put(em, ast.Ty.TOpt(left), o, c_res_taken(em, tty, t, left)) + " }"
 		out = out + " else { " + c_res_mark_right(o) + " }"
 		return out + " " + o + "; })"
 	}
@@ -10082,7 +10364,7 @@ fn c_enum_of(mut &em: Emitter, en: str, meth: str, args: list[ast.Expr], sb: Sub
 	}
 
 	mut out := f"({{ int64_t {v} = {n}; {cn} {r};"
-	out = out + f" if ({test}) {{ {c_res_mark_left(r)} {c_res_ok(r)} = (zg_{en}){{ .tag = (int32_t){v} }}; }}"
+	out = out + f" if ({test}) {{ {c_res_mark_left(r)} {c_res_put(em, ast.Ty.TOpt(ast.Ty.TNamed(en)), r, f"(zg_{en}){{ .tag = (int32_t){v} }}")} }}"
 	return out + f" else {{ {c_res_mark_right(r)} }} {r}; }})"
 }
 
@@ -12213,7 +12495,7 @@ fn c_pat_subst(mut &em: Emitter, pt: ast.Pat, s: str, st: ast.Ty, sb: Subst) -> 
 		# `Left(v)` reads the value, `Right(e)` the Err; neither is a tagged union of the
 		# kind the variant table describes, so the field is named directly
 		return sb if names.len() == 0
-		return c_extend(sb, names[0], c_res_ok(s)) if c_result_tag(em, ctor) == 0
+		return c_extend(sb, names[0], c_res_val(em, st, s)) if c_result_tag(em, ctor) == 0
 
 		return c_extend(sb, names[0], c_res_err(s))
 	}
@@ -14512,7 +14794,19 @@ fn c_recv_helper(mut &em: Emitter, elem: ast.Ty) -> str {
 	em.rcv_names.append(name)
 	mut d := "static " + cn + " " + name + "(zrt_chan *ch) {\n"
 	d = d + "    " + cn + " r = {0};\n"
-	d = d + "    " + c_res_tag("r") + " = (int32_t)zrt_chan_recv(ch, &" + c_res_ok("r") + ");\n"
+
+	# THE RUNTIME WRITES BYTES, so it is handed the slot they belong in. For a BOXED
+	# carrier that slot is not in the carrier at all — the carrier holds a pointer — so the
+	# value is received into storage of its own and boxed afterwards. Handing the runtime
+	# `&r.ok` there would have it write a whole struct over a pointer.
+	ot := ast.Ty.TOpt(elem)
+	if c_carrier_boxed(em, ot) {
+		d = d + "    " + c_type(elem) + " v = {0};\n"
+		d = d + "    " + c_res_tag("r") + " = (int32_t)zrt_chan_recv(ch, &v);\n"
+		d = d + "    if (" + c_res_is_left("r") + ") { " + c_res_put(em, ot, "r", "v") + " }\n"
+	} else {
+		d = d + "    " + c_res_tag("r") + " = (int32_t)zrt_chan_recv(ch, &" + c_res_ok("r") + ");\n"
+	}
 	d = d + "    if (" + c_res_is_right("r") + ") {\n"
 	d = d + "        zrt_err e = zrt_chan_close_err(ch);\n"
 	d = d + "        if (e.kind != ZRT_ERR_STOP_ITERATION) { zrt_raise_err(e); }\n"
@@ -16408,6 +16702,11 @@ fn c_render_fn(mut &em: Emitter, t: ast.Ty) -> str {
 	em.rnd_names.append(name)
 	em.used_rt = true
 	em.used_str = true
+
+	# THE PROTOTYPE IS REGISTERED BEFORE THE BODY IS BUILT, because building it is what
+	# reaches the parts — and a part that reaches back here has to find this name already
+	# declared rather than already defined.
+	em.rnd_protos.append(f"static const char *{name}({c_type(t)} v);\n")
 	em.rnd_decls.append(c_render_body(em, name, t))
 	return name
 }
@@ -16539,7 +16838,7 @@ fn c_render_carrier_body(mut &em: Emitter, t: ast.Ty) -> str {
 	if ast.ty_is_opt(t) {
 		el := c_opt_elem(t)
 		out := "    if (v.tag != 0) { return zrt_str_dup(\"nil\"); }\n"
-		return out + f"    return {c_render_of(em, el, "v.ok", true)};\n"
+		return out + f"    return {c_render_of(em, el, c_res_val(em, t, "v"), true)};\n"
 	}
 
 	# THE ACCUMULATOR FORM, like the other five. These were nested `zrt_str_concat` expressions
@@ -16553,7 +16852,7 @@ fn c_render_carrier_body(mut &em: Emitter, t: ast.Ty) -> str {
 	out = out + "    " + c_render_close(")")
 	out = out + "    }\n"
 	out = out + "    const char *s = zrt_str_dup(\"Left(\");\n"
-	out = out + c_render_join("    ", c_render_of(em, lt, "v.ok", true), true)
+	out = out + c_render_join("    ", c_render_of(em, lt, c_res_val(em, t, "v"), true), true)
 	return out + c_render_close(")")
 }
 
@@ -18088,7 +18387,7 @@ fn c_iflet(mut &em: Emitter, name: str, value: ast.Expr, then_body: list[ast.Stm
 		em.used_rt = true
 		out = out + in3 + f"size_t {mark} = zrt_scope_mark();\n"
 	}
-	out = out + in3 + c_type(elem) + " " + cv + " = " + c_res_taken(em, tmp, elem) + ";\n" + give
+	out = out + in3 + c_type(elem) + " " + cv + " = " + c_res_taken(em, t, tmp, elem) + ";\n" + give
 
 	# the payload has been copied out, so the carrier this statement materialised has nothing
 	# left to say. Only one that names no storage is this statement's to give back, and only
@@ -20314,7 +20613,7 @@ fn c_emit_unit(prog0: ast.File, own0: ast.File, ms: Mods, whole: bool, want_lint
 	# is what makes that invariant hold for a multi-unit program, at the place it already lives,
 	# and it is what lets the declaration passes below go back to reading the WHOLE program.
 	seen := diags.len()
-	mut em := Emitter([], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], false, false, false, [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], 0, [], 0, [], [], false, "", "", [], [], ast.Ty.TVoid, 0, "", 0, 0, diags, 0, 0, [], [], [], [], [], false, 0, false, "", 0, false, false, [], [], [], [], [], [], [], [], [], [], [], "", want_lints, [], [], [], [], [], [], [], [], [], [], [], [], false, 0, [], [], "", c_nosub(), [], [], [], [], [], [], [], [], [], [])
+	mut em := Emitter([], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], false, false, false, [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], 0, [], 0, [], [], false, "", "", [], [], ast.Ty.TVoid, 0, "", 0, 0, diags, 0, 0, [], [], [], [], [], false, 0, false, "", 0, false, false, [], [], [], [], [], [], [], [], [], [], [], "", want_lints, [], [], [], [], [], [], [], [], [], [], [], [], false, 0, [], [], "", c_nosub(), [], [], [], [], [], [], [], [], [], [])
 
 	# ASSIGNED, NOT PASSED. Every argument above is a zero value, and `layering` asserts that
 	# — it lines the call up with the fields by KIND, which only works while nothing in it
@@ -20357,13 +20656,26 @@ fn c_emit_unit(prog0: ast.File, own0: ast.File, ms: Mods, whole: bool, want_lint
 	c_build_structs(em, f)
 	c_build_enums(em, f)
 	c_build_specs(em, f)
-	c_build_spec_vts(em, f)
 
-	# THE DECLARATION SITES, once. Three passes below ask the same question of them — what
-	# types a declaration spells — and the list answers all three (c_decl_sites says why it
+	# THE DECLARATION SITES, once. Four passes below ask the same question of them — what
+	# types a declaration spells — and the list answers all four (c_decl_sites says why it
 	# is one list). Building it here rather than inside each is what makes that literal: a
-	# site added to it is added for all three, and none of them re-walks the program.
+	# site added to it is added for all four, and none of them re-walks the program.
 	sites := c_decl_sites(f)
+
+	# WHICH CARRIERS ARE BOXED, settled before the first pass that asks what a type OWNS —
+	# which is the witness tables below, not the emitter. `impl S for Node` on a struct that
+	# reaches itself through a carrier registers the target's copy and drop, and that asks
+	# `c_carrier_owns(Node?)`, which walks back into `Node`. With the answer not yet computed
+	# the walk does not end, and the compiler died of its own stack on a fifteen-line program
+	# — the shape of defect a type that may now contain itself will keep finding, because
+	# every structural walk in this file was written when no type could.
+	mut box_tuples: list[ast.Ty] = []
+	mut box_carriers: list[ast.Ty] = []
+	c_decl_types(sites, box_tuples, box_carriers)
+	c_decide_boxes(em, f, box_carriers, box_tuples)
+
+	c_build_spec_vts(em, f)
 
 	# OVER THE WHOLE PROGRAM, like everything else here that reads a declaration.
 	#
@@ -20595,6 +20907,9 @@ fn c_emit_unit(prog0: ast.File, own0: ast.File, ms: Mods, whole: bool, want_lint
 	# by a thunk that CALLS one: a boxed `Fd` renders through `zg_render_Fd`. The tables used
 	# to lead, and cc reported an implicit declaration against generated C.
 	mut rnds := ""
+	for d in em.rnd_protos {
+		rnds = rnds + c_lowered(checking, d)
+	}
 	for d in em.rnd_decls {
 		rnds = rnds + c_lowered(checking, d)
 	}

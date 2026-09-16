@@ -59,16 +59,11 @@ live allocations as five rounds do (`make mem-check`).
 
 ---
 
-> **[not yet]** A recursive **`struct`** cannot be declared at all, so the bound above is not reachable
-> through one. `struct Node { value: int; next: Node? }` is rejected with _E4026 `Node` is part of a cycle of
-> by-value declarations — a type holding itself, however indirectly, has no size_: sizing runs over the
-> declaration graph before any boxing decision is reached, so the self-referential slot never gets the cell
-> that would have given it a size. The recursive **`enum`** is the half that builds, boxing and
-> refcount-sharing as described. The `Node`
-> used below — in Copy vs reference semantics, where it is the one place a shared mutation is observable —
-> is the specified form and does not compile today. It
-> carries a second unbuilt form as well: its **named arguments** (`Node(value: 1, …)`) are `E9010`, since
-> arguments bind by position here (see [Types](types.md)).
+> **[not yet]** The `Node` used below — in Copy vs reference semantics, where it is the one place a shared
+> mutation is observable — is written with **named arguments** (`Node(value: 1, …)`), and those are `E9010`:
+> arguments bind by position here (see [Types](types.md)). The recursive **`struct`** itself declares and
+> builds, boxing and refcount-sharing exactly as this reference describes, so the bound above is reachable
+> through one.
 
 **A `struct`'s layout is its declaration.** Fields sit in **declaration order**, the value is laid out
 **inline** in its owner (no indirection beyond the recursive auto-boxing above), and the compiler **never

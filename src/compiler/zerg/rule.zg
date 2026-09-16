@@ -412,6 +412,11 @@ pub enum Rule {
 	DeriveOrdFloat = 4098
 	DeriveOrdWithoutEq = 4099
 	SetCtorTakesOneList = 4100
+
+	# a callee that is not a name has to be a function VALUE — `fs[0](1)` where the element is
+	# an `int`. The name form's own version of this is a lookup that fails; a value's is a type
+	# that is not a `fn`, and there is nothing to look up.
+	CalleeNotAFunction = 4101
 	ListPatternNotAList = 4084
 	MutateAValueNotAPlace = 4081
 

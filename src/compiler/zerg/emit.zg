@@ -7501,6 +7501,7 @@ fn c_expr_node(mut &em: Emitter, e: ast.Expr, sb: Subst) -> str {
 		Expr.EUnary(oper, x) => c_unexpr(em, oper, x, sb)
 		Expr.EBinary(oper, a, b) => c_binexpr(em, oper, a, b, sb)
 		Expr.ECall(name, args, ts) => c_call_written(em, name, args, ts, sb)
+		Expr.ECallVal(callee, args) => c_call_val(em, callee, args, sb)
 		Expr.EField(target, fld) => c_fieldref(em, target, fld, sb)
 		Expr.EOptChain(target, fld) => c_optchain(em, target, fld, sb)
 		Expr.ETry(x) => c_try(em, x, sb)
@@ -10670,6 +10671,27 @@ fn c_infer_call_written(mut &em: Emitter, name: str, args: list[ast.Expr], ts: l
 	return c_infer_call(em, name, args)
 }
 
+# c_call_val lowers a call whose CALLEE IS AN EXPRESSION — `fs[0](1)`, a lambda called where
+# it is written, anything GRAMMAR#postfix lets a `(` follow.
+#
+# THE CALLEE IS BOUND TO A TEMP, and that is the whole difference from the name form beside
+# it. A call through a function value reads the value TWICE — the function pointer, then the
+# environment — and `c_call` can spell a NAME twice because a name costs nothing to read. An
+# expression is not a name: `next()(1)` would run `next()` twice, `fs[i++](1)` would step the
+# index twice. Once, into a temp, and the two reads are of the temp.
+#
+# WHAT IS REFUSED HERE is a callee that is not a function at all. It is checked before the
+# cast rather than after, because the cast is what would otherwise make it cc's finding: a
+# `zg_fnptr` cast over an `int64_t` is a diagnostic about generated C, at a line the reader
+# did not write.
+fn c_call_val(mut &em: Emitter, callee: ast.Expr, args: list[ast.Expr], sb: Subst) -> str {
+	fty := c_infer(em, callee)
+	raise c_diag(em, rule.Rule.CalleeNotAFunction, f"`{ast.expr_kind(callee)}` is a {ast.ty_name(fty)} and this calls it — a callee that is not a name has to be a function VALUE (GRAMMAR#postfix)") if not c_is_fn(fty)
+
+	v := c_tmp(em, "zgt_cv")
+	return f"({{ zg_fnptr {v} = {c_expr(em, callee, sb)}; ({c_fnptr_cast(fty)}{v}.fn)({v}.env{c_args_after(em, fty, args, sb)}); }})"
+}
+
 fn c_call(mut &em: Emitter, name: str, args: list[ast.Expr], sb: Subst) -> str {
 	# `set(xs)` IS A CONSTRUCTOR, and it is read here rather than anywhere a type is read,
 	# because `set` is not a declared name: GRAMMAR#map-lit's note is that a set has no literal
@@ -13049,6 +13071,7 @@ fn c_infer_node(mut &em: Emitter, e: ast.Expr) -> ast.Ty {
 		Expr.EUnary(oper, x) => c_infer_unary(em, oper, x)
 		Expr.EBinary(oper, a, b) => c_infer_binary(em, oper, a, b)
 		Expr.ECall(name, args, ts) => c_infer_call_written(em, name, args, ts)
+		Expr.ECallVal(callee, _) => c_fn_ret(c_infer(em, callee))
 		Expr.EMethod(target, meth, args) => c_infer_methcall(em, target, meth, args)
 		Expr.EField(target, fld) => c_field_ty_of(em, target, fld)
 		Expr.EOptChain(target, fld) => c_optchain_ty(em, target, fld)

@@ -206,9 +206,10 @@ for x in xs {
 ```
 
 > **[not yet]** The coroutine spelling of that loop is not available. A closure **literal** is not one of
-> `spawn`'s three callee forms — `spawn fn () { … }()` is _E9009 NotImplemented: calling fn-expr_ — and
-> `spawn work()` on the **named** closure above is _E9103_, with a place: both keywords lower to a C thunk
-> whose body names a symbol, and a function value has none. (It used to emit `zg_work()` into that thunk
-> and die inside `cc`, which is the one outcome the standing rule forbids.) `spawn handle(x)` is the form
+> `spawn`'s three callee forms — `spawn fn () { … }()` is _E4078_ — and `spawn work()` on the **named**
+> closure above is _E9103_, with a place: both keywords lower to a C thunk whose body names a symbol, and a
+> function value has none. Calling the literal where it is written, without `spawn`, is built. (It used to
+> emit `zg_work()` into that thunk and die inside `cc`, which is the one outcome the standing rule
+> forbids.) `spawn handle(x)` is the form
 > that works, and it snapshots its argument at the `spawn`, which gets the same per-iteration value by the
 > other route. See [Coroutines & Channels](coroutine.md).

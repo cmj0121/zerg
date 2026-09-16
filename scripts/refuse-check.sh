@@ -3362,15 +3362,47 @@ EOF
 # GRAMMAR#fn-sig opens a spec member with `'unsafe'? 'mut'? 'fn'`, so `unsafe fn f()` in a
 # spec IS a derivation. It used to be turned away by E2036 — the catch-all for a token that
 # starts no member at all — which DENIED the derivation and cited GRAMMAR#spec-member while
-# doing it. A top-level `unsafe fn` is BUILT, so what is left here is the one spelling of the
-# marker this compiler does not read: a spec's required signature.
-expect "$ZERG" unsafe-in-a-spec-signature E9036 <<'EOF'
+# doing it.
+#
+# IT IS A POSITION NOW AND NOT A GAP (#123). `unsafe` says who VOUCHES and a `spec` says what
+# a method DOES; a requirement states a contract, and how an implementation keeps it is its own
+# business. So the case names the sentence, which is the part that would have to be deleted on
+# purpose for the rule to change.
+expect "$ZERG" unsafe-in-a-spec-signature E4111 'never `unsafe`' <<'EOF'
 spec Raw {
 	unsafe fn peek() -> int
 }
 
 fn main() {
 	print 1
+}
+EOF
+
+# AND THE SAME RULE FROM THE IMPLEMENTATION'S END. It has to be at the declaration because of
+# the BOX: on the concrete type and through a bound the marker is visible and `E3083` finds it,
+# but a box erases the type and the witness table holds the unsafe function directly — safe
+# code called one and printed its answer with no diagnostic anywhere (#183).
+expect "$ZERG" unsafe-method-for-a-spec-requirement E4112 'requires a safe one' <<'EOF'
+spec Peek {
+	fn peek() -> int
+}
+
+struct P {
+	pub v: int
+}
+
+impl Peek for P {
+	unsafe fn peek() -> int {
+		return this.v
+	}
+}
+
+fn thru(p: Peek) -> int {
+	return p.peek()
+}
+
+fn main() {
+	print thru(P(7))
 }
 EOF
 

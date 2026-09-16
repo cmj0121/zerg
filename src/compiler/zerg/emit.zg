@@ -198,6 +198,11 @@ pub struct Emitter {
 	# used_fnptr records that some function was held as a VALUE, so the generic function
 	# pointer the header typedefs is only there for a program that has one.
 	pub used_fnptr: bool
+
+	# used_range is the same question for a RANGE held as a value. A program that only ever
+	# writes `for i in 0..n` needs no such type — the loop is lowered to its bounds — so the
+	# typedef is emitted for a program that binds, passes or returns one.
+	pub used_range: bool
 	pub ref_names: list[str]
 	pub pr_fn: list[str]
 
@@ -210,6 +215,12 @@ pub struct Emitter {
 	# kept it to a wrong refusal rather than a wrong call.
 	pub pr_mod: list[str]
 	pub pr_idx: list[int]
+
+	# pr_name is the parameter's own NAME, which is what a named argument names
+	# (GRAMMAR#arg). It is here rather than in a table of its own because "which parameter"
+	# is one question and this table already answers every other half of it — the position,
+	# the type, whether it is a reference and whether it has a default.
+	pub pr_name: list[str]
 	pub pr_ref: list[bool]
 
 	# pr_ty is each parameter's TYPE, parallel to pr_fn / pr_idx. It is what lets a bare
@@ -760,7 +771,14 @@ fn c_type(t: ast.Ty) -> str {
 		Ty.TRune      => "int32_t"
 		Ty.TNamed(nm) => c_named_ctype(nm)
 		Ty.TList(_)   => "zrt_list"
-		Ty.TFn(_, _)  => "zg_fnptr"
+
+		# A RANGE IS ONE C STRUCT whatever it bounds — the bounds go in as `int64_t`, which is
+		# what every scalar this compiler compares with `>=` already widens to, so `0..3` and
+		# `'a'..'z'` share a layout the way two `zrt_list`s do. The ZERG type keeps the element
+		# (`range[rune]`), which is what decides what a walk BINDS and what a membership test
+		# compares; the C type does not have to repeat it.
+		Ty.TRange(_) => "zg_range"
+		Ty.TFn(_, _) => "zg_fnptr"
 
 		# a `mut &T` is the caller's own storage lent for one call, which is a POINTER to it —
 		# the same C parameter a `mut &` on a declaration has always lowered to
@@ -1874,6 +1892,16 @@ fn c_carrier_left(c: ast.Ty) -> ast.Ty {
 # for every function type at once, with no table of them to build and keep.
 fn c_fnptr_typedef() -> str {
 	return "typedef struct { void (*fn)(void); const void *env; } zg_fnptr;\n"
+}
+
+# c_range_typedef is the ONE C shape every range value has: its two bounds widened to the
+# type this compiler compares scalars in, and whether the upper one is included.
+#
+# `incl` IS PART OF THE VALUE and not of the type, because `0..3` and `0..=3` are the same
+# type with different contents — a function taking a `range[int]` takes either, which is what
+# lets a caller choose and a callee not care.
+fn c_range_typedef() -> str {
+	return "typedef struct { int64_t lo; int64_t hi; bool incl; } zg_range;\n"
 }
 
 # c_fnptr_helpers is the (copy, drop) pair for a held function — ONE pair for the whole
@@ -4048,6 +4076,7 @@ fn c_add_sig(mut &em: Emitter, fn_i: ast.FnDecl) {
 		em.pr_fn.append(key)
 		em.pr_mod.append(check.c_mod_of(em, fn_i.path))
 		em.pr_idx.append(j)
+		em.pr_name.append(fn_i.params[j].name)
 		em.pr_ref.append(fn_i.params[j].is_ref)
 		em.pr_ty.append(fn_i.params[j].ty)
 		em.pr_hasdef.append(fn_i.params[j].has_def)
@@ -6468,7 +6497,16 @@ fn c_struct_shape(mut &em: Emitter, st: ast.Ty, want: str, fs: list[str], open: 
 fn c_pat_env(mut &em: Emitter, pt: ast.Pat, st: ast.Ty) {
 	bn := c_pat_bind_name(pt)
 	if bn != "" {
-		c_add_var(em, bn, st, false, false)
+		# OVER A CARRIER THE NAME IS THE PAYLOAD'S, and this is the half that makes the
+		# accessor c_pat_subst writes mean anything: a substitution is TEXT, so binding the
+		# payload's expression while telling the checker it is a `T?` gets the arm refused for
+		# an operand it does not have. The two have to agree, and they are two functions
+		# because one walk types the arm and the other lowers it.
+		if c_is_carrier(st) {
+			c_add_var(em, bn, c_carrier_elem(st), false, false)
+		} else {
+			c_add_var(em, bn, st, false, false)
+		}
 		return
 	}
 
@@ -7502,6 +7540,11 @@ fn c_expr_node(mut &em: Emitter, e: ast.Expr, sb: Subst) -> str {
 		Expr.EBinary(oper, a, b) => c_binexpr(em, oper, a, b, sb)
 		Expr.ECall(name, args, ts) => c_call_written(em, name, args, ts, sb)
 		Expr.ECallVal(callee, args) => c_call_val(em, callee, args, sb)
+
+		# A NAMED ARGUMENT REACHING THE LOWERING was written where a name means nothing —
+		# every call site reorders and unwraps its own, so one that survives to here is in a
+		# position that has no parameters to name.
+		Expr.ENamedArg(nm, _) => c_named_arg_misplaced(em, nm)
 		Expr.EField(target, fld) => c_fieldref(em, target, fld, sb)
 		Expr.EOptChain(target, fld) => c_optchain(em, target, fld, sb)
 		Expr.ETry(x) => c_try(em, x, sb)
@@ -7518,7 +7561,7 @@ fn c_expr_node(mut &em: Emitter, e: ast.Expr, sb: Subst) -> str {
 		# rather than as a `for`'s iterable, which c_forin takes before this point. Those
 		# forms have no lowering yet, and saying so is better than emitting something that
 		# reads as an int.
-		Expr.ERange(lo, hi, inclusive) => c_range_unsupported(em)
+		Expr.ERange(lo, hi, inclusive) => c_range_value(em, lo, hi, inclusive, sb)
 		Expr.ETuple(elems) => c_tuple_lit(em, elems, sb)
 		Expr.EMapLit(ks, vs) => c_map_lit(em, ks, vs, sb)
 		Expr.EFn(ps, has_ret, ret, body) => c_lambda(em, ps, has_ret, ret, body)
@@ -8943,6 +8986,22 @@ fn c_in_range(mut &em: Emitter, x: ast.Expr, set: ast.Expr, sb: Subst) -> str {
 	return f"(({sx}) >= ({slo}) && ({sx}) {c_range_cmp(set)} ({shi}))"
 }
 
+# c_in_range_val is `v in r` where `r` is a range VALUE: the same pair of comparisons
+# c_in_range writes, reading the bounds out of the struct and asking `incl` which of `<` and
+# `<=` the upper one takes.
+#
+# BOTH OPERANDS ARE BOUND ONCE. The subject is named twice in the test and the range three
+# times, and either may be a call — which is the defect c_in_range was fixed for, arriving by
+# the other route.
+fn c_in_range_val(mut &em: Emitter, x: ast.Expr, set: ast.Expr, st: ast.Ty, sb: Subst) -> str {
+	check.chk_binary(em, ">=", c_infer(em, x), c_range_elem(st), x, x)
+
+	em.used_range = true
+	xv := c_tmp(em, "zgt_rx")
+	rv := c_tmp(em, "zgt_rr")
+	return f"({{ int64_t {xv} = (int64_t)({c_expr(em, x, sb)}); zg_range {rv} = {c_expr(em, set, sb)}; {xv} >= {rv}.lo && ({rv}.incl ? {xv} <= {rv}.hi : {xv} < {rv}.hi); }})"
+}
+
 # c_range_cmp is the comparison the UPPER bound is made with, which is the only thing `..` and
 # `..=` differ by: an exclusive range stops before its bound and an inclusive one stops on it.
 fn c_range_cmp(set: ast.Expr) -> str {
@@ -9002,12 +9061,18 @@ fn c_in_test(mut &em: Emitter, x: ast.Expr, set: ast.Expr, sb: Subst) -> str {
 	# anything else is asked what its TYPE is so the refusal names the set the reader wrote
 	# rather than the branch that happened to be taken.
 	if kind == 0 {
-		# A RANGE IS ASKED ABOUT BY SHAPE. Nothing infers a range type — a range used as a
-		# VALUE is still refused — so the only range that reaches `in` is one written at the
-		# operator, and c_infer would answer `?` about it.
+		# A RANGE WRITTEN AT THE OPERATOR IS ASKED ABOUT BY SHAPE, and it stays that way: `v in
+		# 1..10` compares the bounds where they are written and materialises nothing, which is
+		# what makes it the same two comparisons a reader would have written by hand.
 		return c_in_range(em, x, set, sb) if c_is_range(set)
 
 		st := c_infer(em, set)
+
+		# A RANGE VALUE reaches the same two comparisons through its struct. It is asked by
+		# TYPE rather than by shape because there is no range in the syntax here — the set is
+		# a name, a call, a field — which is exactly what `range[T]` being a type is for.
+		return c_in_range_val(em, x, set, st, sb) if c_is_range_ty(st)
+
 		return c_in_container(em, x, set, st, sb) if c_is_list(st) or c_is_map(st) or c_is_set(st)
 
 		return c_in_not_a_set(em, set)
@@ -10684,6 +10749,13 @@ fn c_infer_call_written(mut &em: Emitter, name: str, args: list[ast.Expr], ts: l
 # cast rather than after, because the cast is what would otherwise make it cc's finding: a
 # `zg_fnptr` cast over an `int64_t` is a diagnostic about generated C, at a line the reader
 # did not write.
+# c_named_arg_misplaced is `name: value` written where there are no parameters to name — a
+# list element, an operand, an index. Every call and every construction reorders and unwraps
+# its own named arguments, so one that reaches the general lowering is in none of those.
+fn c_named_arg_misplaced(mut &em: Emitter, nm: str) -> str {
+	raise c_diag(em, rule.Rule.NamedArgOutsideACall, f"`{nm}:` names an argument, and this is not an argument position — a name binds to a PARAMETER, so there has to be one to bind to (GRAMMAR#arg)")
+}
+
 fn c_call_val(mut &em: Emitter, callee: ast.Expr, args: list[ast.Expr], sb: Subst) -> str {
 	fty := c_infer(em, callee)
 	raise c_diag(em, rule.Rule.CalleeNotAFunction, f"`{ast.expr_kind(callee)}` is a {ast.ty_name(fty)} and this calls it — a callee that is not a name has to be a function VALUE (GRAMMAR#postfix)") if not c_is_fn(fty)
@@ -11092,7 +11164,100 @@ fn c_gen_type_on_demand(mut &em: Emitter, tpl: ast.StructDecl, applied: str, sol
 	em.res_decls.append(c_elem_vt_helper(em, ast.Ty.TNamed(applied)))
 }
 
-fn c_struct_args(mut &em: Emitter, sname: str, args: list[ast.Expr], sb: Subst) -> str {
+# c_struct_args_named is c_args_named for a CONSTRUCTION: the field is the parameter, and the
+# rules are the same four — a positional after a named one, a name no field has, a field named
+# twice, and a field the reorder skipped.
+#
+# THE ONE THAT DIFFERS IS THE SKIP. A struct field's default is filled by c_struct_rest from
+# the DECLARATION, after this, so a hole in the middle is refused here only when the field has
+# no default to fill it — which is the same rule c_args_named applies, asked of the other table.
+fn c_struct_args_named(mut &em: Emitter, sname: str, args: list[ast.Expr]) -> list[ast.Expr] {
+	mut any := false
+	for a in args {
+		if c_named_arg_name(a) != "" {
+			any = true
+		}
+	}
+	return args if not any
+
+	names := c_struct_field_names(em, sname)
+
+	mut slot: list[int] = []
+	mut val: list[ast.Expr] = []
+	mut seen_named := false
+	mut i := 0
+	for i < args.len() {
+		nm := c_named_arg_name(args[i])
+		if nm == "" {
+			if seen_named {
+				c_named_after_positional(em)
+			}
+			slot.append(i)
+			val.append(args[i])
+		} else {
+			seen_named = true
+			at := c_name_index(names, nm)
+
+			if at < 0 {
+				c_named_unknown(em, nm, f"field of `{sname}`")
+			}
+			if c_slot_taken(slot, at) {
+				c_named_already(em, nm, "field")
+			}
+
+			slot.append(at)
+			val.append(c_named_arg_value(args[i]))
+		}
+		i = i + 1
+	}
+
+	mut top := 0 - 1
+	for k in slot {
+		if k > top {
+			top = k
+		}
+	}
+
+	mut out: list[ast.Expr] = []
+	mut j := 0
+	for j <= top {
+		mut found := 0 - 1
+		mut m := 0
+		for m < slot.len() {
+			if slot[m] == j {
+				found = m
+			}
+			m = m + 1
+		}
+		if found >= 0 {
+			out.append(val[found])
+		} else {
+			if not c_struct_field_hasdef(em, sname, j) {
+				c_named_skips(em, f"`{sname}.{names[j]}`")
+			}
+
+			out.append(c_struct_field_def(em, sname, j))
+		}
+		j = j + 1
+	}
+	return out
+}
+
+fn c_name_index(names: list[str], nm: str) -> int {
+	mut i := 0
+	for i < names.len() {
+		return i if names[i] == nm
+		i = i + 1
+	}
+	return 0 - 1
+}
+
+fn c_struct_args(mut &em: Emitter, sname: str, written: list[ast.Expr], sb: Subst) -> str {
+	# A CONSTRUCTION TAKES NAMED ARGUMENTS TOO — #173's rule is "arguments bind by position in
+	# a call and in a construction alike", so the same sentence has to be true of both forms of
+	# the name. A field is the parameter here, and the reorder is the fields' own.
+	args := c_struct_args_named(em, sname, written)
+
 	# MORE arguments than the struct has fields reached cc as an "excess elements in struct
 	# initializer" WARNING, so it compiled and the extra values were dropped. Too few has
 	# been named since c_struct_rest existed; this is the same question from the other side.
@@ -11220,7 +11385,13 @@ fn c_call_args(mut &em: Emitter, fname: str, args: list[ast.Expr], sb: Subst) ->
 # method, whose receiver already stands where parameter 0 does — the shift is written down
 # once here rather than in each caller, because getting it wrong passes a `mut &` argument
 # by value into the slot after the one that wanted its address.
-fn c_args_from(mut &em: Emitter, key: str, base: int, args: list[ast.Expr], lead: bool, sb: Subst) -> str {
+fn c_args_from(mut &em: Emitter, key: str, base: int, written: list[ast.Expr], lead: bool, sb: Subst) -> str {
+	# NAMED ARGUMENTS ARE REORDERED FIRST, so everything below this line sees a positional
+	# list and nothing downstream of it knows the form exists. The arity check included: a
+	# call that skipped a defaulted parameter in the middle is fully applied by the time it
+	# is counted.
+	args := c_args_named(em, key, base, written)
+
 	check.chk_call_arity(em, key, base, args.len())
 
 	# the aliasing rule is about a CALL rather than an argument, so it is asked once here
@@ -11252,6 +11423,150 @@ fn c_args_from(mut &em: Emitter, key: str, base: int, args: list[ast.Expr], lead
 		i = i + 1
 	}
 	return out + c_default_args(em, key, base + args.len(), lead or args.len() > 0)
+}
+
+# c_args_named puts a call's arguments in PARAMETER order and fills what a name skipped.
+#
+# `f(loud: true)` on `fn f(x: int = 1, loud: bool = false)` is the form GRAMMAR#arg is for —
+# skipping a defaulted parameter in the MIDDLE, which position alone cannot express. The name
+# says which parameter; it never says what type, so the value is whatever it would have been
+# written positionally.
+#
+# IT IS A NO-OP FOR A CALL WITH NO NAMES, and deliberately returns the written list unchanged
+# there rather than rebuilding an equal one: the trailing-default backfill below this is the
+# rule for a call that stops early, and a list padded to full length would take that rule's
+# work away and have to re-derive it.
+#
+# WHAT IS REFUSED IS EVERY WAY THE NAMES CAN FAIL TO PICK A PARAMETER, each on its own terms —
+# a positional after a named one (the position is no longer readable), a name no parameter has,
+# one parameter named twice, and a parameter the reorder skipped that has no default to fill it.
+# THE FOUR WAYS NAMING CAN FAIL, EACH RAISED FROM ONE PLACE. A call and a construction ask
+# the same four questions — `c_args_named` of a parameter list and `c_struct_args_named` of a
+# field list — and writing them twice made each code two rules wearing one identity, which is
+# what `error-codes-check` reports and what this file has been on the wrong side of before.
+#
+# The WORD differs (a parameter, a field) and the rule does not, so the word is an argument.
+fn c_named_after_positional(mut &em: Emitter) {
+	raise c_diag(em, rule.Rule.PositionalAfterNamed, "this argument is positional and follows a named one — once a name has been written the positions are no longer readable, so the rest are named too (GRAMMAR#arg)")
+}
+
+fn c_named_unknown(mut &em: Emitter, nm: str, what: str) {
+	raise c_diag(em, rule.Rule.NamedArgUnknown, f"`{nm}:` names no {what} (GRAMMAR#arg)")
+}
+
+fn c_named_already(mut &em: Emitter, nm: str, what: str) {
+	raise c_diag(em, rule.Rule.NamedArgTwice, f"`{nm}:` names a {what} this call already gives")
+}
+
+fn c_named_skips(mut &em: Emitter, what: str) {
+	raise c_diag(em, rule.Rule.NamedArgSkipsRequired, f"this call skips {what}, which has no default, so nothing fills it (GRAMMAR#arg)")
+}
+
+fn c_args_named(mut &em: Emitter, key: str, base: int, args: list[ast.Expr]) -> list[ast.Expr] {
+	mut any := false
+	for a in args {
+		if c_named_arg_name(a) != "" {
+			any = true
+		}
+	}
+	return args if not any
+
+	# the written arguments, split: the positionals keep their order and the named ones are
+	# placed by the parameter each picks
+	mut slot: list[int] = []
+	mut val: list[ast.Expr] = []
+	mut seen_named := false
+	mut i := 0
+	for i < args.len() {
+		nm := c_named_arg_name(args[i])
+		if nm == "" {
+			if seen_named {
+				c_named_after_positional(em)
+			}
+			slot.append(base + i)
+			val.append(args[i])
+		} else {
+			seen_named = true
+			at := c_param_named(em, key, nm)
+
+			if at < 0 {
+				c_named_unknown(em, nm, "parameter of this call")
+			}
+			if c_slot_taken(slot, at) {
+				c_named_already(em, nm, "parameter")
+			}
+
+			slot.append(at)
+			val.append(c_named_arg_value(args[i]))
+		}
+		i = i + 1
+	}
+
+	# the highest parameter anything picked decides how long the applied list is; the ordinary
+	# backfill still finishes the tail
+	mut top := 0 - 1
+	for k in slot {
+		if k > top {
+			top = k
+		}
+	}
+
+	mut out: list[ast.Expr] = []
+	mut j := base
+	for j <= top {
+		mut found := 0 - 1
+		mut m := 0
+		for m < slot.len() {
+			if slot[m] == j {
+				found = m
+			}
+			m = m + 1
+		}
+		if found >= 0 {
+			out.append(val[found])
+		} else {
+			row := c_param_row(em, key, j)
+			if row < 0 or not em.pr_hasdef[row] {
+				c_named_skips(em, "a parameter")
+			}
+
+			out.append(em.pr_def[row])
+		}
+		j = j + 1
+	}
+	return out
+}
+
+fn c_slot_taken(slot: list[int], at: int) -> bool {
+	for k in slot {
+		return true if k == at
+	}
+	return false
+}
+
+# c_param_named is the index of the parameter this name picks, or -1. The row table already
+# answers every other half of "which parameter"; this is the half a named argument asks.
+fn c_param_named(mut &em: Emitter, key: str, nm: str) -> int {
+	mut i := 0
+	for i < em.pr_fn.len() {
+		return em.pr_idx[i] if em.pr_fn[i] == key and em.pr_name[i] == nm
+		i = i + 1
+	}
+	return 0 - 1
+}
+
+fn c_named_arg_name(e: ast.Expr) -> str {
+	return match e {
+		Expr.ENamedArg(nm, _) => nm
+		_ => ""
+	}
+}
+
+fn c_named_arg_value(e: ast.Expr) -> ast.Expr {
+	return match e {
+		Expr.ENamedArg(_, x) => x
+		_ => e
+	}
 }
 
 # c_owned_args answers WHICH of a call's arguments hand it something the CALLER has to give
@@ -12191,11 +12506,22 @@ fn c_check_arm_pats(mut &em: Emitter, arms: list[ast.Arm], st: ast.Ty) {
 # prove the guard holds), so `A if c => …` still leaves `A` uncovered.
 fn c_check_exhaustive(mut &em: Emitter, arms: list[ast.Arm], st: ast.Ty) {
 	# an unguarded catch-all covers whatever the arms above it did not
-	ca := c_catchall_at(arms)
+	ca := c_catchall_at(arms, st)
 	if ca >= 0 {
 		# every arm after it is dead code AND breaks the lowering, which would hand the
 		# trailing arm the `else` the catch-all was written to take
 		raise c_diag(em, rule.Rule.CatchAllNotLast, "this catch-all arm makes the following arms unreachable") if ca < arms.len() - 1
+		return
+	}
+
+	# AN OPTIONAL HAS EXACTLY TWO SIDES TOO, and naming both is exhaustive: `nil` for the
+	# absent one and a binding for the present one, which is the pair `nil` exists to complete.
+	# It is checked before the Either clause because an optional is a carrier and that clause
+	# is about the OTHER one.
+	if ast.ty_is_opt(st) {
+		raise c_diag(em, rule.Rule.MatchMissingNil, "non-exhaustive match: missing the `nil` case — an optional's absent side is named with `nil`, or covered with `_`") if not c_arm_covers_nil(arms)
+		raise c_diag(em, rule.Rule.MatchMissingPresent, "non-exhaustive match: missing the present case — a name binds what the optional holds, or `_` covers both") if not c_arm_covers_present(arms)
+
 		return
 	}
 
@@ -12240,18 +12566,24 @@ fn c_check_exhaustive(mut &em: Emitter, arms: list[ast.Arm], st: ast.Ty) {
 
 # c_pat_catchall — does this pattern match everything? A binding and a wildcard do, and an `as`
 # does exactly when what it wraps does: `_ as whole` binds and still covers.
-fn c_pat_catchall(pt: ast.Pat) -> bool {
+fn c_pat_catchall(pt: ast.Pat, st: ast.Ty) -> bool {
 	return match pt {
-		Pat.PWild         => true
-		Pat.PBind(_)      => true
-		Pat.PAs(inner, _) => c_pat_catchall(inner)
+		Pat.PWild => true
+
+		# A NAMED BINDING COVERS EVERYTHING EXCEPT OVER A CARRIER, where it binds the payload
+		# and so cannot match the side that has none. Without this `match o { v => v }` read as
+		# exhaustive, took the lowering's untested `else`, and answered the payload slot of an
+		# ABSENT carrier — `0` for a `nil`, with no diagnostic anywhere. `_` is unaffected: it
+		# binds nothing, so there is nothing it can be wrong about.
+		Pat.PBind(_)      => not c_is_carrier(st)
+		Pat.PAs(inner, _) => c_pat_catchall(inner, st)
 
 		# A TUPLE COVERS EVERYTHING WHEN ITS ELEMENTS DO. `(x, y)` is a catch-all — a tuple has
 		# no alternative shapes, so what is left to miss is what its elements miss — and a rule
 		# that knew only `_` and a bare name called it a gap: a `match` on a pair whose last arm
 		# was `(x, y)` was "non-exhaustive, missing a catch-all `_`", about an arm that matches
 		# every pair there is.
-		Pat.PTuple(ps) => c_pats_catchall(ps)
+		Pat.PTuple(ps) => c_pats_catchall(ps, st)
 
 		# `[..]` COVERS EVERY LIST — no element to miss and no length to fail — and it is the
 		# only list pattern that does. `[a, ..]` needs one element and `[a, b]` needs exactly
@@ -12260,26 +12592,26 @@ fn c_pat_catchall(pt: ast.Pat) -> bool {
 
 		# A STRUCT HAS ONE SHAPE, so a pattern of the right type covers every value of it when
 		# each field pattern does. `P{..}` and `P{x, y}` are catch-alls; `P{x: 1, ..}` is not.
-		Pat.PStruct(_, _, ps, _) => c_pats_catchall(ps)
+		Pat.PStruct(_, _, ps, _) => c_pats_catchall(ps, st)
 
 		# ANY side covering everything makes the whole one cover it — `_ | A` is `_` with extra
 		# words. It is `or` and not `and` for that reason, which is the opposite of every other
 		# shape here.
-		Pat.POr(ps) => c_pats_any_catchall(ps)
+		Pat.POr(ps) => c_pats_any_catchall(ps, st)
 		_           => false
 	}
 }
 
-fn c_pats_any_catchall(ps: list[ast.Pat]) -> bool {
+fn c_pats_any_catchall(ps: list[ast.Pat], st: ast.Ty) -> bool {
 	for pt in ps {
-		return true if c_pat_catchall(pt)
+		return true if c_pat_catchall(pt, st)
 	}
 	return false
 }
 
-fn c_pats_catchall(ps: list[ast.Pat]) -> bool {
+fn c_pats_catchall(ps: list[ast.Pat], st: ast.Ty) -> bool {
 	for pt in ps {
-		return false if not c_pat_catchall(pt)
+		return false if not c_pat_catchall(pt, st)
 	}
 	return true
 }
@@ -12351,11 +12683,43 @@ fn c_payload_names(ps: list[ast.Pat]) -> list[str] {
 }
 
 # c_catchall_at is the index of the first UNGUARDED catch-all arm (`_` or a binding), or -1.
-fn c_catchall_at(arms: list[ast.Arm]) -> int {
+# c_pat_is_wild is `_` alone — the pattern that binds nothing and matches everything. It is
+# told from a named binding because the two part company over a carrier: a name binds the
+# payload and `_` binds nothing at all.
+fn c_pat_is_wild(pt: ast.Pat) -> bool {
+	return match pt {
+		Pat.PWild => true
+		Pat.PAs(inner, _) => c_pat_is_wild(inner)
+		_ => false
+	}
+}
+
+# c_arm_covers_nil / c_arm_covers_present are an optional's two sides, asked the way the
+# Either's and the bool's are: unguarded arms only, because the compiler cannot prove a guard
+# holds (GRAMMAR#match-arm).
+fn c_arm_covers_nil(arms: list[ast.Arm]) -> bool {
+	for a in arms {
+		continue if a.has_guard
+		return true if c_pat_is_wild(a.pat)
+		return true if c_pat_is_lit(a.pat) and c_is_nil_lit(c_pat_lit(a.pat))
+	}
+	return false
+}
+
+fn c_arm_covers_present(arms: list[ast.Arm]) -> bool {
+	for a in arms {
+		continue if a.has_guard
+		return true if c_pat_is_wild(a.pat)
+		return true if c_pat_bind_name(a.pat) != ""
+	}
+	return false
+}
+
+fn c_catchall_at(arms: list[ast.Arm], st: ast.Ty) -> int {
 	mut i := 0
 	for i < arms.len() {
 		a := arms[i]
-		return i if c_pat_catchall(a.pat) and not a.has_guard
+		return i if c_pat_catchall(a.pat, st) and not a.has_guard
 		i = i + 1
 	}
 	return 0 - 1
@@ -12438,6 +12802,21 @@ fn c_sub_of(sb: Subst, name: str) -> str {
 
 fn c_pat_subst(mut &em: Emitter, pt: ast.Pat, s: str, st: ast.Ty, sb: Subst) -> Subst {
 	bn := c_pat_bind_name(pt)
+
+	# A NAMED BINDING OVER A CARRIER BINDS WHAT IT HOLDS, not the carrier. `match o { nil =>
+	# …, v => … }` is what `nil` is written for, and it only reads as that pair if `v` is the
+	# value — otherwise the arm beside `nil` hands back a `T?` the reader has to unwrap again,
+	# and naming the absent side has bought nothing.
+	#
+	# It is the rule `if v := o { … }` already follows, and it is why the arm's CONDITION is
+	# the present test rather than "matches anything": a name that binds the payload cannot
+	# match the case where there is no payload. The specification did not pin this — it pinned
+	# only that `nil` was refused — so it is settled here and written down.
+	#
+	# `_` IS NOT A NAMED BINDING and keeps matching everything: it binds nothing, so there is
+	# no payload for it to be wrong about.
+	return c_extend(sb, bn, c_res_val(em, st, s)) if bn != "" and c_is_carrier(st)
+
 	return c_extend(sb, bn, s) if bn != ""
 
 	# `pattern as name` BINDS THE WHOLE and keeps destructuring: the name reads the subject
@@ -12609,6 +12988,11 @@ fn c_pat_cond(mut &em: Emitter, pt: ast.Pat, s: str, st: ast.Ty, sb: Subst) -> s
 	# an `as` TESTS NOTHING of its own — it names what the pattern under it matched
 	return c_pat_cond(em, c_pat_as_inner(pt), s, st, sb) if c_pat_is_as(pt)
 
+	# A NAMED BINDING OVER A CARRIER TESTS PRESENCE, because it binds the payload (see
+	# c_pat_subst) and there is no payload on the absent side. `_` is not a named binding and
+	# is not this: it binds nothing, so it still matches everything.
+	return c_res_is_left(s) if c_pat_bind_name(pt) != "" and c_is_carrier(st)
+
 	return c_pat_list_cond(em, pt, s, st, sb) if c_pat_is_list(pt)
 
 	# AN OR-PATTERN IS THE OR OF ITS ALTERNATIVES, which is the whole of its lowering — the
@@ -12665,7 +13049,17 @@ fn c_pat_cond(mut &em: Emitter, pt: ast.Pat, s: str, st: ast.Ty, sb: Subst) -> s
 		# GRAMMAR#literal-pat makes a literal a pattern, so `match o { nil => … }` is the
 		# natural way to ask about absence — and the arm beside it is what is not built: a
 		# binding pattern over an optional binds the CARRIER rather than what it holds.
-		raise c_diag(em, rule.Rule.NotYetNilPattern, "NotImplemented: `nil` as a `match` pattern — GRAMMAR makes it a literal pattern and this compiler compares it as one; write `if v := o { … }` for the presence test, or `o ?? d` for a default (GRAMMAR#literal-pat)") if c_is_nil_lit(lit)
+		# `nil` OVER AN OPTIONAL IS THE ABSENT SIDE, and it is a TAG TEST rather than the
+		# equality the rest of this branch synthesises: a carrier is not a value until it is
+		# unwrapped, so comparing one against a literal is the thing chk_binary refuses in
+		# every other position. The arm beside it binds the payload — see c_pat_subst — which
+		# is what makes the pair exhaustive and what `nil` is written for.
+		return c_res_is_right(s) if c_is_nil_lit(lit) and c_is_carrier(st)
+
+		# ELSEWHERE IT IS STILL REFUSED. `nil` against anything that is not a carrier has no
+		# absent side to name, and comparing it as a literal is the silent wrong answer this
+		# rule was raised to stop.
+		raise c_diag(em, rule.Rule.NilPatternNeedsCarrier, f"`nil` names the absent side of an optional, and this matches a {ast.ty_name(st)} — there is no absence to name (GRAMMAR#literal-pat)") if c_is_nil_lit(lit)
 
 		# the PATTERN is handed as both operands: this comparison is a scrutinee against a
 		# literal, and a literal pattern is always the one adopting the scrutinee's type, so
@@ -13072,6 +13466,10 @@ fn c_infer_node(mut &em: Emitter, e: ast.Expr) -> ast.Ty {
 		Expr.EBinary(oper, a, b) => c_infer_binary(em, oper, a, b)
 		Expr.ECall(name, args, ts) => c_infer_call_written(em, name, args, ts)
 		Expr.ECallVal(callee, _) => c_fn_ret(c_infer(em, callee))
+
+		# the name decides WHICH parameter, never WHAT TYPE — so the type is the value's, and
+		# a named argument answers whatever it would have answered written positionally
+		Expr.ENamedArg(_, x) => c_infer(em, x)
 		Expr.EMethod(target, meth, args) => c_infer_methcall(em, target, meth, args)
 		Expr.EField(target, fld) => c_field_ty_of(em, target, fld)
 		Expr.EOptChain(target, fld) => c_optchain_ty(em, target, fld)
@@ -13084,7 +13482,11 @@ fn c_infer_node(mut &em: Emitter, e: ast.Expr) -> ast.Ty {
 		Expr.EFmt(_, _, _) => ast.Ty.TStr
 		Expr.EIf(cond, then_e, else_e) => c_infer(em, then_e)
 		Expr.EMatch(scrut, arms) => c_infer_match(em, scrut, arms)
-		Expr.ERange(lo, hi, inclusive) => ast.Ty.TUnknown
+
+		# A RANGE'S TYPE IS ITS BOUNDS'. It answered TUnknown while the form was refused, and
+		# an unknown type is what every rule in check.zg returns early on — so a range in a
+		# value position met no rule at all on its way to the one that turned it away.
+		Expr.ERange(lo, _, _) => ast.Ty.TRange(c_infer(em, lo))
 		Expr.ETuple(elems) => c_tuple_ty(em, elems)
 		Expr.EMapLit(ks, vs) => c_map_lit_ty(em, ks, vs)
 		Expr.EFn(ps, has_ret, ret, body) => c_lambda_ty(ps, has_ret, ret)
@@ -16297,8 +16699,17 @@ fn c_slice(mut &em: Emitter, target: ast.Expr, idx: ast.Expr, tty: ast.Ty, sb: S
 # than a raise: the index is a value entering a slot, which is what every other position of that
 # shape does, and emission carries on so the rest of the program is checked too.
 fn c_list_index_int(mut &em: Emitter, idx: ast.Expr) {
+	# A RANGE SUBSCRIPT IS A SLICE, not a bad index. GRAMMAR says a slice IS an index by a
+	# range, and the caller dispatches to c_slice on exactly that shape — so this rule has to
+	# let it past or it reports on the one subscript that is not an index at all.
+	#
+	# It used to be let past by ACCIDENT: nothing inferred a range type, so the unknown check
+	# below exempted it. The day `range[T]` became a type the accident stopped working and
+	# every slice in the corpus was "a list index is an int, and this is range[int]".
+	return if c_is_range(idx)
+
 	t := c_infer(em, idx)
-	return if c_is_unknown(t) or c_is_int(t)
+	return if c_is_unknown(t) or c_is_range_ty(t) or c_is_int(t)
 
 	check.chk_at(em, rule.Rule.IndexNotInt, f"a list index is an int, and this is {ast.ty_name(t)}")
 }
@@ -16543,6 +16954,12 @@ fn c_tuple_helpers(mut &em: Emitter, name: str, tys: list[ast.Ty]) -> str {
 # list's, and a constant index outside the length is caught here as well — an array's length is
 # part of its type, so an out-of-range constant is a mistake the type already knows about.
 fn c_arr_index(mut &em: Emitter, target: ast.Expr, idx: ast.Expr, tty: ast.Ty, sb: Subst) -> str {
+	# AN ARRAY HAS NO SLICE. A `list` answers a range subscript with a fresh `list[T]`
+	# (c_slice); an array's length is part of its TYPE, so the result of slicing one is a type
+	# that depends on the bounds — which is a thing the language would have to say before this
+	# could lower it. Refused by name, where the shape is still in hand.
+	raise c_diag(em, rule.Rule.NotYetArraySlice, f"NotImplemented: a slice of {ast.ty_name(tty)} — an array's length is part of its type, so what a slice of one would BE is not yet specified; copy it into a `list` and slice that (docs/code/collections.md)") if c_is_range(idx) or c_is_range_ty(c_infer(em, idx))
+
 	c_list_index_int(em, idx)
 	n := c_arr_len(em, tty)
 
@@ -17550,12 +17967,38 @@ fn c_tuple_tys(t: ast.Ty) -> list[ast.Ty] {
 	}
 }
 
-# A code and a place. `x..y` in a value position is a form GRAMMAR#range-expr derives
-# anywhere an expression goes, and the sentence that turned it away carried neither — so a
-# gate could not pin it and a reader was told what a range is NOT good for without being
-# told where they had written one.
-fn c_range_unsupported(mut &em: Emitter) -> str {
-	raise c_diag(em, rule.Rule.NotYetRangeAsValue, "NotImplemented: a range used as a value — `x..y` is a `for … in` iterable and a membership test (`v in x..y`) so far, and there is no Range value to bind, pass or return (GRAMMAR#range-expr)")
+# c_range_value is `x..y` READ AS A VALUE (GRAMMAR#range-expr derives one anywhere an
+# expression goes). It builds the three-field struct c_range_typedef declares.
+#
+# AN OPEN RANGE IS NOT A VALUE. `lo..` has no upper bound, and a value with none would have to
+# carry "unbounded" as a fourth state that every walk and every test then has to ask about —
+# for a form whose only use is the `for` loop it is written in, where the loop itself is the
+# thing that never ends. It keeps its own code.
+#
+# THE BOUNDS ARE EVALUATED IN SOURCE ORDER, which is the same rule the membership test makes:
+# two operands of one run, and `(f()..g())` has to call `f` first.
+fn c_range_value(mut &em: Emitter, lo: ast.Expr, hi: ast.Expr, incl: bool, sb: Subst) -> str {
+	raise c_diag(em, rule.Rule.RangeValueIsBounded, "an open-ended range is not a value — `lo..` has no upper bound to carry, and a value that could be unbounded would make every walk and every test ask about it; write the loop, or give the range a bound (GRAMMAR#range-expr)") if c_is_nil_lit(hi)
+
+	# WHAT C CAN COMPARE, and nothing wider — the same offender rule the membership test
+	# applies, asked of the bounds alone because a value has no subject yet.
+	off := c_in_range_offender(em, [lo, hi])
+	raise c_diag(em, rule.Rule.NotYetRangeOfKind, f"NotImplemented: a range of {off} as a value — a range's bounds are compared, and {off} is not a type this compiler compares that way (GRAMMAR#range-expr)") if off != ""
+
+	check.chk_binary(em, ">=", c_infer(em, lo), c_infer(em, hi), lo, hi)
+
+	em.used_range = true
+
+	seq := c_needs_order([lo, hi], 1)
+	slo := c_ordered(em, seq, c_expr(em, lo, sb))
+	shi := c_ordered(em, seq, c_expr(em, hi, sb))
+	return f"((zg_range){{ (int64_t)({slo}), (int64_t)({shi}), {c_bool_lit(incl)} }})"
+}
+
+fn c_bool_lit(b: bool) -> str {
+	return "true" if b
+
+	return "false"
 }
 
 fn c_is_range(e: ast.Expr) -> bool {
@@ -17751,6 +18194,43 @@ fn c_forchan(mut &em: Emitter, var: str, iter: ast.Expr, t: ast.Ty, body: list[a
 	return out + ind + "}\n"
 }
 
+# c_forrangeval walks a range VALUE: the same counted loop `for i in a..b` lowers to, with
+# the bounds read from the struct. The range is copied into a local first — it is three
+# scalars, so the copy is free — because the expression that produced it may be a call and the
+# loop reads its bounds on every round.
+fn c_forrangeval(mut &em: Emitter, var: str, iter: ast.Expr, ct: ast.Ty, body: list[ast.Stmt], ind: str) -> str {
+	em.used_range = true
+
+	rv := c_tmp(em, "zgt_rg")
+	elem := c_range_elem(ct)
+
+	outer := c_scope_open(em)
+	c_add_var(em, var, elem, false, false)
+	cv := c_var_cname(em, var)
+
+	mut out := f"{ind}{{\n{ind}    zg_range {rv} = {c_expr(em, iter, c_nosub())};\n"
+	out = out + f"{ind}    for ({c_type(elem)} {cv} = ({c_type(elem)}){rv}.lo; {rv}.incl ? (int64_t){cv} <= {rv}.hi : (int64_t){cv} < {rv}.hi; {cv}++) {{\n"
+	out = out + c_block(em, body, ind + "        ")
+	out = out + f"{ind}    }}\n{ind}}}\n"
+	c_scope_close(em, outer)
+	return out
+}
+
+# c_range_elem is what a range's bounds are, and so what a walk over it BINDS.
+pub fn c_range_elem(t: ast.Ty) -> ast.Ty {
+	return match t {
+		Ty.TRange(e) => e
+		_            => ast.Ty.TUnknown
+	}
+}
+
+pub fn c_is_range_ty(t: ast.Ty) -> bool {
+	return match t {
+		Ty.TRange(_) => true
+		_            => false
+	}
+}
+
 fn c_forin(mut &em: Emitter, var: str, iter: ast.Expr, body: list[ast.Stmt], ind: str) -> str {
 	# A RANGE is not a container, so it never touches the list runtime: `for i in a..b` is
 	# the counted C loop it already means.
@@ -17761,6 +18241,13 @@ fn c_forin(mut &em: Emitter, var: str, iter: ast.Expr, body: list[ast.Stmt], ind
 	# is the receive, and the close is what ends it.
 	ct := c_infer(em, iter)
 	return c_forchan(em, var, iter, ct, body, ind) if ast.ty_is_chan(ct)
+
+	# A RANGE VALUE walks the same counted loop the literal above does, reading its bounds out
+	# of the struct instead of out of the syntax. It is a separate arm because the literal form
+	# never materialises a value at all — `for i in 0..n` has no `zg_range` in it — and giving
+	# the common loop both spellings would make every `for` over a range pay for a struct the
+	# overwhelmingly common one does not need.
+	return c_forrangeval(em, var, iter, ct, body, ind) if c_is_range_ty(ct)
 
 	# A MAP binds the KEY, walked in insertion order (docs/code/collections.md) — the value
 	# is reached with `m[k]`. It used to fall through to the list path below, which handed
@@ -20636,7 +21123,7 @@ fn c_emit_unit(prog0: ast.File, own0: ast.File, ms: Mods, whole: bool, want_lint
 	# is what makes that invariant hold for a multi-unit program, at the place it already lives,
 	# and it is what lets the declaration passes below go back to reading the WHOLE program.
 	seen := diags.len()
-	mut em := Emitter([], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], false, false, false, [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], 0, [], 0, [], [], false, "", "", [], [], ast.Ty.TVoid, 0, "", 0, 0, diags, 0, 0, [], [], [], [], [], false, 0, false, "", 0, false, false, [], [], [], [], [], [], [], [], [], [], [], "", want_lints, [], [], [], [], [], [], [], [], [], [], [], [], false, 0, [], [], "", c_nosub(), [], [], [], [], [], [], [], [], [], [])
+	mut em := Emitter([], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], false, false, false, false, [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], 0, [], 0, [], [], false, "", "", [], [], ast.Ty.TVoid, 0, "", 0, 0, diags, 0, 0, [], [], [], [], [], false, 0, false, "", 0, false, false, [], [], [], [], [], [], [], [], [], [], [], "", want_lints, [], [], [], [], [], [], [], [], [], [], [], [], false, 0, [], [], "", c_nosub(), [], [], [], [], [], [], [], [], [], [])
 
 	# ASSIGNED, NOT PASSED. Every argument above is a zero value, and `layering` asserts that
 	# — it lines the call up with the fields by KIND, which only works while nothing in it
@@ -20878,6 +21365,9 @@ fn c_emit_unit(prog0: ast.File, own0: ast.File, ms: Mods, whole: bool, want_lint
 	hdr = hdr + "#include <stdio.h>\n#include <stdint.h>\n#include <stdbool.h>\n#include <string.h>\n"
 	if em.used_fnptr {
 		hdr = hdr + c_fnptr_typedef()
+	}
+	if em.used_range {
+		hdr = hdr + c_range_typedef()
 	}
 	if rt {
 		hdr = hdr + "#include \"zergrt.h\"\n"

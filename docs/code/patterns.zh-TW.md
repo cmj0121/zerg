@@ -74,10 +74,6 @@ c := connect("example.com", port: 8080, tls: false)  # 只具名覆寫想改的
 cfg := Config(host: "example.com", port: 8080)
 ```
 
-> **[not yet]** 上面兩個呼叫都是具名引數的形式，而具名引數沒做：兩者都是 `E9010`（見
-> [函式與閉包](functions.zh-TW.md)）。今天 struct 是 positional 建構的——`Config("example.com", 8080)`——而有預設
-> 的參數只能從呼叫的尾端省略，所以本節拿來取代流式儀式的那個「一次呼叫的 builder」，正是它目前沒有東西可跑的部分。
-
 若真需要**分階段 / 流式**的 builder（如 query builder）,**copy-by-value 讓 fluent-immutable 天然成立**——每步
 讀 `this`、改一份 copy、回傳,鏈式全程不共享可變狀態:
 

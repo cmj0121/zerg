@@ -290,6 +290,12 @@ of the rules already stated for `list`:
   bridge from an array back into the list family — but the `slice` **method** is **[not yet]** — _E9112
   NotImplemented: the array method `slice`_ (see [Slicing](#slicing--read-only-subranges)).
 
+  > **[not yet]** The SUBSCRIPT spelling is unbuilt for its own reason, and it is a question about the
+  > language rather than about this compiler: `a[1..3]` is _E9117 NotImplemented: a slice of [int; 4] — an
+  > array's length is part of its type, so what a slice of one would BE is not yet specified_. A `list`
+  > answers a range subscript with a fresh `list[T]`; an array's would have a type that depends on its
+  > bounds, and nothing has said what that type is. Copy into a `list` and slice that.
+
 ## Strings & bytes
 
 `str` is a **distinct immutable primitive**, not a collection — it iterates as `rune` and is **not

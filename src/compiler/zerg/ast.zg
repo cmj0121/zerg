@@ -62,6 +62,15 @@ pub enum Ty {
 	# clean and answers the fallback. They were found by reading the callers of `c_is_map`.
 	TSet(Ty)
 
+	# TRange is `x..y` READ AS A VALUE (GRAMMAR#range-expr). It carries its bound type, which
+	# is what decides what `for x in r` binds and what `v in r` compares — a range of `int` and
+	# a range of `rune` are two types, exactly as two `list`s of different elements are.
+	#
+	# It is POD: three scalars laid out inline, so there is no copy and no drop and none of the
+	# container machinery a `list` or a `set` needs. That is why it can be a variant here
+	# without touching a single ownership site.
+	TRange(Ty)
+
 	# TChan carries its element type and its DIRECTION — 0 bidirectional, 1 send-only
 	# (`chan[T]<-`), 2 receive-only (`<-chan[T]`). A direction is a purely compile-time
 	# property: all three are the same `zrt_chan*` at runtime, so it rides as a field
@@ -173,6 +182,17 @@ pub enum Expr {
 	# single node would make every one of those lookups ask "is this callee a name" first,
 	# which is the shape it already has, spelled once instead of six times.
 	ECallVal(Expr, list[Expr])
+
+	# ENamedArg is `name: value` in an ARGUMENT position (GRAMMAR#arg) — the sanctioned way
+	# to skip a defaulted parameter in the middle. It is a wrapper around the value rather
+	# than a second list beside the arguments, so every existing reader of an argument list
+	# keeps its shape, and a named argument that reaches a position where names mean nothing
+	# is refused by name instead of being silently dropped.
+	#
+	# IT DOES NOT SURVIVE THE CALL. The call site reorders its arguments into parameter order
+	# and unwraps them, so nothing downstream of that ever sees one — which is why there is no
+	# type for it and no lowering.
+	ENamedArg(str, Expr)
 	EField(Expr, str)
 
 	# EOptChain is `a?.b` (GRAMMAR group 8): read `.b` when `a` is present, else nil IN
@@ -1408,6 +1428,7 @@ pub fn expr_kind(e: Expr) -> str {
 		Expr.EBinary(oper, a, b) => "binary " + oper
 		Expr.ECall(name, args, _) => "call " + name
 		Expr.ECallVal(callee, args) => "call through " + expr_kind(callee)
+		Expr.ENamedArg(nm, _) => f"named argument {nm}:"
 		Expr.EField(target, name) => "field ." + name
 		Expr.EOptChain(target, name) => "optional chain ?." + name
 		Expr.ETry(x) => "try `?`"
@@ -1465,6 +1486,7 @@ pub fn expr_parts(e: Expr) -> list[Expr] {
 		Expr.EBinary(_, a, b) => [a, b]
 		Expr.ECall(_, args, _) => args
 		Expr.ECallVal(c, args) => expr_parts_cons(c, args)
+		Expr.ENamedArg(_, x) => [x]
 		Expr.EField(x, _) => [x]
 		Expr.EOptChain(x, _) => [x]
 		Expr.ETry(x) => [x]
@@ -1781,6 +1803,7 @@ pub fn ty_eq(a: Ty, b: Ty) -> bool {
 		Ty.TOpt(ae)        => ty_eq_opt(ae, b)
 		Ty.TMap(ak, av)    => ty_eq_map(ak, av, b)
 		Ty.TSet(ae)        => ty_eq_set(ae, b)
+		Ty.TRange(ae)      => ty_eq_range(ae, b)
 		Ty.TChan(ae, ad)   => ty_eq_chan(ae, ad, b)
 		Ty.TEither(al, ar) => ty_eq_either(al, ar, b)
 		Ty.TFn(aps, ar)    => ty_eq_fn(aps, ar, b)
@@ -1904,6 +1927,13 @@ fn ty_eq_set(ae: Ty, b: Ty) -> bool {
 	}
 }
 
+fn ty_eq_range(ae: Ty, b: Ty) -> bool {
+	return match b {
+		Ty.TRange(be) => ty_eq(ae, be)
+		_             => false
+	}
+}
+
 # A DIRECTION is part of a channel's type: `chan[int]<-` and `<-chan[int]` are not
 # interchangeable, and the emitter has its own direction check that says so more precisely.
 fn ty_eq_chan(ae: Ty, ad: int, b: Ty) -> bool {
@@ -1974,6 +2004,7 @@ pub fn ty_name(t: Ty) -> str {
 		Ty.TErr          => "Err"
 		Ty.TMap(k, v)    => f"map[{ty_name(k)}, {ty_name(v)}]"
 		Ty.TSet(e)       => f"set[{ty_name(e)}]"
+		Ty.TRange(e)     => f"range[{ty_name(e)}]"
 
 		# spelled, because a diagnostic that says "a ?" tells the reader nothing — and
 		# `print(a, b)` reaches one, since there is no two-argument `print` and the pair
@@ -2117,6 +2148,7 @@ pub fn ty_owning_kind(t: Ty) -> str {
 		Ty.TList(_)   => "list"
 		Ty.TMap(_, _) => "map"
 		Ty.TSet(_)    => "set"
+		Ty.TRange(_)  => "range"
 		_             => ""
 	}
 }

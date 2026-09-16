@@ -322,12 +322,6 @@ function 還是方法,由它的 **body** 決定:[`GRAMMAR#impl-decl`](../../GRAM
 decorator 的職責——**[not yet]**,_E9079 NotImplemented: the decorator `#[sealed]`_,所以今天只要型別可及,
 literal 就可及。
 
-> **[not yet]** struct literal **只依位置**綁定,所以那個指名欄位的形式並不存在:`P(a: 1, b: 2)` 報
-> _NotImplemented: the named argument `a:` — this compiler binds arguments by position only_
-> （見 [函式與 Closure](../code/functions.zh-TW.md)）。`P(1, 2)` 建出同一個值,所以建構本身不受影響;缺的是這一節
-> 用來陳述自己規則的那個寫法——「它會指名每個欄位」正是「私有欄位是外部指不出的欄位」的推導起點——而下面的
-> `Foo(age: 2, name: base.name)` 寫的是編譯器讀不了的形式。
-
 ### 欄位預設值（Field defaults）
 
 欄位可以宣告**預設值**——`h: int = 4`——而預設值正是讓該欄位的 constructor 參數可以被**省略**的東西：對

@@ -141,11 +141,11 @@ greet("Sam", "Hi", true)     # all positional
   any parameter may instead be given by name, a defaulted one may be omitted, and **once you name an argument
   the rest must be named too** (no positional after a name).
 
-  > **[not yet]** Named arguments are not built at all. `greet("Sam", loud: true)` reports _E9010
-  > NotImplemented: the named argument `loud:` — this compiler binds arguments by position only_, and the
-  > rest of the mechanism goes with it: no skipping a defaulted parameter in the middle, and no ordering
-  > rule left to govern. A call fills its parameters left to right, and a defaulted one can only be dropped
-  > off the **end** of the argument list.
+  Each way of getting the names wrong is refused on its own terms: a name no parameter has is _E4106_,
+  one parameter named twice is _E4107_, a positional argument after a named one is _E4108_, and a parameter
+  the names skipped that has no default to fill it is _E4109_. Outside an argument position there is no
+  parameter to bind to at all, which is _E4105_ — a conversion and a built-in receiver's method both have
+  arguments and neither has parameters to name.
 
 Because a parameter can be selected by name, **the name is part of the function's contract** — renaming it
 breaks callers, exactly as changing a type would. Yet neither defaults nor names ride in the _type_:

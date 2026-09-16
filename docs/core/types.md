@@ -385,13 +385,6 @@ decides its value. Making the literal itself unavailable outside the module is w
 decorator is for — **[not yet]**, _E9079 NotImplemented: the decorator `#[sealed]`_, so today the literal is
 reachable wherever the type is.
 
-> **[not yet]** The struct literal binds **by position only**, so the form that names a field does not exist:
-> `P(a: 1, b: 2)` reports _E9010 NotImplemented: the named argument `a:` — this compiler binds arguments by
-> position only_ (see [Functions & Closures](../code/functions.md)). `P(1, 2)` builds the same value, so construction
-> itself is unaffected; what is missing is the spelling this section states its rules in terms of — "it names
-> every field" is what makes a private field one an outsider cannot name, and `Foo(age: 2, name: base.name)`
-> below is written in a form the compiler does not read.
-
 ### Field defaults
 
 A field may declare a **default** — `h: int = 4` — and the default is what lets that field's

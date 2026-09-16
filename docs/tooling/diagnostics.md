@@ -446,6 +446,15 @@ shipping compiler rather than a part of it (the line
 | `E4099` | `#[derive(Ord)]` with no `Eq` beside it                                                               |
 | `E4100` | `set()` written where no type says what it holds                                                      |
 | `E4101` | a value callee that is not a function                                                                 |
+| `E4102` | `nil` matched against something with no absent side                                                   |
+| `E4103` | a `match` over an optional with no `nil` case                                                         |
+| `E4104` | a `match` over an optional with no present case                                                       |
+| `E4105` | a named argument where nothing has parameters                                                         |
+| `E4106` | a named argument naming no parameter or field                                                         |
+| `E4107` | a named argument naming one already given                                                             |
+| `E4108` | a positional argument after a named one                                                               |
+| `E4109` | names that skip a parameter with no default                                                           |
+| `E4110` | an open-ended range used as a value                                                                   |
 | `E5001` | this entry file declares no `fn main`                                                                 |
 | `E5002` | cannot resolve import `…`, and where it was looked for                                                |
 | `E5007` | `…` is a module this build compiles and this module did not import                                    |
@@ -462,7 +471,6 @@ shipping compiler rather than a part of it (the line
 | `E9001` | a parameterized `…[…]` as …                                                                           |
 | `E9005` | the decorator `#[…]`                                                                                  |
 | `E9009` | calling an optional chain — `p?.m(…)`                                                                 |
-| `E9010` | the named argument `…:`                                                                               |
 | `E9015` | an associated type binding `type … = …` in an `impl`                                                  |
 | `E9025` | `for mut v in …`                                                                                      |
 | `E9028` | an associated type projection `….…`                                                                   |
@@ -488,13 +496,12 @@ shipping compiler rather than a part of it (the line
 | `E9063` | `…` is part of the fixed-width ladder                                                                 |
 | `E9066` | `del …` on a CHANNEL                                                                                  |
 | `E9067` | `…[…](…)` as a constructor                                                                            |
-| `E9068` | `nil` as a `match` pattern                                                                            |
 | `E9069` | … whose value has no type this compiler can name                                                      |
 | `E9070` | `…` re-binds a name a `match` arm's pattern already binds                                             |
 | `E9071` | the default on field `…` reads the field `…`                                                          |
 | `E9075` | a generic `type …[…] = …`                                                                             |
 | `E9076` | a sub-pattern inside a variant payload                                                                |
-| `E9077` | a range used as a value                                                                               |
+| `E9077` | a range of a kind this compiler cannot compare, as a value                                            |
 | `E9078` | `is …` names no type to compare against                                                               |
 | `E9079` | the decorator `#[sealed]` — reserved                                                                  |
 | `E9097` | main(args) in a program that uses concurrency                                                         |
@@ -508,6 +515,7 @@ shipping compiler rather than a part of it (the line
 | `E9110` | a NAMED rest in a list pattern                                                                        |
 | `E9111` | an array length reached through an import                                                             |
 | `E9112` | the array method `…`                                                                                  |
+| `E9117` | a slice of an array — its length is part of its type                                                  |
 
 They are reported the moment a file is **read**, before its imports are scanned — scanning
 them parses, and a parser handed unreadable text can only say something untrue about it.
@@ -602,6 +610,13 @@ imports and its operations run.
 built. A type's arguments are carried inside its name and substitution cannot see through one — which was
 true, and what was missing was the table saying what an application is made of. With the table, a parameter
 passes through an application.
+
+**Three retired the day their forms were built (#173).** `E9010` refused a named argument, and it is the
+whole of GRAMMAR#arg now: a name picks a parameter in a call and a field in a construction, which is what
+lets a defaulted one in the MIDDLE be skipped. `E9068` refused `nil` as a pattern, and `nil` names an
+optional's absent side now — with the arm beside it binding what the optional HOLDS, which is what makes
+the pair exhaustive. `E9077` did not retire and NARROWED: a range is a value, and what is left under that
+number is a range whose bounds this compiler cannot compare.
 
 **One retired because the form it named was BUILT.** `E9060` said a type carries one `Into`. It carried
 one because a method was keyed by its NAME; the key now folds in the parameterized spec its `impl` names,
@@ -711,6 +726,8 @@ name now is the prelude rule (`E2061`), which is about the name rather than abou
 | `E9048` | —       | the form was built: a spec names a type, and a box dispatches          |
 | `E9055` | —       | the form was built: `Eq` derives over a payload enum's tag and payload |
 | `E9064` | —       | the form was built: `set[T]`, its constructor and its members          |
+| `E9010` | —       | the form was built: a named argument, in a call and a construction     |
+| `E9068` | —       | the form was built: `nil` names an optional's absent side              |
 
 **One of them moved nowhere**, and it is the only row whose second column is empty. `E3047`
 reported a prefix operator on a `type X = Y` — _operator `not` has no meaning on `Flag`_ — on

@@ -253,6 +253,11 @@ row := [b'\0'; WIDTH]           # WIDTH 是 top-level const——在裸 := 下�
   元素上的 `derive(Eq)`。`a.slice(p, q)` 意圖產出**唯讀 `list[T]`** view——從陣列橋回 list 家族的 COW 通道——但
   `slice` 這個 **method** 是 **[not yet]**——_E9112 NotImplemented: the array method `slice`_（見 [切片](#切片唯讀子區間)）。
 
+  > **[not yet]** **下標**那個寫法未建置的理由是它自己的,而且那是一個關於語言、而非關於這個編譯器的問題:
+  > `a[1..3]` 是 _E9117 NotImplemented: a slice of [int; 4] — an array's length is part of its type, so what
+  > a slice of one would BE is not yet specified_。一個 `list` 用一個全新的 `list[T]` 回答 range 下標;一個
+  > array 的答案會是一個依賴邊界的型別,而還沒有任何地方說過那是什麼型別。先複製進 `list` 再切。
+
 ## 字串與位元組
 
 `str` 是**獨立的 immutable primitive**、不是 collection——它以 `rune` 走訪、且**不可索引**。透過

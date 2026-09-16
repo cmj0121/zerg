@@ -83,11 +83,6 @@ For plain data, **construction is a call** with named fields, which does the sam
 cfg := Config(host: "example.com", port: 8080)
 ```
 
-> **[not yet]** Both calls above are the named-argument form, and named arguments are not built: each is
-> `E9010` (see [Functions & Closures](functions.md)). A struct is built positionally today —
-> `Config("example.com", 8080)` — and a defaulted parameter can only be dropped off the end of a call, so the
-> one-call builder this section recommends over the fluent ceremony is the part of it with nothing to run on.
-
 When you genuinely need a **staged / fluent** builder (e.g. a query builder), **copy-by-value makes a
 fluent-immutable builder fall out** — each step reads `this`, modifies a copy, and returns it, so the chain
 never shares mutable state:

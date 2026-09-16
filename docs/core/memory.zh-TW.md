@@ -48,10 +48,6 @@ copy-by-value 是語意；編譯器會在安全時省略複製：
 
 ---
 
-> **[not yet]** 下面〈複製語意 vs 參照語意〉用到的那個 `Node`——它正是唯一能觀察到共享變動之處——寫的是
-> **具名引數**(`Node(value: 1, …)`),而那些是 `E9010`:這裡的引數依位置綁定(見[型別](types.zh-TW.md))。
-> 遞迴 **`struct`** 本身宣告得出來也建得起來,裝箱與 refcount 共享完全如本篇所述,所以上面那條界限經由它是到得了的。
-
 **一個 `struct` 的佈局就是它的宣告。** 欄位照**宣告序**排、值 **inline** 嵌在它的擁有者裡（除了上述遞迴 auto-boxing
 之外沒有間接），而且編譯器**絕不重排**——所以一個 Zerg `struct` _就是_ 一個 C `struct`、field-for-field、自然對齊
 配標準 padding。這是 transpile 到 C 掉出來的，也正是為什麼 struct **預設就 FFI-ready**（見 [FFI](../runtime/ffi.zh-TW.md)）：

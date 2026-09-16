@@ -907,12 +907,10 @@ production, not the one that first mentions it.
 | 4     | `E9009` | an optional method call — `p?.m(…)`                                                     |
 | 4     | `E2071` | a range with no **lower** bound — `xs[..n]`, and the list pattern `[a, ..rest]` with it |
 | 4     | `E9050` | an **open-ended** range where a bound is needed — `xs[a..]`, `for i in n..`             |
-| 4     | `E9077` | a range as a **value** — `r := 0..3`; it is a `for … in` iterable and nothing else      |
+| 4     | `E9077` | a range **of a type this compiler cannot compare** as a value — `"a".."z"`              |
 | 4     | `E2035` | postfix type arguments with no call after them — `map[str, int]`, `f[int]`              |
 | 4     | `E9067` | `map[K, V](…)` as a constructor — an empty map is the literal `{:}`                     |
-| 5     | `E9010` | a named argument `f(b: 1)` — arguments bind by position, in a call and a construction   |
 | 5     | `E9034` | a default on a **closure** parameter                                                    |
-| 6     | `E9068` | `nil` as a pattern                                                                      |
 | 6     | `E9041` | a `match` arm whose body is a reassignment or a send — those need a block body          |
 | 6     | `E9025` | `for mut v in …` — the loop binding that writes each edited element back                |
 | 6     | `E9032` | an `if` **expression** with a binding head, or with a branch of more than one statement |

@@ -59,12 +59,6 @@ live allocations as five rounds do (`make mem-check`).
 
 ---
 
-> **[not yet]** The `Node` used below — in Copy vs reference semantics, where it is the one place a shared
-> mutation is observable — is written with **named arguments** (`Node(value: 1, …)`), and those are `E9010`:
-> arguments bind by position here (see [Types](types.md)). The recursive **`struct`** itself declares and
-> builds, boxing and refcount-sharing exactly as this reference describes, so the bound above is reachable
-> through one.
-
 **A `struct`'s layout is its declaration.** Fields sit in **declaration order**, the value is laid out
 **inline** in its owner (no indirection beyond the recursive auto-boxing above), and the compiler **never
 reorders** them — so a Zerg `struct` _is_ a C `struct`, field for field, at natural alignment with standard

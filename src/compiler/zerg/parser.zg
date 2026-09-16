@@ -4227,6 +4227,16 @@ fn parse_unary(mut &p: Parser) -> ast.Expr {
 # index_base_name / index_type_name take an `EIndex` apart for the one shape that is not a
 # subscript: `id[int]` as the callee of a call. Both answer "" for anything else, which is
 # what leaves every other indexed callee refused by name.
+# is_opt_chain is whether a callee came from `?.` — the one callee shape that is still
+# refused, because what it needs is not a way to call an expression but a CONDITIONAL call
+# whose result is an optional (GRAMMAR group 8).
+fn is_opt_chain(e: ast.Expr) -> bool {
+	return match e {
+		Expr.EOptChain(_, _) => true
+		_ => false
+	}
+}
+
 fn index_base_name(e: ast.Expr) -> str {
 	return match e {
 		Expr.EIndex(b, _) => ident_name(b)
@@ -4366,7 +4376,19 @@ fn parse_postfix(mut &p: Parser) -> ast.Expr {
 					p_written_type_args(p, base, tn)
 				}
 			}
-			raise p_diag(p, rule.Rule.NotYetCallee, f"NotImplemented: calling {ast.expr_kind(e)} — a callee is a plain name in this compiler, so `fs[0](…)` (a function value in a container) and `p?.m(…)` (an optional method call) are unbuilt (GRAMMAR#postfix)") if name == ""
+
+			# A CALLEE THAT IS NOT A NAME IS AN EXPRESSION, and GRAMMAR#postfix already says
+			# so: `(` is a postfix operator on whatever precedes it. `fs[0](1)` calls the
+			# element, and a lambda called where it is written calls the lambda.
+			#
+			# `p?.m(…)` IS THE ONE THAT STAYS REFUSED, and it is not this shape wearing a
+			# different spelling: `?.` answers an OPTIONAL — nil in place when the operand is
+			# absent — so the call has to be conditional and its result has to be an optional
+			# too. That is group 8's rule and not a callee's, which is why `E9009` narrows to
+			# it rather than retiring.
+			return ast.Expr.ECallVal(e, parse_call_args(p)) if name == "" and not is_opt_chain(e)
+
+			raise p_diag(p, rule.Rule.NotYetCallee, f"NotImplemented: calling {ast.expr_kind(e)} — an optional method call answers an optional, and this compiler does not build one; `x?.m()` is unbuilt while `fs[0](…)` and a lambda called where it is written are not (GRAMMAR#postfix)") if name == ""
 
 			args := parse_call_args(p)
 			if is_conv(name) {

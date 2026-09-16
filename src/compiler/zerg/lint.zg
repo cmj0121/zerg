@@ -624,6 +624,7 @@ fn lint_opt_expr(e: ast.Expr, w: LWhere, ret_opt: bool, mut &out: list[Finding])
 		Expr.EOptChain(t, nm) => lint_opt_expr(t, w, ret_opt, out)
 		Expr.ETry(x) => lint_opt_expr(x, w, ret_opt, out)
 		Expr.ECall(nm, args, _) => lint_opt_args(args, w, ret_opt, out)
+		Expr.ECallVal(c, args) => lint_opt_args(ast.expr_parts(e), w, ret_opt, out)
 		Expr.EMethod(t, nm, args) => lint_opt_args(args, w, ret_opt, out)
 		_ => lint_skip()
 	}
@@ -1324,10 +1325,16 @@ fn walk_raise(x: ast.Expr, has_cause: bool, cause: ast.Expr, mut &ids: list[str]
 
 fn walk_expr(e: ast.Expr, mut &ids: list[str], mut &calls: list[str], mut &ns: list[str]) {
 	match e {
-		Expr.EIdent(name) => ids.append(name)
-		Expr.EUnary(oper, x) => walk_expr(x, ids, calls, ns)
-		Expr.EBinary(oper, a, b) => walk_pair(a, b, ids, calls, ns)
+		Expr.EIdent(name)         => ids.append(name)
+		Expr.EUnary(oper, x)      => walk_expr(x, ids, calls, ns)
+		Expr.EBinary(oper, a, b)  => walk_pair(a, b, ids, calls, ns)
 		Expr.ECall(name, args, _) => walk_call(name, args, ids, calls, ns)
+
+		# THE CALLEE IS WALKED LIKE ANY OTHER OPERAND, and it is not a `calls` entry: a name
+		# reached here is the VALUE `fs`, not the function that ends up being called, which
+		# this walk has no way to know. Left to the `_` arm below, an import or a binding used
+		# only inside `fs[0](x)` read as unused and `L101` retired it.
+		Expr.ECallVal(callee, args) => walk_all(ast.expr_parts(e), ids, calls, ns)
 		Expr.EField(target, name) => walk_expr(target, ids, calls, ns)
 		Expr.EOptChain(target, name) => walk_expr(target, ids, calls, ns)
 		Expr.ETry(x) => walk_expr(x, ids, calls, ns)

@@ -160,6 +160,19 @@ pub enum Expr {
 	# whose subscript is a single expression, so `id[int, str](…)` has no path in — the list
 	# is the shape the field will need, not the shape it can currently be given.
 	ECall(str, list[Expr], list[Ty])
+
+	# ECallVal is a call whose CALLEE IS AN EXPRESSION rather than a name — `fs[0](1)`, a
+	# lambda called where it is written, a field holding a function reached through anything
+	# but a plain `.`. GRAMMAR#postfix makes `(` a postfix operator on whatever precedes it,
+	# so this is the general form and `ECall` is the case where that expression happens to be
+	# a name.
+	#
+	# THEY ARE TWO NODES AND NOT ONE, because the name carries what a name can: `ECall` has to
+	# reach a declared function, an intrinsic, a constructor, a conversion and an error
+	# constructor, none of which is a VALUE and none of which an expression can produce. A
+	# single node would make every one of those lookups ask "is this callee a name" first,
+	# which is the shape it already has, spelled once instead of six times.
+	ECallVal(Expr, list[Expr])
 	EField(Expr, str)
 
 	# EOptChain is `a?.b` (GRAMMAR group 8): read `.b` when `a` is present, else nil IN
@@ -1394,6 +1407,7 @@ pub fn expr_kind(e: Expr) -> str {
 		Expr.EUnary(oper, x) => "unary " + oper
 		Expr.EBinary(oper, a, b) => "binary " + oper
 		Expr.ECall(name, args, _) => "call " + name
+		Expr.ECallVal(callee, args) => "call through " + expr_kind(callee)
 		Expr.EField(target, name) => "field ." + name
 		Expr.EOptChain(target, name) => "optional chain ?." + name
 		Expr.ETry(x) => "try `?`"
@@ -1450,6 +1464,7 @@ pub fn expr_parts(e: Expr) -> list[Expr] {
 		Expr.EUnary(_, x) => [x]
 		Expr.EBinary(_, a, b) => [a, b]
 		Expr.ECall(_, args, _) => args
+		Expr.ECallVal(c, args) => expr_parts_cons(c, args)
 		Expr.EField(x, _) => [x]
 		Expr.EOptChain(x, _) => [x]
 		Expr.ETry(x) => [x]

@@ -557,6 +557,7 @@ fn subst_expr(su: TySubst, e: ast.Expr) -> ast.Expr {
 		Expr.EUnary(o, x) => ast.Expr.EUnary(o, subst_expr(su, x))
 		Expr.EBinary(o, a, b) => ast.Expr.EBinary(o, subst_expr(su, a), subst_expr(su, b))
 		Expr.ECall(nm, xs, ts) => ast.Expr.ECall(nm, subst_exprs(su, xs), subst_tys(su, ts))
+		Expr.ECallVal(c, xs) => ast.Expr.ECallVal(subst_expr(su, c), subst_exprs(su, xs))
 		Expr.EField(x, f) => ast.Expr.EField(subst_expr(su, x), f)
 		Expr.EOptChain(x, f) => ast.Expr.EOptChain(subst_expr(su, x), f)
 		Expr.ETry(x) => ast.Expr.ETry(subst_expr(su, x))

@@ -5590,9 +5590,13 @@ EOF
 # --- bad paths, sweep three: a crash and a silent import --------------------------------
 
 # THE COMPILER SEGFAULTED on this one-line program. The cycle detector catches an indirect
-# cycle (`A` holding `B` holding `A`) and one through a carrier (`p: P?`), and skipped the
-# simplest case of all — a field of the struct's own type — so the copy helper recursed until
-# the stack ran out. A compiler that dies says nothing at all, about anything.
+# cycle (`A` holding `B` holding `A`) and skipped the simplest case of all — a field of the
+# struct's own type — so the copy helper recursed until the stack ran out. A compiler that
+# dies says nothing at all, about anything.
+#
+# A CYCLE THROUGH A CARRIER IS NO LONGER ONE OF THESE (#171). `p: P?` is a linked list, and
+# the sweep breaks it at the carrier rather than refusing it — `E4026` is now the cycle with
+# no carrier on it, which is what this case is and why it still stands.
 reject struct-holding-itself-by-value E4026 <<'EOF'
 struct P {
 	pub p: P

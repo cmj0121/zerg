@@ -1066,7 +1066,7 @@ fn f(n: int) -> int {
 fn main() { print f(1) }
 EOF
 
-expect "$ZERG" struct-cycle-by-value E4026 <<'EOF'
+expect "$ZERG" struct-cycle-by-value E4026 'no edge of it is a carrier' <<'EOF'
 struct A {
 	pub b: B
 }
@@ -1077,6 +1077,11 @@ struct B {
 
 fn main() { print 1 }
 EOF
+
+# AND THE SAME CYCLE WITH A CARRIER ON IT IS NOT REFUSED — it is a linked list, and #171
+# builds it. There is no `expect` for that here, because this file is the refusals; what
+# holds the positive half is `codegen/struct_self_recursive` in the corpus, and the two
+# together are what make `E4026` mean the narrower thing rather than merely say it.
 
 # A NAME NOTHING BINDS is the commonest mistake anyone makes, and it used to be spelled
 # `zg_<n>` and handed to cc. So did a call to a function nothing declares — which is also

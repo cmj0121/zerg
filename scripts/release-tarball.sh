@@ -28,6 +28,8 @@ cd "$ROOT" || exit 2
 
 # shellcheck source=scripts/lib/runcmp.sh
 . "$ROOT/scripts/lib/runcmp.sh"
+# shellcheck source=scripts/lib/sha256.sh
+. "$ROOT/scripts/lib/sha256.sh"
 
 runcmp_self_test || exit 1
 
@@ -111,18 +113,14 @@ tar czf "$DIST/$name.tar.gz" -C "$work" "$name" || {
 # AND ITS CHECKSUM, in the file every platform's tooling already reads. One line per artifact,
 # appended rather than written whole: the three platforms are built on three runners and each
 # knows only its own, so the release job collects them and `sha256sum -c SHA256SUMS` verifies
-# whichever ones a person downloaded.
-#
-# TWO SPELLINGS OF THE SAME TOOL. GNU coreutils has `sha256sum`; macOS ships `shasum -a 256`.
-# Both print `<hash>  <name>`, which is the format `-c` reads on either.
-if command -v sha256sum >/dev/null 2>&1; then
-	sum=$(cd "$DIST" && sha256sum "$name.tar.gz")
-elif command -v shasum >/dev/null 2>&1; then
-	sum=$(cd "$DIST" && shasum -a 256 "$name.tar.gz")
-else
-	echo "release-tarball: neither sha256sum nor shasum is on this machine — the artifact has no checksum" >&2
+# whichever ones a person downloaded. `scripts/lib/sha256.sh` knows which of the two spellings
+# of that tool this machine has, and `release-sums.sh` reads the lines back through the same
+# file.
+if ! sum=$(sha256_sum_file "$DIST" "$name.tar.gz"); then
+	echo "release-tarball: the artifact has no checksum" >&2
 	exit 1
 fi
+
 printf '%s\n' "$sum" >>"$DIST/SHA256SUMS"
 
 size=$(wc -c <"$DIST/$name.tar.gz" | tr -d ' ')

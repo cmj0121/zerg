@@ -26,7 +26,7 @@
 	counterexamples behaviour version-check cache-key-check error-codes-check seed-gaps lint-check \
 	deviation-check marker-codes \
 	chapter-codes method-gaps \
-	doc-check stmt-walk entry-path examples-index mem-peak release-notes
+	doc-check stmt-walk entry-path examples-index mem-peak release-notes release-sums
 
 # The unit suites each subdirectory keeps — the Go seed's, the runtime's C suite — plus the
 # examples corpus. It answered to `test` until the board took that name, and `suites` is what
@@ -412,7 +412,7 @@ gates:                          # every gate is on the board, and the board is r
 	./scripts/gates-check.sh
 
 # `version-check` sits straight after `build` because it reads bin/ rather than filling it.
-LINUX_GATES ?= build version-check suites test-runner stdlib-test examples corpus desugar lsp editor-align treesitter install-check refuse reject oracle reject-fuzz check-equal fmt-corpus fmt-tokens fmt-roundtrip fmt-self lint lint-check doc-check fixpoint docs-links docs-mirror docs-repeat docs-zerg docs-refused generic-walks grammar-cites grammar-cited grammar-keywords grammar-mirror refusal-cites layering stmt-walk dead-code entry-path examples-index conformance productions counterexamples behaviour error-codes-check seed-gaps deviation-check marker-codes chapter-codes method-gaps build-deps-check cache-key-check sha256 gates mem-check mem-peak release-notes sanitize-conc sanitize-corpus
+LINUX_GATES ?= build version-check suites test-runner stdlib-test examples corpus desugar lsp editor-align treesitter install-check refuse reject oracle reject-fuzz check-equal fmt-corpus fmt-tokens fmt-roundtrip fmt-self lint lint-check doc-check fixpoint docs-links docs-mirror docs-repeat docs-zerg docs-refused generic-walks grammar-cites grammar-cited grammar-keywords grammar-mirror refusal-cites layering stmt-walk dead-code entry-path examples-index conformance productions counterexamples behaviour error-codes-check seed-gaps deviation-check marker-codes chapter-codes method-gaps build-deps-check cache-key-check sha256 gates mem-check mem-peak release-notes release-sums sanitize-conc sanitize-corpus
 
 # The dead-code questions `zerg lint` cannot be asked, because neither is a question about one
 # program: a `pub` function of the COMPILER that nothing in the compiler calls, and a script
@@ -554,6 +554,22 @@ mem-peak:                       # the compiler emits its own C under a memory ce
 release-notes:                  # the changelog has a section for the version being built
 	@./scripts/release-notes.sh >/dev/null
 	@echo "release-notes: CHANGELOG.md has a section for $$(cat VERSION), and the notes it links are there"
+
+# AND THE STEP THAT ASSEMBLES THE RELEASE, which is the other thing that runs once a year. Three
+# runners each write a `SHA256SUMS` beside their own tarball, and the publish job used to collect
+# them with `merge-multiple: true` — which flattens three directories into one, where three files
+# of that NAME overwrite each other. The published file named one platform, a different one each
+# release, and `sha256sum -c SHA256SUMS` passed beside it because it verifies the tarball the file
+# names: a true check over a population of one (#167).
+#
+# `make release` could not see it. It builds and smoke-tests ONE tarball on ONE machine, so the
+# step where three become one had no gate — the collision needs three artifacts at once, which
+# happens only on a tag. The script below makes three out of `dd` and a tar and runs the real
+# assembly on them, in both directions: the fixed layout has to pass, and the layout that shipped
+# has to be refused.
+release-sums:                   # the release's SHA256SUMS covers every tarball it publishes
+	./scripts/release-sums-check.sh
+
 
 # `zerg build src/…/zergc.zg` and `zerg build /abs/…/zergc.zg` are one program, and nothing
 # about it changed between the two commands — only the string a person typed. The C used to

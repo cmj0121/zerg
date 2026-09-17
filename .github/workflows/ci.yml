@@ -149,6 +149,13 @@ jobs:
       - name: The changelog has a section for the version being built
         run: make release-notes
 
+      # The other step that runs once a year: the one where three runners' artifacts become
+      # one release. It shipped a SHA256SUMS naming a single platform three times, with a
+      # passing `sha256sum -c` beside it, because nothing ever assembled three tarballs
+      # anywhere but on a tag. This assembles three made-up ones on every push.
+      - name: The release's SHA256SUMS covers every tarball it publishes
+        run: make release-sums
+
       # A code is an identity, and an identity nothing checks is a number. This holds
       # the compiler's codes, the gates that assert them, and the catalogue a reader
       # looks them up in to being one set.

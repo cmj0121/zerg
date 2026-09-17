@@ -26,7 +26,7 @@
 	counterexamples behaviour version-check cache-key-check error-codes-check seed-gaps lint-check \
 	deviation-check marker-codes \
 	chapter-codes method-gaps \
-	doc-check stmt-walk entry-path examples-index mem-peak release-notes release-sums
+	doc-check stmt-walk entry-path examples-index mem-peak release-notes release-sums formula
 
 # The unit suites each subdirectory keeps — the Go seed's, the runtime's C suite — plus the
 # examples corpus. It answered to `test` until the board took that name, and `suites` is what
@@ -412,7 +412,7 @@ gates:                          # every gate is on the board, and the board is r
 	./scripts/gates-check.sh
 
 # `version-check` sits straight after `build` because it reads bin/ rather than filling it.
-LINUX_GATES ?= build version-check suites test-runner stdlib-test examples corpus desugar lsp editor-align treesitter install-check refuse reject oracle reject-fuzz check-equal fmt-corpus fmt-tokens fmt-roundtrip fmt-self lint lint-check doc-check fixpoint docs-links docs-mirror docs-repeat docs-zerg docs-refused generic-walks grammar-cites grammar-cited grammar-keywords grammar-mirror refusal-cites layering stmt-walk dead-code entry-path examples-index conformance productions counterexamples behaviour error-codes-check seed-gaps deviation-check marker-codes chapter-codes method-gaps build-deps-check cache-key-check sha256 gates mem-check mem-peak release-notes release-sums sanitize-conc sanitize-corpus
+LINUX_GATES ?= build version-check suites test-runner stdlib-test examples corpus desugar lsp editor-align treesitter install-check refuse reject oracle reject-fuzz check-equal fmt-corpus fmt-tokens fmt-roundtrip fmt-self lint lint-check doc-check fixpoint docs-links docs-mirror docs-repeat docs-zerg docs-refused generic-walks grammar-cites grammar-cited grammar-keywords grammar-mirror refusal-cites layering stmt-walk dead-code entry-path examples-index conformance productions counterexamples behaviour error-codes-check seed-gaps deviation-check marker-codes chapter-codes method-gaps build-deps-check cache-key-check sha256 gates mem-check mem-peak release-notes release-sums formula sanitize-conc sanitize-corpus
 
 # The dead-code questions `zerg lint` cannot be asked, because neither is a question about one
 # program: a `pub` function of the COMPILER that nothing in the compiler calls, and a script
@@ -570,6 +570,18 @@ release-notes:                  # the changelog has a section for the version be
 release-sums:                   # the release's SHA256SUMS covers every tarball it publishes
 	./scripts/release-sums-check.sh
 
+# AND THE OTHER WAY IN. The release publishes three native tarballs and none of them is
+# darwin/x86_64, so `Formula/zerg.rb` is not a convenience beside them — it is the platform they
+# do not reach, and it builds from source for exactly that reason. Its own comment says updating
+# its two lines is part of cutting a release; that instruction was followed once, and 0.2.0,
+# 0.3.0 and 0.4.0 all shipped with the formula still installing v0.1.0.
+#
+# What is asserted is the weakest thing that would have caught it. A source tarball has no
+# sha256 until its tag exists, so the formula is REQUIRED to be one release behind between the
+# version bump and the tag — holding it to VERSION would paint that window red for a rule the
+# window cannot obey. One release of lag is allowed here; two is not.
+formula:                        # the Homebrew formula installs a version this project released
+	./scripts/formula-check.sh
 
 # `zerg build src/…/zergc.zg` and `zerg build /abs/…/zergc.zg` are one program, and nothing
 # about it changed between the two commands — only the string a person typed. The C used to

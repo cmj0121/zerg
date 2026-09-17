@@ -9,11 +9,17 @@
 # IT NAMES THE LAST RELEASED VERSION, never the working tree: a source tarball has no sha256
 # until its tag exists. Updating the two lines below is part of cutting a release, and a formula
 # that pointed at an unreleased version would install something nobody can download.
+#
+# WHICH IS AN INSTRUCTION, and it was followed once. 0.2.0, 0.3.0 and 0.4.0 all shipped with
+# these two lines still naming v0.1.0, so `brew install` built a compiler from before generics
+# or specs existed — for three releases, with nothing in the tree able to say so. `make formula`
+# is the gate that can: it holds the version below to one of the two newest the changelog has a
+# section for, which is the most that can be asserted while the sha has to wait for the tag.
 class Zerg < Formula
   desc "Compiled language that translates to C, self-hosted and dependency-free"
   homepage "https://github.com/cmj0121/zerg"
-  url "https://github.com/cmj0121/zerg/archive/refs/tags/v0.1.0.tar.gz"
-  sha256 "c8c73cadd33ad1f44fa30398e79b83263bb971574ecebf8bdc945d4f26641076"
+  url "https://github.com/cmj0121/zerg/archive/refs/tags/v0.4.0.tar.gz"
+  sha256 "75ba2f4230a47602b823eac8c4c0bb0a059d4ca7084da8499ffecde3ee1bc974"
 
   # The layers are the repository's, and LICENSE says why they differ: what ends up in YOUR
   # binary is permissive, and what produced it is not.

@@ -847,19 +847,16 @@ fn parse_base_type(mut &p: Parser) -> ast.Ty {
 		return ast.Ty.TArr(elem, key)
 	}
 
-	# `unsafe fn(…) -> R` — a FUNCTION TYPE carrying the unsafe marker (GRAMMAR#fn-type is
-	# `'unsafe'? 'fn' '(' param-type-list? ')' ret-type?`). `unsafe` is a keyword, so it never
-	# reached the name below and every type position reported the token after it instead: a
-	# binding said ``expected `=`, found `fn` ``, a parameter said ``expected `,`, found `fn` ``
-	# — two tokens, neither of them the form, for a production GRAMMAR derives in full.
-	#
-	# `unsafe fn(…)` — a function TYPE carrying the marker (GRAMMAR#fn-type). The marker is
-	# part of the TYPE, so `unsafe fn() -> int` and `fn() -> int` are two types and a value of
-	# one is not a value of the other: that is what keeps a plain `fn` type from being a way to
-	# launder an unsafe function into safe code.
+	# `unsafe` IS NOT PART OF A TYPE ANY MORE (#182). GRAMMAR#fn-type is `'fn' '(' … ')'`
+	# and nothing else: a type says what a value IS, and `unsafe` says who vouches. The marker
+	# carried in the type existed so that a HELD function could not be laundered into safe
+	# code, and what replaces it is that the thing needing laundering cannot leave the group —
+	# a `fn` declared in one is not nameable outside it, and a `ptr` may not be named outside
+	# it at all.
 	if p_at(p, token.Kind.Unsafe) {
+		u := cur(p)
 		p_advance(p)
-		return ast.Ty.TUnsafe(parse_base_type(p))
+		raise p_diag_at(p, u.line, u.col, rule.Rule.UnsafeIsNotAType, "`unsafe` is not part of a type — a type says what a value IS and `unsafe` says who vouches (GRAMMAR#fn-type). What a caller may not reach is kept inside a module-level `unsafe { … }` group rather than marked on its way out")
 	}
 
 	if p_at(p, token.Kind.LArrow) {
@@ -1419,13 +1416,12 @@ pub fn parse_at(src: str, path: str) -> ast.File {
 			# every use answered `undefined name` about a name the module plainly declares.
 			consts.append(p_top_binding(p, "", false, false, is_pub, in_unsafe, t.line, t.col))
 		} else if p_at(p, token.Kind.Unsafe) and (peek_kind(p, 1) == token.Kind.Fn or (peek_kind(p, 1) == token.Kind.Mut and peek_kind(p, 2) == token.Kind.Fn)) {
-			# A STANDALONE `unsafe fn` — GRAMMAR#fn-decl spells it (`'pub'? 'unsafe'?
-			# 'mut'? 'fn'`), and it IS a declaration. What the marker does is what the
-			# module-level GROUP's marker does: it records `in_unsafe` on the declaration,
-			# and the caller rule (E3083) reads that — so the single-function form and the
-			# group form are one rule with two spellings rather than two rules.
-			p_advance(p)
-			fns.append(parse_fn(p, is_pub, "", false, true, false, false))
+			# THERE IS NO STANDALONE `unsafe fn` (#182). GRAMMAR#fn-decl is
+			# `'pub'? 'mut'? 'fn'`: the marker propagated the obligation OUTWARD, which is
+			# what made a caller have to know whether the thing it calls is unsafe. The
+			# GROUP is the only unsafe context a declaration sits in, and what it buys is
+			# that a caller never has to ask — what the group holds cannot reach it.
+			p_no_unsafe_fn(p, cur(p))
 		} else if p_at(p, token.Kind.Unsafe) and peek_kind(p, 1) == token.Kind.LBrace {
 			# a module-level `unsafe { … }` group opens. Every item inside goes through
 			# the arms above exactly as it would outside — the group is a CONTEXT, not a
@@ -2799,8 +2795,10 @@ fn parse_impl(mut &p: Parser, mut &fns: list[ast.FnDecl], mut &impls: list[ast.I
 		# it is reporting.
 		mut fn_unsafe := in_unsafe
 		if p_at(p, token.Kind.Unsafe) and (peek_kind(p, 1) == token.Kind.Fn or (peek_kind(p, 1) == token.Kind.Mut and peek_kind(p, 2) == token.Kind.Fn)) {
-			p_advance(p)
-			fn_unsafe = true
+			# AND NOT ON A METHOD EITHER (#182). An `impl` item is a `fn-decl`, and
+			# `fn-decl` has no `'unsafe'?` any more — so a method needing unsafety
+			# discharges it in the body and supplies the signature its caller reads.
+			p_no_unsafe_fn(p, cur(p))
 		}
 		mut recv_mut := false
 		if p_at(p, token.Kind.Mut) {
@@ -4245,6 +4243,14 @@ fn parse_unary(mut &p: Parser) -> ast.Expr {
 # is_opt_chain is whether a callee came from `?.` — the one callee shape that is still
 # refused, because what it needs is not a way to call an expression but a CONDITIONAL call
 # whose result is an optional (GRAMMAR group 8).
+# p_no_unsafe_fn is `unsafe fn` wherever it is written — at the top level and on an `impl`
+# item, which are the two positions GRAMMAR#fn-decl reaches. ONE raise site, because it is one
+# finding: a marker on a declaration, in a language whose only unsafe context for one is the
+# group.
+fn p_no_unsafe_fn(mut &p: Parser, u: token.Token) {
+	raise p_diag_at(p, u.line, u.col, rule.Rule.UnsafeFnRetired, "there is no `unsafe fn` — a declaration is unsafe by sitting inside a module-level `unsafe {{ … }}` group, which is the whole of the marker (GRAMMAR#fn-decl); wrap this declaration in one, or discharge what it needs with `unsafe {{ … }}` in the body and keep the safe signature")
+}
+
 fn is_opt_chain(e: ast.Expr) -> bool {
 	return match e {
 		Expr.EOptChain(_, _) => true

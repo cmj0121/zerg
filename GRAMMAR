@@ -357,9 +357,9 @@ type-name    ::= identifier            # a type, a spec, or an enum's name (grou
 # mutable reference (below). A parameter may carry a default; a call fills parameters
 # positionally, then by name. ('type' is defined in group 7 (Types); referenced here.)
 
-fn-decl      ::= 'pub'? 'unsafe'? 'mut'? 'fn' identifier generics? '(' param-list? ')' ret-type? block
+fn-decl      ::= 'pub'? 'mut'? 'fn' identifier generics? '(' param-list? ')' ret-type? block
 fn-expr      ::= 'fn' '(' closure-param-list? ')' ret-type? block  # anonymous / closure — never generic or unsafe
-fn-type      ::= 'unsafe'? 'fn' '(' param-type-list? ')' ret-type?   # a function's type; 'unsafe fn' for a ptr
+fn-type      ::= 'fn' '(' param-type-list? ')' ret-type?             # a function's type
 
 # 'mut fn' marks a METHOD that mutates its implicit receiver 'this' in place — exactly the
 # 'mut &this' case. It is meaningful only on a method (a 'fn' in an 'impl' or 'spec'); the
@@ -682,7 +682,7 @@ variant      ::= identifier ( '(' type ( ',' type )* ')' )? ( '=' const-expr )? 
 # pinned by coherence), and a per-impl constant is an ordinary TYPE CONSTANT (a 'val-bind' in
 # the impl, group 7) — which no spec demands and none can require.
 spec-member  ::= fn-sig | fn-decl               # a required method, or a provided one
-fn-sig       ::= 'unsafe'? 'mut'? 'fn' identifier generics? '(' param-list? ')' ret-type?
+fn-sig       ::= 'mut'? 'fn' identifier generics? '(' param-list? ')' ret-type?
 
 # ==================================================================================
 # 8. Null-safety & Errors
@@ -896,11 +896,17 @@ del-stmt     ::= 'del' identifier        # revoke a name's access now
 # body it is a block-EXPRESSION inside which the raw operations below are legal (everywhere else a
 # compile error) and whose bindings are block-scoped like any block; it yields the block's value.
 # At MODULE (declaration) level the SAME 'unsafe { … }' is a DECLARATION GROUP: every item inside is
-# unsafe — a 'fn' is an unsafe fn (unsafe throughout its body, callable only from unsafe), and a 'mut'
+# unsafe — a 'fn' is unsafe (unsafe throughout its body, callable only from unsafe), and a 'mut'
 # binding is a module-PRIVATE mutable GLOBAL (persistent — the group scopes names to the MODULE, it is
-# not a fresh value scope). So a page table and the functions that touch it group in one block. An
-# 'unsafe fn' (group 5) is the single-function form outside a group. 'unsafe' is a TRUST BOUNDARY: the
-# compiler makes no memory-safety guarantee inside it — the author vouches for it.
+# not a fresh value scope). So a page table and the functions that touch it group in one block.
+# 'unsafe' is a TRUST BOUNDARY: the compiler makes no memory-safety guarantee inside it — the author
+# vouches for it.
+#
+# THERE IS NO 'unsafe fn'. The group is the only unsafe context a DECLARATION can sit in, and the
+# marker is not part of a signature: a signature says what a function takes and answers, and
+# 'unsafe' says who vouches. A per-declaration marker also propagates the obligation OUTWARD, which
+# means a caller has to know whether the thing it is calling is unsafe — and what the group buys
+# instead is that it never has to, because what the group holds cannot reach it (ptr-type, below).
 unsafe-expr  ::= 'unsafe' block          # in a function: block-expression; unsafe ops legal only here
 unsafe-group ::= 'unsafe' '{' stmt-sep* ( unsafe-item ( stmt-sep+ unsafe-item )* stmt-sep* )? '}'
 unsafe-item  ::= decorated-decl | binding   # a declaration (unsafe here); a 'mut' binding is a mutable GLOBAL
@@ -917,9 +923,21 @@ unsafe-item  ::= decorated-decl | binding   # a declaration (unsafe here); a 'mu
 # 'ptr' is inherently nullable (address 0 is null) and is ORTHOGONAL to 'T?' — there is NO
 # 'ptr[T]?'; test a null pointer with 'p == 0'. Because T is any type, function pointers fall out
 # for free — 'ptr[fn(int) -> nil]' (an interrupt vector / callback) — as do 'ptr[ptr[T]]' and the
-# bare 'ptr' (a void*). A 'ptr'/'ptr[T]' TYPE may appear in a signature or field (to DESCRIBE
-# pointer-shaped data), but every OPERATION on one — taking an address, dereferencing, storing,
-# offsetting, casting — is legal only inside 'unsafe'. Those operations are unsafe stdlib
+# bare 'ptr' (a void*).
+#
+# A 'ptr'/'ptr[T]' TYPE MAY BE NAMED ONLY INSIDE A MODULE-LEVEL 'unsafe { … }' GROUP — in the
+# signature of a 'fn' declared there, or in a field of a type declared there — and a type that
+# CONTAINS one, however indirectly, is named by the same rule. Outside a group a raw address cannot
+# be taken as an argument, returned, or stored, so it cannot reach code that has not vouched.
+#
+# THE RULE USED TO BE THE OTHER WAY and it made a safe API unsound: the TYPE was allowed anywhere
+# and only the OPERATIONS were restricted, so 'fn read(p: ptr[int]) -> int { return unsafe { p.load() } }'
+# was a safe signature whose body vouched for a pointer the caller supplied and it could not check.
+# Every signature in such a program is safe and it reads a dangling address. A block says "I have
+# discharged this"; a function that cannot know what it was handed is not in a position to say so.
+#
+# Every OPERATION on one — taking an address, dereferencing, storing, offsetting, casting — is
+# legal only inside 'unsafe', which is unchanged. Those operations are unsafe stdlib
 # INTRINSICS, not grammar: 'addr(x) -> ptr[T]', 'p.load() -> T', 'p.store(v)', 'p.offset(n)', and
 # 'ptr' ⇄ 'ptr[T]' ⇄ 'uint' casts (volatile / atomic variants likewise). There is no '*'/'&'
 # pointer operator — the bracket type keeps pointers consistent with 'list[T]'/'Ref[T]'/'chan[T]'.

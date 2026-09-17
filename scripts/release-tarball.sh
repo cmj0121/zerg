@@ -121,6 +121,15 @@ if ! sum=$(sha256_sum_file "$DIST" "$name.tar.gz"); then
 	exit 1
 fi
 
+# THE LINE FOR THIS NAME, NOT ANOTHER COPY OF IT. A second `make release` on one machine used
+# to append a second line for the same tarball, because nothing cleans `dist/` — and a
+# SHA256SUMS with a name twice in it is one the publish job now REFUSES, since it counts lines
+# against tarballs. CI runners are fresh so the release path never saw it; a person running the
+# target twice did.
+if [ -f "$DIST/SHA256SUMS" ]; then
+	grep -v " $name\.tar\.gz\$" "$DIST/SHA256SUMS" >"$DIST/SHA256SUMS.tmp" || true
+	mv "$DIST/SHA256SUMS.tmp" "$DIST/SHA256SUMS"
+fi
 printf '%s\n' "$sum" >>"$DIST/SHA256SUMS"
 
 size=$(wc -c <"$DIST/$name.tar.gz" | tr -d ' ')

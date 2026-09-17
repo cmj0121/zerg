@@ -46,7 +46,7 @@ commit. `GRAMMAR` grows section by section, and the [nvim tooling](#editor-tooli
 | 9   | Concurrency          | `spawn`, `chan[T]()`, `ch <- v`, `<-ch`, `select`                | landed |
 | 10  | Modules & Programs   | `import`, `import pub`, `init()`, `pub`, `main`                  | landed |
 | 11  | Resource cleanup     | `defer expr`, `del name`                                         | landed |
-| 12  | Unsafe               | `unsafe { }`, `unsafe fn`, `ptr` / `ptr[T]`, `asm(…)`            | landed |
+| 12  | Unsafe               | `unsafe { }`, `ptr` / `ptr[T]`, `asm(…)`                         | landed |
 
 All groups above are landed — the surface grammar is complete. Raw memory and inline assembly land with
 group 12 (`unsafe` / `ptr` / `asm`), so bare-metal work (MMIO, page tables, a syscall via `asm`) is
@@ -363,9 +363,9 @@ best-effort (it never raises), so `print f"hello {name}"` is the smallest progra
 A function is a first-class value — a named declaration, an anonymous expression, and a type:
 
 ```text
-fn-decl    ::= 'pub'? 'unsafe'? 'mut'? 'fn' identifier generics? '(' param-list? ')' ret-type? block
+fn-decl    ::= 'pub'? 'mut'? 'fn' identifier generics? '(' param-list? ')' ret-type? block
 fn-expr    ::= 'fn' '(' closure-param-list? ')' ret-type? block   # anonymous — never generic/unsafe; types inferrable
-fn-type    ::= 'unsafe'? 'fn' '(' param-type-list? ')' ret-type?
+fn-type    ::= 'fn' '(' param-type-list? ')' ret-type?
 ret-type   ::= '->' type
 return     ::= 'return' expr? ( 'if' expr )?     # 'return x if c' — conditional early exit (sugar)
 param      ::= ( 'mut' '&' )? identifier ':' type ( '=' expr )?
@@ -846,8 +846,7 @@ The one door to bare-metal. Everything here is legal **only inside `unsafe`**; t
 unsafe-expr  ::= 'unsafe' block            # in a function: block-expression; unsafe ops legal only here
 unsafe-group ::= 'unsafe' '{' stmt-sep* ( unsafe-item ( stmt-sep+ unsafe-item )* stmt-sep* )? '}'
 unsafe-item  ::= decorated-decl | binding  # a decl (unsafe here); a 'mut' binding is a mutable global
-fn-decl     ::= 'pub'? 'unsafe'? 'mut'? 'fn' …    # 'unsafe fn' — the single-function form
-ptr-type    ::= 'ptr' ( '[' type ']' )?    # 'ptr' = raw address; 'ptr[T]' = typed pointer
+ptr-type    ::= 'ptr' ( '[' type ']' )?    # named only INSIDE a group (below)
 asm-expr    ::= 'asm' '(' str-lit ( ',' asm-operand )* ')'
 asm-operand ::= 'in' '(' str-lit ')' expr | 'out' '(' str-lit ')' lvalue
               | 'inout' '(' str-lit ')' lvalue | 'clobber' '(' str-lit ( ',' str-lit )* ')'
@@ -857,12 +856,14 @@ asm-operand ::= 'in' '(' str-lit ')' expr | 'out' '(' str-lit ')' lvalue
   [`GRAMMAR#unsafe-expr`](../../GRAMMAR), a **block-expression** (it yields the block's value) inside which
   raw operations are legal; anywhere else they are a compile error. At **module** level the same
   `unsafe { … }` is [`GRAMMAR#unsafe-group`](../../GRAMMAR), a **declaration group**: every
-  [`GRAMMAR#unsafe-item`](../../GRAMMAR) inside it is unsafe — a `fn` is an unsafe fn, and a `mut` binding is a
-  module-private mutable **global**
+  [`GRAMMAR#unsafe-item`](../../GRAMMAR) inside it is unsafe — a `fn` declared there is unsafe, and a `mut`
+  binding is a module-private mutable **global**
   (persistent; the group scopes names to the module, it is not a fresh value scope). `unsafe` is a **trust
   boundary** — the compiler makes no memory-safety guarantee about its contents; the author vouches for
-  them. **`unsafe fn`** is the single-function form; an unsafe fn may only be **called** from another
-  `unsafe` context.
+  them. **There is no third shape**: no `unsafe fn` and no `unsafe` in a type. A marker on a declaration
+  propagates the obligation outward, so every caller would have to know; a group's whole value is that a
+  caller never has to, because what the group holds cannot reach it. A `fn` declared in one may only be
+  **called** from another `unsafe` context.
 - **Global mutable state.** The one exception to _no mutable globals_ (group 10) is a `mut` binding **inside
   a module-level `unsafe { … }` group** — the bare-metal escape hatch (a page table plus the functions that
   touch it, grouped together). There is **no `unsafe mut` prefix** and no `static` keyword. A mutable global

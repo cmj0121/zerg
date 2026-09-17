@@ -72,7 +72,8 @@ zerg doc --check strings      # 指名沒有註解的宣告；只要有就以 1 
 | module 層的 `pub mut` | 照它寫的樣子，歸在常數那一段             |
 
 module 層的 `pub mut` 綁定照它寫的樣子顯示——`mut COUNTER := 0`——而它必須待在裡面的那個 `unsafe { }` 群組**不會**
-印在它外面，儘管 `unsafe fn` 會留住它的關鍵字。`unsafe` 群組是 module 的性質，不是那一行綁定的性質。
+印在它外面。`unsafe` 群組是 module 的性質、不是那一行綁定的性質——而既然沒有 `unsafe fn`,那也就是一份文件
+會略去的全部。
 
 私有宣告不是文件——`main` 不在任何文件裡，沒有 `pub` 的其他東西也一樣。一個六個欄位只顯示兩個的 struct，描述的是一個
 編不過的字面值，所以私有欄位被略去的 struct 會說 `(private fields not shown)`。

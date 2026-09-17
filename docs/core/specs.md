@@ -384,7 +384,7 @@ type and the witness table would hold the unsafe function directly. Safe code ca
 answer with no diagnostic anywhere. An implementation may not promise less than the interface it supplies;
 the requirement is what a caller reads, and a caller reading it never sees the concrete type at all.
 
-An **inherent** `unsafe fn` method is untouched: it supplies no contract, so there is nothing for it to
+An **inherent** method in a group is untouched: it supplies no contract, so there is nothing for it to
 break. Everything that starts **no** member at all — `unsafe { … }` in a spec body among them — still gets
 `E2036`.
 
@@ -426,10 +426,10 @@ that never learned the parameter and not this rule. What is left in an `impl`is 
 without promising anything: _E2077`…`is not an`impl` item — GRAMMAR#impl-item derives a method, an
 > associated value and an associated type\_.
 
-An **`unsafe fn` method** is not among them. [`GRAMMAR#fn-decl`](../../GRAMMAR) spells the marker
-(`'pub'? 'unsafe'? 'mut'? 'fn'`) and [`GRAMMAR#impl-item`](../../GRAMMAR) takes a `fn-decl`, so a method
-carries it exactly as a free function does — and the caller rule reads it in the same place: calling one
-from safe code is _E3083_, whichever of the three spellings declared it.
+An **unsafe method** is not among them, and it is not spelled with a marker: there is no `unsafe fn`
+anywhere ([`GRAMMAR#fn-decl`](../../GRAMMAR)). A method is unsafe by its `impl` sitting inside a
+module-level `unsafe { … }` group, which [`GRAMMAR#unsafe-item`](../../GRAMMAR) derives — and the caller
+rule reads it in the same place it always did: calling one from safe code is _E3083_.
 
 The cost lands on a **single-output protocol**. `Iterable[T]` can be implemented at several `T` where a
 fixed `Item` could not, so what pins the element type is **coherence** — at most one such impl per type,

@@ -5,10 +5,12 @@ Because C is Zerg's **codegen target** (not just an escape hatch), FFI is a nati
 directly on the type, memory, error, and visibility models in the [Language Reference](../language.md) and
 the public-surface rules in [Modules, Packages & Programs](package.md). Also in [繁體中文](ffi.zh-TW.md).
 
-**Group 12 is built.** The `unsafe` context a foreign call sits inside is here: the **block-expression**
-`unsafe { … }` yields its block's value, a standalone **`unsafe fn`** declares one, and the **`unsafe fn`
-TYPE** carries the marker so a value of one is not a value of a plain `fn`. Inline assembly is here beside
-them, and so are the raw-pointer type and its operations — the rest of this chapter describes what runs.
+**Group 12 is built.** The `unsafe` context a foreign call sits inside is here, and it has **one
+spelling**: `unsafe { … }`. In a function body it is a **block-expression** yielding its block's value; at
+module level the same braces are a **declaration group**. There is no `unsafe fn` and no `unsafe` in a
+type — a signature says what a function takes and answers, and `unsafe` says who vouches. Inline assembly
+is here beside them, and so are the raw-pointer type and its operations — the rest of this chapter
+describes what runs.
 
 > **[not yet]** The **import edge** is not. There is no `ffi` module in the shipped standard library, so
 > `import "ffi"` fails at the import itself — _E5002 cannot resolve import `ffi` under any source root_ —
@@ -83,7 +85,7 @@ surface for each:
 | Edge       | Direction | How it is expressed                                                              |
 | ---------- | --------- | -------------------------------------------------------------------------------- |
 | **export** | Zerg → C  | **no new syntax** — a package's public surface _is_ its C ABI, emitted on demand |
-| **import** | C → Zerg  | **no new syntax** — the **stdlib** binds a foreign C symbol as an `unsafe fn`    |
+| **import** | C → Zerg  | **no new syntax** — the **stdlib** binds a foreign C symbol inside a group       |
 
 Both edges share **one** definition of which values may cross (FFI-safe types), **one** rule for who
 owns memory at the boundary, and **one** treatment of errors and concurrency. **Neither edge is
@@ -150,18 +152,22 @@ right-hand side); the raw token is the stdlib `handle`, and a named resource is 
 in a newtype you own (the same **foreign-handle pattern** as `File = Ref[handle]` in
 [Process & I/O](io.md)).
 
-The stdlib binds each foreign symbol as an **`unsafe fn`** whose signature you supply — the linker name
+The stdlib binds each foreign symbol **inside a group**, with the signature you supply — the linker name
 taken **verbatim**, no mangling:
 
 ```text
 import "ffi"
 
-sqlite3_open  := ffi.symbol[unsafe fn(path: str, mut &db: handle?) -> int]("sqlite3_open")
-sqlite3_close := ffi.symbol[unsafe fn(db: handle) -> int]("sqlite3_close")
+unsafe {
+    sqlite3_open  := ffi.symbol[fn(path: str, mut &db: handle?) -> int]("sqlite3_open")
+    sqlite3_close := ffi.symbol[fn(db: handle) -> int]("sqlite3_close")
+}
 ```
 
-(The exact stdlib API is a stdlib detail; what the **language** fixes is that the result is an `unsafe
-fn`, callable only inside `unsafe`.) A handle **can** be stored in a binding or field, copied, passed to
+(The exact stdlib API is a stdlib detail; what the **language** fixes is **where** the binding may live.
+The signature is a plain `fn` — `unsafe` is not part of a type — and what makes the symbol unreachable
+from safe code is the group it is bound in, which is also where the thin wrappers that vouch for it go.) A
+handle **can** be stored in a binding or field, copied, passed to
 other foreign calls, and `del`-ed. It **cannot** be dereferenced, indexed, arithmetic'd, or built from a
 constructor (it has no fields) — it arrives only as a foreign call's return or out-parameter.
 
@@ -265,8 +271,9 @@ packages, and that arrives with the layer it belongs to.
 
 There is **no import block** in the grammar either. Binding a foreign C symbol — naming
 `sqlite3_open` so Zerg may call it — is a **stdlib facility**: the stdlib resolves a linker symbol
-**verbatim** (no mangling, the name taken as written) into an **`unsafe fn`**-typed callable whose
-signature you supply, type-checked as FFI-safe like any boundary declaration.
+**verbatim** (no mangling, the name taken as written) into a callable whose signature you supply,
+type-checked as FFI-safe like any boundary declaration, and bound **inside a group** — which is what
+keeps it out of safe code, there being no marker on the type to do it.
 
 > **The standard library does not use this to reach the OS.** Binding a foreign symbol is for a program
 > that links a **third-party** C library (sqlite, a codec, …). Zerg itself is **zero-dependency, like Go**:
@@ -277,10 +284,10 @@ signature you supply, type-checked as FFI-safe like any boundary declaration.
 
 **A foreign call is `unsafe`.** Calling such a binding is legal **only inside an `unsafe` context**. The
 current unsafe model has three shapes: an **`unsafe { … }` block-expression** in a function body (it
-yields the block's value, as in `open` above); a standalone **`unsafe fn`**, unsafe throughout its body
-and callable only from unsafe; and a **module-level `unsafe { … }`** that **groups declarations** in an
-unsafe context (a `fn` inside is an unsafe fn, a `mut` binding is a mutable global). There is **no
-`unsafe mut` prefix**. Inside any of them the compiler makes no safety guarantee across the foreign call —
+yields the block's value, as in `open` above) and a **module-level `unsafe { … }`** that **groups
+declarations** in an unsafe context (a `fn` inside is unsafe, a `mut` binding is a mutable global). Two
+positions of one word, and no third shape: there is **no `unsafe fn`** and **no `unsafe mut` prefix**. Inside
+any of them the compiler makes no safety guarantee across the foreign call —
 the thin wrapper you write is where you vouch. Group the raw bindings and their wrappers together:
 
 The module-level group is **one context with a beginning and an end**, and both are checked:
@@ -290,11 +297,15 @@ it rather than swallowing the rest of the file. Neither is pedantry about braces
 declaration below it read as being inside, which is exactly how a `mut` binding in safe code becomes a
 mutable global with nothing said.
 
-A **standalone `unsafe fn`** is the single-function form of the same marker: it records `in_unsafe` on the
-declaration, which is what the caller rule reads, so the two spellings are one rule rather than two.
+**There is no standalone `unsafe fn`**, and that is the point rather than an omission. A marker on a
+declaration propagates the obligation **outward**: every caller then has to know whether the thing it is
+calling is unsafe, and so does every caller of _that_. What the group offers instead is that a caller never
+has to ask — what a group holds cannot reach it. A function whose body needs unsafety and whose
+preconditions it can discharge itself writes the safe signature and vouches inside; one that cannot
+discharge them belongs in the group with the things it touches.
 
-The group's own rule **is** enforced: a `fn` declared inside a module-level `unsafe { … }` group is an
-unsafe fn, and naming it from safe code — calling it, or binding the bare name as a function value — is
+The group's own rule **is** enforced: a `fn` declared inside a module-level `unsafe { … }` group is
+unsafe, and naming it from safe code — calling it, or binding the bare name as a function value — is
 rejected as `E3083`, with a place. Its callers are the other declarations in the group, which is what the
 group is for. Until the block-expression above is built, that is also the ONLY caller a program has: an
 entry point is safe, so a group's `fn` is reachable from another group member and from nowhere else.

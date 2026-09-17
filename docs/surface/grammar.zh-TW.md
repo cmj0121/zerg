@@ -44,7 +44,7 @@ notation 很小：
 | 9   | Concurrency          | `spawn`、`chan[T]()`、`ch <- v`、`<-ch`、`select`               | 已落地 |
 | 10  | Modules & Programs   | `import`、`import pub`、`init()`、`pub`、`main`                 | 已落地 |
 | 11  | Resource cleanup     | `defer expr`、`del name`                                        | 已落地 |
-| 12  | Unsafe               | `unsafe { }`、`unsafe fn`、`ptr` / `ptr[T]`、`asm(…)`           | 已落地 |
+| 12  | Unsafe               | `unsafe { }`、`ptr` / `ptr[T]`、`asm(…)`                        | 已落地 |
 
 以上各 group 皆已落地——表面文法**已完整**。raw memory 與 inline assembly 隨 group 12（`unsafe` / `ptr` /
 `asm`）到來，故裸機工作（MMIO、page table、以 `asm` 發 syscall）皆可表達。有兩件事**刻意不放進表面文法**：**FFI
@@ -330,9 +330,9 @@ literal** `` f`…` ``（[`GRAMMAR#fcmd-lit`](../../GRAMMAR)）：每個洞會�
 function 是 first-class value——具名宣告、匿名 expression，與一個型別：
 
 ```text
-fn-decl    ::= 'pub'? 'unsafe'? 'mut'? 'fn' identifier generics? '(' param-list? ')' ret-type? block
+fn-decl    ::= 'pub'? 'mut'? 'fn' identifier generics? '(' param-list? ')' ret-type? block
 fn-expr    ::= 'fn' '(' closure-param-list? ')' ret-type? block   # 匿名——永不泛型、永不 unsafe;參數型別可推斷
-fn-type    ::= 'unsafe'? 'fn' '(' param-type-list? ')' ret-type?
+fn-type    ::= 'fn' '(' param-type-list? ')' ret-type?
 ret-type   ::= '->' type
 return     ::= 'return' expr? ( 'if' expr )?     # 'return x if c'——條件式提前離開（sugar）
 param      ::= ( 'mut' '&' )? identifier ':' type ( '=' expr )?
@@ -727,8 +727,7 @@ del-stmt   ::= 'del' identifier
 unsafe-expr  ::= 'unsafe' block            # 函式內：block-expression；unsafe 操作僅此合法
 unsafe-group ::= 'unsafe' '{' stmt-sep* ( unsafe-item ( stmt-sep+ unsafe-item )* stmt-sep* )? '}'
 unsafe-item  ::= decorated-decl | binding  # 一個宣告（此處即 unsafe）；'mut' 綁定是可變全域
-fn-decl     ::= 'pub'? 'unsafe'? 'mut'? 'fn' …    # 'unsafe fn'——單一函式形式
-ptr-type    ::= 'ptr' ( '[' type ']' )?    # 'ptr' = 原始位址；'ptr[T]' = 具型別指標
+ptr-type    ::= 'ptr' ( '[' type ']' )?    # 只能在 group 內指名（見下）
 asm-expr    ::= 'asm' '(' str-lit ( ',' asm-operand )* ')'
 asm-operand ::= 'in' '(' str-lit ')' expr | 'out' '(' str-lit ')' lvalue
               | 'inout' '(' str-lit ')' lvalue | 'clobber' '(' str-lit ( ',' str-lit )* ')'
@@ -738,9 +737,10 @@ asm-operand ::= 'in' '(' str-lit ')' expr | 'out' '(' str-lit ')' lvalue
   **block-expression**（yields 區塊值），其內 raw 操作
   合法；其外皆為編譯錯誤。在 **module** 層級，同一個 `unsafe { … }` 是 [`GRAMMAR#unsafe-group`](../../GRAMMAR)，一個**宣告分組**：其內
   每個 [`GRAMMAR#unsafe-item`](../../GRAMMAR) 都是 unsafe——`fn`
-  是 unsafe fn，而 `mut` 綁定是 module-private 的可變**全域**（持久；此分組把名字歸屬到 module，並非新的 value scope）。
-  `unsafe` 是**信任邊界**——編譯器對其內容不作記憶體安全保證，由作者背書。**`unsafe fn`** 是單一函式形式；unsafe fn
-  只能從另一個 `unsafe` context **呼叫**。
+  是 unsafe 的,而 `mut` 綁定是 module-private 的可變**全域**(持久;此分組把名字歸屬到 module,並非新的 value scope)。
+  `unsafe` 是**信任邊界**——編譯器對其內容不作記憶體安全保證,由作者背書。**沒有第三種形態**:沒有 `unsafe fn`,
+  型別裡也沒有 `unsafe`。一個掛在宣告上的標記會把義務往外傳,於是每個呼叫者都得知道;而分組的全部價值就在於呼叫者
+  永遠不必知道,因為分組裡的東西到不了它。宣告在分組裡的 `fn` 只能從另一個 `unsafe` context **呼叫**。
 - **全域可變狀態。** _無可變全域_（group 10）的唯一例外，是**在 module 層級 `unsafe { … }` 分組內**的 `mut` 綁定——
   裸機逃生口（page table 與觸碰它的函式，放在一起）。**沒有 `unsafe mut` 前綴**、無 `static` 關鍵字。可變全域為
   **module-private**（不可 `pub`）。優先用**安全**替代——不可變 `:=` 持有 stdlib **`Atomic[T]`**——跨核共享

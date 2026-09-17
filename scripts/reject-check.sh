@@ -801,14 +801,20 @@ EOF
 # lowered down a path of its own, and a rule enforced at one of a form's spellings is one
 # spelling away from meaning nothing — which is what E9109 was hiding: the form was refused, so
 # nobody could find out that the call site had no rule.
-reject unsafe-method-called-from-safe-code E3083 '`B.peek` is an unsafe fn' <<'EOF'
+#
+# THE `impl` SITS IN A GROUP because there is no `unsafe fn` any more (#182). The method is
+# unsafe by being declared in one, which is the only spelling left, and the caller rule reads
+# the same `in_unsafe` it always did.
+reject unsafe-method-called-from-safe-code E3083 '`B.peek` is declared inside a module-level' <<'EOF'
 struct B {
 	pub n: int
 }
 
-impl B {
-	unsafe fn peek() -> int {
-		return this.n
+unsafe {
+	impl B {
+		fn peek() -> int {
+			return this.n
+		}
 	}
 }
 

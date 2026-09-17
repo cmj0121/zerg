@@ -391,10 +391,12 @@ module.exports = grammar({
 				optional(seq("(", sepBy1(",", $._expression), ")")),
 			),
 
+		// NO `unsafe` ON A DECLARATION (#182). GRAMMAR#fn-decl is `'pub'? 'mut'? 'fn'`: a
+		// declaration is unsafe by sitting inside a module-level `unsafe { … }` group, and a
+		// marker that propagated the obligation outward is what the group exists to replace.
 		function_declaration: ($) =>
 			seq(
 				optional("pub"),
-				optional("unsafe"),
 				optional("mut"),
 				"fn",
 				field("name", $.identifier),
@@ -534,9 +536,10 @@ module.exports = grammar({
 		type_arguments: ($) =>
 			seq("[", sepBy1(",", choice($._type, $._expression)), "]"),
 
+		// AND NONE IN A TYPE. GRAMMAR#fn-type is `'fn' '(' … ')' ret-type?` — a type says what a
+		// value IS, and `unsafe` says who vouches.
 		function_type: ($) =>
 			seq(
-				optional("unsafe"),
 				"fn",
 				"(",
 				optional(sepBy1(",", seq(optional(seq("mut", "&")), $._type))),

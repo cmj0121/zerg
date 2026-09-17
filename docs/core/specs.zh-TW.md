@@ -309,7 +309,7 @@ _E3138 `Greet.hello` reads `this.n`, and a spec is field-blind_。錯在 spec �
 witness table 會直接放著那個 unsafe 函式。安全程式碼曾經就這樣呼叫到它、印出答案，而**沒有任何診斷**。一個實作
 不得承諾得比它所供給的介面更少;要求才是呼叫者讀的東西,而讀它的人根本看不到那個具體型別。
 
-一個 **inherent** 的 `unsafe fn` 方法不受影響:它沒有供給任何契約,也就沒有東西可以違背。至於**完全不**開啟任何
+一個在分組裡的 **inherent** 方法不受影響:它沒有供給任何契約,也就沒有東西可以違背。至於**完全不**開啟任何
 成員的東西——`spec` 內文裡的 `unsafe { … }` 也在其中——仍然拿到 `E2036`。
 
 於是一個只有 1 個 required method 的 spec，能免費給 implementer 一堆衍生 method——`Iterator` 由 `next` 衍生
@@ -344,9 +344,10 @@ spec 把同一件事往前講:associated type 是每個 impl 一個輸出,參數
 _E2077`…`is not an`impl` item — GRAMMAR#impl-item derives a method, an associated value and an
 > associated type\_。
 
-**`unsafe fn` 方法**不在其中。[`GRAMMAR#fn-decl`](../../GRAMMAR) 拼得出這個標記（`'pub'? 'unsafe'? 'mut'?
-'fn'`），而 [`GRAMMAR#impl-item`](../../GRAMMAR) 取一個 `fn-decl`，所以方法帶著它的方式和自由函式完全一樣——
-呼叫者規則也在同一處讀它:從安全程式碼呼叫一個,就是 _E3083_,不管三種拼法裡的哪一種宣告了它。
+**unsafe 的方法**不在其中,而且它不是用標記拼出來的:哪裡都沒有 `unsafe fn`
+（[`GRAMMAR#fn-decl`](../../GRAMMAR)）。一個方法之所以 unsafe,是因為它的 `impl` 待在 module 層級的
+`unsafe { … }` 分組裡,那是 [`GRAMMAR#unsafe-item`](../../GRAMMAR) 推導得出的——而呼叫者規則仍在它一直以來的
+同一處讀它:從安全程式碼呼叫一個,就是 _E3083_。
 
 代價落在**單一輸出的協定**上。`Iterable[T]` 可以在不同 `T` 上有多個 impl,固定的 `Item` 不行,所以釘死元素型別
 的是 **coherence**——每個型別至多一個這種 impl,而 compiler 對其他每一組 (型別, spec) 本來就在檢查它。

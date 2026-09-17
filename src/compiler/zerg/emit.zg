@@ -5035,6 +5035,41 @@ fn c_decl_collect_carrier(c: ast.Ty, mut &tups: list[ast.Ty], mut &cars: list[as
 # been emitted yet. A VARIANT'S PAYLOAD is on that list, and it was once the site this pass
 # did not walk: `Leaf(int, 1)` declared a payload of type `1`, and the emitter wrote `zg_1`
 # into a union member for cc to complain about.
+# c_check_raw_scope refuses a `ptr` named where a caller who has not vouched could reach it.
+#
+# THE TYPE USED TO BE WRITABLE ANYWHERE and only the OPERATIONS were `unsafe`-only, which read as
+# a tidy separation and was unsound: `fn read(p: ptr[int]) -> int { return unsafe { p.load() } }`
+# is a SAFE signature whose body vouches for a pointer the caller supplied and it cannot check.
+# Every signature in such a program is safe and it reads a dangling address — demonstrated, and
+# ASan calls it a stack-use-after-return (#182). An `unsafe { … }` block says "I have discharged
+# this"; a function that cannot know what it was handed is not in a position to say it.
+#
+# SO THE VALUE IS CONTAINED RATHER THAN THE CALLER WARNED. A `ptr` may be named in the signature
+# of a `fn` declared inside a module-level `unsafe { … }` group and nowhere else, so it cannot be
+# taken as an argument or returned into code that has not vouched — and a caller never has to ask
+# whether what it is calling is unsafe, which is the whole of why there is no `unsafe fn`.
+#
+# WHAT THIS DOES NOT REACH is a `ptr` behind a declared type — a `struct` holding one, handed out
+# whole. A StructDecl records no `in_unsafe`, so the group a struct was declared in is not a fact
+# this compiler has; naming that gap here is better than a rule that covers the signature and
+# quietly leaves the field.
+fn c_check_raw_scope(mut &em: Emitter, f: ast.File) {
+	for fn_i in f.fns {
+		continue if fn_i.in_unsafe
+
+		c_raw_says(em, fn_i, fn_i.ret, f"the result of `{fn_i.name}`")
+		for pm in fn_i.params {
+			c_raw_says(em, fn_i, pm.ty, c_param_says(fn_i, pm))
+		}
+	}
+}
+
+fn c_raw_says(mut &em: Emitter, fn_i: ast.FnDecl, t: ast.Ty, place: str) {
+	return if not c_is_ptr(t)
+
+	check.chk_at_place(em, fn_i.path, fn_i.line, fn_i.col, rule.Rule.RawPointerOutsideUnsafe, f"`{ast.ty_name(t)}` is named by {place}, and a raw address may be named only inside a module-level `unsafe {{ … }}` group (GRAMMAR#ptr-type) — outside one it would reach a caller that has not vouched, and no `unsafe {{ … }}` in this body could speak for what the caller handed over")
+}
+
 fn c_check_named_types(mut &em: Emitter, f: ast.File, sites: list[Site]) {
 	# an `impl` on a PRIMITIVE arrives as a synthesized `this` of that type, and that is
 	# knowable here and nowhere below: `c_check_type_name` sees a name and a site string, so
@@ -21226,6 +21261,7 @@ fn c_emit_unit(prog0: ast.File, own0: ast.File, ms: Mods, whole: bool, want_lint
 	# reporting problem and belongs to the reporting channel, which now dedupes across units
 	# (see the `seen` seeding above) — so the check can read what it has always needed to read.
 	c_check_named_types(em, f, sites)
+	c_check_raw_scope(em, f)
 	c_scan_fnptr(em, sites)
 	c_build_namespaces(em, f)
 

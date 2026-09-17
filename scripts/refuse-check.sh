@@ -1529,6 +1529,70 @@ fn main() {
 }
 EOF
 
+# `unsafe` HAS ONE SPELLING (#182): the module-level `unsafe { … }` group. It is not a marker
+# on a declaration and not part of a type, because a signature says what a function takes and
+# answers while `unsafe` says who vouches — and a marker that propagates outward makes a caller
+# have to know what it is calling, which is what the group exists so it never does.
+expect "$ZERG" no-standalone-unsafe-fn E4113 'there is no `unsafe fn`' <<'EOF'
+unsafe fn raw() -> int {
+	return 1
+}
+
+fn main() {
+	print 1
+}
+EOF
+
+expect "$ZERG" no-unsafe-fn-method E4113 'there is no `unsafe fn`' <<'EOF'
+struct P {
+	pub v: int
+}
+
+impl P {
+	unsafe fn raw() -> int {
+		return this.v
+	}
+}
+
+fn main() {
+	print 1
+}
+EOF
+
+expect "$ZERG" unsafe-is-not-part-of-a-type E4114 'not part of a type' <<'EOF'
+fn hold(f: unsafe fn(int) -> int) -> int {
+	return 1
+}
+
+fn main() {
+	print 1
+}
+EOF
+
+# A RAW ADDRESS MAY BE NAMED ONLY INSIDE A GROUP. The TYPE used to be writable anywhere and
+# only the OPERATIONS were `unsafe`-only, which let a SAFE signature take a pointer it could
+# not check and vouch for it in the body — every signature safe, and a dangling read.
+expect "$ZERG" ptr-in-a-safe-result E4115 'may be named only inside' <<'EOF'
+fn leak() -> ptr[int] {
+	mut local := 1234
+	return unsafe { addr(local) }
+}
+
+fn main() {
+	print 1
+}
+EOF
+
+expect "$ZERG" ptr-in-a-safe-parameter E4115 'may be named only inside' <<'EOF'
+fn read(p: ptr[int]) -> int {
+	return unsafe { p.load() }
+}
+
+fn main() {
+	print 1
+}
+EOF
+
 # A NAME IS ONLY A NAME WHERE THERE ARE PARAMETERS TO BIND TO. A CONVERSION has none — it
 # reads one value as another — and neither does a built-in receiver's method, so neither runs
 # the reorder that unwraps a named argument and one that reaches the general lowering is in a
@@ -3382,6 +3446,12 @@ EOF
 # the BOX: on the concrete type and through a bound the marker is visible and `E3083` finds it,
 # but a box erases the type and the witness table holds the unsafe function directly — safe
 # code called one and printed its answer with no diagnostic anywhere (#183).
+#
+# THE `impl` IS IN A GROUP because `unsafe fn` is gone (#182), and that is the whole of what
+# #182 took away here: one of two spellings. An `impl` is an `unsafe-item`, so a method can
+# still be unsafe by being declared in a group, and this rule still has something to refuse —
+# which is the half the issue predicted wrong when it said #182 would close this by
+# construction.
 expect "$ZERG" unsafe-method-for-a-spec-requirement E4112 'requires a safe one' <<'EOF'
 spec Peek {
 	fn peek() -> int
@@ -3391,9 +3461,11 @@ struct P {
 	pub v: int
 }
 
-impl Peek for P {
-	unsafe fn peek() -> int {
-		return this.v
+unsafe {
+	impl Peek for P {
+		fn peek() -> int {
+			return this.v
+		}
 	}
 }
 

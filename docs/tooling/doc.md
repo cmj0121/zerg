@@ -83,8 +83,9 @@ Every `pub` form is in the document, and nothing else is:
 | a `pub mut` binding | as it is written, filed under the constants                        |
 
 A module-level `pub mut` binding is shown as it was written — `mut COUNTER := 0` — and the
-`unsafe { }` group it has to sit in is **not** printed around it, though an `unsafe fn` does
-keep its keyword. An `unsafe` group is a property of the module, not of the binding's line.
+`unsafe { }` group it has to sit in is **not** printed around it. An `unsafe` group is a
+property of the module, not of the binding's line — and since there is no `unsafe fn`, that is
+the whole of what a document leaves out.
 
 A private declaration is not documentation — `main` is in no document, and neither is anything
 else without `pub`. A struct shown with two of its six fields would describe a literal that

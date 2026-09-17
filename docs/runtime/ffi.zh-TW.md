@@ -5,9 +5,10 @@ Zerg package 如何與 **C ABI** 交界——這是唯一一處 Zerg 值變成 C
 錯誤與可見性模型，以及 [Module、Package 與 Program](package.zh-TW.md) 的 public surface 規則之上。
 亦有 [English](ffi.md) 版本。
 
-**Group 12 建好了。** 外部呼叫所處的 `unsafe` 情境就在這裡：**block-expression** 的 `unsafe { … }` 產出它 block
-的值、獨立的 **`unsafe fn`** 宣告一個，而 **`unsafe fn` 型別**帶著那個標記，所以它的值不是一個純 `fn` 的值。內聯
-組語也在這裡，raw pointer 的型別與它的操作亦然——本章其餘部分描述的是跑得起來的東西。
+**Group 12 建好了。** 外部呼叫所處的 `unsafe` 情境就在這裡,而它只有**一種拼法**:`unsafe { … }`。在函式本體
+內它是一個 **block-expression**、產出它 block 的值;在 module 層級同樣這對大括號是一個**宣告分組**。沒有
+`unsafe fn`,型別裡也沒有 `unsafe`——簽章說的是一個函式收什麼、答什麼,而 `unsafe` 說的是誰擔保。內聯組語也在
+這裡,raw pointer 的型別與它的操作亦然——本章其餘部分描述的是跑得起來的東西。
 
 > **[not yet]** **import 那條邊**還沒有。出貨的標準函式庫裡沒有 `ffi` 模組，所以 `import "ffi"` 就在 import 那一
 > 步失敗——_E5002 cannot resolve import `ffi` under any source root_——而標註 `handle` 的 binding 會在寫下它的地方
@@ -72,7 +73,7 @@ FFI 有兩個方向，它們刻意重用你已經有的機制，而不是各自�
 | 邊         | 方向     | 如何表達                                                            |
 | ---------- | -------- | ------------------------------------------------------------------- |
 | **export** | Zerg → C | **無新語法**——package 的 public surface _就是_ 它的 C ABI，按需輸出 |
-| **import** | C → Zerg | **無新語法**——由 **stdlib** 把外部 C 符號綁成一個 `unsafe fn`       |
+| **import** | C → Zerg | **無新語法**——由 **stdlib** 把外部 C 符號綁在一個分組裡             |
 
 兩條邊共用**同一份**「哪些值可跨界」的定義（FFI-safe 型別）、**同一條**邊界記憶體所有權規則，以及**同一套**
 錯誤與並行處理。**兩條邊都不是語法**：export 依附 `pub` surface，而 import 是一個 **stdlib 設施**——沒有
@@ -132,16 +133,19 @@ Zerg **沒有安全的 pointer surface** 且 **safe by default**，所以 FFI �
 就是 stdlib 的 `handle`，而一個具名資源是包在你自己擁有的 newtype 裡的 `Ref[handle]`（與 [Process 與 I/O](io.zh-TW.md)
 的 `File = Ref[handle]` 同一套**foreign-handle pattern**）。
 
-stdlib 把每個外部符號綁成一個**`unsafe fn`**、其簽章由你提供——linker 名**原封不動**、不 mangle：
+stdlib 把每個外部符號綁**在一個分組裡**、其簽章由你提供——linker 名**原封不動**、不 mangle:
 
 ```text
 import "ffi"
 
-sqlite3_open  := ffi.symbol[unsafe fn(path: str, mut &db: handle?) -> int]("sqlite3_open")
-sqlite3_close := ffi.symbol[unsafe fn(db: handle) -> int]("sqlite3_close")
+unsafe {
+    sqlite3_open  := ffi.symbol[fn(path: str, mut &db: handle?) -> int]("sqlite3_open")
+    sqlite3_close := ffi.symbol[fn(db: handle) -> int]("sqlite3_close")
+}
 ```
 
-（確切的 stdlib API 是 stdlib 細節；**語言**所固定的是：結果是一個 `unsafe fn`、只能在 `unsafe` 內呼叫。）
+(確切的 stdlib API 是 stdlib 細節;**語言**所固定的是綁定**能住在哪裡**。簽章是一個普通的 `fn`——`unsafe` 不是
+型別的一部分——而讓這個符號從安全程式碼到不了的,是它被綁在哪個分組裡,也正是那些替它擔保的薄 wrapper 所在之處。)
 一個 handle **可以**存進 binding 或欄位、被複製、傳給其他外部呼叫、以及被 `del`。它**不能**被解參考、索引、
 做算術，或用 constructor 建構（它沒有欄位）——它只會以外部呼叫的回傳或 out-parameter 形式出現。
 
@@ -228,7 +232,8 @@ link-name 覆寫,是待決問題——見下。)
 
 grammar 裡也**沒有匯入區塊**。綁定一個外部 C 符號——把 `sqlite3_open` 命名出來讓 Zerg
 可呼叫——是一個 **stdlib 設施**：stdlib 把一個 linker 符號**原封不動**（不 mangle、名字照字面採用）解析成一個
-**`unsafe fn`** 型別的可呼叫值，其簽章由你提供，並與任何邊界宣告一樣被檢查為 FFI-safe。
+一個可呼叫值,其簽章由你提供,並與任何邊界宣告一樣被檢查為 FFI-safe,而且綁**在一個分組裡**——型別上既然沒有
+標記可用,那就是讓它離安全程式碼遠一點的東西。
 
 > **標準函式庫不靠這個碰 OS。** 綁定外部符號是給**連結第三方 C 庫**（sqlite、某個 codec……）的程式用的。
 > Zerg 本身是 **zero-dependency，like Go**：它自己的標準函式庫只透過 **self runtime**——C runtime 裡的
@@ -236,11 +241,10 @@ grammar 裡也**沒有匯入區塊**。綁定一個外部 C 符號——把 `sql
 > 而非 FFI 客戶（`io.read_file` 走 runtime 的 syscall leaf 迴圈；`math.sqrt` 是數值演算法）。runtime 是唯一
 > 底層；上面那套 FFI import，是**程式**要伸手到底層之外時用的。
 
-**外部呼叫是 `unsafe`。** 呼叫這樣一個綁定，**只在 `unsafe` 情境內**合法。目前的 unsafe 模型有三種形狀：函式
-本體內的一個 **`unsafe { … }` block-expression**（它產出區塊的值，如上面的 `open`）；一個獨立的 **`unsafe
-fn`**，其整個本體都是 unsafe、且只能從 unsafe 呼叫；以及一個**module 層級的 `unsafe { … }`**，它把宣告**分組**
-進一個 unsafe 情境（裡面的 `fn` 是一個 unsafe fn，一個 `mut` binding 是一個可變 global）。**沒有 `unsafe mut`
-前綴**。在其中任何一種裡，compiler 都不對這次外部呼叫作安全保證——你寫的那層薄 wrapper 就是你擔保之處。把
+**外部呼叫是 `unsafe`。** 呼叫這樣一個綁定,**只在 `unsafe` 情境內**合法。unsafe 模型有**兩個位置、一個字**:
+函式本體內的一個 **`unsafe { … }` block-expression**(它產出區塊的值,如上面的 `open`),以及一個**module 層級的
+`unsafe { … }`**,它把宣告**分組**進一個 unsafe 情境(裡面的 `fn` 是 unsafe 的,一個 `mut` binding 是一個可變
+global)。沒有第三種形狀:**沒有 `unsafe fn`**,也**沒有 `unsafe mut` 前綴**。在其中任何一種裡，compiler 都不對這次外部呼叫作安全保證——你寫的那層薄 wrapper 就是你擔保之處。把
 raw 綁定與它們的 wrapper 分在一組：
 
 module 層級的分組是**一個有開頭也有結尾的情境**，兩端都會被檢查：`unsafe-item ::= decorated-decl | binding`
@@ -249,10 +253,12 @@ module 層級的分組是**一個有開頭也有結尾的情境**，兩端都會
 `}`，它底下每一個宣告都會被讀成在分組**裡面**——安全程式碼裡的一個 `mut` binding 就是這樣一聲不吭地變成可變
 global 的。
 
-一個**獨立的 `unsafe fn`** 就是同一個標記的單一函式形式：它把 `in_unsafe` 記在宣告上，而那正是 caller 規則所讀
-的東西，所以兩種拼法是同一條規則、不是兩條。
+**沒有獨立的 `unsafe fn`**,而那是重點、不是遺漏。一個掛在宣告上的標記會把義務**往外傳**:於是每個呼叫者都得
+知道自己呼叫的東西安不安全,而那個呼叫者的呼叫者也一樣。分組給的是相反的東西——呼叫者永遠不必問,因為分組裡
+的東西到不了它。一個本體需要 unsafe、而前提條件它自己履行得了的函式,寫出安全簽章、在裡面擔保;履行不了的,就
+跟它碰的東西一起待在分組裡。
 
-分組自己的規則**有**被強制：宣告在 module 層級 `unsafe { … }` 分組裡的 `fn` 是一個 unsafe fn，從安全程式碼指名
+分組自己的規則**有**被強制:宣告在 module 層級 `unsafe { … }` 分組裡的 `fn` 是 unsafe 的,從安全程式碼指名
 它——呼叫它，或把裸名字綁成 function value——會以 `E3083` 拒絕、帶位置。它的呼叫者是分組裡其他的宣告，而那正是分
 組存在的理由。在上面那個 block-expression 建起來之前，那也是一個程式僅有的呼叫者：進入點是安全的，所以分組的
 `fn` 只能被同一個分組的成員叫到，除此之外無處可及。

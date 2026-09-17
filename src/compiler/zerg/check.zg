@@ -506,11 +506,11 @@ pub fn chk_unsafe_reachable(mut &em: emit.Emitter, name: str, callee_unsafe: boo
 	# functions that touch it are declared together, and they reach each other.
 	return if em.in_unsafe_fn
 
-	# THE SENTENCE NAMES THE MARKER AND NOT THE SPELLING. It used to say "declared in a
-	# module-level `unsafe { … }` group", which was the only way to be one — and stopped being
-	# true the day a standalone `unsafe fn` was built. Both spellings record the same thing on
-	# the declaration, so the rule is about that and the message says so.
-	chk_at(em, rule.Rule.UnsafeNameInSafeCode, f"`{name}` is an unsafe fn — declared `unsafe fn`, or inside a module-level `unsafe {{ … }}` group — and GRAMMAR group 12 makes it callable only from unsafe, and {what}")
+	# AND THERE IS ONE SPELLING AGAIN (#182). The sentence said "declared `unsafe fn`, or inside
+	# a module-level `unsafe { … }` group" for as long as there were two; `unsafe fn` is gone —
+	# the marker propagated an obligation outward, and the group's whole value is that a caller
+	# never has to know — so the group is what the message names.
+	chk_at(em, rule.Rule.UnsafeNameInSafeCode, f"`{name}` is declared inside a module-level `unsafe {{ … }}` group, and GRAMMAR group 12 makes what a group holds reachable only from unsafe — {what} it from safe code is what the group is there to prevent; call it inside an `unsafe {{ … }}` block, or move the caller into the group")
 }
 
 # chk_asm_context holds inline assembly to `unsafe`. It is the same rule an unsafe fn's caller

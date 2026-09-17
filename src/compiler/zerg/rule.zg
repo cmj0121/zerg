@@ -428,6 +428,18 @@ pub enum Rule {
 	UnsafeSpecMember = 4111
 	UnsafeImplMethod = 4112
 
+	# `unsafe` has ONE spelling (#182): the module-level `unsafe { … }` group. It is not a
+	# declaration marker and not part of a type, because a signature says what a function takes
+	# and answers and `unsafe` says who vouches — and a marker that propagates makes a caller
+	# have to know, which is what the group exists so it never does.
+	UnsafeFnRetired = 4113
+	UnsafeIsNotAType = 4114
+
+	# a `ptr` may be named only inside a group. The TYPE used to be writable anywhere and only
+	# the operations were unsafe, which let a safe signature take a raw address it could not
+	# check and vouch for it in the body — a use-after-return behind entirely safe signatures.
+	RawPointerOutsideUnsafe = 4115
+
 	# an optional has two sides and a `match` over one covers both, the way it covers an
 	# Either's two and a bool's two. `nil` names the absent side; a name binds the present one.
 	MatchMissingNil = 4103

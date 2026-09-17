@@ -457,6 +457,9 @@ shipping compiler rather than a part of it (the line
 | `E4110` | an open-ended range used as a value                                                                   |
 | `E4111` | an `unsafe` `spec` member                                                                             |
 | `E4112` | an `unsafe` method supplied for a spec requirement                                                    |
+| `E4113` | an `unsafe fn` — the group is the only unsafe context a declaration sits in                           |
+| `E4114` | `unsafe` written as part of a type                                                                    |
+| `E4115` | a raw `ptr` named outside an `unsafe { … }` group                                                     |
 | `E5001` | this entry file declares no `fn main`                                                                 |
 | `E5002` | cannot resolve import `…`, and where it was looked for                                                |
 | `E5007` | `…` is a module this build compiles and this module did not import                                    |
@@ -611,6 +614,12 @@ imports and its operations run.
 built. A type's arguments are carried inside its name and substitution cannot see through one — which was
 true, and what was missing was the table saying what an application is made of. With the table, a parameter
 passes through an application.
+
+**And three whose form has since been REMOVED (#182).** `E9027`, `E9073` and `E9109` retired when the
+standalone `unsafe fn`, the `unsafe fn` type and the `unsafe fn` method were built. That is still what
+happened, and it is why those numbers left; the form itself is gone now — `unsafe` has one spelling, the
+group — which changes nothing about the retirement. A number is retired for the event that retired it,
+not for the state of the language afterwards, and it is never reused either way.
 
 **One retired because the language took a position (#123).** `E9036` refused an `unsafe` `spec`
 signature as a form this compiler had not built. It is not a form that gets built: `unsafe` says who

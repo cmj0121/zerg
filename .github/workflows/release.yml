@@ -135,24 +135,22 @@ jobs:
       - name: Checkout the tag
         uses: actions/checkout@v4
 
+      # NOT `merge-multiple`. Each runner writes a `SHA256SUMS` beside its own artifact, so
+      # three of them carry a file of that NAME — and flattening three directories into one
+      # overwrote two of them. Whichever ran last is the one that survived, which is why the
+      # published file named a different platform every release. They land in their own
+      # directories here and the script below concatenates them.
       - name: Collect every platform's artifacts
         uses: actions/download-artifact@v4
         with:
           pattern: dist-*
-          merge-multiple: true
-          path: dist
+          path: staging
 
-      # EACH RUNNER KNOWS ONLY ITS OWN. `release-tarball.sh` appends one line per artifact to a
-      # SHA256SUMS beside it, so merging three of them gives three lines in one file — and
-      # `sha256sum -c SHA256SUMS` then verifies whichever ones a person downloaded.
       - name: One SHA256SUMS for the release
         run: |
-          cd dist
-          cat SHA256SUMS | sort -k2 > SHA256SUMS.all
-          mv SHA256SUMS.all SHA256SUMS
-          sha256sum -c SHA256SUMS
+          ./scripts/release-sums.sh staging dist
           echo "--- publishing ---"
-          ls -l
+          ls -l dist
 
       # NOT `body_path: CHANGELOG.md`. That publishes the whole file, and most of that file is
       # ABOUT the file — where the number comes from, what belongs in `notes/`, that entries

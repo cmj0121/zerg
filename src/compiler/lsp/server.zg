@@ -453,12 +453,17 @@ fn ls_check(path: str, text: str, load: fn (str, str) -> Program) -> list[json.V
 	# program the size of the compiler's own source, for a string this function never had a
 	# use for. A long session was SIGKILLed on the third or fourth keystroke batch.
 	#
+	# AND ONE WALK FOR BOTH HALVES: `check_and_lint` asks `check_files_diag`'s question and
+	# `lint_program`'s of a single lowering walk (lint.zg says why). The errors land in `ds`
+	# and the lint findings come back.
+	#
 	# The block ends in `ds.len()` because a `guard` carries a value and this call answers
-	# through its out-parameter. The count is not read; what is read is whether the walk
+	# through its out-parameters. The count is not read; what is read is whether the walk
 	# reached the end of it at all.
 	mut ds: list[zerg.Diag] = []
+	mut lints: list[zerg.Finding] = []
 	err := match guard {
-		zerg.check_files_diag(prog.srcs, prog.paths, zerg.mods_of(prog.paths, prog.mods, prog.imp_at, prog.imp_path, prog.imp_mod), ds)
+		lints = zerg.check_and_lint(prog.srcs, prog.paths, zerg.mods_of(prog.paths, prog.mods, prog.imp_at, prog.imp_path, prog.imp_mod), ds)
 		ds.len()
 	} {
 		Either.Left(_)  => ""
@@ -479,21 +484,13 @@ fn ls_check(path: str, text: str, load: fn (str, str) -> Program) -> list[json.V
 		}
 	}
 
-	# EVERY LINT FINDING, THROUGH THE FUNCTION `zerg lint` CALLS. It used to be
-	# `lint_conversions` — the L5xx family alone — which meant the server had a private
-	# answer to "what does the linter say about this file": the eight tree rules were
-	# missing, and so was `#[allow(…)]`, which lives inside `lint_program` and would
-	# otherwise have had to be applied a second time here. `lint_program` also asks
-	# `lint_conversions` itself, so this is one call where there were nearly two.
-	#
-	# GUARDED, because loading a program is the one thing here that can refuse, and a
-	# server that dies on a half-typed file is a server the editor stops talking to.
-	lints := match guard {
-		zerg.lint_program(prog.srcs, prog.paths, zerg.mods_of(prog.paths, prog.mods, prog.imp_at, prog.imp_path, prog.imp_mod))
-	} {
-		Either.Left(ls) => ls
-		Either.Right(_) => []
-	}
+	# EVERY LINT FINDING, AS `zerg lint` REPORTS IT. It used to be `lint_conversions` — the
+	# L5xx family alone — which meant the server had a private answer to "what does the
+	# linter say about this file": every rule `lint_merged` runs over the tree was missing,
+	# and so was `#[allow(…)]`, which lives in the linter and would otherwise have had to be
+	# applied a second time here. `check_and_lint` answers with the rules `lint_program` runs,
+	# and guards the tree rules itself, so a raise among them costs the lint half and not the
+	# check.
 	for f in lints {
 		if f.path == path {
 			out.append(ls_diagnostic_at(text, f.line, f.col, f.code, f.msg, ls_severity(f.sev)))

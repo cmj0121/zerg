@@ -148,10 +148,56 @@ pub struct Finding {
 # it imports, as the driver resolved them), with the `#[allow(…)]` suppressions applied and
 # the two things worth saying about a suppression itself.
 pub fn lint_program(srcs: list[str], paths: list[str], ms: emit.Mods) -> list[Finding] {
+	# THE L5xx FAMILY IS ASKED HERE rather than by the driver. It used to be a second call the
+	# driver made and a second loop it printed, which meant the suppression in lint_merged
+	# would have had to be applied twice, in two places, by whoever remembered — and
+	# `#[allow(L502)]` is exactly the suppression a reader reaches for first.
+	#
+	# GUARDED, because lowering a program is the one thing here that can refuse. Its own rule
+	# is already "a program that does not compile answers nothing" — it returns [] when the
+	# walk collected diagnostics — but a form the emitter turns away by RAISING never reaches
+	# that line, and the raise took the whole run with it. Everything else lint_merged reports
+	# comes from the parsed tree and is true of a program the emitter cannot lower, so the
+	# honest answer is no conversions rather than no lint.
+	#
+	# MERGED ONCE, for the walk and the tree rules both.
+	prog := emit.merge_files_at(srcs, paths)
+	mut diags: list[ast.Diag] = []
+	mut convs: list[ast.Diag] = []
+	guard {
+		convs = emit.lint_conversions_of(prog, ms, diags)
+	}
+	return lint_merged(srcs, paths, ms, prog, convs)
+}
+
+# check_and_lint is check_files_diag and lint_program in ONE lowering walk: the compiler's
+# findings land in `diags`, and what comes back is what lint_program reports.
+#
+# It is the language server's question. Asked as those two calls, one check merged the
+# program three times and lowered it twice — the second walk inside lint_conversions, asking
+# again what the first had just computed — and on this compiler's own program that second
+# walk was about half of the check's seconds.
+#
+# THE WALK IS NOT GUARDED: an abort there is the caller's finding, the refusal `zerg build`
+# would print. The tree rules are, as they were behind the separate call — a raise among them
+# costs the lint half and not the check.
+pub fn check_and_lint(srcs: list[str], paths: list[str], ms: emit.Mods, mut &diags: list[ast.Diag]) -> list[Finding] {
+	prog := emit.merge_files_at(srcs, paths)
+	convs := emit.lint_conversions_of(prog, ms, diags)
+	mut out: list[Finding] = []
+	guard {
+		out = lint_merged(srcs, paths, ms, prog, convs)
+	}
+	return out
+}
+
+# lint_merged is every rule over a program already merged, plus the lowering walk's L5xx
+# notes, with the `#[allow(…)]` suppressions applied last so they see every finding.
+fn lint_merged(srcs: list[str], paths: list[str], ms: emit.Mods, prog: ast.File, convs: list[ast.Diag]) -> list[Finding] {
 	# THE BUILT-IN SPECS TOO, and through the same function the lowering walk uses: `Into` is
 	# declared by the language, so a program that implements it declares no spec by that name
 	# — and L102 read the resulting `into` as a private function nobody calls.
-	f := emit.c_with_builtin_specs(emit.merge_files_at(srcs, paths))
+	f := emit.c_with_builtin_specs(prog)
 	mut out: list[Finding] = []
 
 	# Names used ANYWHERE in the program: a private function called from another module
@@ -179,21 +225,6 @@ pub fn lint_program(srcs: list[str], paths: list[str], ms: emit.Mods) -> list[Fi
 	lint_ships_a_test(f, out)
 	lint_token_rules(srcs, paths, out)
 
-	# THE L5xx FAMILY IS ASKED HERE rather than by the driver. It used to be a second call the
-	# driver made and a second loop it printed, which meant the suppression below would have
-	# had to be applied twice, in two places, by whoever remembered — and `#[allow(L502)]` is
-	# exactly the suppression a reader reaches for first.
-	#
-	# GUARDED, because lowering a program is the one thing here that can refuse. Its own rule
-	# is already "a program that does not compile answers nothing" — it returns [] when the
-	# walk collected diagnostics — but a form the emitter turns away by RAISING never reaches
-	# that line, and the raise took the whole run with it. Everything above comes from the
-	# parsed tree and is true of a program the emitter cannot lower, so the honest answer is
-	# no conversions rather than no lint.
-	mut convs: list[ast.Diag] = []
-	guard {
-		convs = emit.lint_conversions(srcs, paths, ms)
-	}
 	for d in convs {
 		out.append(Finding("", d.path, d.line, d.col, d.code, d.msg))
 	}

@@ -7,6 +7,31 @@ The full account of a release, broken out by area and with its gaps named, lives
 The number a build reports comes from [`VERSION`](VERSION), the single source both compilers are generated from.
 **A release's date is its tag's**, so no entry here writes one down.
 
+## 0.5.0
+
+The release in which the language **stops saying no** while a user writes a library. →
+[full notes](notes/0.5/0.5.0_CHANGELOG.md)
+
+> **0.4.0 let a user write a LIBRARY. 0.5.0 stops the language saying no while they write one.**
+
+- **`Ord` derives**, and `Eq` / `Ord` reach a payload enum. `E9055` retires. `E9054` **narrows** to
+  `Hash`, `Encode` and `Decode` — those three stay `[not yet]`.
+- **`set[T]`** is a type, with a constructor and members. `E9064` retires.
+- **A `struct` may contain itself through a carrier.** `E4026` narrows to a cycle with no carrier.
+  `struct Node { pub next: Node }` is still not a program.
+- **A callee may be an expression.** A named argument in a call and a construction; `nil` as a
+  pattern; a range as a value. `in` asks the equality rule in its own words. `E9009` narrows to
+  `p?.m(…)`; `E9010` and `E9068` retire; `E9077` narrows to a range of a type this compiler cannot
+  compare.
+- **A `spec` member is never `unsafe`.** The leftover of 0.4.0 —
+  [#123](https://github.com/cmj0121/zerg/issues/123) — closes: `E9036` retires into a position.
+- **62 gates**, up from 60. The two new names are `formula` and `release-sums`.
+
+**Two leftovers of 0.4.0 ship unfixed** — [#165](https://github.com/cmj0121/zerg/issues/165), whose
+GitHub close was the 0.4.0 notes naming it, not a fix, and
+[#166](https://github.com/cmj0121/zerg/issues/166), still a generic method's receiver polluting a
+later solve, though the observed program has shifted. Both are loud; neither miscompiles.
+
 ## 0.4.0
 
 The release in which the type system grows into something you can write a **library** with. →

@@ -1256,8 +1256,8 @@ fn c_either_no_context(mut &em: Emitter, what: str) {
 
 fn c_ctor_side(mut &em: Emitter, e: ast.Expr) -> int {
 	return match e {
-		Expr.ECall(nm, args, _) => c_ctor_side_bare(em, nm, args.len())
-		Expr.EMethod(target, meth, args) => c_ctor_side_of(c_either_qual(target, meth), args.len())
+		Expr.ECall(nm, args, _, _, _) => c_ctor_side_bare(em, nm, args.len())
+		Expr.EMethod(target, meth, args, _, _) => c_ctor_side_of(c_either_qual(target, meth), args.len())
 		_ => 0 - 1
 	}
 }
@@ -1290,7 +1290,7 @@ fn c_ctor_side_bare(mut &em: Emitter, nm: str, n: int) -> int {
 # was already resolved through its enum, and these two are matched here.
 fn c_either_qual(target: ast.Expr, meth: str) -> str {
 	return match target {
-		Expr.EIdent(nm) => c_either_qual_of(nm, meth)
+		Expr.EIdent(nm, _, _) => c_either_qual_of(nm, meth)
 		_ => ""
 	}
 }
@@ -1305,8 +1305,8 @@ fn c_either_qual_of(nm: str, meth: str) -> str {
 # one value.
 fn c_check_ctor_arity(mut &em: Emitter, e: ast.Expr) {
 	match e {
-		Expr.ECall(nm, args, _) => c_check_ctor_arity_of(em, nm, args.len())
-		Expr.EMethod(target, meth, args) => c_check_ctor_arity_of(em, c_either_qual(target, meth), args.len())
+		Expr.ECall(nm, args, _, _, _) => c_check_ctor_arity_of(em, nm, args.len())
+		Expr.EMethod(target, meth, args, _, _) => c_check_ctor_arity_of(em, c_either_qual(target, meth), args.len())
 		_ => c_skip()
 	}
 }
@@ -3281,8 +3281,8 @@ fn c_gen_variant_of(mut &em: Emitter, want: ast.Ty, e: ast.Expr) -> str {
 	# field reference, because a payload-less variant takes no arguments — one value, two forms,
 	# and reading only the first left `e: Tree[int] = Tree.Leaf` saying `undefined name Tree`.
 	return match e {
-		Expr.EMethod(t, m, _) => c_gen_variant_named(em, c_app_base(nm), c_ident_name(t), m)
-		Expr.EField(t, f) => c_gen_variant_named(em, c_app_base(nm), c_ident_name(t), f)
+		Expr.EMethod(t, m, _, _, _) => c_gen_variant_named(em, c_app_base(nm), c_ident_name(t), m)
+		Expr.EField(t, f, _, _) => c_gen_variant_named(em, c_app_base(nm), c_ident_name(t), f)
 		_ => ""
 	}
 }
@@ -3291,7 +3291,7 @@ fn c_gen_variant_of(mut &em: Emitter, want: ast.Ty, e: ast.Expr) -> str {
 fn c_meth_args(e: ast.Expr) -> list[ast.Expr] {
 	mut none: list[ast.Expr] = []
 	return match e {
-		Expr.EMethod(_, _, args) => args
+		Expr.EMethod(_, _, args, _, _) => args
 		_ => none
 	}
 }
@@ -6941,7 +6941,7 @@ fn c_ns_root(e: ast.Expr) -> str {
 	return n if n != ""
 
 	return match e {
-		Expr.EField(x, _) => c_ns_root(x)
+		Expr.EField(x, _, _, _) => c_ns_root(x)
 		_ => ""
 	}
 }
@@ -7003,8 +7003,8 @@ fn c_ns_kind(mut &em: Emitter, target: ast.Expr) -> NsKind {
 # two.
 fn c_ns_unqualify(mut &em: Emitter, e: ast.Expr) -> ast.Expr {
 	return match e {
-		Expr.EField(t, f) => c_ns_unqualify_field(em, t, f)
-		Expr.EMethod(t, m, args) => c_ns_unqualify_meth(em, t, m, args)
+		Expr.EField(t, f, l, c) => c_ns_unqualify_field(em, t, f, l, c)
+		Expr.EMethod(t, m, args, l, c) => c_ns_unqualify_meth(em, t, m, args, l, c)
 		_ => e
 	}
 }
@@ -7013,31 +7013,31 @@ fn c_ns_unqualify(mut &em: Emitter, e: ast.Expr) -> ast.Expr {
 # the whole of `lib.Color` in `lib.Color.of(n)`. The target is rewritten too when the pair
 # is not one, because the qualifier sits at the ROOT of a `.`-chain and the segment that
 # names the type may be anywhere along it.
-fn c_ns_unqualify_field(mut &em: Emitter, t: ast.Expr, f: str) -> ast.Expr {
+fn c_ns_unqualify_field(mut &em: Emitter, t: ast.Expr, f: str, l: int, c: int) -> ast.Expr {
 	if c_ns_names_type(em, t, f) {
 		# THE QUALIFIER IS ABOUT TO BE DROPPED, so this is the last point that knows one was
 		# written. `lib.Colour.Red` names a real module and a real type, and whether THIS
 		# module may write that name is a separate question from whether the name resolves —
 		# the same pairing the call and the member-read paths already ask.
 		check.chk_ns_bound(em, c_ns_root(t))
-		return ast.Expr.EIdent(f)
+		return ast.Expr.EIdent(f, l, c)
 	}
 
-	return ast.Expr.EField(c_ns_unqualify(em, t), f)
+	return ast.Expr.EField(c_ns_unqualify(em, t), f, l, c)
 }
 
 # c_ns_unqualify_meth is `lib.Point(1, 2)` — a CONSTRUCTION, which is a call whose callee is
 # a type name and so becomes the ECall the unqualified spelling parses to.
-fn c_ns_unqualify_meth(mut &em: Emitter, t: ast.Expr, m: str, args: list[ast.Expr]) -> ast.Expr {
+fn c_ns_unqualify_meth(mut &em: Emitter, t: ast.Expr, m: str, args: list[ast.Expr], l: int, c: int) -> ast.Expr {
 	if c_ns_names_type(em, t, m) {
 		# `lib.Counter("a")` — a CONSTRUCTION through a namespace, the field path's question
 		# one node up
 		check.chk_ns_bound(em, c_ns_root(t))
 		mut none: list[ast.Ty] = []
-		return ast.Expr.ECall(m, args, none)
+		return ast.Expr.ECall(m, args, none, l, c)
 	}
 
-	return ast.Expr.EMethod(c_ns_unqualify(em, t), m, args)
+	return ast.Expr.EMethod(c_ns_unqualify(em, t), m, args, l, c)
 }
 
 # c_ns_names_type is the pair this rule is about: a MODULE qualifier, and a segment that
@@ -7657,21 +7657,21 @@ fn c_expr_node(mut &em: Emitter, e: ast.Expr, sb: Subst) -> str {
 		Expr.EStr(v) => c_str_cell(em, v)
 		Expr.EBool(b) => c_bool(b)
 		Expr.ENil => "0"
-		Expr.EIdent(n) => c_ident_val(em, n, sb)
+		Expr.EIdent(n, _, _) => c_ident_val(em, n, sb)
 		Expr.EUnary(oper, x) => c_unexpr(em, oper, x, sb)
 		Expr.EBinary(oper, a, b) => c_binexpr(em, oper, a, b, sb)
-		Expr.ECall(name, args, ts) => c_call_written(em, name, args, ts, sb)
+		Expr.ECall(name, args, ts, _, _) => c_call_written(em, name, args, ts, sb)
 		Expr.ECallVal(callee, args) => c_call_val(em, callee, args, sb)
 
 		# A NAMED ARGUMENT REACHING THE LOWERING was written where a name means nothing —
 		# every call site reorders and unwraps its own, so one that survives to here is in a
 		# position that has no parameters to name.
-		Expr.ENamedArg(nm, _) => c_named_arg_misplaced(em, nm)
-		Expr.EField(target, fld) => c_fieldref(em, target, fld, sb)
-		Expr.EOptChain(target, fld) => c_optchain(em, target, fld, sb)
+		Expr.ENamedArg(nm, _, _, _) => c_named_arg_misplaced(em, nm)
+		Expr.EField(target, fld, _, _) => c_fieldref(em, target, fld, sb)
+		Expr.EOptChain(target, fld, _, _) => c_optchain(em, target, fld, sb)
 		Expr.ETry(x) => c_try(em, x, sb)
 		Expr.EIndex(target, idx) => c_index(em, target, idx, sb)
-		Expr.EMethod(target, meth, args) => c_method(em, target, meth, args, sb)
+		Expr.EMethod(target, meth, args, _, _) => c_method(em, target, meth, args, sb)
 		Expr.EListLit(elems) => c_list_lit(em, elems, sb)
 		Expr.EFill(v, n) => c_fill_lit(em, v, n, sb)
 		Expr.EConv(ty, x, nm) => c_conv(em, ty, x, nm, sb)
@@ -8313,7 +8313,7 @@ fn c_order_trivial(e: ast.Expr) -> bool {
 		Expr.EStr(_) => true
 		Expr.EBool(_) => true
 		Expr.ENil => true
-		Expr.EIdent(_) => true
+		Expr.EIdent(_, _, _) => true
 		_ => false
 	}
 }
@@ -8532,9 +8532,9 @@ fn c_eq_legal(mut &em: Emitter, t: ast.Ty) -> bool {
 # handing it back to c_expr gets the receiver copy, the name mangling and the argument rules
 # from the one place that already has them — the same move `Into` makes for `.into()`.
 fn c_eq_call(mut &em: Emitter, oper: str, a: ast.Expr, b: ast.Expr, sb: Subst) -> str {
-	return c_expr(em, ast.Expr.EMethod(a, "eq", [b]), sb) if oper == "=="
+	return c_expr(em, ast.Expr.EMethod(a, "eq", [b], 0, 0), sb) if oper == "=="
 
-	return c_expr(em, ast.Expr.EMethod(a, "ne", [b]), sb)
+	return c_expr(em, ast.Expr.EMethod(a, "ne", [b], 0, 0), sb)
 }
 
 # c_is_order_op is the half of the comparison operators `Ord` answers. `==` and `!=` are
@@ -8553,11 +8553,11 @@ fn c_is_order_op(oper: str) -> bool {
 # (docs/core/specs.md), and under totality `a <= b` is exactly `not (b < a)`, which spends
 # each operand once.
 fn c_ord_call(mut &em: Emitter, oper: str, a: ast.Expr, b: ast.Expr, sb: Subst) -> str {
-	return c_expr(em, ast.Expr.EMethod(a, "less", [b]), sb) if oper == "<"
-	return c_expr(em, ast.Expr.EMethod(b, "less", [a]), sb) if oper == ">"
-	return c_expr(em, ast.Expr.EUnary("not", ast.Expr.EMethod(b, "less", [a])), sb) if oper == "<="
+	return c_expr(em, ast.Expr.EMethod(a, "less", [b], 0, 0), sb) if oper == "<"
+	return c_expr(em, ast.Expr.EMethod(b, "less", [a], 0, 0), sb) if oper == ">"
+	return c_expr(em, ast.Expr.EUnary("not", ast.Expr.EMethod(b, "less", [a], 0, 0)), sb) if oper == "<="
 
-	return c_expr(em, ast.Expr.EUnary("not", ast.Expr.EMethod(a, "less", [b])), sb)
+	return c_expr(em, ast.Expr.EUnary("not", ast.Expr.EMethod(a, "less", [b], 0, 0)), sb)
 }
 
 # c_eq_refuse names what is missing, and there are four different sentences under one gap —
@@ -9366,7 +9366,7 @@ fn c_conv(mut &em: Emitter, ty: ast.Ty, x: ast.Expr, nm: str, sb: Subst) -> str 
 		# override (the "" state) already earned its finding at the declaration; an inert
 		# placeholder lets that finding print instead of a raise about a missing rendering.
 		if meth := c_render_override(em, xt0) {
-			return c_expr(em, ast.Expr.EMethod(x, meth, []), sb) if meth != ""
+			return c_expr(em, ast.Expr.EMethod(x, meth, [], 0, 0), sb) if meth != ""
 			return "\"\""
 		}
 
@@ -10021,9 +10021,9 @@ pub fn c_meth_mutates(meth: str) -> bool {
 
 fn c_is_lvalue(e: ast.Expr) -> bool {
 	return match e {
-		Expr.EIdent(_) => true
-		Expr.EField(_, _) => true
-		Expr.EOptChain(_, _) => false
+		Expr.EIdent(_, _, _) => true
+		Expr.EField(_, _, _, _) => true
+		Expr.EOptChain(_, _, _, _) => false
 		Expr.ETry(_) => false
 		Expr.EIndex(t, i) => not c_is_range(i)
 		_ => false
@@ -10509,7 +10509,7 @@ fn c_list_method_on(mut &em: Emitter, tgt: str, meth: str, args: list[ast.Expr],
 # c_ident_name is the name a bare identifier expression spells, or "" for anything else.
 pub fn c_ident_name(e: ast.Expr) -> str {
 	return match e {
-		Expr.EIdent(n) => n
+		Expr.EIdent(n, _, _) => n
 		_ => ""
 	}
 }
@@ -11811,14 +11811,14 @@ fn c_param_named(mut &em: Emitter, key: str, nm: str) -> int {
 
 fn c_named_arg_name(e: ast.Expr) -> str {
 	return match e {
-		Expr.ENamedArg(nm, _) => nm
+		Expr.ENamedArg(nm, _, _, _) => nm
 		_ => ""
 	}
 }
 
 fn c_named_arg_value(e: ast.Expr) -> ast.Expr {
 	return match e {
-		Expr.ENamedArg(_, x) => x
+		Expr.ENamedArg(_, x, _, _) => x
 		_ => e
 	}
 }
@@ -13785,18 +13785,18 @@ fn c_infer_node(mut &em: Emitter, e: ast.Expr) -> ast.Ty {
 		Expr.EStr(_) => ast.Ty.TStr
 		Expr.EBool(_) => ast.Ty.TBool
 		Expr.ENil => ast.Ty.TNil
-		Expr.EIdent(n) => c_infer_ident(em, n)
+		Expr.EIdent(n, _, _) => c_infer_ident(em, n)
 		Expr.EUnary(oper, x) => c_infer_unary(em, oper, x)
 		Expr.EBinary(oper, a, b) => c_infer_binary(em, oper, a, b)
-		Expr.ECall(name, args, ts) => c_infer_call_written(em, name, args, ts)
+		Expr.ECall(name, args, ts, _, _) => c_infer_call_written(em, name, args, ts)
 		Expr.ECallVal(callee, _) => c_fn_ret(c_infer(em, callee))
 
 		# the name decides WHICH parameter, never WHAT TYPE — so the type is the value's, and
 		# a named argument answers whatever it would have answered written positionally
-		Expr.ENamedArg(_, x) => c_infer(em, x)
-		Expr.EMethod(target, meth, args) => c_infer_methcall(em, target, meth, args)
-		Expr.EField(target, fld) => c_field_ty_of(em, target, fld)
-		Expr.EOptChain(target, fld) => c_optchain_ty(em, target, fld)
+		Expr.ENamedArg(_, x, _, _) => c_infer(em, x)
+		Expr.EMethod(target, meth, args, _, _) => c_infer_methcall(em, target, meth, args)
+		Expr.EField(target, fld, _, _) => c_field_ty_of(em, target, fld)
+		Expr.EOptChain(target, fld, _, _) => c_optchain_ty(em, target, fld)
 		Expr.ETry(x) => c_carrier_elem(c_infer(em, x))
 		Expr.EIndex(target, idx) => c_elem_ty(em, target, idx)
 		Expr.EListLit(elems) => c_infer_listlit(em, elems)
@@ -14105,7 +14105,7 @@ fn c_block_tail_name(st: ast.Stmt) -> str {
 	return "" if not c_is_expr_stmt(st)
 
 	return match c_expr_stmt_of(st) {
-		Expr.EIdent(n) => n
+		Expr.EIdent(n, _, _) => n
 		_ => ""
 	}
 }
@@ -14382,7 +14382,7 @@ fn c_fill_elems(mut &em: Emitter, v: ast.Expr, n: ast.Expr) -> list[ast.Expr] {
 fn c_destructure(mut &em: Emitter, t: ast.Target, v: ast.Expr, is_bind: bool, is_mut: bool, is_const: bool, ind: str) -> str {
 	tmp := c_tmp(em, "zg_dt")
 	mut body: list[ast.Stmt] = [ast.Stmt.SLet(tmp, ast.Ty.TUnknown, false, false, false, v)]
-	c_target_stmts(em, t, ast.Expr.EIdent(tmp), c_infer(em, v), is_bind, is_mut, is_const, body)
+	c_target_stmts(em, t, ast.Expr.EIdent(tmp, 0, 0), c_infer(em, v), is_bind, is_mut, is_const, body)
 
 	mut out := ""
 	for st in body {
@@ -14421,7 +14421,7 @@ fn c_target_leaf(mut &em: Emitter, e: ast.Expr, src: ast.Expr, is_bind: bool, is
 
 fn c_target_name(mut &em: Emitter, e: ast.Expr) -> str {
 	return match e {
-		Expr.EIdent(n) => n
+		Expr.EIdent(n, _, _) => n
 		_ => ""
 	}
 }
@@ -14437,7 +14437,7 @@ fn c_target_tuple(mut &em: Emitter, ts: list[ast.Target], src: ast.Expr, sty: as
 		if i < els.len() {
 			et = els[i]
 		}
-		c_target_stmts(em, sub, ast.Expr.EField(src, strconv.to_string(i, 10)), et, is_bind, is_mut, is_const, out)
+		c_target_stmts(em, sub, ast.Expr.EField(src, strconv.to_string(i, 10), 0, 0), et, is_bind, is_mut, is_const, out)
 		i = i + 1
 	}
 }
@@ -14450,7 +14450,7 @@ fn c_target_struct(mut &em: Emitter, nm: str, fs: list[str], ts: list[ast.Target
 
 	mut i := 0
 	for sub in ts {
-		c_target_stmts(em, sub, ast.Expr.EField(src, fs[i]), c_field_ty(em, sn, fs[i]), is_bind, is_mut, is_const, out)
+		c_target_stmts(em, sub, ast.Expr.EField(src, fs[i], 0, 0), c_field_ty(em, sn, fs[i]), is_bind, is_mut, is_const, out)
 		i = i + 1
 	}
 }
@@ -15113,8 +15113,8 @@ fn c_const_ready_stmts(f: ast.File, body: list[ast.Stmt], done: list[bool], mut 
 # no to; expr_parts must know every node's contents, so a `_` there is a hole.
 fn c_callee_name(e: ast.Expr) -> str {
 	return match e {
-		Expr.ECall(nm, _, _) => nm
-		Expr.EMethod(_, nm, _) => nm
+		Expr.ECall(nm, _, _, _, _) => nm
+		Expr.EMethod(_, nm, _, _, _) => nm
 		_ => ""
 	}
 }
@@ -15131,7 +15131,7 @@ fn c_seen_fn(seen: list[str], nm: str) -> bool {
 # flatten into one namespace before they reach here.
 fn c_const_idx(f: ast.File, e: ast.Expr) -> int {
 	return match e {
-		Expr.EIdent(nm) => c_const_row(f, nm)
+		Expr.EIdent(nm, _, _) => c_const_row(f, nm)
 		_ => 0 - 1
 	}
 }
@@ -16097,7 +16097,7 @@ fn c_lambda(mut &em: Emitter, ps: list[ast.Param], has_ret: bool, ret: ast.Ty, b
 	# written rather than a reference to a binding that may already be gone.
 	mut cvals: list[str] = []
 	for cp in cps {
-		cvals.append(c_copied(em, cp.ty, ast.Expr.EIdent(cp.name), c_nosub()))
+		cvals.append(c_copied(em, cp.ty, ast.Expr.EIdent(cp.name, 0, 0), c_nosub()))
 	}
 
 	mut allps := cps
@@ -16628,21 +16628,21 @@ fn c_callee_raw(mut &em: Emitter, x: ast.Expr, what: str) -> Callee {
 
 fn c_is_method_expr(e: ast.Expr) -> bool {
 	return match e {
-		Expr.EMethod(_, _, _) => true
+		Expr.EMethod(_, _, _, _, _) => true
 		_ => false
 	}
 }
 
 fn c_meth_target_of(e: ast.Expr) -> ast.Expr {
 	return match e {
-		Expr.EMethod(t, _, _) => t
+		Expr.EMethod(t, _, _, _, _) => t
 		_ => ast.Expr.ENil
 	}
 }
 
 fn c_meth_name_of(e: ast.Expr) -> str {
 	return match e {
-		Expr.EMethod(_, m, _) => m
+		Expr.EMethod(_, m, _, _, _) => m
 		_ => ""
 	}
 }
@@ -16650,14 +16650,14 @@ fn c_meth_name_of(e: ast.Expr) -> str {
 fn c_meth_args_of(e: ast.Expr) -> list[ast.Expr] {
 	mut none: list[ast.Expr] = []
 	return match e {
-		Expr.EMethod(_, _, a) => a
+		Expr.EMethod(_, _, a, _, _) => a
 		_ => none
 	}
 }
 
 fn c_call_name(e: ast.Expr) -> str {
 	return match e {
-		Expr.ECall(n, _, _) => n
+		Expr.ECall(n, _, _, _, _) => n
 		_ => ""
 	}
 }
@@ -16668,8 +16668,8 @@ fn c_call_name(e: ast.Expr) -> str {
 fn c_call_args_of(e: ast.Expr) -> list[ast.Expr] {
 	mut none: list[ast.Expr] = []
 	return match e {
-		Expr.ECall(_, a, _) => a
-		Expr.EMethod(_, _, a) => a
+		Expr.ECall(_, a, _, _, _) => a
+		Expr.EMethod(_, _, a, _, _) => a
 		_ => none
 	}
 }
@@ -16921,7 +16921,7 @@ fn c_infer_set(mut &em: Emitter, args: list[ast.Expr]) -> ast.Ty {
 # has to come from the position it lands in.
 pub fn c_is_empty_set_ctor(e: ast.Expr) -> bool {
 	return match e {
-		Expr.ECall(nm, args, _) => nm == "set" and args.len() == 0
+		Expr.ECall(nm, args, _, _, _) => nm == "set" and args.len() == 0
 		_ => false
 	}
 }
@@ -19061,7 +19061,7 @@ fn c_print(mut &em: Emitter, e: ast.Expr, ind: str) -> str {
 		return f"{ind}/* mis-shaped render override */\n" if meth == ""
 
 		em.used_rt = true
-		call := c_expr(em, ast.Expr.EMethod(e, meth, []), c_nosub())
+		call := c_expr(em, ast.Expr.EMethod(e, meth, [], 0, 0), c_nosub())
 		return f"{ind}{{ const char* zgt_ps = {call}; printf(\"%s\\n\", zgt_ps); zrt_str_release(zgt_ps); }}\n"
 	}
 
@@ -19486,7 +19486,7 @@ fn c_err_cause(mut &em: Emitter, cause: ast.Expr) -> str {
 
 fn c_is_err_ctor(mut &em: Emitter, x: ast.Expr) -> bool {
 	return match x {
-		Expr.ECall(nm, _, _) => c_err_kind(nm) > 0
+		Expr.ECall(nm, _, _, _, _) => c_err_kind(nm) > 0
 		_ => false
 	}
 }

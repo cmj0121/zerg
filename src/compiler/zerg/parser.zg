@@ -623,7 +623,7 @@ fn p_stmt_sep(mut &p: Parser, end: token.Kind) {
 # and call targets in the subset), or "" for anything else.
 fn ident_name(e: ast.Expr) -> str {
 	return match e {
-		Expr.EIdent(n) => n
+		Expr.EIdent(n, _, _) => n
 		_ => ""
 	}
 }
@@ -775,7 +775,7 @@ fn p_arr_len_key(mut &p: Parser) -> str {
 # constant from another module has, and the one an array length cannot resolve.
 fn p_is_qualified(e: ast.Expr) -> bool {
 	return match e {
-		Expr.EField(x, _) => p_name_of(x) != ""
+		Expr.EField(x, _, _, _) => p_name_of(x) != ""
 		_ => false
 	}
 }
@@ -814,7 +814,7 @@ fn p_len_binary(o: str, a: ast.Expr, b: ast.Expr) -> int {
 
 fn p_name_of(e: ast.Expr) -> str {
 	return match e {
-		Expr.EIdent(nm) => nm
+		Expr.EIdent(nm, _, _) => nm
 		_ => ""
 	}
 }
@@ -3244,7 +3244,10 @@ fn p_target(mut &p: Parser, is_bind: bool) -> ast.Target {
 		return ast.Target.TgtWild
 	}
 
-	return ast.Target.TgtPlace(ast.Expr.EIdent(p_name(p, "a destructuring target"))) if is_bind
+	if is_bind {
+		bt := cur(p)
+		return ast.Target.TgtPlace(ast.Expr.EIdent(p_name(p, "a destructuring target"), bt.line, bt.col))
+	}
 
 	# AN ASSIGNMENT'S LEAF IS AN LVALUE, and it is read with the expression parser because that
 	# is the only thing that knows the postfix chain — `obj.f`, `xs[i]`, `t.0`. Whether what
@@ -3273,6 +3276,7 @@ fn p_target_struct(mut &p: Parser, is_bind: bool) -> ast.Target {
 			continue
 		}
 
+		ft := cur(p)
 		fname := p_name(p, "a field in a destructuring target")
 		fields.append(fname)
 		if p_at(p, token.Kind.Colon) {
@@ -3282,7 +3286,7 @@ fn p_target_struct(mut &p: Parser, is_bind: bool) -> ast.Target {
 			# THE SHORTHAND IS THE SAME THING WRITTEN OUT: `P{x}` reads field `x` into the
 			# target `x`, which is a fresh name for a binding and the existing one for an
 			# assignment — and in both spellings that target is the identifier itself.
-			ts.append(ast.Target.TgtPlace(ast.Expr.EIdent(fname)))
+			ts.append(ast.Target.TgtPlace(ast.Expr.EIdent(fname, ft.line, ft.col)))
 		}
 		p_list_sep(p, token.Kind.RBrace, "}", "a destructuring target")
 	}
@@ -3663,7 +3667,7 @@ fn p_assert_claim(mut &p: Parser, at: token.Token, c: AClaim, mut &out: list[ast
 	# `if` block it is defined as, which is what parse_jump_guard would have made of it
 	mut body: list[ast.Stmt] = []
 	mut none: list[ast.Stmt] = []
-	body.append(ast.Stmt.SRaise(ast.Expr.ECall("AssertionError", args, []), false, ast.Expr.ENil))
+	body.append(ast.Stmt.SRaise(ast.Expr.ECall("AssertionError", args, [], 0, 0), false, ast.Expr.ENil))
 	out.append(ast.Stmt.SIf(ast.Expr.EUnary("not", p_assert_parse(p, cond.toks)), body, false, none))
 }
 
@@ -4183,8 +4187,9 @@ fn parse_chain_tail(mut &p: Parser, e0: ast.Expr) -> ast.Expr {
 	for p_at(p, token.Kind.Dot) or p_at(p, token.Kind.LBrack) or p_at(p, token.Kind.OptDot) {
 		if p_at(p, token.Kind.OptDot) {
 			p_advance(p)
+			ft := cur(p)
 			fld := p_field_name(p, "?.", false)
-			e = ast.Expr.EOptChain(e, fld)
+			e = ast.Expr.EOptChain(e, fld, ft.line, ft.col)
 		} else if p_at(p, token.Kind.LBrack) {
 			p_advance(p) # '['
 			idx := parse_expr(p)
@@ -4192,11 +4197,12 @@ fn parse_chain_tail(mut &p: Parser, e0: ast.Expr) -> ast.Expr {
 			e = ast.Expr.EIndex(e, idx)
 		} else {
 			p_advance(p) # '.'
+			ft := cur(p)
 			fld := p_field_name(p, ".", true)
 			if p_at(p, token.Kind.LParen) {
-				e = ast.Expr.EMethod(e, fld, parse_call_args(p))
+				e = ast.Expr.EMethod(e, fld, parse_call_args(p), ft.line, ft.col)
 			} else {
-				e = ast.Expr.EField(e, fld)
+				e = ast.Expr.EField(e, fld, ft.line, ft.col)
 			}
 		}
 	}
@@ -4253,7 +4259,7 @@ fn p_no_unsafe_fn(mut &p: Parser, u: token.Token) {
 
 fn is_opt_chain(e: ast.Expr) -> bool {
 	return match e {
-		Expr.EOptChain(_, _) => true
+		Expr.EOptChain(_, _, _, _) => true
 		_ => false
 	}
 }
@@ -4333,8 +4339,9 @@ fn parse_postfix(mut &p: Parser) -> ast.Expr {
 			# `a?.b` — the lexer has produced this token since it existed and no parser ever
 			# consumed it, so `x := p?.n` bound `p` and the `.n` was simply dropped.
 			p_advance(p)
+			ft := cur(p)
 			fld := p_field_name(p, "?.", false)
-			e = ast.Expr.EOptChain(e, fld)
+			e = ast.Expr.EOptChain(e, fld, ft.line, ft.col)
 		} else if p_at(p, token.Kind.LBrack) {
 			p_advance(p) # '['
 			idx := parse_expr(p)
@@ -4360,12 +4367,13 @@ fn parse_postfix(mut &p: Parser) -> ast.Expr {
 			}
 		} else if p_at(p, token.Kind.Dot) {
 			p_advance(p)
+			ft := cur(p)
 			fld := p_field_name(p, ".", true)
 			if p_at(p, token.Kind.LParen) {
 				# method call: target.method(args)
-				e = ast.Expr.EMethod(e, fld, parse_call_args(p))
+				e = ast.Expr.EMethod(e, fld, parse_call_args(p), ft.line, ft.col)
 			} else {
-				e = ast.Expr.EField(e, fld)
+				e = ast.Expr.EField(e, fld, ft.line, ft.col)
 			}
 		} else {
 			# free call: name(args), or a scalar type conversion like int(x)
@@ -4422,7 +4430,8 @@ fn parse_postfix(mut &p: Parser) -> ast.Expr {
 
 				e = ast.Expr.EConv(conv_ty(name), args[0], name)
 			} else {
-				e = ast.Expr.ECall(name, args, tyargs)
+				at := ast.ident_at(e)
+				e = ast.Expr.ECall(name, args, tyargs, at.0, at.1)
 			}
 		}
 	}
@@ -4459,7 +4468,8 @@ fn p_type_arg_call(mut &p: Parser, base: ast.Expr, first: ast.Expr) -> ast.Expr 
 	expect(p, token.Kind.RBrack)
 	raise p_diag(p, rule.Rule.TypeArgsNoCall, f"`{name}[…]` with no call after it — this compiler instantiates a generic at the call, so its type arguments have to arrive with the arguments") if not p_at(p, token.Kind.LParen)
 
-	return ast.Expr.ECall(name, parse_call_args(p), tyargs)
+	at := ast.ident_at(base)
+	return ast.Expr.ECall(name, parse_call_args(p), tyargs, at.0, at.1)
 }
 
 # p_written_type_args is the one complaint both shapes earn. `id[int](7)` is recovered from
@@ -4489,10 +4499,11 @@ fn parse_call_args(mut &p: Parser) -> list[ast.Expr] {
 		# decided here: which parameter it is, whether there is one, and where it goes are all
 		# questions about the CALLEE, which the parser does not have. The call site reorders.
 		if p_at(p, token.Kind.Ident) and peek_kind(p, 1) == token.Kind.Colon {
-			nm := token.says(cur(p))
+			nt := cur(p)
+			nm := token.says(nt)
 			p_advance(p)
 			p_advance(p)
-			args.append(ast.Expr.ENamedArg(nm, parse_expr(p)))
+			args.append(ast.Expr.ENamedArg(nm, parse_expr(p), nt.line, nt.col))
 			p_list_sep(p, token.Kind.RParen, ")", "an argument list")
 			continue
 		}
@@ -4564,7 +4575,7 @@ fn parse_primary(mut &p: Parser) -> ast.Expr {
 		# the receiver reads as an ordinary binding, because the parser made it one
 		p_advance(p)
 		p.saw_this = true
-		return ast.Expr.EIdent("this")
+		return ast.Expr.EIdent("this", t.line, t.col)
 	}
 
 	# The INTERPOLATING form, `` f`…` ``, lexes as a bare `f` and then the command literal,
@@ -4611,7 +4622,7 @@ fn parse_primary(mut &p: Parser) -> ast.Expr {
 			return ast.Expr.EConv(ast.Ty.TList(elem), args[0], "list")
 		}
 		p_advance(p)
-		return ast.Expr.EIdent(t.lexeme)
+		return ast.Expr.EIdent(t.lexeme, t.line, t.col)
 	}
 	return parse_fn_expr(p) if k == token.Kind.Fn
 	if k == token.Kind.Chan {
@@ -5312,7 +5323,7 @@ fn cmd_call(mut &p: Parser, t: token.Token, argv: list[ast.Expr]) -> ast.Expr {
 	# literal is what they wrote, so the literal is what the sentence is about.
 	raise p_diag_at(p, t.line, t.col, rule.Rule.CommandNeedsOs, "a command literal is `os.command(…)` — a child process and its three streams — and this file does not `import \"os\"`") if not cmd_imports_os(p)
 
-	return ast.Expr.EMethod(ast.Expr.EIdent("os"), "command", [ast.Expr.EListLit(argv)])
+	return ast.Expr.EMethod(ast.Expr.EIdent("os", 0, 0), "command", [ast.Expr.EListLit(argv)], 0, 0)
 }
 
 # cmd_imports_os reads the file's own token stream for an `import "os"`, in either spelling —

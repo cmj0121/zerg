@@ -651,12 +651,12 @@ fn lint_opt_expr(e: ast.Expr, w: LWhere, ret_opt: bool, mut &out: list[Finding])
 		Expr.EForce(x) => lint_opt_force(x, w, ret_opt, out)
 		Expr.EBinary(op, a, b) => lint_opt_pair(a, b, w, ret_opt, out)
 		Expr.EUnary(op, x) => lint_opt_expr(x, w, ret_opt, out)
-		Expr.EField(t, nm) => lint_opt_expr(t, w, ret_opt, out)
-		Expr.EOptChain(t, nm) => lint_opt_expr(t, w, ret_opt, out)
+		Expr.EField(t, nm, _, _) => lint_opt_expr(t, w, ret_opt, out)
+		Expr.EOptChain(t, nm, _, _) => lint_opt_expr(t, w, ret_opt, out)
 		Expr.ETry(x) => lint_opt_expr(x, w, ret_opt, out)
-		Expr.ECall(nm, args, _) => lint_opt_args(args, w, ret_opt, out)
+		Expr.ECall(nm, args, _, _, _) => lint_opt_args(args, w, ret_opt, out)
 		Expr.ECallVal(c, args) => lint_opt_args(ast.expr_parts(e), w, ret_opt, out)
-		Expr.EMethod(t, nm, args) => lint_opt_args(args, w, ret_opt, out)
+		Expr.EMethod(t, nm, args, _, _) => lint_opt_args(args, w, ret_opt, out)
 		_ => lint_skip()
 	}
 }
@@ -799,8 +799,8 @@ fn lint_captures_expr(e: ast.Expr, w: LWhere, refs: list[str], mut &muts: list[s
 		Expr.EBlock(b) => lint_captures_body(b, w, refs, muts, out)
 		Expr.EUnsafe(b) => lint_captures_body(b, w, refs, muts, out)
 		Expr.EFn(ps, has_ret, ret, b) => lint_captures_body(b, w, refs, muts, out)
-		Expr.ECall(nm, args, _) => lint_captures_each(args, w, refs, muts, out)
-		Expr.EMethod(t, m, args) => lint_captures_each(args, w, refs, muts, out)
+		Expr.ECall(nm, args, _, _, _) => lint_captures_each(args, w, refs, muts, out)
+		Expr.EMethod(t, m, args, _, _) => lint_captures_each(args, w, refs, muts, out)
 		_ => lint_skip()
 	}
 }
@@ -882,8 +882,8 @@ fn assigns_to(s: ast.Stmt, n: str, refs: list[str]) -> bool {
 # rather than guessed at here, so a method or a signature added later is seen for free.
 fn mutates_expr(e: ast.Expr, n: str, refs: list[str]) -> bool {
 	return match e {
-		Expr.EMethod(t, m, args) => emit.c_meth_mutates(m) and check.chk_root_name(t) == n
-		Expr.ECall(nm, args, _) => ref_arg(nm, args, n, refs)
+		Expr.EMethod(t, m, args, _, _) => emit.c_meth_mutates(m) and check.chk_root_name(t) == n
+		Expr.ECall(nm, args, _, _, _) => ref_arg(nm, args, n, refs)
 		_ => false
 	}
 }
@@ -1356,21 +1356,21 @@ fn walk_raise(x: ast.Expr, has_cause: bool, cause: ast.Expr, mut &ids: list[str]
 
 fn walk_expr(e: ast.Expr, mut &ids: list[str], mut &calls: list[str], mut &ns: list[str]) {
 	match e {
-		Expr.EIdent(name)         => ids.append(name)
-		Expr.EUnary(oper, x)      => walk_expr(x, ids, calls, ns)
-		Expr.EBinary(oper, a, b)  => walk_pair(a, b, ids, calls, ns)
-		Expr.ECall(name, args, _) => walk_call(name, args, ids, calls, ns)
+		Expr.EIdent(name, _, _)         => ids.append(name)
+		Expr.EUnary(oper, x)            => walk_expr(x, ids, calls, ns)
+		Expr.EBinary(oper, a, b)        => walk_pair(a, b, ids, calls, ns)
+		Expr.ECall(name, args, _, _, _) => walk_call(name, args, ids, calls, ns)
 
 		# THE CALLEE IS WALKED LIKE ANY OTHER OPERAND, and it is not a `calls` entry: a name
 		# reached here is the VALUE `fs`, not the function that ends up being called, which
 		# this walk has no way to know. Left to the `_` arm below, an import or a binding used
 		# only inside `fs[0](x)` read as unused and `L101` retired it.
 		Expr.ECallVal(callee, args) => walk_all(ast.expr_parts(e), ids, calls, ns)
-		Expr.EField(target, name) => walk_expr(target, ids, calls, ns)
-		Expr.EOptChain(target, name) => walk_expr(target, ids, calls, ns)
+		Expr.EField(target, name, _, _) => walk_expr(target, ids, calls, ns)
+		Expr.EOptChain(target, name, _, _) => walk_expr(target, ids, calls, ns)
 		Expr.ETry(x) => walk_expr(x, ids, calls, ns)
 		Expr.EIndex(target, idx) => walk_pair(target, idx, ids, calls, ns)
-		Expr.EMethod(target, meth, args) => walk_method(target, meth, args, ids, calls, ns)
+		Expr.EMethod(target, meth, args, _, _) => walk_method(target, meth, args, ids, calls, ns)
 		Expr.EListLit(elems) => walk_all(elems, ids, calls, ns)
 		Expr.EFill(v, n) => walk_pair(v, n, ids, calls, ns)
 		Expr.EConv(ty, x, nm) => walk_expr(x, ids, calls, ns)
@@ -1419,7 +1419,7 @@ fn walk_call(name: str, args: list[ast.Expr], mut &ids: list[str], mut &calls: l
 # module's function is reached, and that is what tells an import from an unused one.
 fn walk_method(target: ast.Expr, meth: str, args: list[ast.Expr], mut &ids: list[str], mut &calls: list[str], mut &ns: list[str]) {
 	match target {
-		Expr.EIdent(name) => ns.append(name)
+		Expr.EIdent(name, _, _) => ns.append(name)
 		_ => skip()
 	}
 	calls.append(meth)

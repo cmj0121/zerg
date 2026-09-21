@@ -150,13 +150,20 @@ pub struct AsmOp {
 }
 
 # Expr is an expression node.
+#
+# A NODE THAT CARRIES A NAME CARRIES THE NAME'S PLACE — the trailing `int, int` of EIdent,
+# ECall, ENamedArg, EField, EOptChain and EMethod is the 1-based line and BYTE column of the
+# name token, the convention EInt already keeps. It is what lets a position be answered with
+# the declaration a name resolves to (#24), which a statement's SAt cannot: one statement
+# holds many names. A node the compiler SYNTHESIZES — a desugaring, an operator lowered to a
+# method — carries 0, 0, which means "written nowhere" and is never indexed.
 pub enum Expr {
 	EInt(str, int, int)
 	EFloat(str)
 	EStr(str)
 	EBool(bool)
 	ENil
-	EIdent(str)
+	EIdent(str, int, int)
 	EUnary(str, Expr)
 	EBinary(str, Expr, Expr)
 
@@ -168,7 +175,7 @@ pub enum Expr {
 	# It holds AT MOST ONE today. The parser recovers a written argument from an `EIndex`,
 	# whose subscript is a single expression, so `id[int, str](…)` has no path in — the list
 	# is the shape the field will need, not the shape it can currently be given.
-	ECall(str, list[Expr], list[Ty])
+	ECall(str, list[Expr], list[Ty], int, int)
 
 	# ECallVal is a call whose CALLEE IS AN EXPRESSION rather than a name — `fs[0](1)`, a
 	# lambda called where it is written, a field holding a function reached through anything
@@ -192,13 +199,13 @@ pub enum Expr {
 	# IT DOES NOT SURVIVE THE CALL. The call site reorders its arguments into parameter order
 	# and unwraps them, so nothing downstream of that ever sees one — which is why there is no
 	# type for it and no lowering.
-	ENamedArg(str, Expr)
-	EField(Expr, str)
+	ENamedArg(str, Expr, int, int)
+	EField(Expr, str, int, int)
 
 	# EOptChain is `a?.b` (GRAMMAR group 8): read `.b` when `a` is present, else nil IN
 	# PLACE — the result is itself an optional, which is what lets a chain keep going
 	# without a test at every link.
-	EOptChain(Expr, str)
+	EOptChain(Expr, str, int, int)
 
 	# ETry is `x?` (GRAMMAR group 8): unwrap the payload, or early-return the absent side
 	# from the ENCLOSING function. It is the one operator that is a control transfer wearing
@@ -206,7 +213,7 @@ pub enum Expr {
 	# it can be written at all.
 	ETry(Expr)
 	EIndex(Expr, Expr)
-	EMethod(Expr, str, list[Expr])
+	EMethod(Expr, str, list[Expr], int, int)
 	EListLit(list[Expr])
 
 	# EFill is the fill form `[v; N]` — N copies of v (GRAMMAR group 4's `list-lit`). It is a
@@ -1423,17 +1430,17 @@ pub fn expr_kind(e: Expr) -> str {
 		Expr.EStr(v) => "str"
 		Expr.EBool(v) => "bool"
 		Expr.ENil => "nil"
-		Expr.EIdent(n) => "ident " + n
+		Expr.EIdent(n, _, _) => "ident " + n
 		Expr.EUnary(oper, x) => "unary " + oper
 		Expr.EBinary(oper, a, b) => "binary " + oper
-		Expr.ECall(name, args, _) => "call " + name
+		Expr.ECall(name, args, _, _, _) => "call " + name
 		Expr.ECallVal(callee, args) => "call through " + expr_kind(callee)
-		Expr.ENamedArg(nm, _) => f"named argument {nm}:"
-		Expr.EField(target, name) => "field ." + name
-		Expr.EOptChain(target, name) => "optional chain ?." + name
+		Expr.ENamedArg(nm, _, _, _) => f"named argument {nm}:"
+		Expr.EField(target, name, _, _) => "field ." + name
+		Expr.EOptChain(target, name, _, _) => "optional chain ?." + name
 		Expr.ETry(x) => "try `?`"
 		Expr.EIndex(target, idx) => "index"
-		Expr.EMethod(target, meth, args) => "method ." + meth
+		Expr.EMethod(target, meth, args, _, _) => "method ." + meth
 		Expr.EListLit(elems) => "list-literal"
 		Expr.EFill(v, n) => "fill"
 		Expr.EConv(ty, x, nm) => "convert " + nm
@@ -1455,6 +1462,15 @@ pub fn expr_kind(e: Expr) -> str {
 		Expr.EIs(x, name) => "is " + name
 		Expr.EIn(x, set) => "in"
 		_ => "?"
+	}
+}
+
+# ident_at is where an EIdent's name was written, and (0, 0) for anything else — the place a
+# node built from that name carries for it: a call whose callee it is, a binding it names.
+pub fn ident_at(e: Expr) -> (int, int) {
+	return match e {
+		Expr.EIdent(_, l, c) => (l, c)
+		_ => (0, 0)
 	}
 }
 
@@ -1481,17 +1497,17 @@ pub fn expr_parts(e: Expr) -> list[Expr] {
 		Expr.EStr(_) => expr_parts_none()
 		Expr.EBool(_) => expr_parts_none()
 		Expr.ENil => expr_parts_none()
-		Expr.EIdent(_) => expr_parts_none()
+		Expr.EIdent(_, _, _) => expr_parts_none()
 		Expr.EUnary(_, x) => [x]
 		Expr.EBinary(_, a, b) => [a, b]
-		Expr.ECall(_, args, _) => args
+		Expr.ECall(_, args, _, _, _) => args
 		Expr.ECallVal(c, args) => expr_parts_cons(c, args)
-		Expr.ENamedArg(_, x) => [x]
-		Expr.EField(x, _) => [x]
-		Expr.EOptChain(x, _) => [x]
+		Expr.ENamedArg(_, x, _, _) => [x]
+		Expr.EField(x, _, _, _) => [x]
+		Expr.EOptChain(x, _, _, _) => [x]
 		Expr.ETry(x) => [x]
 		Expr.EIndex(x, i) => [x, i]
-		Expr.EMethod(x, _, args) => expr_parts_cons(x, args)
+		Expr.EMethod(x, _, args, _, _) => expr_parts_cons(x, args)
 		Expr.EListLit(elems) => elems
 		Expr.EFill(v, n) => [v, n]
 		Expr.EConv(_, x, _) => [x]

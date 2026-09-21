@@ -307,7 +307,7 @@ fn gen_len_known(keys: list[str], name: str) -> bool {
 fn gen_len_fold(keys: list[str], vals: list[str], e: ast.Expr) -> int {
 	return match e {
 		Expr.EInt(lex, _, _) => gen_len_int(lex)
-		Expr.EIdent(n) => gen_len_named(keys, vals, n)
+		Expr.EIdent(n, _, _) => gen_len_named(keys, vals, n)
 		Expr.EBinary(o, a, b) => gen_len_binary(keys, vals, o, a, b)
 		_ => 0 - 1
 	}
@@ -558,14 +558,14 @@ fn subst_expr(su: TySubst, e: ast.Expr) -> ast.Expr {
 	return match e {
 		Expr.EUnary(o, x) => ast.Expr.EUnary(o, subst_expr(su, x))
 		Expr.EBinary(o, a, b) => ast.Expr.EBinary(o, subst_expr(su, a), subst_expr(su, b))
-		Expr.ECall(nm, xs, ts) => ast.Expr.ECall(nm, subst_exprs(su, xs), subst_tys(su, ts))
+		Expr.ECall(nm, xs, ts, l, c) => ast.Expr.ECall(nm, subst_exprs(su, xs), subst_tys(su, ts), l, c)
 		Expr.ECallVal(c, xs) => ast.Expr.ECallVal(subst_expr(su, c), subst_exprs(su, xs))
-		Expr.ENamedArg(nm, x) => ast.Expr.ENamedArg(nm, subst_expr(su, x))
-		Expr.EField(x, f) => ast.Expr.EField(subst_expr(su, x), f)
-		Expr.EOptChain(x, f) => ast.Expr.EOptChain(subst_expr(su, x), f)
+		Expr.ENamedArg(nm, x, l, c) => ast.Expr.ENamedArg(nm, subst_expr(su, x), l, c)
+		Expr.EField(x, f, l, c) => ast.Expr.EField(subst_expr(su, x), f, l, c)
+		Expr.EOptChain(x, f, l, c) => ast.Expr.EOptChain(subst_expr(su, x), f, l, c)
 		Expr.ETry(x) => ast.Expr.ETry(subst_expr(su, x))
 		Expr.EIndex(x, i) => ast.Expr.EIndex(subst_expr(su, x), subst_expr(su, i))
-		Expr.EMethod(x, m, xs) => ast.Expr.EMethod(subst_expr(su, x), m, subst_exprs(su, xs))
+		Expr.EMethod(x, m, xs, l, c) => ast.Expr.EMethod(subst_expr(su, x), m, subst_exprs(su, xs), l, c)
 		Expr.EListLit(xs) => ast.Expr.EListLit(subst_exprs(su, xs))
 		Expr.EConv(ty, x, as_) => ast.Expr.EConv(subst_ty(su, ty), subst_expr(su, x), as_)
 		Expr.EFmt(x, cv, sp) => ast.Expr.EFmt(subst_expr(su, x), cv, sp)
@@ -595,12 +595,12 @@ fn subst_expr(su: TySubst, e: ast.Expr) -> ast.Expr {
 
 		# and no catch-all, for subst_stmt's reason. What is left is the literals and a bare
 		# name, which hold no type for an argument to reach.
-		Expr.EInt(_, _, _) => e
-		Expr.EFloat(_)     => e
-		Expr.EStr(_)       => e
-		Expr.EBool(_)      => e
-		Expr.ENil          => e
-		Expr.EIdent(_)     => e
+		Expr.EInt(_, _, _)   => e
+		Expr.EFloat(_)       => e
+		Expr.EStr(_)         => e
+		Expr.EBool(_)        => e
+		Expr.ENil            => e
+		Expr.EIdent(_, _, _) => e
 	}
 }
 

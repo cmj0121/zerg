@@ -21,10 +21,10 @@ _「這個 buffer 現在有什麼問題」_。後者編譯器一直都在回答�
 的東西held 到 `zerg build` 與 `zerg lint` 對同一個檔案說的話——error 對上會為此拒絕的那個命令,lint findings 對上會
 回報它的那個命令。這是 `make oracle` 的論證套用在第二個前端上。
 
-除此之外它還帶了**十五個 protocol case**,而且每一個都曾經是壞的:exit status、shutdown 之後的回覆、空的變更、增量
-變更、完整變更、`$/` notification 對比 `$/` request、格式錯誤的 frame、字串 id、一行 CJK 之後的 UTF-16 欄位、大於
-runtime bounded leaf 一次讀取量的 body,以及五個關於
-[quick fix](#quick-fix-是編譯器的答案不是-server-的) 的。那是另一種、也更安靜的失敗——buffer 被弄壞的編輯器,
+除此之外它還帶了 **protocol case**,而且每一個都曾經是壞的:exit status、shutdown 之後的回覆、空的變更、增量變更、
+完整變更、`$/` notification 對比 `$/` request、格式錯誤的 frame、字串 id、一行 CJK 之後的 UTF-16 欄位、大於 runtime
+bounded leaf 一次讀取量的 body、發佈在 `zerg build` 所指位置的 abort,以及
+[quick fix](#quick-fix-是編譯器的答案不是-server-的)。那是另一種、也更安靜的失敗——buffer 被弄壞的編輯器,
 或一個在乾等的 client,什麼都不會說。
 
 ## 它住在哪裡
@@ -102,9 +102,14 @@ module 與測試檔正好都是這一類。
 讀者都得再解析一次出來的東西,而 server 去解析它就會是一份語言事實的第二份拷貝。沒有代碼的 finding 會省略這個欄位,
 而不是送一個空的。
 
-**abort 沒有位置。** parse error 與 `NotImplemented` refusal 都是被 `raise` 的句子,而編譯器兩者都沒有帶地點——所以它
-們以檔案頂端一個零寬度的 range 落地,帶著編譯器自己的話。不是 1:1 上那個字:畫在 `fn` 底下的線是在說 `fn` 錯了,而關
-於這類 finding 唯一確定的事就是沒人知道它在哪。
+**abort 落在它的句子所說的地方。** parse error 與 `NotImplemented` refusal 都是被 `raise` 的句子,不是 `Diag`,
+地點就在句子裡:`zerg build` 印在它底下的最後一行 `--> file:line:col`。當那一行指名的是這個 buffer 的檔案,finding
+就發佈在那個位置,而那一行會從訊息裡拿掉,因為 range 已經說了。只讀這個形式,不讀更寬鬆的——沒有路徑的
+`--> line:col` 不知道是哪個檔案。
+
+有兩種 finding 改以檔案頂端一個零寬度的 range 落地,理由各不相同。**沒有指名地點**的,落在那裡是因為編譯器沒說在哪。
+地點在程式裡**另一個**檔案的,落在那裡是因為那個地點不在這個 buffer 裡,而且它保留自己的 `-->` 那一行——這時只有那
+一行說得出該往哪看。兩種都不是 1:1 上那個字:畫在 `fn` 底下的線是在說 `fn` 錯了,而那正是兩者都沒有說的事。
 
 ## 位置
 
@@ -158,8 +163,8 @@ quick fix 不需要任何設定——`vim.lsp.buf.code_action()` 是 nvim 自己
 什麼都不改——而找出它真的改了的那兩種情況(一條被拆行的 `+` 鏈,與一行以 `# >>>` 結尾的 doctest 註解),就是這條規則
 被塑造出來的過程。
 
-**`:make` 是 quickfix list 裡的編譯器**,它值得跟 language server 並存,因為兩者的失敗方式不同:一個 buffer abort 時,
-server 只能在檔案頂端發佈一則 finding,而 `:make` 仍然帶著編譯器自己的句子,以及(有的話)它的位置。
+**`:make` 是 quickfix list 裡的編譯器**,它值得跟 language server 並存,因為兩者的失敗方式不同:程式在 buffer 以外
+的檔案 abort 時,server 只能把那則 finding 發佈在 buffer 頂端,而 `:make` 會跳到編譯器所指名那個檔案裡的位置。
 
 ```vim
 :make | copen           " 編譯這個 buffer,把它說的話列出來

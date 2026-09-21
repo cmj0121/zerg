@@ -24,10 +24,11 @@ corpus programs, and holds what the server publishes to what `zerg build` and `z
 the same file — errors against the command that refuses over one, lint findings against the command
 that reports one. It is `make oracle`'s argument applied to the second front end.
 
-It carries **fifteen protocol cases** beside that, and every one of them failed once: the exit status,
-the post-shutdown reply, an empty change, an incremental change, a full change, a `$/` notification
+It carries **protocol cases** beside that, and every one of them failed once: the exit status, the
+post-shutdown reply, an empty change, an incremental change, a full change, a `$/` notification
 versus a `$/` request, a malformed frame, a string id, a UTF-16 column after a line of CJK, a body
-larger than one read of the runtime's bounded leaf, and five over the [quick fix](#a-quick-fix-is-the-compilers-answer-not-the-servers).
+larger than one read of the runtime's bounded leaf, an abort published where `zerg build` places it,
+and the [quick fix](#a-quick-fix-is-the-compilers-answer-not-the-servers).
 Those are a different kind of failure and a quieter one — an editor with a corrupted buffer, or a
 client left waiting, reports nothing at all.
 
@@ -127,10 +128,17 @@ That is the rule this page is about, applied to itself: a code spelled only insi
 one every reader has to parse back out, and the server reading it out would be a second copy of a
 language fact. A finding with no code omits the field rather than sending an empty one.
 
-**An abort has no position.** A parse error and a `NotImplemented` refusal are `raise`d sentences,
-and the compiler does not carry a place on either — so they land as a zero-width range at the top of
-the file with the compiler's own words. Not the word at 1:1: an underline drawn under `fn` says the
-`fn` is wrong, and the one thing known about such a finding is that nobody knows where it is.
+**An abort lands where its sentence says.** A parse error and a `NotImplemented` refusal are
+`raise`d sentences, not `Diag`s, and the place rides in the sentence as the last line `zerg build`
+prints under it: `--> file:line:col`. Where that line names this buffer's file, the finding is
+published at that place and the line is dropped from the message, because the range now says it.
+Exactly that form is read and nothing looser — a pathless `--> line:col` knows no file.
+
+Two findings land as a zero-width range at the top of the file instead, for two different reasons. One
+that names **no place** lands there because the compiler did not say where. One placed in **another**
+file of the program lands there because that place is not in this buffer, and it keeps its `-->`
+line, which is then the only thing saying where to look. Not the word at 1:1 in either case: an
+underline drawn under `fn` says the `fn` is wrong, and that is the one thing neither finding says.
 
 ## Positions
 
@@ -193,9 +201,9 @@ every source the formatter wrote must change nothing, and finding the two cases 
 wrapped `+`-chain and a doctest comment ending in `# >>>` — is what the rule is shaped by.
 
 **`:make` is the compiler in the quickfix list**, and it is worth having beside a language server
-because the two fail differently: when a buffer aborts, the server can only publish one finding at
-the top of the file, while `:make` still carries the compiler's own sentence and, where there is one,
-its place.
+because the two fail differently: when a program aborts in a file other than the buffer, the server
+can only publish that finding at the top of the buffer, while `:make` jumps to the place in the file
+the compiler named.
 
 ```vim
 :make | copen           " compile this buffer, list what it said

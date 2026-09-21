@@ -486,6 +486,85 @@ _, fr = run([INIT, {"jsonrpc": "2.0", "method": "textDocument/didOpen", "params"
     "textDocument": {"uri": biguri, "languageId": "zerg", "version": 1, "text": big}}}, EXIT])
 check(diags(fr) == [0], "a %d-byte body is reassembled across reads" % len(big), diags(fr))
 
+# --- an abort is published where `zerg build` says it is ---------------------------------
+#
+# A parse error and a `NotImplemented` refusal end the run with a raised sentence, not a
+# Diag, and `zerg build` prints the place under it as `  --> file:line:col`. The server used
+# to publish every such abort at the top of the file, so the editor and the command
+# disagreed about where the program is wrong. The place asserted here is the one the COMMAND
+# printed, read out of its stderr, never a number written into this script.
+#
+# The command's column is a 1-based BYTE column and the server's is a 0-based UTF-16
+# character, so the expected character is the UTF-16 length of the line's bytes before it.
+# Two sources put the place after non-ASCII on the same line — CJK, and a pair outside the
+# basic plane — where a byte column published as-is would land several characters late.
+import re
+PLACE = re.compile(r"^  --> (.+):(\d+):(\d+)$")
+
+def built_place(p):
+    err = subprocess.run([zerg, "build", "--emit", "c", p], stdout=subprocess.DEVNULL,
+                         stderr=subprocess.PIPE, timeout=120).stderr.decode("utf-8")
+    for line in err.split("\n"):
+        m = PLACE.match(line)
+        if m:
+            return m.group(1), int(m.group(2)), int(m.group(3))
+    return None
+
+def utf16_char(text, line, col):
+    head = text.split("\n")[line - 1].encode("utf-8")[:col - 1].decode("utf-8")
+    return len(head.encode("utf-16-le")) // 2
+
+def abort_diag(name, text):
+    p = os.path.join(tmp, name)
+    open(p, "w", encoding="utf-8").write(text)
+    u = "file://" + os.path.abspath(p)
+    _, fr = run([INIT, {"jsonrpc": "2.0", "method": "textDocument/didOpen", "params": {
+        "textDocument": {"uri": u, "languageId": "zerg", "version": 1, "text": text}}}, EXIT])
+    ds = [f for f in fr if f.get("method") == "textDocument/publishDiagnostics"]
+    d = ds[0]["params"]["diagnostics"] if ds else []
+    return os.path.abspath(p), (d[0] if len(d) == 1 else None)
+
+TOP = {"start": {"line": 0, "character": 0}, "end": {"line": 0, "character": 0}}
+
+for name, text, what in [
+    ("abort-parse.zg", "fn main() {\n\tx := (1 +)\n\tprint x\n}\n", "a parse abort"),
+    ("abort-notimpl.zg", "#[derive(Hash)]\nstruct P {\n\tx: int\n}\n\nfn main() {\n\tprint 1\n}\n",
+     "a NotImplemented raise"),
+    ("abort-cjk.zg", 'fn main() {\n\ts := "日本語"; x := (1 +)\n}\n', "an abort after CJK"),
+    ("abort-astral.zg", 'fn main() {\n\tprint("😀😀" + str((1 +)))\n}\n', "an abort after a surrogate pair"),
+]:
+    p, d = abort_diag(name, text)
+    at = built_place(p)
+    check(at is not None and at[0] == p, "%s: zerg build names a place in the file" % what, at)
+    if at is not None and d is not None:
+        check(d["range"]["start"] == {"line": at[1] - 1, "character": utf16_char(text, at[1], at[2])},
+              "%s is published at %s:%d:%d, where zerg build puts it" % (what, name, at[1], at[2]),
+              d["range"])
+        check("-->" not in d["message"], "%s: the range carries the place, not the sentence" % what,
+              d["message"])
+    else:
+        check(False, "%s publishes one diagnostic" % what, d)
+
+# an abort in ANOTHER file of the program names a place this buffer does not have: it stays
+# at the top, and its sentence keeps the trailer, which is then the only thing saying where
+open(os.path.join(tmp, "abortdep.zg"), "w").write("pub fn f() {\n\tx := (1 +)\n}\n")
+p, d = abort_diag("abort-import.zg", 'import "./abortdep"\n\nfn main() {\n\tabortdep.f()\n}\n')
+at = built_place(p)
+check(at is not None and at[0] == os.path.join(os.path.dirname(p), "abortdep.zg"),
+      "an imported file's abort: zerg build names the imported file", at)
+check(d is not None and d["range"] == TOP and at is not None
+      and d["message"].endswith("  --> %s:%d:%d" % at),
+      "an abort placed in another file lands at the top and keeps its place in the sentence", d)
+
+# an abort that names NO place still lands at the top. A dangling import is one: the loader
+# resolves `./dangle` to a file it then cannot open, and says so with no `-->` at all.
+os.symlink("nowhere.zg", os.path.join(tmp, "dangle.zg"))
+p, d = abort_diag("abort-noplace.zg", 'import "./dangle"\n\nfn main() {\n\tprint 1\n}\n')
+at = built_place(p)
+check(at is None, "a dangling import: zerg build names no place", at)
+check(d is not None and d["range"] == TOP and "-->" not in d["message"],
+      "an abort naming no place lands at the top of the file", d)
+
 sys.exit(1 if bad else 0)
 PYEOF
 then
@@ -662,4 +741,4 @@ if [ "$members" -lt 3 ]; then
 	echo "lsp-check: only $members module members were opened — the fixture did not build, or the loop did not run"
 	exit 1
 fi
-echo "lsp-check: $ran buffers agree with the compiler, $outlined outlines are the parser's own, $members module members are checked against their module, formatting is fmt's answer, and 15 protocol cases hold, and the dump carries the type parameters the outline cannot show"
+echo "lsp-check: $ran buffers agree with the compiler, $outlined outlines are the parser's own, $members module members are checked against their module, formatting is fmt's answer, every protocol case holds, and the dump carries the type parameters the outline cannot show"

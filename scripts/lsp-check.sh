@@ -8,11 +8,10 @@
 # the same compiler one question, held to the same answer.
 #
 # It matters because the invariant is only structurally true while nobody adds a rule. The
-# server calls `check_files_diag`, `lex_diags`, `lint_program` and `fmt_src_off` and
-# owns none of them; the day one handler grows a shortcut — a special case for an empty
-# buffer, a filter that drops a finding the author thought was noise — an editor starts
-# reporting a language that the compiler does not implement, and no other gate here can
-# see it.
+# server calls `lex_diags`, `check_and_lint` and `fmt_src_off` and owns none of them; the
+# day one handler grows a shortcut — a special case for an empty buffer, a filter that
+# drops a finding the author thought was noise — an editor starts reporting a language that
+# the compiler does not implement, and no other gate here can see it.
 #
 # It also drives the WIRE, which nothing else does: a real session over stdio with real
 # `Content-Length` frames. Every failure this found on the first run was in the framing,
@@ -160,7 +159,22 @@ EOF
 # reports nothing looks identical to a check that never ran. So this is asserted against
 # programs the corpus already says are correct, and the count below is what says the
 # session happened at all.
-for src in "$@"; do
+#
+# PLUS ONE BUFFER THAT IS NOT a program: an error, and beside it a literal the lowering walk
+# notes as an L502 adoption. `zerg lint` gives no conversion advice about a program whose
+# types are wrong, and the server takes its notes from the same walk that found the error, so
+# dropping them (`lint_conversions_of`) is on its path too. Every other buffer here is either
+# valid or has no literal to note, so none of them could see that drop go missing.
+cat >"$tmp/noted.zg" <<'ZG'
+fn main() {
+	x: float = 1 / 2
+	y: int = "one"
+	print x
+	print y
+}
+ZG
+noted='{"errors": [], "lints": []}'
+for src in "$@" "$tmp/noted.zg"; do
 	got=$(session "$ZERG" diag "$src" 2>"$tmp/err") || {
 		echo "SESSION   $src — the server did not complete a session"
 		sed 's/^/  /' "$tmp/err"
@@ -168,6 +182,7 @@ for src in "$@"; do
 		continue
 	}
 	ran=$((ran + 1))
+	[ "$src" = "$tmp/noted.zg" ] && noted=$got
 
 	n=$(printf '%s' "$got" | "$PY" -c 'import json,sys; print(len(json.load(sys.stdin)["errors"]))')
 
@@ -195,6 +210,10 @@ for src in "$@"; do
 	# compared, because a program is linted whole and the server publishes per document.
 	# This is the assertion that keeps the two families from swapping severity — a server
 	# that painted a lint finding red would still agree about every count.
+	#
+	# IN ORDER, not sorted: the order is part of the linter's answer — the tree rules, then the
+	# walk's conversion notes, then what `#[allow(…)]` says about itself — and the server
+	# publishes the list it was handed. A sorted comparison could not see the two disagree.
 	"$ZERG" lint "$src" >"$tmp/lint" 2>/dev/null || true
 	if ! "$PY" - "$src" "$tmp/lint" "$got" <<'PYEOF'
 import json, sys, re
@@ -205,9 +224,9 @@ for line in open(lintfile, encoding="utf-8"):
     m = re.match(r"^(.*?):(\d+):(\d+): (.*)$", line.rstrip("\n"))
     if m and m.group(1) == src:
         want.append(m.group(4))
-if sorted(got["lints"]) != sorted(want):
-    print("  server: %s" % sorted(got["lints"]))
-    print("  lint:   %s" % sorted(want))
+if got["lints"] != want:
+    print("  server: %s" % got["lints"])
+    print("  lint:   %s" % want)
     sys.exit(1)
 PYEOF
 	then
@@ -262,6 +281,21 @@ PYEOF
 		fi
 	fi
 done
+
+# The agreement above holds only while `zerg lint` is right about the same buffer, so the
+# noted buffer's answer is also asserted outright: an error, and no L5xx note beside it.
+if ! "$PY" - "$noted" <<'PYEOF'
+import json, re, sys
+got = json.loads(sys.argv[1])
+notes = [l for l in got["lints"] if re.match(r"^(warning: |info: )?L5\d\d ", l)]
+if not got["errors"] or notes:
+    print("NOTED     a buffer with an error: errors %s, conversion notes %s — want an error and no note"
+          % (got["errors"], notes))
+    sys.exit(1)
+PYEOF
+then
+	fail=$((fail + 1))
+fi
 
 # --- 2. formatting is fmt's answer, not a second one --------------------------------
 #
@@ -741,4 +775,107 @@ if [ "$members" -lt 3 ]; then
 	echo "lsp-check: only $members module members were opened — the fixture did not build, or the loop did not run"
 	exit 1
 fi
-echo "lsp-check: $ran buffers agree with the compiler, $outlined outlines are the parser's own, $members module members are checked against their module, formatting is fmt's answer, every protocol case holds, and the dump carries the type parameters the outline cannot show"
+
+# --- 6. one check is one walk -------------------------------------------------------------
+#
+# Every case above asks WHAT a check says, and a check that lowers the program twice says the
+# same thing as one that lowers it once — `check-equal` is green on both. The server did exactly
+# that for a while: the errors from one walk, then `lint_program` walking again for the L5xx
+# notes, and the second walk was about half of every check's seconds on the compiler's own
+# program (#22).
+#
+# So this measures the COST, from outside the process, against the command that is one walk by
+# definition: `zerg build --emit check` on the same program. The server additionally runs the
+# tree rules and the protocol, which on this program is about a tenth of a walk; a second walk
+# doubles it. 1.5 sits between the two with room on both sides.
+#
+# THE UNIT IS INSTRUCTIONS RETIRED where the platform counts them (macOS `time -l`), and CPU
+# time otherwise. Not wall time, which a busy machine inflates, and on Apple silicon not CPU time
+# either: the same work costs about three times the seconds on an efficiency core, and which
+# core a process lands on is the scheduler's choice, not the program's. An instruction count is
+# the same number however the machine is loaded.
+#
+# `src/compiler/zergc.zg` because it is the program the issue is about — opening ANY file under
+# `src/compiler/` checks this program — and because it is large enough that the walk is the
+# whole cost. On a small example the process start-up is, and a second walk would not show.
+if ! "$PY" - "$ZERG" src/compiler/zergc.zg <<'PYEOF'
+import json, os, re, resource, subprocess, sys
+
+zerg, path = sys.argv[1], sys.argv[2]
+
+# The shape of the available `time` is DISCOVERED, as mem-peak-check.sh does, rather than
+# assumed from the platform name — and decided once, so the two runs cannot be measured in
+# different units and compared anyway.
+TIMER = ["/usr/bin/time", "-l"]
+try:
+    probe = subprocess.run(TIMER + ["true"], stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
+    counts = probe.returncode == 0 and b"instructions retired" in probe.stderr
+except OSError:
+    counts = False
+unit = "instructions" if counts else "CPU seconds"
+
+def cost(cmd, stdin=b""):
+    run = lambda c: subprocess.run(c, input=stdin, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=600)
+    if counts:
+        p = run(TIMER + cmd)
+        m = re.search(rb"(\d+)\s+instructions retired", p.stderr)
+        if not m:
+            print("WALK      `time -l` counted no instructions for `%s`" % " ".join(cmd[1:]))
+            sys.exit(1)
+        return p, int(m.group(1))
+    before = resource.getrusage(resource.RUSAGE_CHILDREN)
+    p = run(cmd)
+    after = resource.getrusage(resource.RUSAGE_CHILDREN)
+    return p, (after.ru_utime + after.ru_stime) - (before.ru_utime + before.ru_stime)
+
+ref, one = cost([zerg, "build", "--emit", "check", path])
+if ref.returncode != 0:
+    print("WALK      `zerg build --emit check %s` failed, so there is no walk to measure against" % path)
+    sys.exit(1)
+
+text = open(path, encoding="utf-8").read()
+uri = "file://" + os.path.abspath(path)
+msgs = [
+    {"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {"capabilities": {}}},
+    {"jsonrpc": "2.0", "method": "textDocument/didOpen", "params": {
+        "textDocument": {"uri": uri, "languageId": "zerg", "version": 1, "text": text}}},
+    {"jsonrpc": "2.0", "id": 2, "method": "shutdown"},
+    {"jsonrpc": "2.0", "method": "exit"},
+]
+wire = b"".join(b"Content-Length: %d\r\n\r\n%s" % (len(b), b) for b in (json.dumps(m).encode() for m in msgs))
+lsp, got = cost([zerg, "lsp"], wire)
+
+# A session that published nothing did not check anything, and costs less than a walk for
+# that reason alone — which would pass this case for the wrong one. So does a check that
+# ABORTED: it publishes the one error it raised and stops part-way. The reference
+# build exited 0, so a complete check of this program publishes no error at all.
+published = None
+out, i = lsp.stdout, 0
+while i < len(out):
+    j = out.find(b"\r\n\r\n", i)
+    if j < 0:
+        break
+    n = int(re.search(rb"Content-Length:\s*(\d+)", out[i:j], re.I).group(1))
+    frame = json.loads(out[j + 4:j + 4 + n].decode("utf-8"))
+    if frame.get("method") == "textDocument/publishDiagnostics":
+        published = frame["params"]["diagnostics"]
+    i = j + 4 + n
+if published is None:
+    print("WALK      the server published no diagnostics for %s, so no check was measured" % path)
+    sys.exit(1)
+errors = [d["message"] for d in published if d.get("severity") == 1]
+if errors:
+    print("WALK      the server reports an error in %s, which builds: %s" % (path, errors[0]))
+    sys.exit(1)
+
+ratio = got / one
+print("WALK      one check of %s costs %.2f walks (%s: check %s, server %s)" % (path, ratio, unit, one, got))
+if ratio >= 1.5:
+    print("WALK      a check walks the program more than once")
+    sys.exit(1)
+PYEOF
+then
+	echo "lsp-check: a check of the compiler's own program is not one complete walk"
+	exit 1
+fi
+echo "lsp-check: $ran buffers agree with the compiler, $outlined outlines are the parser's own, $members module members are checked against their module, formatting is fmt's answer, every protocol case holds, the dump carries the type parameters the outline cannot show, and a check is one walk"

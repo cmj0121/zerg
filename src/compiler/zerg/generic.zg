@@ -395,9 +395,11 @@ pub fn subst_method(su: TySubst, m: ast.FnDecl, recv: str) -> ast.FnDecl {
 	return ast.FnDecl(m.name, recv, subst_params(su, m.params), m.has_ret, subst_ty(su, m.ret), subst_block(su, m.body), m.is_pub, m.path, m.line, m.col, m.tparams, m.tbounds, m.in_unsafe, m.is_test, m.is_fixture, m.has_body, m.is_assoc, m.spec_of)
 }
 
+# subst_fn keeps `is_assoc`: a specialization of `impl P { fn make[U](…) }` is still an
+# associated fn, and the signature row it becomes is what tells `P.make(…)` from `p.make(…)`.
 pub fn subst_fn(tpl: ast.FnDecl, args: list[ast.Ty], at: str, apps: list[ast.TyApp]) -> ast.FnDecl {
 	su := TySubst(tpl.tparams, args, [], [], apps, at)
-	return ast.FnDecl(gen_mangle(tpl.name, args), tpl.recv, subst_params(su, tpl.params), tpl.has_ret, subst_ty(su, tpl.ret), subst_block(su, tpl.body), tpl.is_pub, tpl.path, tpl.line, tpl.col, [], [], tpl.in_unsafe, tpl.is_test, tpl.is_fixture, tpl.has_body, false, tpl.spec_of)
+	return ast.FnDecl(gen_mangle(tpl.name, args), tpl.recv, subst_params(su, tpl.params), tpl.has_ret, subst_ty(su, tpl.ret), subst_block(su, tpl.body), tpl.is_pub, tpl.path, tpl.line, tpl.col, [], [], tpl.in_unsafe, tpl.is_test, tpl.is_fixture, tpl.has_body, tpl.is_assoc, tpl.spec_of)
 }
 
 # subst_ty replaces a type parameter wherever a type is written, at any depth.

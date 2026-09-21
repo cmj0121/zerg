@@ -202,7 +202,7 @@ reaches_into "$ZG/parser.zg"
 # grep below used to name `ty_quals` alone, and `ty_apps` — added for generic type applications
 # — matched its `[^)]*` tail and was reported as a READ of the first. One loop, one name at a
 # time, so a third accumulator is one word here rather than a rule written twice.
-for acc in ty_quals ty_apps; do
+for acc in ty_quals ty_apps ty_uses; do
 	# THE MATCH STOPS AT A COMMA as well as at a `)`. The exemption below is for the `File`
 	# constructor's hand-off, and it used to rest on the accumulator being that call's LAST
 	# argument: `[^)]*` swallowed `p.ty_quals, p.ty_apps` whole and reported the pair as a read
@@ -236,7 +236,7 @@ done
 # carried the few statements from where the keyword is consumed to where the declaration is
 # built. What would break the claim is a field holding what the parser has DECLARED; this holds
 # what it has READ, which is the difference between a symbol table and a cursor.
-ZPARSER_FIELDS="toks pos impl_ty path saw_this depth edepth ty_quals ty_apps"
+ZPARSER_FIELDS="toks pos impl_ty path saw_this depth edepth ty_quals ty_apps ty_uses"
 zf=$(zg_fields "$ZG/parser.zg" Parser)
 if [ -z "$zf" ]; then
 	note "the zerg parser's fields did not extract"

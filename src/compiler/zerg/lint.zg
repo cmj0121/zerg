@@ -421,7 +421,7 @@ fn lint_arm_key(a: ast.Arm) -> str {
 		# PAYLOAD is deliberately not in the key: `E.Wrap(a)` and `E.Wrap(0)` are two patterns
 		# and only the second can be covered by the first, which is a question about
 		# containment rather than about sameness — E4032's, not this one.
-		Pat.PVariant(q, c, _) => f"ctor {q}.{c}"
+		Pat.PVariant(q, c, _, _, _) => f"ctor {q}.{c}"
 
 		# A binding and a wildcard are unkeyed on purpose: they cover everything, so an arm
 		# after one is unreachable rather than duplicated, and E4032 says so.
@@ -534,12 +534,12 @@ fn writes_this(body: list[ast.Stmt], refs: list[str]) -> bool {
 
 fn writes_this_in(s: ast.Stmt, refs: list[str]) -> bool {
 	return match s {
-		Stmt.SIf(c, tb, he, eb)        => writes_this(tb, refs) or writes_this(eb, refs)
-		Stmt.SIfLet(nm, v, tb, he, eb) => writes_this(tb, refs) or writes_this(eb, refs)
-		Stmt.SFor(hc, c, b)            => writes_this(b, refs)
-		Stmt.SForIn(nm, it, b)         => writes_this(b, refs)
-		Stmt.SSelect(arms)             => writes_this_arms(arms, refs)
-		Stmt.SForSelect(arms)          => writes_this_arms(arms, refs)
+		Stmt.SIf(c, tb, he, eb) => writes_this(tb, refs) or writes_this(eb, refs)
+		Stmt.SIfLet(nm, v, tb, he, eb, _, _) => writes_this(tb, refs) or writes_this(eb, refs)
+		Stmt.SFor(hc, c, b) => writes_this(b, refs)
+		Stmt.SForIn(nm, it, b, _, _) => writes_this(b, refs)
+		Stmt.SSelect(arms) => writes_this_arms(arms, refs)
+		Stmt.SForSelect(arms) => writes_this_arms(arms, refs)
 
 		# the two blocks this had not got: a bare `{ … }`, and an `assert`, whose statements
 		# are the author's own condition. A write to `this` inside either is a write.
@@ -614,15 +614,15 @@ fn lint_opt_body(body: list[ast.Stmt], at: LWhere, ret_opt: bool, mut &out: list
 	for s in body {
 		w = lint_step(w, s)
 		match s {
-			Stmt.SLet(nm, ty, ht, im, ic, v) => lint_opt_expr(v, w, ret_opt, out)
+			Stmt.SLet(nm, ty, ht, im, ic, v, _, _) => lint_opt_expr(v, w, ret_opt, out)
 			Stmt.SAssign(lhs, rhs) => lint_opt_expr(rhs, w, ret_opt, out)
 			Stmt.SPrint(v) => lint_opt_expr(v, w, ret_opt, out)
 			Stmt.SReturn(hv, v) => lint_opt_expr(v, w, ret_opt, out)
 			Stmt.SExpr(v) => lint_opt_expr(v, w, ret_opt, out)
 			Stmt.SIf(c, tb, he, eb) => lint_opt_two(tb, eb, w, ret_opt, out)
-			Stmt.SIfLet(nm, v, tb, he, eb) => lint_opt_two(tb, eb, w, ret_opt, out)
+			Stmt.SIfLet(nm, v, tb, he, eb, _, _) => lint_opt_two(tb, eb, w, ret_opt, out)
 			Stmt.SFor(hc, c, b) => lint_opt_body(b, w, ret_opt, out)
-			Stmt.SForIn(nm, it, b) => lint_opt_body(b, w, ret_opt, out)
+			Stmt.SForIn(nm, it, b, _, _) => lint_opt_body(b, w, ret_opt, out)
 			Stmt.SAssert(b) => lint_opt_body(b, w, ret_opt, out)
 			Stmt.SSelect(arms) => lint_opt_arms(arms, w, ret_opt, out)
 			Stmt.SForSelect(arms) => lint_opt_arms(arms, w, ret_opt, out)
@@ -746,14 +746,14 @@ fn lint_captures_body(body: list[ast.Stmt], at: LWhere, refs: list[str], mut &mu
 	for i < body.len() {
 		w = lint_step(w, body[i])
 		match body[i] {
-			Stmt.SLet(nm, ty, has_ty, is_mut, is_const, v) => lint_captures_let(nm, is_mut, v, w, refs, muts, out)
+			Stmt.SLet(nm, ty, has_ty, is_mut, is_const, v, _, _) => lint_captures_let(nm, is_mut, v, w, refs, muts, out)
 			Stmt.SExpr(e) => lint_captures_expr(e, w, refs, muts, out)
 			Stmt.SSpawn(x) => lint_capture_at(body, i, x, "spawn", w, refs, muts, out)
 			Stmt.SDefer(x) => lint_capture_at(body, i, x, "defer", w, refs, muts, out)
 			Stmt.SIf(c, tb, he, eb) => lint_captures_two(tb, eb, w, refs, muts, out)
-			Stmt.SIfLet(nm, v, tb, he, eb) => lint_captures_two(tb, eb, w, refs, muts, out)
+			Stmt.SIfLet(nm, v, tb, he, eb, _, _) => lint_captures_two(tb, eb, w, refs, muts, out)
 			Stmt.SFor(hc, c, b) => lint_captures_body(b, w, refs, muts, out)
-			Stmt.SForIn(nm, it, b) => lint_captures_body(b, w, refs, muts, out)
+			Stmt.SForIn(nm, it, b, _, _) => lint_captures_body(b, w, refs, muts, out)
 			Stmt.SAssert(b) => lint_captures_body(b, w, refs, muts, out)
 
 			# a select arm's body is a block like any other, and it is where coroutines
@@ -1087,12 +1087,12 @@ fn collect_binds_at(body: list[ast.Stmt], at: LWhere, mut &names: list[str], mut
 	for s in body {
 		w = lint_step(w, s)
 		match s {
-			Stmt.SLet(name, ty, has_ty, is_mut, is_const, value) => collect_binds_let(name, value, w, names, ats)
+			Stmt.SLet(name, ty, has_ty, is_mut, is_const, value, _, _) => collect_binds_let(name, value, w, names, ats)
 			Stmt.SIf(cond, then_b, has_else, else_b) => collect_binds_if(then_b, else_b, w, names, ats)
 			Stmt.SFor(is_cond, cond, body_b) => collect_binds_at(body_b, w, names, ats)
-			Stmt.SForIn(name, iter, body_b) => collect_binds_at(body_b, w, names, ats)
+			Stmt.SForIn(name, iter, body_b, _, _) => collect_binds_at(body_b, w, names, ats)
 			Stmt.SAssert(body_b) => collect_binds_at(body_b, w, names, ats)
-			Stmt.SIfLet(name, value, then_b, has_else, else_b) => collect_binds_iflet(name, then_b, else_b, w, names, ats)
+			Stmt.SIfLet(name, value, then_b, has_else, else_b, _, _) => collect_binds_iflet(name, then_b, else_b, w, names, ats)
 			Stmt.SExpr(x) => collect_binds_expr(x, w, names, ats)
 			Stmt.SSelect(arms) => collect_binds_arms(arms, w, names, ats)
 			Stmt.SForSelect(arms) => collect_binds_arms(arms, w, names, ats)
@@ -1260,7 +1260,7 @@ fn walk_field_defaults(fields: list[ast.FieldDef], mut &ids: list[str], mut &cal
 pub fn walk_body(body: list[ast.Stmt], mut &ids: list[str], mut &calls: list[str], mut &ns: list[str]) {
 	for s in body {
 		match s {
-			Stmt.SLet(name, ty, has_ty, is_mut, is_const, value) => walk_expr(value, ids, calls, ns)
+			Stmt.SLet(name, ty, has_ty, is_mut, is_const, value, _, _) => walk_expr(value, ids, calls, ns)
 			Stmt.SAssign(target, value) => walk_pair(target, value, ids, calls, ns)
 
 			# a destructuring target READS what its leaves name when it assigns, and mints them
@@ -1272,9 +1272,9 @@ pub fn walk_body(body: list[ast.Stmt], mut &ids: list[str], mut &calls: list[str
 			Stmt.SReturnIf(value, cond) => walk_pair(value, cond, ids, calls, ns)
 			Stmt.SExpr(x) => walk_expr(x, ids, calls, ns)
 			Stmt.SIf(cond, then_b, has_else, else_b) => walk_if(cond, then_b, else_b, ids, calls, ns)
-			Stmt.SIfLet(name, value, then_b, has_else, else_b) => walk_if(value, then_b, else_b, ids, calls, ns)
+			Stmt.SIfLet(name, value, then_b, has_else, else_b, _, _) => walk_if(value, then_b, else_b, ids, calls, ns)
 			Stmt.SFor(is_cond, cond, body_b) => walk_loop(cond, body_b, ids, calls, ns)
-			Stmt.SForIn(name, iter, body_b) => walk_loop(iter, body_b, ids, calls, ns)
+			Stmt.SForIn(name, iter, body_b, _, _) => walk_loop(iter, body_b, ids, calls, ns)
 			Stmt.SRaise(x, hc, c) => walk_raise(x, hc, c, ids, calls, ns)
 
 			# an `assert` holds the author's own expressions, desugared: an import reached
@@ -1286,7 +1286,7 @@ pub fn walk_body(body: list[ast.Stmt], mut &ids: list[str], mut &calls: list[str
 			Stmt.SSend(ch, v)        => walk_pair(ch, v, ids, calls, ns)
 			Stmt.SSelect(arms)       => walk_sel(arms, ids, calls, ns)
 			Stmt.SForSelect(arms)    => walk_sel(arms, ids, calls, ns)
-			Stmt.SDel(n)             => ids.append(n)
+			Stmt.SDel(n, _, _)       => ids.append(n)
 			Stmt.SClose(ch, at_exit) => walk_expr(ch, ids, calls, ns)
 
 			# A BARE BLOCK IS A BLOCK. Without this arm a name used ONLY inside `{ … }` was

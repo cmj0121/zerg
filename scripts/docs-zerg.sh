@@ -54,8 +54,8 @@
 # blocks failed, and each is now ` ```text `, because a bracket landing in a column is a
 # picture of layout and not a program anybody would write.
 #
-# WHAT IT STILL CANNOT SEE. It does not DIFF anything: `doc-examples-check.sh` is the gate
-# that holds an example to its stated output, and it owns the module comments. This one owns
+# WHAT IT STILL CANNOT SEE. It does not DIFF anything: `zerg doc --check` is the gate that
+# holds an example to its stated output, and it owns the module comments. This one owns
 # the chapters, and it asks only whether they compile — with the one exception above, where a
 # group's tests are run because filtering happens before building, so `zerg test -k <a name no
 # test has>` reports "no such test" and exits clean over a test file that does not compile.

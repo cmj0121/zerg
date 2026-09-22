@@ -407,7 +407,7 @@ impl Command {
 	# them as well as groups them, so the set is written once:
 	#
 	# ```zerg
-	# .exclusive([cli.flag("c", "check"), cli.flag("w", "write")])
+	# cli.command("fmt").exclusive([cli.flag("c", "check"), cli.flag("w", "write")])
 	# ```
 	pub fn exclusive(args: list[Argument]) -> This {
 		return this.grouped(args, false)

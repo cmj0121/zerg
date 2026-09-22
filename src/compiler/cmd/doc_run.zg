@@ -1,0 +1,308 @@
+# The examples half of `zerg doc --check`: a module's worked examples built as one program, run,
+# and held to what their ` ```output ` fences say. Which lines are examples is `zerg/doc.zg`'s
+# answer; what is here is turning them into a program and reading back what it did.
+#
+# THE PROGRAM IS BUILT BY `zerg build`, in a process of its own, and not by calling the build's
+# functions from here. A build that fails reports its diagnostics and EXITS (`report_diags`),
+# which inside this process would end the whole check at the first module with a broken
+# example and say nothing about the rest. As a child it is the same command a user runs, its
+# report is captured, and the next module still gets its turn.
+#
+# ONE PROGRAM PER MODULE, so the lines run in source order in one process and a later example
+# sees what an earlier one did — the form docs/tooling/doc.md writes down. Each generated line
+# carries the place it came from as a trailing comment, so a diagnostic's source line, caret and
+# all, names the comment the example lives in rather than a file that is gone by then.
+#
+# EVERYTHING A RUN WRITES IS IN A DIRECTORY OF ITS OWN (`example_dir`), so two `zerg doc
+# --check` at once never share a path: a fixed name under the build cache made concurrent runs
+# link over each other's binary and fail with nothing wrong in any example.
+
+import "./layout"
+import "./source"
+import "./test"
+import (
+	"io"
+
+	"/zerg"
+)
+
+# example_dir makes the directory one `--check` run writes into, and answers its path. It is
+# `mktemp -d`'s, because a unique name is the whole point and the runtime has no leaf that
+# creates one atomically; `drop_dir` takes it away at the end of the run.
+pub fn example_dir() -> str {
+	mut out := ""
+	code := run_child(["sh", "-c", "mktemp -d \"${TMPDIR:-/tmp}/zerg-doc.XXXXXX\""], out)
+	lines := test.lines_of(out)
+	raise "`zerg doc --check` could not make a directory to build its examples in" if code != 0 or lines.len() != 1
+
+	return lines[0]
+}
+
+# drop_dir removes what example_dir made.
+pub fn drop_dir(dir: str) {
+	mut out := ""
+	run_child(["rm", "-rf", dir], out)
+}
+
+# run_examples runs every example `m` carries and answers what went wrong, one finding per
+# block, each opening at a place. `tmp` is the run's own directory and `secs` how long the build,
+# and then the run, may each take. `ran` is added the number of example lines run, which is what
+# a caller's floor is measured against: a fence parser that stopped matching finds nothing, and
+# nothing is also what a module with every example right reports.
+pub fn run_examples(m: zerg.DocModule, tmp: str, secs: int, mut &ran: int) -> str {
+	return "" if m.examples.len() == 0
+
+	first := m.examples[0]
+	at := f"{first.path}:{first.line}"
+
+	# A STDLIB MODULE IS IMPORTED BY ITS BARE NAME, from inside the run's directory. Anything
+	# else is reached only as `./name`, which resolves against the importing FILE's directory,
+	# so that one program is written beside the module — under a name carrying the run's
+	# directory, so two runs never write the same file there either. A build compiles its entry
+	# file and what that imports, so the module's neighbours are not swept in, and the leading
+	# dot keeps it off every listing of modules for the moment it exists.
+	parent := example_parent(m)
+	mut src := layout.join_path(tmp, f"ex_{m.name}.zg")
+	mut imp := m.name
+	if not test.in_stdlib(parent) {
+		src = layout.join_path(parent, f".zerg-doc-{m.name}-{source.path_tail(tmp)}.zg")
+		imp = "./" + m.name
+	}
+	stem := layout.join_path(tmp, m.name)
+	bin := stem + ".bin"
+
+	wrote := guard {
+		write_text(src, example_program(m, imp))
+	}
+	why := match wrote {
+		Either.Left(_)  => ""
+		Either.Right(e) => e.message()
+	}
+	return f"{at}: the examples of `{m.name}` could not be written to `{src}` — {why}\n" if why != ""
+
+	bcode := bounded([__zrt_exe_path(), "build", src, "-o", bin], secs, tmp, src, stem)
+	blog := test.read_or_empty(stem + ".out")
+	test.rm_file(src)
+
+	return f"{at}: the process tree cannot be stopped on this host: `ps` is missing, so the examples of `{m.name}` were not run\n" if no_ps(bcode, stem)
+	return f"{at}: the examples of `{m.name}` did not build within {secs}s — raise the limit with `zerg doc --check --timeout`\n" if timed_out(bcode, stem)
+	return f"{at}: the examples of `{m.name}` do not compile\n" + indent_head(blog) if bcode != 0
+
+	for ex in m.examples {
+		ran = ran + ex.code.len()
+	}
+
+	pcode := bounded([bin], secs, tmp, "", stem)
+	out := test.read_or_empty(stem + ".out")
+
+	return f"{at}: the examples of `{m.name}` did not finish within {secs}s — raise the limit with `zerg doc --check --timeout`\n" if timed_out(pcode, stem)
+	return f"{at}: the examples of `{m.name}` exited {pcode}\n" + indent(test.lines_of(out)) if pcode != 0
+
+	return output_mismatch(m, test.lines_of(out))
+}
+
+# example_program is the one program a module's examples are: an expression line is printed, a
+# statement line is run as written.
+fn example_program(m: zerg.DocModule, imp: str) -> str {
+	mut out := "# Generated by `zerg doc --check` and removed once it is built.\n"
+	out = out + f"import \"{imp}\"\n\n" + "fn main() {\n"
+	for ex in m.examples {
+		mut k := 0
+		for k < ex.code.len() {
+			mut ln := ex.code[k]
+			if ex.expr {
+				ln = "print " + ln
+			}
+			out = out + f"\t{ln}  # {ex.path}:{ex.line + 1 + k}\n"
+			k = k + 1
+		}
+	}
+	return out + "}\n"
+}
+
+# output_mismatch diffs what the program printed against the ` ```output ` fences, in order, and
+# names the example whose fence the first difference falls in. Only the first: every line after
+# it is compared against the wrong claim once one example has printed a line too many or too
+# few, and the findings past that point would be noise.
+#
+# What it printed is BOTH STREAMS joined, in the order they were written (`bounded`), and the
+# fences are held to that one stream: a line written to stderr is compared like any other.
+fn output_mismatch(m: zerg.DocModule, got: list[str]) -> str {
+	mut at := 0
+	for ex in m.examples {
+		mut k := 0
+		for k < ex.want.len() {
+			mut g := "(nothing)"
+			if at < got.len() {
+				g = got[at]
+			}
+			return f"{ex.path}:{ex.line}: this example's ```output is not what it prints — line {k + 1} says `{ex.want[k]}`, and the example printed `{g}`\n" if g != ex.want[k]
+			at = at + 1
+			k = k + 1
+		}
+	}
+	return "" if at >= got.len()
+
+	last := m.examples[m.examples.len() - 1]
+	return f"{last.path}:{last.line}: the examples of `{m.name}` printed more than their ```output blocks say — `{got[at]}` is claimed by none\n"
+}
+
+# example_parent is the directory an import of `m` is written from: the one where `./name`
+# resolves to exactly the files `m` was read from.
+#
+# IT ASKS THE RESOLVER, not the names. A module is one file or a directory holding `mod.zg`, and
+# the file's own folder may carry the module's name either way — `gc/gc.zg` is a one-file module
+# standing in a folder called `gc`. So the folder the first file stands in is tried first, as
+# `module_at` would read `./name` from there, and if that is not this module, the module is the
+# folder itself and is imported from the one above it.
+fn example_parent(m: zerg.DocModule) -> str {
+	d := layout.dir_of(m.files[0].path)
+	return d if same_files(source.module_at(d, m.name), m)
+
+	return layout.dir_of(d)
+}
+
+fn same_files(got: list[str], m: zerg.DocModule) -> bool {
+	return false if got.len() != m.files.len()
+
+	mut i := 0
+	for i < got.len() {
+		return false if got[i] != m.files[i].path
+		i = i + 1
+	}
+	return true
+}
+
+# BOUNDED is the shell `bounded` runs a child under, and it is a stand-in: #196 is the issue that
+# removes it, by giving the runtime a child process with redirected streams, a deadline and a
+# directory of its own — every job below, and `example_dir`'s `mktemp`, then being the runtime's.
+#
+#   - IT NEEDS `ps` AND `awk`, and says so. Without them the tree below cannot be walked, so it
+#     leaves a `.nops` mark and exits `NO_PS` rather than kill only the direct child quietly.
+#   - THE CHILD WRITES TO A FILE, stdout and stderr joined, and its input is empty. No pipe is
+#     read while it runs, so nothing it starts — `cc` under `zerg build`, a process an example
+#     leaves running — can hold one open and keep this command waiting.
+#   - A WATCHDOG marks the run late and kills the child once `secs` have passed.
+#   - KILLING IS BY TREE (`k`): one `ps` snapshot of every process and its parent is taken
+#     first, then each process in the child's tree is stopped so it can start nothing more, and
+#     killed after its children. The snapshot comes before the first stop because stopping a
+#     member of an orphaned group makes the kernel hang up on the rest, and a middle process that
+#     dies of that before it is listed would hide its children. Not by process group — that needs
+#     job control, and dash refuses `set -m` without a terminal.
+#   - WHEN THE CHILD ENDS, the watchdog's tree is killed, `sleep` included, so nothing the
+#     watchdog started outlives the run. A process an example leaves running after a NORMAL exit
+#     is not killed: it has been handed to init, and no tree reaches it.
+#   - HANGUP, INTERRUPT OR TERM kill both trees and remove the run's directory and the generated
+#     source. The handler first ignores all three, so the hangup the kernel sends while `k` stops
+#     an orphaned group is absorbed. The command itself has no handler of its own, so a signal
+#     that lands between two children leaves the directory behind.
+#   - THE SHELL WRITES NOTHING. Its own streams go nowhere, because a shell that reports a killed
+#     job on stderr would do so into a pipe whose reader an interrupt has just killed.
+#
+# TWO WINDOWS ARE LEFT, both a signal to a process id the kernel reaped a moment earlier: a
+# watchdog already past its `sleep` in the instant the child ends, and a watchdog that killed the
+# child and was reaped by the shell during `wait` before `k` reaches it. The interrupt branch is
+# held by `make doc-check`; the hangup and no-`ps` branches were verified by hand, and stay so
+# until #196 replaces the wrapper.
+const BOUNDED := "exec >/dev/null 2>&1\nm=$1; o=$2; t=$3; d=$4; s=$5; shift 5\ncommand -v ps && command -v awk || { : >\"${m%.late}.nops\"; exit 97; }\nk() { z=$(ps -A -o pid= -o ppid=); kk \"$1\"; }\nkk() { kill -STOP \"$1\" 2>/dev/null; for c in $(printf '%s\\n' \"$z\" | awk -v p=\"$1\" '$2 == p { print $1 }'); do kk \"$c\"; done; kill -9 \"$1\" 2>/dev/null; }\np=; w=\ntrap 'trap : HUP INT TERM; k \"$p\"; k \"$w\"; rm -f \"$s\"; rm -rf \"$d\"; exit 130' HUP INT TERM\n\"$@\" >\"$o\" 2>&1 </dev/null &\np=$!\n( sleep \"$t\"; : >\"$m\"; k \"$p\" ) >/dev/null 2>&1 &\nw=$!\nwait \"$p\"\nr=$?\nk \"$w\"\nexit \"$r\"\n"
+
+# NO_PS is the status BOUNDED exits with when the host lacks what it needs to stop a process
+# tree. It is read together with the `.nops` mark, so a child that exits 97 is not mistaken for it.
+const NO_PS := 97
+
+# bounded runs argv for at most `secs` seconds and answers its status; everything it wrote is
+# left in `stem.out`. `tmp` is the run's directory and `src` the generated source, which an
+# interrupt removes; `stem` names the files a child leaves in `tmp` — its output, and the mark
+# that it ran late or could not be bounded at all.
+#
+# A LIMIT, because an example is code and code can loop. The runtime has no leaf that kills a
+# process, so the shell is asked to. `sh` is POSIX's, and a host this compiler can build on at
+# all is a POSIX host with a `cc`.
+fn bounded(argv: list[str], secs: int, tmp: str, src: str, stem: str) -> int {
+	mut sh: list[str] = ["sh", "-c", BOUNDED, "zerg-doc", stem + ".late", stem + ".out", f"{secs}", tmp, src]
+	for a in argv {
+		sh.append(a)
+	}
+	mut said := ""
+	return run_child(sh, said)
+}
+
+# no_ps reports whether BOUNDED refused to start for want of `ps` or `awk`: the status it exits
+# with, AND the mark it leaves, so a build or an example that happens to exit with the same
+# status is not taken for it.
+fn no_ps(code: int, stem: str) -> bool {
+	return code == NO_PS and __zrt_exists(stem + ".nops")
+}
+
+# timed_out reports whether the watchdog, rather than the child, ended the run: it marked the
+# run late AND the child died of the kill. A child that finished in the instant between the two
+# finished.
+fn timed_out(code: int, stem: str) -> bool {
+	return code == 137 and __zrt_exists(stem + ".late")
+}
+
+# run_child runs argv to the end and answers its status, with what it wrote to its stdout
+# appended to `out`.
+#
+# IT IS `os.command` SPELLED ON THE RUNTIME'S LEAVES, because the seed that builds this compiler
+# cannot build `os`, so the module that already does this is out of reach from here. Its stderr
+# is read only after its stdout has ended, which is safe for what is run here only: the shell
+# under `bounded` sends its child's output to a file and writes a line at most itself, and
+# `mktemp` / `rm` write a line at most.
+fn run_child(argv: list[str], mut &out: str) -> int {
+	h := __zrt_proc_open3(argv)
+	raise f"`zerg doc --check` could not start `{argv[0]}`" if h.len() < 4
+
+	__zrt_close(h[1])
+	out = out + drain(h[2])
+	drain(h[3])
+	return __zrt_proc_wait(h[0])
+}
+
+fn drain(fd: int) -> str {
+	mut got: list[byte] = []
+	for {
+		chunk := __zrt_read(fd)
+		break if chunk.len() == 0
+		for b in chunk {
+			got.append(b)
+		}
+	}
+	__zrt_close(fd)
+	return str(got)
+}
+
+# write_text is `io.write_file` answering a value, so a `guard` around it has a carrier the seed
+# can match on — a guarded call answering nothing is one it cannot.
+fn write_text(path: str, text: str) -> bool {
+	io.write_file(path, bytearray(text))
+	return true
+}
+
+# indent_head is `indent` for a build's report, cut to its first REPORT_LINES lines with a line
+# saying how many went. The first diagnostic is the one to fix, and a module with a thousand
+# broken lines otherwise buries every other module's finding under half a megabyte of the same
+# sentence.
+fn indent_head(text: str) -> str {
+	lines := test.lines_of(text)
+	return indent(lines) if lines.len() <= REPORT_LINES
+
+	# a loop rather than `slice`, which the seed that builds this compiler does not have
+	mut head: list[str] = []
+	for ln in lines {
+		break if head.len() == REPORT_LINES
+		head.append(ln)
+	}
+	return indent(head) + f"    … {lines.len() - REPORT_LINES} more line(s) of the build's report cut\n"
+}
+
+# REPORT_LINES is how much of a build's report a finding carries.
+const REPORT_LINES := 50
+
+fn indent(lines: list[str]) -> str {
+	mut out := ""
+	for ln in lines {
+		out = out + "    " + ln + "\n"
+	}
+	return out
+}

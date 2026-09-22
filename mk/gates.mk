@@ -65,20 +65,8 @@ test-runner:                    # the test runner can see a test that fails
 # having asked nothing — the one failure a test gate must not have.
 STDLIB_TEST_MIN ?= 159
 
-# The modules whose comments carry runnable examples. An example nobody executes is an
-# unverified claim, which is the shape this repository has spent a span removing, so the
-# ` ```zerg ` / ` ```output ` pairs are COMPILED AND RUN and their stated output diffed
-# against what came out. The list is a variable so that adding a module's examples is one
-# name here rather than a second copy of the rule.
-#
-# IT NAMES THE MODULES AND NOT THE SUITES NOW BESIDE THEM, and it is a list rather than a
-# glob, so the move did not quietly widen it: an example is a claim a module's DOC COMMENT
-# makes to a reader, and a `*_test.zg` makes its claims in `assert`.
-DOC_EXAMPLE_SRCS := src/stdlib/json.zg src/stdlib/log.zg src/stdlib/os.zg src/stdlib/strings.zg src/stdlib/time.zg
-
 stdlib-test:                    # the standard library's own suites, and a floor under them
 	$(MAKE) build
-	./scripts/doc-examples-check.sh $(DOC_EXAMPLE_SRCS)
 	@# `log`'s claims a suite inside the process cannot make — `fatal` exits, the default stream
 	@# is stderr, one line is one write, colour follows the terminal, `ZERG_LOG_LEVEL` names a
 	@# level, and the pattern `log` is the tree's reference for is still the shape of its
@@ -704,8 +692,10 @@ lint-check:                     # every linter rule has a program that makes it 
 # attachment rule gets a fixture case of its own, because two of them were wrong once with
 # no gate able to see it.
 #
-# It is NOT `zerg doc --check` — running a doc example and diffing its output is the second
-# half of issue #17 and is not built. `stdlib-test` still runs the examples.
-doc-check:                      # the document is every exposed declaration, and no more
+# AND EVERY EXAMPLE IS RUN, by `zerg doc --check` itself: each ` ```zerg ` fence in any comment
+# of any standard library module is built and run, and what it prints is held to the
+# ` ```output ` fence beside it. The modules are the command's own index, not a list here, so
+# a module that gains an example is covered the day it does.
+doc-check:                      # the document is every exposed declaration, and every example runs
 	$(MAKE) build
 	./scripts/doc-check.sh

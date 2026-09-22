@@ -60,10 +60,14 @@
 # of UNDOCUMENTED declarations is pinned exactly rather than bounded: it moves when somebody
 # writes a comment or adds a bare `pub`, and it should move because they did.
 #
-# WHAT IS NOT HERE: `zerg doc --check` — compiling a doc example and diffing its output —
-# is the second half of issue #17 and is not built. scripts/doc-examples-check.sh is still
-# the thing that runs the examples, it still runs on the board under `stdlib-test`, and
-# nothing here overlaps it.
+# §9 is the examples. `zerg doc --check` builds every ` ```zerg ` fence in the standard library
+# and diffs what it prints against the ` ```output ` fence beside it — every module, derived by
+# the command rather than listed here. The number of example lines it ran is held EQUAL to a
+# count this script derives from the sources with a wider pattern, runs at once must answer
+# what a single run answers, and a fixture holds one case for each way an example can be wrong —
+# a fence spelled another way, a build that fills a pipe, an example that never returns or leaves
+# a process running, a run interrupted — plus the two shapes of module a program is written
+# beside, and the undocumented `pub` the standard library no longer has an instance of.
 #
 # It needs no corpus: the standard library ships in this repository and the fixture is
 # written by the script, so it runs the same everywhere.
@@ -74,10 +78,9 @@ cd "$ROOT" || exit 2
 
 ZERG="${ZERG:-./bin/zerg}"
 
-# The counts this gate would report success for having measured nothing, and each of them is
-# the number this tree MEASURES rather than a round one under it: 183 exposed declarations
-# across the 14 stdlib modules that parse, 16 modules in the list, 18 declarations that carry
-# no comment, 26 attachment and form rules, and 56 checks.
+# The counts this gate would report success for having measured nothing. Each floor is the
+# number this tree MEASURES rather than a round one under it, so it moves in the change that
+# moves the measurement.
 #
 # THE FLOORS ARE THE MEASUREMENT AND NOT A MARGIN UNDER IT. `MIN_CHECKS` stood at 45 against a
 # run of 55, so ten checks could stop running with nothing said; a floor with slack in it
@@ -90,13 +93,13 @@ ZERG="${ZERG:-./bin/zerg}"
 # in a directory built to have one, rather than by a number that would have gone on passing
 # while the walk answered nothing.
 #
-# 56 is the count on a host with no `script`, which is the smaller of the two runs: the
-# terminal half of §6 adds five more. A floor pinned to the larger one would turn every host
+# `MIN_CHECKS` is the count on a host with no `script`, which is the smaller of the two runs: the
+# terminal half of §6 adds more. A floor pinned to the larger one would turn every host
 # without a pty red for a section it says out loud it did not run.
 MIN_DECLS="${MIN_DECLS:-183}"
 MIN_MODULES="${MIN_MODULES:-15}"
 UNDOC_LIST="${UNDOC_LIST:-scripts/doc-undocumented}"
-MIN_CHECKS="${MIN_CHECKS:-56}"
+MIN_CHECKS="${MIN_CHECKS:-81}"
 MIN_RULES="${MIN_RULES:-26}"
 
 # The column budget the document is filled to — `DOC_WIDTH` in cmd/doc_render.zg, written
@@ -827,6 +830,346 @@ grep -qx '(nothing exposed)' "$tmp/quiet.out" ||
 	note "a file with no header and nothing exposed renders as a heading and a blank line: $(cat "$tmp/quiet.out")"
 checks=$((checks + 1))
 
+# --- 9. `--check` runs every example, and still names what is undocumented ---------------
+#
+# The standard library first, whole: every ` ```zerg ` fence in it is built and run, and the
+# run has to be clean. Then one fixture per way an example can be wrong, because a check that
+# only ever sees right examples passes just as well when it runs none of them.
+
+# bounded_check <seconds> <out-file> <args…> runs `zerg doc --check <args…>` and answers its
+# status, or 124 when it was still running after <seconds>. A runner that hangs is the failure
+# two of the cases below exist to catch, and a gate that hangs with it catches nothing.
+bounded_check() {
+	local secs=$1 outf=$2 pid dog rc
+	shift 2
+	"$ZERG_ABS" doc --check "$@" >"$outf" 2>&1 &
+	pid=$!
+	(
+		sleep "$secs"
+		: >"$outf.late"
+		kill -9 "$pid"
+	) >/dev/null 2>&1 &
+	dog=$!
+	wait "$pid"
+	rc=$?
+	kill "$dog" 2>/dev/null
+	wait "$dog" 2>/dev/null
+	if [ -e "$outf.late" ]; then
+		rm -f "$outf.late"
+		return 124
+	fi
+	return "$rc"
+}
+
+# THE COUNT IS DERIVED, not written down. A second opinion reads the example lines out of the
+# standard library's sources with a pattern wider than the tool's own fence — any indentation,
+# backticks or tildes three or more, space before the word or none, `zerg` or `zg` in any case,
+# any word after it — and the tool has to report running EXACTLY that many.
+# A fence the tool stopped recognising makes the two differ; a fence it reports as not one
+# makes the run fail; and no number in this file has to be moved when an example is added.
+derived=$(
+	for src in src/stdlib/*.zg; do
+		# an `if` and not a `case`: bash 3.2 cannot parse a `case` pattern's bare `)` inside `$(…)`
+		if [ "${src%_test.zg}" = "$src" ]; then printf '%s\n' "$src"; fi
+	done | xargs awk '
+		FNR == 1 { inside = 0 }
+		/^[ \t]*#+[ \t]*(```+|~~~+)[ \t]*([Zz][Ee][Rr][Gg]|[Zz][Gg])/ { inside = 1; next }
+		inside && /^[ \t]*#+[ \t]*(```+|~~~+)[ \t]*$/ { inside = 0; next }
+		inside { n++ }
+		END { print n + 0 }
+	'
+)
+bounded_check 600 "$tmp/check.out"
+rc=$?
+ran=$(sed -nE 's/.*, ([0-9]+) example line\(s\) run,.*/\1/p' "$tmp/check.out")
+if [ "$rc" -ne 0 ]; then
+	note "\`zerg doc --check\` over the standard library exited $rc:"
+	sed 's/^/          /' "$tmp/check.out" >&2
+elif [ "$derived" -eq 0 ] || [ "${ran:-0}" -ne "$derived" ]; then
+	note "\`zerg doc --check\` ran ${ran:-no} example lines and the sources hold $derived — a fence was skipped, or none was found"
+else
+	checks=$((checks + 1))
+fi
+
+# RUNS AT ONCE, each of which must answer what a single run answers. Every run writes into a
+# directory of its own; a shared path had them linking over each other's binary and failing with
+# nothing wrong in any example. More than two, because that collision is a race and two runs in
+# step can miss it. One module is enough to race on — the paths are per module — so the runs ask
+# `json` alone rather than building the whole library three times over. Only a run that DISAGREES
+# with the single run is blamed on a shared path.
+bounded_check 120 "$tmp/conc0.out" json
+rc=$?
+concrc=""
+pids=()
+for i in 1 2 3; do
+	bounded_check 120 "$tmp/conc$i.out" json &
+	pids+=($!)
+done
+for i in 1 2 3; do
+	wait "${pids[i - 1]}"
+	r=$?
+	[ "$r" -eq "$rc" ] || concrc="$concrc $i:$r"
+done
+if [ -n "$concrc" ]; then
+	note "\`zerg doc --check json\` run at once disagreed with a single run's $rc (run:status$concrc) — a run shares a path with another:"
+	for i in 1 2 3; do
+		grep -v 'exposed declarations' "$tmp/conc$i.out" | head -3 | sed 's/^/          /' >&2
+	done
+else
+	checks=$((checks + 1))
+fi
+
+mkdir -p "$tmp/ex"
+
+# right: an expression example, a statement example, and one in the file's header — a comment
+# no declaration claims, which is a claim about the code all the same
+cat >"$tmp/ex/right.zg" <<'ZG'
+# right is a fixture, and its header carries an example too.
+#
+# ```zerg
+# right.twice(2)
+# ```
+# ```output
+# 4
+# ```
+
+# twice doubles its argument.
+#
+# ```zerg
+# right.twice(21)
+# right.twice(-1)
+# ```
+# ```output
+# 42
+# -2
+# ```
+#
+# and a statement example claims to print nothing:
+#
+# ```zerg
+# right.twice(0)
+# ```
+pub fn twice(n: int) -> int {
+	return n * 2
+}
+ZG
+
+# ran_check <case> <file> <wanted-exit> <wanted-substring> [<args>…]
+#
+# Each variant below is `right.zg` with ONE line changed and the module renamed, so a finding
+# can only have come from that line.
+ran_check() {
+	local what=$1 file=$2 want_rc=$3 want=$4 out rc
+	shift 4
+	bounded_check 120 "$tmp/ex/$file.out" "$@" "$tmp/ex/$file"
+	rc=$?
+	out="$(cat "$tmp/ex/$file.out")"
+	if [ "$rc" -eq 124 ]; then
+		note "$what — \`zerg doc --check $file\` was still running after 120s"
+		return
+	fi
+	if [ "$rc" -ne "$want_rc" ]; then
+		note "$what — \`zerg doc --check $file\` exited $rc, wanted $want_rc: $(printf '%s' "$out" | head -3)"
+		return
+	fi
+	case $out in
+	*"$want"*) checks=$((checks + 1)) ;;
+	*) note "$what — \`zerg doc --check $file\` said \"$(printf '%s' "$out" | head -3)\", wanted \"$want\"" ;;
+	esac
+}
+
+# what `right.zg`, and every copy of it that should pass, answers
+RIGHT_OK=', 4 example line(s) run, 0 module(s) whose examples are wrong'
+
+ran_check 'right examples, the statement and header ones included' right.zg 0 "$RIGHT_OK"
+
+# a limit of no seconds is a typo, and read as one it would fail every example for being late
+ran_check 'a `--timeout` below one second' right.zg 1 '`--timeout` is a whole number of seconds, one or more' --timeout 0
+
+sed 's/^# -2$/# -3/; s/right\./wrongout./' "$tmp/ex/right.zg" >"$tmp/ex/wrongout.zg"
+ran_check 'an ```output line that is not what the example prints' wrongout.zg 1 \
+	"wrongout.zg:12: this example's \`\`\`output is not what it prints — line 2 says \`-3\`, and the example printed \`-2\`"
+
+sed 's/^# 4$/# 5/; s/right\./header./' "$tmp/ex/right.zg" >"$tmp/ex/header.zg"
+ran_check 'a wrong example in a comment no declaration claims' header.zg 1 \
+	"header.zg:3: this example's \`\`\`output is not what it prints — line 1 says \`5\`, and the example printed \`4\`"
+
+sed 's/^# right\.twice(21)$/# right.nothing(21)/; s/right\./broken./' "$tmp/ex/right.zg" >"$tmp/ex/broken.zg"
+ran_check 'an example that does not compile' broken.zg 1 "broken.zg:3: the examples of \`broken\` do not compile"
+
+sed 's/^# right\.twice(0)$/# print right.twice(0)/; s/right\./chatty./' "$tmp/ex/right.zg" >"$tmp/ex/chatty.zg"
+ran_check 'a statement example that prints' chatty.zg 1 \
+	"the examples of \`chatty\` printed more than their \`\`\`output blocks say — \`0\` is claimed by none"
+
+# A fence spelled any other way is REPORTED, never skipped: the reader sees an example either way.
+#
+# fence_case <case> <name> <fence line> <wanted-finding> writes a module whose only fence-shaped
+# line is <fence line>, on line 3, and holds `--check` to the finding it names. Nothing else in
+# the module is an example, so the case builds nothing and asks one question.
+fence_case() {
+	printf '# %s is a fixture with one fence-shaped line.\n#\n# %s\n# %s.one()\n# ```\npub fn one() -> int {\n\treturn 1\n}\n' \
+		"$2" "$3" "$2" >"$tmp/ex/$2.zg"
+	ran_check "$1" "$2.zg" 1 "$2.zg:3: $4"
+}
+not_a_fence='is shaped like an example fence and is not one'
+fence_case 'an indented fence' indented '  ```zerg' "\`  \`\`\`zerg\` $not_a_fence"
+fence_case 'a ```zg fence' zg '```zg' "\`\`\`\`zg\` $not_a_fence"
+fence_case 'a fence with a space before its word' spaced '``` zerg' "\`\`\`\` zerg\` $not_a_fence"
+fence_case 'a fence whose word is capitalised' upper '```Zerg' "\`\`\`\`Zerg\` $not_a_fence"
+fence_case 'a ```ZG fence' shout '```ZG' "\`\`\`\`ZG\` $not_a_fence"
+fence_case 'a four-backtick fence' four '````zerg' "\`\`\`\`\`zerg\` $not_a_fence"
+fence_case 'a tilde fence' tilde '~~~zerg' "\`~~~zerg\` $not_a_fence"
+fence_case 'an output fence with no example above it' orphan '```output' 'an output fence with no example above it'
+
+# A ONE-FILE MODULE IN A FOLDER OF ITS OWN NAME, and a directory module beside it. The program
+# is written where `./name` reaches exactly the files the module was read from; a folder that
+# happens to share the module's name must not make a one-file module look like a directory.
+mkdir -p "$tmp/ex/gc" "$tmp/ex/pair"
+sed 's/right\./gc./' "$tmp/ex/right.zg" >"$tmp/ex/gc/gc.zg"
+ran_check 'a one-file module in a folder of its own name' gc/gc.zg 0 "$RIGHT_OK"
+sed 's/right\./pair./' "$tmp/ex/right.zg" >"$tmp/ex/pair/mod.zg"
+ran_check 'a directory module' pair 0 "$RIGHT_OK"
+
+# MORE DIAGNOSTICS THAN A PIPE HOLDS, and an example that never returns. The first deadlocked
+# the runner — it read the build's stdout to its end while the build waited to write stderr —
+# and the second hung it with nothing to stop the wait. Both have to be REPORTED.
+{
+	printf '# loud has an example that does not compile, loudly.\n#\n# ```zerg\n'
+	i=0
+	while [ "$i" -lt 1500 ]; do
+		printf '# loud.nothing%d()\n' "$i"
+		i=$((i + 1))
+	done
+	printf '# ```\npub fn one() -> int {\n\treturn 1\n}\n'
+} >"$tmp/ex/loud.zg"
+ran_check 'a build whose diagnostics fill a pipe' loud.zg 1 "loud.zg:3: the examples of \`loud\` do not compile"
+# and the finding carries the head of that report, saying how much it cut — half a megabyte of
+# one sentence would bury every other finding in the run
+if grep -q "more line(s) of the build's report cut" "$tmp/ex/loud.zg.out" &&
+	[ "$(wc -l <"$tmp/ex/loud.zg.out" | tr -d ' ')" -lt 100 ]; then
+	checks=$((checks + 1))
+else
+	note "a build report of $(wc -l <"$tmp/ex/loud.zg.out" | tr -d ' ') lines was copied into the finding without being cut"
+fi
+
+cat >"$tmp/ex/spin.zg" <<'ZG'
+# spin never returns.
+#
+# ```zerg
+# spin.spin()
+# ```
+pub fn spin() {
+	mut i := 0
+	for {
+		i = i + 1
+		if i > 1000 {
+			i = 0
+		}
+	}
+}
+ZG
+ran_check 'an example that never returns' spin.zg 1 \
+	"spin.zg:3: the examples of \`spin\` did not finish within 3s" --timeout 3
+
+# running <pattern> reports whether a process whose command line matches is alive. The listing
+# goes to a file first: under `pipefail`, `ps | grep -q` fails exactly when grep FINDS the line
+# and stops reading, which turns every "is it still running" into "no".
+running() {
+	ps -A -o args= >"$tmp/ps.out"
+	grep -q "$1" "$tmp/ps.out"
+}
+
+# AND ONE THAT LEAVES A PROCESS RUNNING. Killing the example alone left its child holding the
+# output and the command waiting the child out; the limit has to hold, and nothing the example
+# started may outlive the run. The marker is unique to this run, and the bracket in the pattern
+# keeps `grep` from finding itself.
+mark="zerg-doc-grandchild-$$"
+cat >"$tmp/ex/nap.zg" <<ZG
+import "os"
+
+# nap starts a child that outlives any sensible limit.
+#
+# \`\`\`zerg
+# nap.nap()
+# \`\`\`
+# \`\`\`output
+# 0
+# \`\`\`
+pub fn nap() -> int {
+	return os.run(["sh", "-c", "sleep 30; echo $mark"])
+}
+ZG
+started=$(date +%s)
+ran_check 'an example whose child outlives the limit' nap.zg 1 \
+	"nap.zg:5: the examples of \`nap\` did not finish within 3s" --timeout 3
+took=$(($(date +%s) - started))
+if [ "$took" -ge 20 ]; then
+	note "an example whose child outlives a 3s limit was reported after ${took}s — the command waited for the child"
+elif running "[z]erg-doc-grandchild-$$"; then
+	note "an example's child was still running after the run that started it had been stopped"
+else
+	checks=$((checks + 1))
+fi
+
+# AN INTERRUPT CLEANS UP. Ctrl-C reaches the whole foreground process group, so the command is
+# started in a group of its own (`set -m` gives a background job one in bash) and the group is
+# sent INT while an endless example runs: no run directory, no generated source beside the
+# module, and no process the example started may be left. The run directory is found by
+# pointing `TMPDIR` at an empty one.
+mkdir -p "$tmp/int/run" "$tmp/int/mod"
+imark="zerg-doc-interrupted-$$"
+cat >"$tmp/int/mod/intr.zg" <<ZG
+import "os"
+
+# intr never returns, and leaves a marked process running while it does not.
+#
+# \`\`\`zerg
+# intr.intr()
+# \`\`\`
+pub fn intr() {
+	os.run(["sh", "-c", "while :; do sleep 1; done; : $imark"])
+}
+ZG
+set -m
+TMPDIR="$tmp/int/run" "$ZERG_ABS" doc --check --timeout 60 "$tmp/int/mod/intr.zg" >"$tmp/int/out" 2>&1 &
+ipid=$!
+set +m
+i=0
+while [ "$i" -lt 30 ] && ! running "[z]erg-doc-interrupted-$$"; do
+	sleep 1
+	i=$((i + 1))
+done
+kill -INT -- -"$ipid" 2>/dev/null
+wait "$ipid"
+# the command dies at once and the shell under it is still cleaning up, so its cleanup is given
+# a few seconds to finish before what is left is judged
+j=0
+while [ "$j" -lt 10 ] && [ -n "$(ls -A "$tmp/int/run")" ]; do
+	sleep 1
+	j=$((j + 1))
+done
+left=""
+[ -z "$(ls -A "$tmp/int/run")" ] || left="$left the run directory,"
+ls -A "$tmp/int/mod" | grep -q zerg-doc && left="$left the generated source,"
+running "[z]erg-doc-interrupted-$$" && left="$left the example's process,"
+if [ "$i" -ge 30 ]; then
+	note "an interrupted run was never seen running its example: $(head -3 "$tmp/int/out")"
+elif [ -n "$left" ]; then
+	note "an interrupted \`zerg doc --check\` left${left%,} behind"
+	pkill -9 -f "zerg-doc-interrupted-$$" 2>/dev/null
+else
+	checks=$((checks + 1))
+fi
+
+# AND THE UNDOCUMENTED HALF IS STILL THERE. The standard library has nothing undocumented, so
+# §2 compares an empty list with an empty list — which a `--check` that had stopped naming
+# anything would satisfy too.
+{
+	cat "$tmp/ex/right.zg"
+	printf '\npub fn bare() -> int {\n\treturn 1\n}\n'
+} | sed 's/right\./bare./' >"$tmp/ex/bare.zg"
+ran_check 'an undocumented `pub fn` beside right examples' bare.zg 1 "\`bare.bare\` is exposed and carries no comment"
+
 # --- the module list, and the floors ----------------------------------------------------
 #
 # `zerg doc` with no argument is the first page a reader sees, and the only claim made about
@@ -851,7 +1194,7 @@ mkdir -p "$tmp/proj/greet"
 printf '# A module because it holds this file.\n\nimport pub "./hello"\n' >"$tmp/proj/greet/mod.zg"
 printf '# hello is the one name on the surface.\npub fn hello() -> str {\n\treturn "hi"\n}\n' >"$tmp/proj/greet/hello.zg"
 printf 'fn main() {\n\tnop\n}\n' >"$tmp/proj/main.zg"
-(cd "$tmp/proj" && "$OLDPWD/$ZERG" doc >"$tmp/local.out" 2>&1) || true
+(cd "$tmp/proj" && "$ZERG_ABS" doc >"$tmp/local.out" 2>&1) || true
 grep -qE "^  greet( |$)" "$tmp/local.out" ||
 	note "a folder holding a \`mod.zg\` beside the reader is a module and \`zerg doc\` does not list it: $(cat "$tmp/local.out")"
 checks=$((checks + 1))

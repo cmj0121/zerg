@@ -9,7 +9,7 @@ zerg doc strings              # that module's whole document
 zerg doc --brief strings      # its exposed surface, one line each
 zerg doc strings.split        # one declaration; log.Logger.level for a method
 zerg doc src/stdlib/log.zg    # a file, or a directory, documented where it stands
-zerg doc --check strings      # name what carries no comment; exit 1 if anything does
+zerg doc --check strings      # name what carries no comment, run every example; exit 1 on either
 ```
 
 ## The claim
@@ -47,9 +47,10 @@ question and is not a declaration of anything. Only then is the name split, **at
 and not the last** — splitting at the last leaves `log.Logger`, which resolves to nothing and
 turns a question that has an answer into a refusal.
 
-**Nothing here builds anything.** Reading a module is not importing it, so the checks an
-`import` is held to go unasked: a module that ships and cannot be compiled is still a module
-that can be read.
+**Reading builds nothing.** Reading a module is not importing it, so the checks an `import` is
+held to go unasked: a module that ships and cannot be compiled is still a module that can be
+read. `--check` is the one form that builds, and what it builds is the module's examples — the
+module itself is still read, not imported.
 
 `--brief` shortens a **listing** — each declaration becomes its signature and the first
 sentence of its comment, with fields, variants and methods left out. It is the same walk and
@@ -60,7 +61,8 @@ the thing itself, so `zerg doc --brief strings.split` prints the whole entry.
 `--check` reads the document for what is **missing** from it. Every exposed declaration whose
 comment is empty is named at the place it was declared, a file that did not parse is named
 too — because a module whose declarations never reached the document would answer "nothing is
-missing" by having nothing to report — and the run exits **1** if either happened.
+missing" by having nothing to report — every worked example is run, and the run exits **1** if
+any of that went wrong. How an example is run is its own section below.
 
 The mark it reports is the one the document already prints. What did not exist before it is a
 way to _ask_: `(undocumented)` is met in the middle of a page, one module at a time, with no
@@ -222,10 +224,16 @@ reader can see.
 
 ## The form of an example
 
-A worked example lives in the comment, as a pair of fenced blocks: **one expression per line** in a ` ```zerg `
-fence, and what those lines print in an ` ```output ` fence written directly beside it. Nothing declares the lines
-and nothing wraps them — the runner puts `print` in front of each one, in source order, and diffs what came out
-against the `output` block **line for line**.
+A worked example lives in the comment, as fenced blocks. An **expression example** is a pair: **one expression per
+line** in a ` ```zerg ` fence, and what those lines print in an ` ```output ` fence written directly beside it.
+Nothing declares the lines and nothing wraps them — the runner puts `print` in front of each line of an expression
+example, in source order, and diffs what came out against the `output` block **line for line**.
+
+**A fence is exactly ` ```zerg `, ` ```output ` or ` ``` `** — the whole comment once `#` and any trailing
+whitespace are taken off. Any other
+line a Markdown renderer could show as such a fence is reported by `--check` as a fence it does not recognise, never
+skipped: indented, three or more backticks or tildes, a space before the word, the word in any case, `zg`, words
+after the name, or an `output` fence with no example above it. A reader sees an example either way.
 
 ````text
 # ```zerg
@@ -238,12 +246,32 @@ against the `output` block **line for line**.
 # ```
 ````
 
-Every example in one file becomes **one program**, so the lines run in source order in a single process and a later
-one sees what an earlier one did. Both fences are carried into the document exactly as they were written, like any
-other fenced block.
+A ` ```zerg ` fence with **no** ` ```output ` fence under it is a **statement example**. Its lines are run as
+written rather than printed, and it claims to print nothing — a statement example that prints is as wrong as an
+expression example that prints the wrong thing. It is the shape a call answering nothing needs: `os.set_env` shows
+its write as one, and the read after it as an ordinary expression example.
 
-Two kinds of function cannot have an example in that form, and both are in the standard library today rather than
-hypothetical:
+````text
+# ```zerg
+# os.set_env("ZERG_DOC_EXAMPLE", "yes")
+# ```
+# ```zerg
+# os.env("ZERG_DOC_EXAMPLE") ?? "unset"
+# ```
+# ```output
+# yes
+# ```
+````
+
+Every example in one module becomes **one program**, so the lines run in source order in a single process and a
+later one sees what an earlier one did. Both fences are carried into the document exactly as they were written, like
+any other fenced block.
+
+An example is run **wherever it is written**: above a declaration, in the file's header, or in a comment nothing
+claims. Where it sits decides where the document shows it, and has no bearing on whether it is true. It runs from
+outside the module, as a reader's program would, so it reaches only what the module exposes.
+
+Two kinds of function are awkward to show, and both are in the standard library today rather than hypothetical:
 
 - **One answering a `list`, a `map` or a struct.** `print` renders a composite structurally now, so an
   example may show the answer whole — but reducing it is usually the better example anyway.
@@ -251,21 +279,61 @@ hypothetical:
   reason — `strings.join(strings.split("a,b,c", ","), "|")` prints `a|b|c`, which shows the pieces **and** that
   `join` inverts `split`. Issue [#16](https://github.com/cmj0121/zerg/issues/16) files it as `E449`, a composite
   has no rendering.
-- **One answering nothing.** `print` of it needs a value and is handed nil (`E3086`), so `os.set_env` carries an
-  **indented illustration** instead of a fence — printed in the document exactly as written, and never run. #16
-  files that one as `E390`; the round trip is asserted in `src/stdlib/os_test.zg` instead, where a claim about a
-  write can be made in full.
+- **One answering nothing.** `print` of it needs a value and is handed nil (`E3086`), so it cannot be an expression
+  example; #16 files that one as `E390`. A statement example runs it, and a later expression example can show what
+  it did — which is how `os.set_env` is shown. What a statement example cannot do is claim output of its own.
 
-An illustration is the honest shape for either, and it is not an example: nothing executes it and nothing holds it
-to what it says. That is the whole distinction — an example is a claim that is checked, and everything else in a
+What neither form can hold is an **indented illustration** — printed in the document exactly as written, and never
+run. `os.set_env` keeps one beside its examples, for the child process its value is inherited by: what a child
+prints is the child's, not the example's. An illustration is not an example: nothing executes it and nothing holds
+it to what it says. That is the whole distinction — an example is a claim that is checked, and everything else in a
 comment is a claim that is written down.
 
-**`zerg doc --check` is not built**, so the fences are executed by
-[`scripts/doc-examples-check.sh`](../../scripts/doc-examples-check.sh) instead, over the modules `mk/gates.mk` lists
-in `DOC_EXAMPLE_SRCS` — `json`, `log`, `os`, `strings` and `time` — on the gate board under `stdlib-test`. A module
-outside that list is not run at all: `cli.zg`'s one ` ```zerg ` fence has no `output` beside it and is a fragment of
-a method chain, which is an illustration that happens to be fenced. Moving the run into the command is the rest of
-[#17](https://github.com/cmj0121/zerg/issues/17).
+## How `--check` runs them
+
+`zerg doc --check` reads each module, extracts every example out of its comments, and writes them into one program
+that imports the module — by its bare name for a standard library module, and as `./name` from beside it for any
+other. That program is built by `zerg build` in a process of its own, so a module whose examples do not compile is
+reported and the next module still runs. Each generated line carries the `path:line` it came from as a trailing
+comment, so a diagnostic's source line names the comment the example lives in.
+
+Everything a run writes goes into a directory of its own, so two `--check` runs at once never share a path; the one
+file written beside a module outside the standard library carries that directory's unique name too. A program's two
+streams are **joined, in the order written**, and the `output` fences are held to that one stream — a line written
+to stderr is compared like any other. The output goes to a file in the run's directory rather than a pipe, so a
+process the example starts cannot keep the command waiting.
+
+The build, and then the run, may each take `--timeout` seconds — a whole number, one or more — and 60 unless it is
+given. When the limit is reached the child is killed together with the processes it started that are still its
+descendants; one an example started and left behind after a normal exit is not. A hangup, an interrupt (Ctrl-C) or
+a TERM kills the same processes and removes the run's directory and the generated source while a child is running;
+`zerg doc` has no handler of its own, so a signal that lands between two children leaves the directory behind.
+
+The directory, the joined streams and the limit come from host tools, the way `zerg build` depends on `cc`: `sh`,
+`ps`, `awk`, `mktemp`, `kill` and `sleep`, until [#196](https://github.com/cmj0121/zerg/issues/196) gives the runtime
+a child process that has all three. A host without `ps` or `awk` cannot stop a process tree, so each module's
+examples are reported as not run rather than run under a limit that does not hold. A build's
+report is copied into the finding up to its first `REPORT_LINES` lines (in `cmd/doc_run.zg`), with a line saying how
+many were cut.
+
+A module's examples are wrong, and the run exits **1**, when any of these happen:
+
+| What happened                               | Reported at                                           |
+| ------------------------------------------- | ----------------------------------------------------- |
+| its program cannot be written               | the module's first example, with why                  |
+| the host has no `ps` or `awk`               | the module's first example — its examples are not run |
+| the program does not compile                | the module's first example, with the build's report   |
+| the build or the run outlasts `--timeout`   | the module's first example                            |
+| it exits with a status other than 0         | the module's first example, with what it wrote        |
+| a printed line is not its `output` line     | the example whose fence that line falls in            |
+| it prints more than its `output` fences say | the module's last example, with the first extra line  |
+
+Only the first difference in a module is reported: once one example prints a line too many or too few, every line
+after it is compared against the wrong claim. With no argument `--check` reads every module `zerg doc` lists, so
+the whole standard library is run — no list of modules decides which examples count. `make doc-check` holds that run
+clean, holds the number of example lines it ran equal to a count it derives from the sources itself, runs it
+several times at once, and keeps fixture cases that are wrong on purpose — a run over right examples alone passes
+just as well when it runs none of them.
 
 ## The shape of a document
 
@@ -380,17 +448,10 @@ itself is the one failure it cannot recover from:
 
 | Not built                                                | Issue                                            |
 | -------------------------------------------------------- | ------------------------------------------------ |
-| `--check` — build a doc example and diff its output      | [#17](https://github.com/cmj0121/zerg/issues/17) |
 | `##` — the reader's document apart from the maintainer's | [#18](https://github.com/cmj0121/zerg/issues/18) |
 | finding a declaration without naming its module          | [#19](https://github.com/cmj0121/zerg/issues/19) |
 | static HTML pages                                        | [#20](https://github.com/cmj0121/zerg/issues/20) |
 | `--serve`                                                | [#21](https://github.com/cmj0121/zerg/issues/21) |
-
-`--check` is the second half of the issue this first version came from, deliberately left for
-its own commit. Until it lands, the examples go on being run by
-[`scripts/doc-examples-check.sh`](../../scripts/doc-examples-check.sh), over the modules
-`DOC_EXAMPLE_SRCS` names — the form of an example, and what that script does with it, is a
-section of its own above. Nothing in `zerg doc` overlaps it.
 
 `##` waits **deliberately**. This codebase's comments are long and largely addressed to
 maintainers, and separating the reader's half from the maintainer's half cannot be automated —

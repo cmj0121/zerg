@@ -68,6 +68,8 @@
 #     to whoever is writing for that reader. It is `hidden`'s argument, one struct up.
 
 import (
+	"ascii"
+
 	"./ast"
 	"./emit"
 	"./lexer"
@@ -100,6 +102,43 @@ pub struct DocModule {
 	# written, and `doc_find` reaches a name without being told which chapter holds it.
 	# Which file a declaration came from is `DocDecl.path`, which a renderer groups by.
 	pub decls: list[DocDecl]
+
+	# every worked example written in any comment of the module, in source order — attached
+	# or not. An example is a claim about the code wherever it is written, and one that
+	# `--check` skipped for sitting in a header nobody claims would be a claim nobody checks.
+	pub examples: list[DocExample]
+
+	# every comment line SHAPED like an example fence that is not one: an indented fence, a
+	# fence with words after `zerg`, a `zg` fence, an `output` fence with no example above it.
+	# Skipping them would be the same silence one step earlier: a reader sees an example, and
+	# nothing ran it.
+	pub strays: list[DocStray]
+}
+
+# DocStray is one line that looks like a fence and is not one, where it was written.
+pub struct DocStray {
+	pub path: str
+	pub line: int
+	pub text: str
+
+	# a correctly spelled ` ```output ` fence standing where no example is, which is a different
+	# mistake from a misspelled fence and is named as that
+	pub orphan: bool
+}
+
+# DocExample is one ` ```zerg ` fence and the ` ```output ` fence written directly under it, if
+# there is one. With it the fence is an EXPRESSION example: each line is a value, printed. With
+# none it is a STATEMENT example: each line is run as written, and it claims to print nothing
+# — which is the only shape a function answering nothing can be shown working in.
+pub struct DocExample {
+	pub path: str
+
+	# the line of the ` ```zerg ` fence itself, which is where a failure is reported
+	pub line: int
+
+	pub code: list[str]
+	pub want: list[str]
+	pub expr: bool
 }
 
 # DocFile is one source file of a module: where it was read from, what it says about itself,
@@ -198,6 +237,8 @@ pub fn doc_module(name: str, srcs: list[str], paths: list[str]) -> DocModule {
 
 	mut files: list[DocFile] = []
 	mut decls: list[DocDecl] = []
+	mut examples: list[DocExample] = []
+	mut strays: list[DocStray] = []
 
 	mut i := 0
 	for i < srcs.len() {
@@ -214,9 +255,85 @@ pub fn doc_module(name: str, srcs: list[str], paths: list[str]) -> DocModule {
 
 		# after the claim pass, never before it: a header is the run no declaration wanted
 		files.append(DocFile(path, doc_header(tv), ok))
+		doc_examples(tv, path, examples, strays)
 		i = i + 1
 	}
-	return DocModule(name, files, decls)
+	return DocModule(name, files, decls, examples, strays)
+}
+
+# doc_examples appends the examples one file's comments hold, and the lines that only look like
+# the start of one. A fence never spans two runs: a blank line ends a run, and an example with a
+# blank line inside it is two paragraphs of prose to a reader too.
+#
+# A FENCE IS EXACTLY ` ```zerg ` OR ` ```output ` — the whole comment once `# ` is taken off. That
+# is one spelling to learn and one to check, and every other line that opens a fence naming
+# zerg, zg or output — however it is spelled (`doc_fence_shaped`) — is reported rather than
+# guessed at.
+fn doc_examples(tv: DocTrivia, path: str, mut &out: list[DocExample], mut &strays: list[DocStray]) {
+	for r in tv.runs {
+		mut i := 0
+		for i < r.lines.len() {
+			if r.lines[i] != "```zerg" {
+				if doc_fence_shaped(r.lines[i]) {
+					strays.append(DocStray(path, r.first + i, r.lines[i], r.lines[i] == "```output"))
+				}
+				i = i + 1
+				continue
+			}
+			at := r.first + i
+			mut code: list[str] = []
+			i = doc_fence_body(r.lines, i + 1, code)
+			mut want: list[str] = []
+			expr := i < r.lines.len() and r.lines[i] == "```output"
+			if expr {
+				i = doc_fence_body(r.lines, i + 1, want)
+			}
+			out.append(DocExample(path, at, code, want, expr))
+		}
+	}
+}
+
+# doc_fence_shaped reports whether a comment line opens a fence of any spelling — indented or
+# not, three or more backticks or tildes, space or none before the word — whose word starts with
+# `zerg`, `zg` or `output` in any case. That is every line a Markdown renderer might show as one
+# of these fences, which is the population a reader would take for an example. Asked only of
+# lines that are not an opening fence, so every line it answers true for is a stray.
+fn doc_fence_shaped(line: str) -> bool {
+	b := bytearray(line)
+	mut i := 0
+	for i < b.len() and (b[i] == b' ' or b[i] == b'\t') {
+		i = i + 1
+	}
+	return false if i >= b.len() or (b[i] != b'`' and b[i] != b'~')
+
+	mark := b[i]
+	start := i
+	for i < b.len() and b[i] == mark {
+		i = i + 1
+	}
+	return false if i - start < 3
+
+	for i < b.len() and (b[i] == b' ' or b[i] == b'\t') {
+		i = i + 1
+	}
+	mut word: list[byte] = []
+	for i < b.len() {
+		word.append(ascii.fold_lower(b[i]))
+		i = i + 1
+	}
+	rest := str(word)
+	return parser.strings_has_prefix(rest, "zerg") or parser.strings_has_prefix(rest, "zg") or parser.strings_has_prefix(rest, "output")
+}
+
+# doc_fence_body collects the lines of a fence opened on the line before `i`, up to its closing
+# ```, and answers the line after that close.
+fn doc_fence_body(lines: list[str], i: int, mut &body: list[str]) -> int {
+	mut k := i
+	for k < lines.len() and lines[k] != "```" {
+		body.append(lines[k])
+		k = k + 1
+	}
+	return k + 1
 }
 
 # doc_find answers WHERE in `m.decls` the named declaration is. `name` is `split` or

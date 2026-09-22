@@ -216,14 +216,21 @@ fn run_tests(root: str, only: str, secs: int) -> int {
 # A package inside the standard library's tree is a stdlib module — that is what a bare
 # `import "json"` from its own suite names — and anything else is this project's.
 fn pkg_identity(p: test_pkg.Pkg) -> str {
-	# THE TWO PATHS ARE THE SAME DIRECTORY SPELLED TWICE — `stdlib_dir()` is absolute, and a
-	# package's directory is whatever the caller typed — so this asks whether one is the tail of
-	# the other rather than whether the strings are equal. It is the same shape as the bug this
-	# whole change is about, one level down: a path is not an identity.
-	std := layout.stdlib_dir()
-	return "stdlib:" + p.mod if p.dir == std or layout.has_suffix(std, "/" + p.dir) or has_prefix(p.dir, std + "/")
+	return "stdlib:" + p.mod if in_stdlib(p.dir)
 
 	return "project:" + p.mod
+}
+
+# in_stdlib reports whether a directory, spelled however the caller spelled it, is the standard
+# library's or one inside it. `zerg doc --check` asks it too, of the directory a module's
+# examples import it from, because a stdlib module is imported by its bare name and nothing
+# else is.
+pub fn in_stdlib(dir: str) -> bool {
+	# THE TWO PATHS ARE THE SAME DIRECTORY SPELLED TWICE — `stdlib_dir()` is absolute, and a
+	# package's directory is whatever the caller typed — so this asks whether one is the tail of
+	# the other rather than whether the strings are equal: a path is not an identity.
+	std := layout.stdlib_dir()
+	return dir == std or layout.has_suffix(std, "/" + dir) or has_prefix(dir, std + "/")
 }
 
 # run_pkg builds one package's test binary and runs it, adding its counts to the run's.
@@ -443,8 +450,9 @@ const TEST_JOBS := 4
 # nothing deciding, the one that hangs takes the whole run with it — until CI's own timeout
 # kills the job, at which point the log says the job was killed and nothing says which test
 # did it. Sixty seconds is far above anything a unit test should take and far below any CI
-# job limit, which is the whole of what a default here has to be.
-const TEST_TIMEOUT := 60
+# job limit, which is the whole of what a default here has to be. `zerg doc --check` takes it as
+# its default for a module's examples, for the same reason.
+pub const TEST_TIMEOUT := 60
 
 # test_dir is where a test binary and its report are written: a `test` directory under the build
 # cache, which is already the place a build puts what it made and which `make clean` already
@@ -624,7 +632,7 @@ fn first_line(text: str) -> str {
 	return ""
 }
 
-fn read_or_empty(path: str) -> str {
+pub fn read_or_empty(path: str) -> str {
 	mut out := ""
 	guard {
 		out = str(io.read_file(path))
@@ -634,7 +642,7 @@ fn read_or_empty(path: str) -> str {
 
 # rm_file removes a path this command made, and says nothing when it was not there — every
 # caller wants "make sure this is gone" rather than "delete exactly this".
-fn rm_file(path: str) {
+pub fn rm_file(path: str) {
 	guard {
 		__zrt_remove(path)
 	}

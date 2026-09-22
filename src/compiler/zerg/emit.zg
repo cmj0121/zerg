@@ -4263,6 +4263,13 @@ fn c_gen_meth_resolved(mut &em: Emitter, recv: str, meth: str, target: ast.Expr,
 	# answer is int, and this gives T_.
 	raise c_diag(em, rule.Rule.GenericMethodOnExistential, f"`{meth}` on a {recv} is a GENERIC method, and a boxed value has nothing to dispatch it through — a witness table holds one slot per required member and a generic method would need one per type argument. Call it on the concrete type, or through a generic parameter bounded by the spec (docs/core/specs.md)") if c_is_spec_name(em, recv)
 
+	# AN ASSOCIATED FN HAS NO RECEIVER to be the first actual below. Solving as if it had paired
+	# its first parameter with the instance, so `b.wrap(9)` on `fn wrap[U](v: U) -> Maybe[U]`
+	# answered `Maybe[Bag]` and reported arity against an argument the caller never wrote.
+	if c_gen_is_assoc(em, key) {
+		c_refuse_assoc_through_instance(em, recv, meth)
+	}
+
 	# THE RECEIVER IS THE FIRST ACTUAL, because it is the first PARAMETER: `this` is implicit in
 	# the source and explicit in the list from the parser on. Solving against the written
 	# arguments alone paired `this: P` with `7` and reported _argument 0 of `P.pick` is int, and
@@ -10483,17 +10490,48 @@ fn c_enum_of(mut &em: Emitter, en: str, meth: str, args: list[ast.Expr], sb: Sub
 # receiver to be called on, and an associated fn reached through an instance has nowhere to put
 # one — so each names what the declaration is and what the other spelling would be.
 fn c_assoc_call(mut &em: Emitter, tn: str, meth: str, args: list[ast.Expr], sb: Subst) -> str {
-	key := c_sig_key(tn, meth)
+	key := c_assoc_key(em, tn, meth, args)
 	r := c_sig_row(em, key)
 
 	raise c_diag(em, rule.Rule.NoSuchAssociatedFn, f"`{tn}` declares no `{meth}` — an `impl` of it declares the methods and associated fns it has, and they share one namespace (GRAMMAR#impl-decl)") if r < 0
-	raise c_diag(em, rule.Rule.MethodThroughItsType, f"`{meth}` is a METHOD of `{tn}` — its body uses `this`, so it is reached through an instance (`x.{meth}(…)`) and not through the type (GRAMMAR#impl-decl)") if not em.sig_assoc[r]
+	if not em.sig_assoc[r] {
+		c_refuse_method_through_type(em, tn, meth)
+	}
 
 	c_chk_unsafe_fn(em, f"{tn}.{meth}", "this call is in safe code", r)
 
 	# base 0, and `lead` false: an associated fn has no receiver, so its first written argument
 	# is parameter 0 and there is no operand standing in front of the run.
-	return f"{c_fn_cname(tn, meth)}({c_args_from(em, key, 0, args, false, sb)})"
+	return f"{c_fn_cname(tn, c_sig_meth_of(key))}({c_args_from(em, key, 0, args, false, sb)})"
+}
+
+# c_assoc_key is the signature key `Type.f(…)` names — the lowering's and the inference's, which
+# have to agree. A GENERIC associated fn is specialized here, from the WRITTEN arguments alone:
+# it has no receiver, so there is nothing to put in front of them. A generic METHOD reached this
+# way is refused before solving, because solving without its `this` pairs the first written
+# argument with it.
+fn c_assoc_key(mut &em: Emitter, tn: str, meth: str, args: list[ast.Expr]) -> str {
+	key := c_sig_key(tn, meth)
+	return key if not c_is_generic(em, key)
+
+	if not c_gen_is_assoc(em, key) {
+		c_refuse_method_through_type(em, tn, meth)
+	}
+	return c_instantiate(em, key, args)
+}
+
+# c_gen_is_assoc is `is_assoc` for a TEMPLATE, which has no signature row to carry `sig_assoc`.
+fn c_gen_is_assoc(mut &em: Emitter, key: str) -> bool {
+	return em.gen_tpls[c_generic_row(em, key)].is_assoc
+}
+
+# EACH REFUSAL IS ASKED FROM A PLAIN ROW AND FROM A TEMPLATE, so its sentence is spelled once.
+fn c_refuse_method_through_type(mut &em: Emitter, tn: str, meth: str) {
+	raise c_diag(em, rule.Rule.MethodThroughItsType, f"`{meth}` is a METHOD of `{tn}` — its body uses `this`, so it is reached through an instance (`x.{meth}(…)`) and not through the type (GRAMMAR#impl-decl)")
+}
+
+fn c_refuse_assoc_through_instance(mut &em: Emitter, recv: str, meth: str) {
+	raise c_diag(em, rule.Rule.AssocFnThroughAnInstance, f"`{meth}` is an ASSOCIATED FN of `{recv}` — its body does not use `this`, so it takes no receiver and is reached through the type (`{recv}.{meth}(…)`) (GRAMMAR#impl-decl)")
 }
 
 fn c_free_method(mut &em: Emitter, target: ast.Expr, meth: str, args: list[ast.Expr], sb: Subst) -> str {
@@ -12333,7 +12371,9 @@ fn c_recv_call(mut &em: Emitter, recv: str, meth: str, target: ast.Expr, args: l
 	# the dot has nowhere to go — it used to be passed as the first written argument, which is
 	# how `p.make(2)` came out as `argument 0 of `P.make` is int, and this gives P`: a sentence
 	# about the argument the caller did not write.
-	raise c_diag(em, rule.Rule.AssocFnThroughAnInstance, f"`{meth}` is an ASSOCIATED FN of `{recv}` — its body does not use `this`, so it takes no receiver and is reached through the type (`{recv}.{meth}(…)`) (GRAMMAR#impl-decl)") if r >= 0 and em.sig_assoc[r]
+	if r >= 0 and em.sig_assoc[r] {
+		c_refuse_assoc_through_instance(em, recv, meth)
+	}
 
 	c_chk_unsafe_fn(em, f"{recv}.{meth}", "this call is in safe code", r)
 	return f"{c_fn_cname(recv, meth)}({c_recv_args(em, key, target, args, sb)})"
@@ -13569,7 +13609,7 @@ fn c_infer_methcall(mut &em: Emitter, target: ast.Expr, meth: str, args: list[as
 	# it reads that. The row is what carries the answer, and it is keyed the way a method's is —
 	# an associated fn shares its type's namespace.
 	sn := c_ident_name(target)
-	return c_lookup_sig_ret(em, c_sig_key(sn, meth)) if sn != "" and c_is_struct_name(em, sn)
+	return c_lookup_sig_ret(em, c_assoc_key(em, sn, meth, args)) if sn != "" and c_is_struct_name(em, sn)
 
 	tty := c_infer(em, target)
 	recv := c_recv_name(em, tty)

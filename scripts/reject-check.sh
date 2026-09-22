@@ -968,6 +968,45 @@ fn main() {
 }
 EOF
 
+# A GENERIC fn is told apart by the same body, and both refusals hold for it. The instance used
+# to be solved as the first argument of every generic fn of an impl, so `p.wrap(9)` answered
+# `Maybe[P]` and reported arity against an argument nobody wrote — and `P.pick(1)` said the type
+# declares no `pick`.
+
+reject a-generic-associated-fn-reached-through-an-instance E3152 'is an ASSOCIATED FN of `P`' <<'EOF'
+struct P {
+	pub x: int
+}
+
+impl P {
+	fn wrap[U](v: U) -> list[U] {
+		return [v]
+	}
+}
+
+fn main() {
+	p := P(1)
+	print p.wrap(9).len()
+}
+EOF
+
+reject a-generic-method-reached-through-its-type E3151 'is a METHOD of `P`' <<'EOF'
+struct P {
+	pub x: int
+}
+
+impl P {
+	fn pick[U](v: U) -> U {
+		print this.x
+		return v
+	}
+}
+
+fn main() {
+	print P.pick(1)
+}
+EOF
+
 # --- an array length that names a constant (GRAMMAR#array-type) ----------------------
 #
 # The length is part of the TYPE, so `[int; N]` and `[int; 4]` have to be ONE type wherever two

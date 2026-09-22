@@ -91,6 +91,15 @@ mutate() {
 	awk -v KIND="$2" -f scripts/reject-fuzz.awk "$1"
 }
 
+# THE MODULE DIRECTORIES GO BESIDE THE COPIES. A multi-file case is an entry at the top of
+# the corpus importing a directory next to it (`import "./dcap_sink"`), and a copy with no
+# such directory beside it cannot resolve the import — so every such entry used to land in the
+# skipped count below, and a batch of multi-file cases read as the population shrinking. The
+# module files themselves are never mutated: only the top level is globbed.
+for dir in "$CORPUS"/*/; do
+	[ -d "$dir" ] && cp -R "${dir%/}" "$tmp/"
+done
+
 for src in "$CORPUS"/*.zg; do
 	name="$(basename "$src" .zg)"
 
@@ -99,11 +108,12 @@ for src in "$CORPUS"/*.zg; do
 	#
 	# Measured on a COPY, where the mutations are compiled, and not on the source in
 	# place — because a case may be well-formed where it lives and unbuildable anywhere
-	# else. A multi-file case importing a module directory beside it is exactly that: the
-	# copy cannot resolve the import, so every mutation of it was refused for a reason the
-	# mutation did not cause, and the refusal — the driver's, which carries no place —
-	# counted against a ceiling that watches the checker's rules. One such case moved
-	# `write-immutable` from 2 to 3 and read as a regression.
+	# else. A multi-file case whose module directory was missing beside the copy was exactly
+	# that: every mutation of it was refused for a reason the mutation did not cause, and the
+	# refusal — the driver's, which carries no place — counted against a ceiling that watches
+	# the checker's rules. One such case moved `write-immutable` from 2 to 3 and read as a
+	# regression. The directories are copied above now; what is still skipped here is a case
+	# that does not build on its own for some other reason.
 	cp "$src" "$tmp/$name.orig.zg"
 	"$ZERG" build --emit c "$tmp/$name.orig.zg" >/dev/null 2>&1 || {
 		unbuildable=$((unbuildable + 1))
@@ -188,10 +198,11 @@ rc=0
 # that are only printed. A source that does not build in isolation is not this gate's finding
 # — the reason is three paragraphs up and it is a good one — but it leaves the fuzzer's
 # population smaller, and the population is the only thing standing between "no mutation was
-# refused for the wrong reason" and "almost nothing was mutated". Eleven today; a change that
-# made a hundred sources unbuildable on their own would have read as eleven plus more, green,
-# with MIN_REFUSED far enough below the 461 applied to tolerate the collapse.
-UNBUILDABLE_MAX=${UNBUILDABLE_MAX:-11}
+# refused for the wrong reason" and "almost nothing was mutated". None since the module
+# directories are copied beside the sources; a change that made a hundred sources unbuildable
+# on their own would otherwise have read green, with MIN_REFUSED far enough below the mutations
+# applied to tolerate the collapse.
+UNBUILDABLE_MAX=${UNBUILDABLE_MAX:-0}
 if [ "$unbuildable" -gt "$UNBUILDABLE_MAX" ]; then
 	echo "reject-fuzz: $unbuildable sources do not build on their own, and the ceiling is $UNBUILDABLE_MAX — the fuzzer's population is shrinking"
 	rc=1

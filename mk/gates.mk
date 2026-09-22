@@ -19,7 +19,7 @@
 # LINUX_GATES, and a step in .github/workflows/ci.yml. `make gates` holds all three
 # to each other.
 
-.PHONY: suites test-runner stdlib-test install-check examples corpus fixpoint sanitize-conc sanitize-corpus \
+.PHONY: suites test-runner stdlib-test compiler-test install-check examples corpus fixpoint sanitize-conc sanitize-corpus \
 	mem-check refuse reject oracle lsp editor-align treesitter desugar gates reject-fuzz \
 	check-equal fmt-corpus fmt-self fmt-tokens fmt-roundtrip docs-links docs-mirror docs-zerg docs-refused \
 	grammar-cites grammar-cited grammar-keywords grammar-mirror refusal-cites docs-repeat generic-walks sha256 layering conformance productions \
@@ -79,6 +79,28 @@ stdlib-test:                    # the standard library's own suites, and a floor
 	n=$$(printf '%s\n' "$$out" | sed -n 's/^\([0-9][0-9]*\) passed,.*/\1/p'); \
 	[ -n "$$n" ] && [ $$n -ge $(STDLIB_TEST_MIN) ] || \
 		{ echo "stdlib-test: $${n:-no} tests passed, and the floor is $(STDLIB_TEST_MIN) — the gate did not run itself"; exit 1; }
+
+# The compiler library's own suites — the `*_test.zg` beside the files of src/compiler/zerg —
+# which nothing ran. They are a target of their own rather than a second walk in `stdlib-test`
+# because a red board should say WHICH library broke.
+#
+# A PACKAGE THAT CANNOT BE BUILT IS A FAILURE HERE, and that is the case this gate was written
+# for: `testing` imports `log`, and while a bare name was answered from the whole program the
+# compiler's own `Kind.Chan` took `log`'s `Chan(ch)`, so no suite of this library could be
+# compiled at all (#195).
+#
+# The floor is `stdlib-test`'s, for its reason: `zerg test` over a tree with no test in it exits
+# with a status of its own, but a suite deleted beside one that stays still passes.
+COMPILER_TEST_MIN ?= 3
+
+compiler-test:                  # the compiler library's own suites, and a floor under them
+	$(MAKE) build
+	@out=$$(./bin/zerg test src/compiler/zerg 2>&1); status=$$?; \
+	printf '%s\n' "$$out"; \
+	[ $$status -eq 0 ] || exit 1; \
+	n=$$(printf '%s\n' "$$out" | sed -n 's/^\([0-9][0-9]*\) passed,.*/\1/p'); \
+	[ -n "$$n" ] && [ $$n -ge $(COMPILER_TEST_MIN) ] || \
+		{ echo "compiler-test: $${n:-no} tests passed, and the floor is $(COMPILER_TEST_MIN) — the gate did not run itself"; exit 1; }
 
 # `make install` is the first command a user runs and was the one command nothing ran: every
 # other gate here uses the compiler out of ./bin, so a broken install was invisible until
@@ -400,7 +422,7 @@ gates:                          # every gate is on the board, and the board is r
 	./scripts/gates-check.sh
 
 # `version-check` sits straight after `build` because it reads bin/ rather than filling it.
-LINUX_GATES ?= build version-check suites test-runner stdlib-test examples corpus desugar lsp editor-align treesitter install-check refuse reject oracle reject-fuzz check-equal fmt-corpus fmt-tokens fmt-roundtrip fmt-self lint lint-check doc-check fixpoint docs-links docs-mirror docs-repeat docs-zerg docs-refused generic-walks grammar-cites grammar-cited grammar-keywords grammar-mirror refusal-cites layering stmt-walk dead-code entry-path examples-index conformance productions counterexamples behaviour error-codes-check seed-gaps deviation-check marker-codes chapter-codes method-gaps build-deps-check cache-key-check sha256 gates mem-check mem-peak release-notes release-sums formula sanitize-conc sanitize-corpus
+LINUX_GATES ?= build version-check suites test-runner stdlib-test compiler-test examples corpus desugar lsp editor-align treesitter install-check refuse reject oracle reject-fuzz check-equal fmt-corpus fmt-tokens fmt-roundtrip fmt-self lint lint-check doc-check fixpoint docs-links docs-mirror docs-repeat docs-zerg docs-refused generic-walks grammar-cites grammar-cited grammar-keywords grammar-mirror refusal-cites layering stmt-walk dead-code entry-path examples-index conformance productions counterexamples behaviour error-codes-check seed-gaps deviation-check marker-codes chapter-codes method-gaps build-deps-check cache-key-check sha256 gates mem-check mem-peak release-notes release-sums formula sanitize-conc sanitize-corpus
 
 # The dead-code questions `zerg lint` cannot be asked, because neither is a question about one
 # program: a `pub` function of the COMPILER that nothing in the compiler calls, and a script

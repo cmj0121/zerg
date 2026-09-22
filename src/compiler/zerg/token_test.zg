@@ -1,0 +1,29 @@
+# The `token` suite — the keyword table and its rendering, asked from inside the file they
+# live in.
+#
+# `Kind.Chan` IS WHY THIS FILE EXISTS FIRST. `zerg test` builds every test against `testing`,
+# which imports `log`, and `log` constructs its own struct `Chan` by bare name. While a bare
+# name was answered from the whole program, this module's variant took that construction and
+# the package could not be built at all (#195) — so no suite of the compiler library could
+# run. A regression of that rule fails this file before any assertion is reached, since the
+# package is refused as a whole.
+#[test]
+fn test_chan_is_a_keyword() {
+	assert lookup_keyword("chan") == Kind.Chan
+	assert kind_name(Kind.Chan) == "chan"
+}
+
+# a word the table does not hold is an identifier, however close it is to one it does
+#[test]
+fn test_near_keyword_is_an_identifier() {
+	assert lookup_keyword("chans") == Kind.Ident
+	assert lookup_keyword("Chan") == Kind.Ident
+}
+
+# every keyword's rendering reads back as that keyword, which is what `--emit tokens` relies on
+#[test]
+fn test_keyword_round_trips_through_its_name() {
+	for w in ["fn", "return", "chan", "select", "spawn", "match"] {
+		assert kind_name(lookup_keyword(w)) == w
+	}
+}

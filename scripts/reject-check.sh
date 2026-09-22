@@ -7011,6 +7011,298 @@ fn main() {
 }
 EOF
 
+# A BARE VARIANT IS THIS FILE'S (#57), and the sentence names the enum THIS file declared even
+# when another file of the program declares a variant of the same name. The lookup used to be
+# program-wide and answered the first enum loaded, so it named the other module's — and typed
+# the value as that enum too, which opened the finding with a wrong-answer E3032.
+#
+# IN PAIRS that differ only in which file writes the bare name. Whichever enum a program-wide
+# lookup meets first, one case of each pair is answered with the other file's enum; a single
+# case could agree with that lookup by accident.
+reject a-bare-payload-variant-names-this-files-enum E3079 'write `Local.Chan`' seed-gap <<'EOF'
+import "./far"
+
+enum Local {
+	Chan(int)
+	Idle
+}
+
+fn pick() -> Local {
+	return Chan(1)
+}
+
+fn main() {
+	pick()
+	print far.one()
+}
+--- far/mod.zg
+pub enum Remote {
+	Chan(int)
+	Idle
+}
+
+pub fn one() -> int {
+	return 1
+}
+EOF
+
+reject a-bare-payload-variant-in-a-module-names-its-enum E3079 'write `Remote.Chan`' seed-gap <<'EOF'
+import "./far"
+
+enum Local {
+	Chan(int)
+	Idle
+}
+
+fn main() {
+	l := Local.Chan(1)
+	print far.one()
+}
+--- far/mod.zg
+pub enum Remote {
+	Chan(int)
+	Idle
+}
+
+fn pick() -> Remote {
+	return Chan(1)
+}
+
+pub fn one() -> int {
+	pick()
+	return 1
+}
+EOF
+
+reject a-bare-payload-free-variant-names-this-files-enum E3079 'write `Local.Idle`' seed-gap <<'EOF'
+import "./far"
+
+enum Local {
+	Chan(int)
+	Idle
+}
+
+fn pick() -> Local {
+	return Idle
+}
+
+fn main() {
+	pick()
+	print far.one()
+}
+--- far/mod.zg
+pub enum Remote {
+	Chan(int)
+	Idle
+}
+
+pub fn one() -> int {
+	return 1
+}
+EOF
+
+reject a-bare-payload-free-variant-in-a-module-names-its-enum E3079 'write `Remote.Idle`' seed-gap <<'EOF'
+import "./far"
+
+enum Local {
+	Chan(int)
+	Idle
+}
+
+fn main() {
+	l := Local.Idle
+	print far.one()
+}
+--- far/mod.zg
+pub enum Remote {
+	Chan(int)
+	Idle
+}
+
+fn pick() -> Remote {
+	return Idle
+}
+
+pub fn one() -> int {
+	pick()
+	return 1
+}
+EOF
+
+# A PATTERN IS TYPED BY ITS SUBJECT, not by the file, so a bare `Chan(n)` against a `Local`
+# that has no `Chan` is the wrong enum's variant when another file declares one — never "no
+# variant named `Chan`". The file-scoped lookup above must not reach this question.
+reject a-bare-pattern-of-another-files-variant E4018 <<'EOF'
+import "./far"
+
+enum Local {
+	Idle
+	Busy
+}
+
+fn main() {
+	l := Local.Idle
+	print match l {
+		Chan(n) => n
+		_       => far.one()
+	}
+}
+--- far/mod.zg
+pub enum Remote {
+	Chan(int)
+	Idle
+}
+
+pub fn one() -> int {
+	return 1
+}
+EOF
+
+# A BARE NAME ONLY ANOTHER FILE DECLARES AS A VARIANT is undefined here, and the finding says
+# where the variant does live — spelled through the namespace this file bound for its module,
+# which is the one spelling that reaches it. A call and a value are the two codes it reaches.
+reject a-bare-call-of-another-modules-variant E4016 '`Chan` is a variant of `far.Remote` — name it through its module (`far.Remote.Chan`)' <<'EOF'
+import "./far"
+
+fn main() {
+	x := Chan(1)
+	print far.one()
+}
+--- far/mod.zg
+pub enum Remote {
+	Chan(int)
+	Idle
+}
+
+pub fn one() -> int {
+	return 1
+}
+EOF
+
+reject a-bare-value-of-another-modules-variant E3069 '`Idle` is a variant of `far.Remote` — name it through its module (`far.Remote.Idle`)' <<'EOF'
+import "./far"
+
+fn main() {
+	x := Idle
+	print far.one()
+}
+--- far/mod.zg
+pub enum Remote {
+	Chan(int)
+	Idle
+}
+
+pub fn one() -> int {
+	return 1
+}
+EOF
+
+# and a module this file did not import has no spelling here, so the finding names its file
+reject a-bare-call-of-an-unimported-modules-variant E4016 'is a variant of `Remote`, declared in' <<'EOF'
+import "./near"
+
+fn main() {
+	x := Chan(1)
+	print near.one()
+}
+--- near/mod.zg
+import "./far"
+
+pub fn one() -> int {
+	return far.one()
+}
+--- near/far/mod.zg
+pub enum Remote {
+	Chan(int)
+	Idle
+}
+
+pub fn one() -> int {
+	return 1
+}
+EOF
+
+# a RE-EXPORT is a spelling too: `mid` puts `sink` on its surface, so `mid.Remote.Chan` reaches it
+reject a-bare-call-of-a-re-exported-variant E4016 '`Chan` is a variant of `mid.Remote` — name it through its module (`mid.Remote.Chan`)' <<'EOF'
+import "./mid"
+
+fn main() {
+	x := Chan(1)
+	print mid.one()
+}
+--- mid/mod.zg
+import pub "./sink"
+
+pub fn one() -> int {
+	return 1
+}
+--- mid/sink/mod.zg
+pub enum Remote {
+	Chan(int)
+	Idle
+}
+EOF
+
+# and a PRIVATE enum has no spelling here either, so the finding never offers one the reader
+# would then be refused for
+reject a-bare-call-of-another-modules-private-variant E4016 'is a variant of `Remote`, declared in' <<'EOF'
+import "./far"
+
+fn main() {
+	x := Chan(1)
+	print far.one()
+}
+--- far/mod.zg
+enum Remote {
+	Chan(int)
+	Idle
+}
+
+pub fn one() -> int {
+	return 1
+}
+EOF
+
+# `del` says what a name IS, which is a program-wide question: a variant another file declares
+# is still a variant and not "nothing this program declares".
+reject del-of-another-modules-variant E3104 'names a variant' <<'EOF'
+import "./far"
+
+fn main() {
+	del Idle
+	print far.one()
+}
+--- far/mod.zg
+pub enum Remote {
+	Chan(int)
+	Idle
+}
+
+pub fn one() -> int {
+	return 1
+}
+EOF
+
+# AN ENTRY WHOSE PATH STARTS WITH `<` IS STILL A FILE. The bracket is how a tree the compiler
+# wrote is marked, and read by the bracket alone `zerg build '<a-bracketed-entry>.zg'` was
+# compiler-written: every privacy silence applied, and a private name of another module was
+# callable from it.
+reject '<a-bracketed-entry>' E3001 bare-entry <<'EOF'
+import "./far"
+
+fn main() {
+	print far.hid()
+}
+--- far/mod.zg
+fn hid() -> int {
+	return 7
+}
+
+pub fn one() -> int {
+	return 1
+}
+EOF
+
 # AND THE BUILT-IN IS NOT AN EXCEPTION. `Left` and `Right` are variants of `Either`, and
 # they were the last two names in this language that read as themselves — for a mechanical
 # reason rather than a decided one: they are context-typed, so this compiler matched them by

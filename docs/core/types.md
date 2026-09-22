@@ -305,8 +305,16 @@ would mean that declaring a variant in one file changes what a name in another f
 [Grammar](../surface/grammar.md) makes for pattern position, which holds identically here. A variant IS the
 pair, so the pair is how it is written, in every position.
 
-Where two enums declare the name, the suggestion in that sentence names the first of them: it is one of the
-two spellings that would work, and the reader is the one who knows which.
+The rule is asked of **this file's** enums, because a bare name is this file's
+([Modules, Packages & Programs](../runtime/package.md)). A variant another file declares is not reached by a
+bare spelling here at all: `Chan(ch)` in a file that declares a struct `Chan` builds that struct, whatever
+enum elsewhere in the program has a `Chan`, and a bare name that only another file declares as a variant is an
+undefined name — whose finding names the variant through a namespace this file bound that reaches its module,
+directly or through a re-export (`far.Remote.Chan`), and names the file that declares it instead when no import
+of this file reaches that module or the enum is private. The same holds inside a default, which is its
+declaring file's expression wherever it is called, and inside what a decorator expands to. Where two of this
+file's enums declare the name, the suggestion names the first of them: it is one of the two spellings that
+would work, and the reader is the one who knows which.
 
 A specific width is the opt-in layout decorator `#[repr]` (**[not yet]** —
 reserved and rejected loudly today as _E9005_, see [Decorators](decorators.md)); the serialized/wire form is

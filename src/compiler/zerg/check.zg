@@ -155,7 +155,7 @@ fn chk_seen(ds: list[ast.Diag], path: str, line: int, col: int, msg: str) -> boo
 # It reads and does not write; `mut &` is the only reference this language has, and a copy is
 # what the alternative costs.
 pub fn c_mod_of(mut &em: emit.Emitter, path: str) -> str {
-	return "" if c_synthetic_path(path)
+	return "" if c_synthetic_path(em, path)
 
 	mut i := 0
 	for i < em.unit_paths.len() {
@@ -167,7 +167,7 @@ pub fn c_mod_of(mut &em: emit.Emitter, path: str) -> str {
 }
 
 # c_synthetic_path is whether a path names a tree the COMPILER wrote rather than a file it
-# read — `<builtin>` for the built-in specs, `<derive>` for what a decorator expands to — plus
+# read — `<builtin>` for the built-in specs, `<derive:FILE>` for what a decorator expands to — plus
 # the empty path, which is a declaration with no origin at all.
 #
 # It is the "there is no module here" sentinel, and until now it was arrived at by accident:
@@ -176,14 +176,48 @@ pub fn c_mod_of(mut &em: emit.Emitter, path: str) -> str {
 # silence, which is the hole. Naming the two apart is what lets a bare filename have a module
 # without a derived impl acquiring one.
 #
-# `<` is what marks it, because no path the loader ever hands over can start with one: a
-# source is either the entry as it was typed on the command line or a `.zg` file resolved
-# under a source root, and neither route produces an angle bracket.
-fn c_synthetic_path(path: str) -> bool {
+# `<` MARKS IT, AND THE LOADER'S TABLE IS WHAT MAKES THE MARK TRUE. The entry file is taken as
+# it was typed, so `zerg build '<x>.zg'` hands over a real source whose path starts with one —
+# and read by the bracket alone that file was compiler-written: every privacy silence here
+# applied to it, and a bare name in it read the whole program. A path the loader READ is in
+# `unit_paths`, so it is a file whatever it is spelled like; only a bracketed path nothing
+# loaded is a tree the compiler wrote.
+pub fn c_synthetic_path(mut &em: emit.Emitter, path: str) -> bool {
 	b := bytearray(path)
-	return true if b.len() == 0
 
-	return b[0] == b'<'
+	return true if b.len() == 0
+	return false if b[0] != b'<'
+
+	for up in em.unit_paths {
+		return false if up == path
+	}
+	return true
+}
+
+# c_origin_path is the FILE a path answers name questions for. A real file answers for itself;
+# a tree a decorator expanded is parsed at `<derive:FILE>`, FILE being the declaration it was
+# expanded from, and answers for that file — so the bare names `#[obj]` writes (`DrawObj(…)`)
+# resolve as they would in the spec's own file and not against every file of the program.
+# `<builtin>` and `<derive>` name no file and answer themselves, which no declaration matches.
+pub fn c_origin_path(mut &em: emit.Emitter, path: str) -> str {
+	return path if not c_synthetic_path(em, path)
+
+	b := bytearray(path)
+	pre := bytearray("<derive:")
+	return path if b.len() <= pre.len() or b[b.len() - 1] != b'>'
+
+	mut i := 0
+	for i < pre.len() {
+		return path if b[i] != pre[i]
+		i = i + 1
+	}
+
+	mut out: list[byte] = []
+	for i < b.len() - 1 {
+		out.append(b[i])
+		i = i + 1
+	}
+	return str(out)
 }
 
 # chk_across_modules is the SILENCE every visibility rule keeps, and it is one function
@@ -214,8 +248,8 @@ fn chk_across_modules(mut &em: emit.Emitter, at_path: str, decl_path: str) -> bo
 	# compiler wrote, so neither is a file a reader could have put a `pub` in, and a rule that
 	# guessed there would refuse a program for a reason nobody can act on. It was `c_mod_of`
 	# answering `""` for them before this compared paths directly.
-	return false if c_synthetic_path(decl_path)
-	return false if c_synthetic_path(at_path)
+	return false if c_synthetic_path(em, decl_path)
+	return false if c_synthetic_path(em, at_path)
 
 	return false if at_path == decl_path
 

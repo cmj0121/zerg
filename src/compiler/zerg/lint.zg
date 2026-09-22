@@ -184,6 +184,18 @@ pub fn lint_program(srcs: list[str], paths: list[str], ms: emit.Mods) -> list[Fi
 pub fn check_and_lint(srcs: list[str], paths: list[str], ms: emit.Mods, mut &diags: list[ast.Diag]) -> list[Finding] {
 	prog := emit.merge_files_at(srcs, paths)
 	convs := emit.lint_conversions_of(prog, ms, diags)
+	return lint_after(srcs, paths, ms, prog, convs)
+}
+
+# check_lint_index is check_and_lint that also answers the NAME INDEX (#24) in `nx`, out of the
+# same one walk. An abort raises out of it before `nx` is written.
+pub fn check_lint_index(srcs: list[str], paths: list[str], ms: emit.Mods, mut &diags: list[ast.Diag], mut &nx: ast.NameIndex) -> list[Finding] {
+	prog := emit.merge_files_at(srcs, paths)
+	convs := emit.lint_index_of(prog, ms, diags, nx)
+	return lint_after(srcs, paths, ms, prog, convs)
+}
+
+fn lint_after(srcs: list[str], paths: list[str], ms: emit.Mods, prog: ast.File, convs: list[ast.Diag]) -> list[Finding] {
 	mut out: list[Finding] = []
 	guard {
 		out = lint_merged(srcs, paths, ms, prog, convs)

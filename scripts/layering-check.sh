@@ -202,7 +202,7 @@ reaches_into "$ZG/parser.zg"
 # grep below used to name `ty_quals` alone, and `ty_apps` — added for generic type applications
 # — matched its `[^)]*` tail and was reported as a READ of the first. One loop, one name at a
 # time, so a third accumulator is one word here rather than a rule written twice.
-for acc in ty_quals ty_apps ty_uses; do
+for acc in ty_quals ty_apps ty_uses tp_scopes; do
 	# THE MATCH STOPS AT A COMMA as well as at a `)`. The exemption below is for the `File`
 	# constructor's hand-off, and it used to rest on the accumulator being that call's LAST
 	# argument: `[^)]*` swallowed `p.ty_quals, p.ty_apps` whole and reported the pair as a read
@@ -236,7 +236,7 @@ done
 # carried the few statements from where the keyword is consumed to where the declaration is
 # built. What would break the claim is a field holding what the parser has DECLARED; this holds
 # what it has READ, which is the difference between a symbol table and a cursor.
-ZPARSER_FIELDS="toks pos impl_ty path saw_this depth edepth ty_quals ty_apps ty_uses"
+ZPARSER_FIELDS="toks pos impl_ty path saw_this depth edepth ty_quals ty_apps ty_uses tp_scopes"
 zf=$(zg_fields "$ZG/parser.zg" Parser)
 if [ -z "$zf" ]; then
 	note "the zerg parser's fields did not extract"
@@ -350,6 +350,7 @@ kind_of_arg() {
 	'""') printf 'str\n' ;;
 	Ty.* | *.Ty.*) printf 'Ty\n' ;;
 	"c_nosub()") printf 'Subst\n' ;;
+	"ast.no_index()") printf 'NameIndex\n' ;;
 	[0-9]*) printf 'int\n' ;;
 	*) printf 'UNKNOWN(%s)\n' "$1" ;;
 	esac
@@ -365,8 +366,8 @@ else
 		sed -E "s/^$TAB(pub )?[a-z_][A-Za-z0-9_]*: //" >"$TMPD/fields"
 	while read -r f; do kind_of_field "$f"; done <"$TMPD/fields" >"$TMPD/fkinds"
 
-	# and the argument KINDS, in call order. `c_nosub()` is the only call among them, and it
-	# holds no comma, so splitting on `,` and trimming each side is safe.
+	# and the argument KINDS, in call order. `c_nosub()` and `ast.no_index()` are the only calls
+	# among them, and neither holds a comma, so splitting on `,` and trimming each side is safe.
 	printf '%s\n' "$ctor" | tr ',' '\n' | sed 's/^ *//; s/ *$//' >"$TMPD/args"
 	while read -r a; do kind_of_arg "$a"; done <"$TMPD/args" >"$TMPD/akinds"
 

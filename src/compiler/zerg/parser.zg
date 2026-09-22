@@ -66,6 +66,10 @@ pub struct Parser {
 
 	# ty_uses — every type NAME written (File.ty_uses), under the same rule: appended, never read
 	pub ty_uses: list[ast.TyUse]
+
+	# tp_scopes — the extent of each declaration that has type parameters (File.tp_scopes),
+	# appended when the declaration ends and never read
+	pub tp_scopes: list[ast.TyScope]
 }
 
 fn cur(mut &p: Parser) -> token.Token {
@@ -633,7 +637,47 @@ fn ident_name(e: ast.Expr) -> str {
 
 # p_ty_use records one type NAME as written — `t` is its token, the one a reader points at.
 fn p_ty_use(mut &p: Parser, t: token.Token) {
-	p.ty_uses.append(ast.TyUse(t.lexeme, p.path, t.line, t.col, bytearray(t.lexeme).len()))
+	p_ty_use_as(p, t, ast.TP_USE, "")
+}
+
+# p_tparam_decl records the token that DECLARES a type parameter, beside the uses.
+fn p_tparam_decl(mut &p: Parser, t: token.Token) {
+	p_ty_use_as(p, t, ast.TP_DECL, "")
+}
+
+fn p_ty_use_as(mut &p: Parser, t: token.Token, tparam: int, app: str) {
+	p.ty_uses.append(ast.TyUse(t.lexeme, p.path, t.line, t.col, bytearray(t.lexeme).len(), tparam, app))
+}
+
+# p_tparam_maybe records each bare name among an `impl` target's arguments — the tokens from
+# `lo` up to `hi` — as one that may declare a type parameter (ast.TP_MAYBE) of the application
+# `app`, and answers how many.
+fn p_tparam_maybe(mut &p: Parser, lo: int, hi: int, app: str) -> int {
+	mut n := 0
+	mut depth := 0
+	mut i := lo
+	for i < hi {
+		t := p.toks[i]
+		if t.kind == token.Kind.LBrack {
+			depth = depth + 1
+		} else if t.kind == token.Kind.RBrack {
+			depth = depth - 1
+		} else if depth == 1 and t.kind == token.Kind.Ident and i + 1 < hi and (p.toks[i + 1].kind == token.Kind.Comma or p.toks[i + 1].kind == token.Kind.RBrack) {
+			p_ty_use_as(p, t, ast.TP_MAYBE, app)
+			n = n + 1
+		}
+		i = i + 1
+	}
+	return n
+}
+
+# p_tp_scope records where a declaration with type parameters ends — the token after it — so
+# its parameters' scope runs from `start` to there. A declaration with none records nothing.
+fn p_tp_scope(mut &p: Parser, start: token.Token, n: int) {
+	return if n == 0
+
+	e := cur(p)
+	p.tp_scopes.append(ast.TyScope(p.path, start.line, start.col, e.line, e.col))
 }
 
 # p_take_ty_uses carries a scratch parser's type uses back to the one that made it. A hole is
@@ -1259,7 +1303,7 @@ fn conv_ty(name: str) -> ast.Ty {
 # than a second door that says it by default.
 pub fn parse_at(src: str, path: str) -> ast.File {
 	toks := lexer.tokenize(src)
-	mut p := Parser(toks, 0, "", path, false, 0, 0, [], [], [])
+	mut p := Parser(toks, 0, "", path, false, 0, 0, [], [], [], [])
 	mut imports: list[ast.ImportDecl] = []
 	mut structs: list[ast.StructDecl] = []
 	mut enums: list[ast.EnumDecl] = []
@@ -1542,7 +1586,7 @@ pub fn parse_at(src: str, path: str) -> ast.File {
 	# not the end of the file, because that is where the reader has to go.
 	raise p_diag_at(p, unsafe_line, unsafe_col, rule.Rule.UnsafeGroupUnterminated, "this module-level `unsafe { … }` group is never closed — a group marks a context and the context has to end, or every declaration after it is read as being inside") if in_unsafe
 
-	return ast.File(imports, structs, enums, specs, impls, fns, types, consts, derive_on, derive_spec, stmts, p.ty_quals, p.ty_apps, p.ty_uses)
+	return ast.File(imports, structs, enums, specs, impls, fns, types, consts, derive_on, derive_spec, stmts, p.ty_quals, p.ty_apps, p.ty_uses, p.tp_scopes)
 }
 
 # p_take_top_stmt records a top-level statement for the build to refuse, and is the one
@@ -2036,6 +2080,7 @@ fn parse_spec(mut &p: Parser, is_pub: bool) -> ast.SpecDecl {
 	if p_at(p, token.Kind.LBrack) {
 		p_advance(p)
 		for not p_at(p, token.Kind.RBrack) and not p_at(p, token.Kind.Eof) {
+			p_tparam_decl(p, cur(p))
 			params.append(p_name(p, "a spec's type parameter"))
 			if p_at(p, token.Kind.Colon) {
 				p_advance(p)
@@ -2117,6 +2162,7 @@ fn parse_spec(mut &p: Parser, is_pub: bool) -> ast.SpecDecl {
 			# The receiver is `This` — the implementing type, which is not known here. Giving
 			# it a name makes a required signature the same SHAPE as a supplied one, so the
 			# two are compared position for position with nothing to offset.
+			start := cur(p)
 			sig := parse_fn_head(p, false, "This", recv_mut, false)
 
 			# A PROVIDED METHOD — `fn f() { … }` in a spec. GRAMMAR#spec-member is `fn-sig |
@@ -2131,6 +2177,7 @@ fn parse_spec(mut &p: Parser, is_pub: bool) -> ast.SpecDecl {
 			} else {
 				reqs.append(sig)
 			}
+			p_tp_scope(p, start, sig.tparams.len())
 		} else if p_at(p, token.Kind.Type) {
 			raise p_diag(p, rule.Rule.AssocTypeNotSpecMember, "an associated type is not a `spec` member — a spec carries BEHAVIOUR and nothing else (GRAMMAR#spec-member), so `type Item` names a type nothing here binds. Take the type as a parameter of the spec instead")
 		} else if p_at(p, token.Kind.Ident) and peek_kind(p, 1) == token.Kind.Colon {
@@ -2146,6 +2193,7 @@ fn parse_spec(mut &p: Parser, is_pub: bool) -> ast.SpecDecl {
 		skip_semis(p)
 	}
 	expect(p, token.Kind.RBrace)
+	p_tp_scope(p, kw, params.len())
 	return ast.SpecDecl(name, params, supers, super_args, reqs, is_pub, p.path, kw.line, kw.col, nt.line, nt.col)
 }
 
@@ -2453,6 +2501,7 @@ fn parse_enum(mut &p: Parser, is_pub: bool) -> ast.EnumDecl {
 	# equal its position was indistinguishable from one that declared nothing, so `P(int) = 0`
 	# had its discriminant read and then quietly dropped.
 	raise p_diag(p, rule.Rule.DiscriminantOnPayloadEnum, f"enum `{name}` carries a payload, so its tag is opaque — a discriminant (on `{spelled[0]}`) belongs to an enum whose every variant is fieldless") if payload and spelled.len() > 0
+	p_tp_scope(p, kw, tparams.len())
 	return ast.EnumDecl(name, variants, tparams, is_pub, p.path, kw.line, kw.col, nt.line, nt.col)
 }
 
@@ -2519,6 +2568,7 @@ fn parse_struct(mut &p: Parser, is_pub: bool) -> ast.StructDecl {
 		p_stmt_sep(p, token.Kind.RBrace)
 	}
 	expect(p, token.Kind.RBrace)
+	p_tp_scope(p, kw, tparams.len())
 	return ast.StructDecl(name, fields, is_pub, p.path, kw.line, kw.col, tparams, nt.line, nt.col)
 }
 
@@ -2717,7 +2767,9 @@ fn parse_impl(mut &p: Parser, mut &fns: list[ast.FnDecl], mut &impls: list[ast.I
 	p_ty_use(p, ftok)
 
 	mut first := p_name(p, "an `impl`")
+	mut a0 := p.pos
 	mut args := parse_ty_args(p)
+	mut a1 := p.pos
 	mut sp := ""
 	mut target := first
 
@@ -2734,7 +2786,9 @@ fn parse_impl(mut &p: Parser, mut &fns: list[ast.FnDecl], mut &impls: list[ast.I
 		ttok = cur(p)
 		p_ty_use(p, ttok)
 		target = p_name(p, "an `impl … for …` target")
+		a0 = p.pos
 		targs = parse_ty_args(p)
+		a1 = p.pos
 	}
 
 	# A DOTTED NAME IN THE HEAD. GRAMMAR#impl-decl's target is a `type`, and GRAMMAR#base-type
@@ -2810,6 +2864,13 @@ fn parse_impl(mut &p: Parser, mut &fns: list[ast.FnDecl], mut &impls: list[ast.I
 	if sp != "" {
 		impls.append(ast.ImplDecl(sp, args, target, tp_names, p.path, kw.line, kw.col))
 	}
+
+	# `impl Box[T]` — with no `impl[T]`, what makes it generic is that an argument of its target
+	# names no type, and the emitter decides that (c_tpl_params). The tokens are recorded here.
+	mut maybe := 0
+	if tp_names.len() == 0 {
+		maybe = p_tparam_maybe(p, a0, a1, target)
+	}
 	expect(p, token.Kind.LBrace)
 	skip_semis(p)
 
@@ -2875,6 +2936,7 @@ fn parse_impl(mut &p: Parser, mut &fns: list[ast.FnDecl], mut &impls: list[ast.I
 	}
 	expect(p, token.Kind.RBrace)
 	p.impl_ty = outer
+	p_tp_scope(p, kw, tp_names.len() + maybe)
 }
 
 # `is_test` and `is_fixture` are the `#[test]` / `#[fixture]` the caller took off the pending
@@ -2909,6 +2971,7 @@ fn p_impl_spec_of(sp: str, args: list[ast.Ty]) -> str {
 }
 
 fn parse_fn_at(mut &p: Parser, is_pub: bool, recv: str, recv_mut: bool, in_unsafe: bool, is_test: bool, is_fixture: bool, assoc_ok: bool, spec_of: str) -> ast.FnDecl {
+	start := cur(p)
 	head := parse_fn_head_at(p, is_pub, recv, recv_mut, in_unsafe, not assoc_ok)
 
 	# SAVED AND RESTORED around the body, the discipline every parser flag here follows: a `fn`
@@ -2917,6 +2980,7 @@ fn parse_fn_at(mut &p: Parser, is_pub: bool, recv: str, recv_mut: bool, in_unsaf
 	outer_this := p.saw_this
 	p.saw_this = false
 	body := parse_block(p)
+	p_tp_scope(p, start, head.tparams.len())
 	is_assoc := assoc_ok and not p.saw_this and not p_is_rendering(head.name)
 	p.saw_this = outer_this or p.saw_this
 
@@ -2964,6 +3028,7 @@ fn p_type_params(mut &p: Parser, mut &names: list[str], mut &bounds: list[str]) 
 
 	p_advance(p) # '['
 	for not p_at(p, token.Kind.RBrack) and not p_at(p, token.Kind.Eof) {
+		p_tparam_decl(p, cur(p))
 		nm := p_name(p, "a type parameter")
 		mut bound := ""
 		if p_at(p, token.Kind.Colon) {
@@ -3640,7 +3705,7 @@ fn parse_assert(mut &p: Parser) -> ast.Stmt {
 # token list: `p` and `p.toks` cannot both be `mut &` in one call — they alias — and a list is
 # copy-on-write, so the value here is a refcount and not the file.
 fn p_scratch(mut &p: Parser, toks: list[token.Token], pos: int) -> Parser {
-	return Parser(toks, pos, p.impl_ty, p.path, p.saw_this, p.depth, p.edepth, [], [], [])
+	return Parser(toks, pos, p.impl_ty, p.path, p.saw_this, p.depth, p.edepth, [], [], [], [])
 }
 
 # p_assert_claims is the split: one claim per conjunct of a top-level `and` chain, and ONE

@@ -725,6 +725,38 @@ pub struct Emitter {
 	pub fld_path: list[str]
 	pub fld_line: list[int]
 	pub fld_col: list[int]
+
+	# want_index / nx are THE NAME INDEX (#24): asked for by the language server and nothing else,
+	# so a build carries the empty one and every recording site answers at its first line. It is
+	# filled where the walk RESOLVES a name — the declaration it records for a use is the one the
+	# walk lowered that use to — which is what makes it the compiler's answer and not a second one.
+	pub want_index: bool
+	pub nx: ast.NameIndex
+
+	# nx_rows settles a binding whose declaration is learned only AFTER its uses were lowered: a
+	# loop variable's body is walked inside the call that binds it, and the place its name was
+	# written is known to the statement, not to that call. Such a row starts PENDING (c_nx_row)
+	# and its uses record the pending id; ast.nx_seal settles them through this table.
+	pub nx_rows: list[int]
+
+	# env_nx / sig_nx / fld_nx / var_nx / tk_nx / ns_nx / pr_nx are each row's DECLARATION in `nx`,
+	# row for row beside the table it annotates — -1 when nobody wrote the name, and a pending id
+	# (below -1) for a binding still waiting on nx_rows. The key they stand for is the
+	# declaration's NAME token, which a specialization shares with its template. They are filled
+	# only when an index was asked for, and read only then: a build appends nothing to them.
+	pub env_nx: list[int]
+	pub sig_nx: list[int]
+	pub fld_nx: list[int]
+	pub var_nx: list[int]
+	pub tk_nx: list[int]
+	pub ns_nx: list[int]
+	pub pr_nx: list[int]
+
+	# nx_sub_repls / nx_sub_decls are the pattern binders a substitution's TEXT stands for, row for
+	# row: a binder is not a binding — c_ident_val splices its accessor in — so its declaration
+	# rides beside the text rather than in an environment row (c_extend_bound).
+	pub nx_sub_repls: list[str]
+	pub nx_sub_decls: list[int]
 }
 
 # Subst is an active set of identifier substitutions: an EIdent whose name appears in
@@ -746,6 +778,17 @@ fn c_extend(sb: Subst, name: str, repl: str) -> Subst {
 	nn.append(name)
 	rr.append(repl)
 	return Subst(nn, rr)
+}
+
+# c_extend_bound is c_extend for a PATTERN BINDER: the text `repl` stands for the binder `pt`
+# declares, and the name index records which (c_nx_sub). A substitution is text, so the text is
+# the key — it names one scrutinee's accessor at one match site.
+fn c_extend_bound(mut &em: Emitter, sb: Subst, name: str, repl: str, pt: ast.Pat) -> Subst {
+	if em.want_index {
+		em.nx_sub_repls.append(repl)
+		em.nx_sub_decls.append(c_nx_pat_decl(em, pt))
+	}
+	return c_extend(sb, name, repl)
 }
 
 # c_sub_active is the substitution an expression is actually rendered under: the one its
@@ -1085,7 +1128,12 @@ fn c_into(mut &em: Emitter, want: ast.Ty, e0: ast.Expr, sb: Subst) -> str {
 	# supplies what the construction could not have known. docs/core/type-system.md's "T comes
 	# from the arguments" has this one exception and says so.
 	gv := c_gen_variant_of(em, want, e)
-	return c_variant_ctor(em, c_named_of(want), gv, c_meth_args(e), sb) if gv != ""
+	if gv != "" {
+		if em.want_index {
+			c_nx_gen_variant_written(em, c_app_base(c_named_of(want)), e)
+		}
+		return c_variant_ctor(em, c_named_of(want), gv, c_meth_args(e), sb)
+	}
 
 	# A SPEC-TYPED POSITION BUILDS A BOX out of the implementer written into it, and it is asked
 	# HERE rather than in c_fit_copied for the reason this function's own comment gives: a
@@ -1329,10 +1377,13 @@ fn c_ctor_side_of(nm: str, n: int) -> int {
 # The operand is bound to a temp because it is read twice, the tag and then the payload,
 # exactly as `??` does; and the branch is a statement rather than a ternary because the two
 # sides fill different fields of the answer.
-fn c_optchain(mut &em: Emitter, target: ast.Expr, fld: str, sb: Subst) -> str {
+fn c_optchain(mut &em: Emitter, target: ast.Expr, fld: str, l: int, c: int, sb: Subst) -> str {
 	t := c_infer(em, target)
 	raise c_diag(em, rule.Rule.OptionalChainOnNonOptional, f"`?.` reads through an optional, and {ast.ty_name(t)} is not one — use `.` for a value that is always there") if not ast.ty_is_opt(t)
 	inner := c_opt_elem(t)
+	if em.want_index {
+		c_nx_field(em, inner, fld, l, c)
+	}
 	ft := c_field_ty(em, c_named_of(inner), fld)
 	raise c_diag(em, rule.Rule.NoSuchFieldInChain, f"no field `{fld}` on {ast.ty_name(inner)} (optional chain `?.{fld}`)") if c_is_unknown(ft)
 
@@ -2146,6 +2197,7 @@ fn c_reset_env(mut &em: Emitter) {
 	em.env_scope = []
 	em.env_const = []
 	em.env_cval = []
+	em.env_nx = []
 	em.frz_idxs = []
 	em.frz_paths = []
 
@@ -2254,6 +2306,543 @@ fn c_env_row(mut &em: Emitter, name: str, t: ast.Ty, cname: str, is_mut: bool, i
 	# declaration of that name was, silently, which is exactly the shape of bug a column
 	# parallel to env_names exists to prevent.
 	em.env_cval.append(check.Folded(false, 0))
+
+	# and where its name was written, which only some binders know here — the rest settle it
+	# through c_nx_bind once the statement that made the row has
+	if em.want_index {
+		em.env_nx.append(c_nx_row(em))
+	}
+}
+
+# --- the name index ------------------------------------------------------------------
+#
+# Every function here answers at its first line when no index was asked for, which is what
+# keeps a build from paying for one: the tables above still grow a column, of -1s.
+
+# c_nx_decl records a declaration by its name token and answers its id in the index.
+fn c_nx_decl(mut &em: Emitter, path: str, line: int, col: int, name: str, kind: int) -> int {
+	return -1 if not em.want_index
+
+	known := ast.nx_known(em.nx, path, line, col)
+	return known if known >= 0
+
+	return ast.nx_decl(em.nx, path, line, col, name, kind, check.c_mod_of(em, path))
+}
+
+# c_nx_use records that the name written at `line`:`col` of the file being walked resolves to
+# `decl` — an id c_nx_decl answered, a pending one, or -1 for a name that resolved to nothing a
+# reader declared.
+fn c_nx_use(mut &em: Emitter, line: int, col: int, name: str, decl: int) {
+	return if not em.want_index or decl == -1
+
+	ast.nx_use(em.nx, em.at_path, line, col, name, -1, decl)
+}
+
+# c_nx_row is the id a NEW environment row starts with: pending, until c_nx_bind says where its
+# name was written.
+fn c_nx_row(mut &em: Emitter) -> int {
+	return -1 if not em.want_index
+
+	em.nx_rows.append(-1)
+	return -(em.nx_rows.len() + 1)
+}
+
+# c_nx_bind says where environment row `row`'s name was written, settling any use recorded
+# while it was pending.
+#
+# A binder written nowhere (0, 0) leaves its row pending: a closure's capture is one, and
+# c_lambda settles it to the binding it copies.
+fn c_nx_bind(mut &em: Emitter, row: int, line: int, col: int, kind: int) {
+	return if not em.want_index or row < 0 or line <= 0
+
+	c_nx_bind_to(em, row, c_nx_decl(em, em.at_path, line, col, em.env_names[row], kind))
+}
+
+# c_nx_bind_to is c_nx_bind with the declaration already in hand.
+fn c_nx_bind_to(mut &em: Emitter, row: int, d: int) {
+	return if not em.want_index or row < 0
+
+	code := em.env_nx[row]
+	if code < -1 {
+		em.nx_rows[-code - 2] = d
+	}
+	em.env_nx[row] = d
+}
+
+# c_nx_bind_new settles the row a statement just made for `name` — the FIRST one it made when
+# the construct binds before it walks a body that may shadow the name (a loop variable, an
+# `if let`), the LAST when the initializer is walked first (a binding).
+fn c_nx_bind_new(mut &em: Emitter, start: int, name: str, line: int, col: int, first: bool) {
+	return if not em.want_index
+
+	mut row := -1
+	mut i := start
+	for i < em.env_names.len() {
+		if em.env_names[i] == name and (row < 0 or not first) {
+			row = i
+		}
+		i = i + 1
+	}
+	c_nx_bind(em, row, line, col, ast.NK_LOCAL)
+}
+
+# c_nx_pat_decl is the declaration a pattern binder makes, or -1 for a pattern that binds none.
+fn c_nx_pat_decl(mut &em: Emitter, pt: ast.Pat) -> int {
+	return -1 if not em.want_index
+
+	return match pt {
+		Pat.PBind(n, l, c) => c_nx_decl(em, em.at_path, l, c, n, ast.NK_LOCAL)
+		Pat.PAs(_, n, l, c) => c_nx_decl(em, em.at_path, l, c, n, ast.NK_LOCAL)
+		_ => -1
+	}
+}
+
+# c_nx_sub is the declaration a substitution's text stands for, or -1 for an alias the lowering
+# invented.
+fn c_nx_sub(mut &em: Emitter, repl: str) -> int {
+	mut i := em.nx_sub_repls.len() - 1
+	for i >= 0 {
+		return em.nx_sub_decls[i] if em.nx_sub_repls[i] == repl
+		i = i - 1
+	}
+	return -1
+}
+
+# c_nx_pat_ctor records the constructor a variant pattern names, against the enum it is typed by.
+fn c_nx_pat_ctor(mut &em: Emitter, pt: ast.Pat, st: ast.Ty) {
+	return if not em.want_index
+
+	match pt {
+		Pat.PVariant(_, ctor, _, l, c) => c_nx_use_dep(em, l, c, ctor, c_nx_var_in(em, c_named_of(st), ctor))
+		_ => c_skip()
+	}
+}
+
+# The readers of the columns answer -1 when no index was asked for, because then the columns are
+# empty — a recording site may hand one straight to c_nx_use, which is the one that asks.
+fn c_nx_var_in(mut &em: Emitter, en: str, name: str) -> int {
+	return -1 if not em.want_index
+
+	return c_nx_var(em, c_var_row_in(em, en, name))
+}
+
+fn c_nx_var(mut &em: Emitter, r: int) -> int {
+	return -1 if not em.want_index or r < 0
+
+	return em.var_nx[r]
+}
+
+fn c_nx_tk(mut &em: Emitter, nm: str) -> int {
+	return -1 if not em.want_index
+
+	r := c_ty_row(em, nm)
+	return em.tk_nx[r] if r >= 0
+
+	g := c_gen_struct_row(em, nm)
+	return c_nx_decl(em, em.gen_structs[g].path, em.gen_structs[g].name_line, em.gen_structs[g].name_col, nm, ast.NK_STRUCT) if g >= 0
+
+	e := c_gen_enum_row(em, nm)
+	return c_nx_decl(em, em.gen_enums[e].path, em.gen_enums[e].name_line, em.gen_enums[e].name_col, nm, ast.NK_ENUM) if e >= 0
+
+	return -1
+}
+
+fn c_nx_sig(mut &em: Emitter, r: int) -> int {
+	return -1 if not em.want_index or r < 0
+
+	return em.sig_nx[r]
+}
+
+# c_nx_template is the declaration of a generic function TEMPLATE, reached by its key.
+fn c_nx_template(mut &em: Emitter, key: str) -> int {
+	t := em.gen_tpls[c_generic_row(em, key)]
+	return c_nx_decl(em, t.path, t.name_line, t.name_col, c_nx_written(t.name), c_nx_fn_kind(t))
+}
+
+# c_nx_ns_target records the NAMESPACE at the root of a qualified expression's target — `lib` in
+# `lib.f()`, `lib.K` and `lib.Colour.Red` — against the import that bound it in this file. It is
+# asked of the expression as WRITTEN, because c_ns_unqualify drops the qualifier before anything
+# resolves it.
+fn c_nx_ns_target(mut &em: Emitter, t: ast.Expr) {
+	match t {
+		Expr.EIdent(n, l, c) => c_nx_ns_ident(em, t, n, l, c)
+		Expr.EField(x, _, _, _) => c_nx_ns_target(em, x)
+		Expr.EMethod(x, _, _, _, _) => c_nx_ns_target(em, x)
+		_ => c_skip()
+	}
+}
+
+fn c_nx_ns_ident(mut &em: Emitter, t: ast.Expr, n: str, l: int, c: int) {
+	return if not c_is_ns(em, n) or c_ns_kind(em, t) != NsKind.NsModule
+
+	c_nx_use(em, l, c, n, c_nx_ns_row(em, n, em.at_path))
+}
+
+fn c_nx_ns_row(mut &em: Emitter, n: str, at: str) -> int {
+	return -1 if not em.want_index
+
+	mut i := 0
+	for i < em.ns_names.len() {
+		return em.ns_nx[i] if em.ns_names[i] == n and em.ns_at[i] == at
+		i = i + 1
+	}
+	return -1
+}
+
+# c_nx_gen_variant records a bare variant of a generic enum's TEMPLATE, whose rows no table holds.
+fn c_nx_gen_variant(mut &em: Emitter, gb: str, n: str, l: int, c: int) {
+	return if not em.want_index
+
+	ed := em.gen_enums[c_gen_enum_row(em, gb)]
+	for v in ed.variants {
+		if v.name == n {
+			c_nx_use(em, l, c, n, c_nx_decl(em, ed.path, v.line, v.col, n, ast.NK_VARIANT))
+		}
+	}
+}
+
+# c_nx_gen_variant_written records `Opt.Has(3)` / `Opt.Nope` — a generic enum's variant a typed
+# position solves — as the enum's template and its variant.
+fn c_nx_gen_variant_written(mut &em: Emitter, base: str, e: ast.Expr) {
+	match e {
+		Expr.EMethod(t, m, _, l, c) => {
+			c_nx_type_name(em, t, base)
+			c_nx_gen_variant(em, base, m, l, c)
+		}
+		Expr.EField(t, f, l, c) => {
+			c_nx_type_name(em, t, base)
+			c_nx_gen_variant(em, base, f, l, c)
+		}
+		_ => c_skip()
+	}
+}
+
+# c_nx_type_call records a call whose callee names a variant or a type — the question c_call
+# asks next, answered the way it answers it.
+fn c_nx_type_call(mut &em: Emitter, n: str, l: int, c: int) {
+	return if not em.want_index
+
+	if c_call_is_variant(em, n) {
+		c_nx_use(em, l, c, n, c_nx_var(em, c_var_row(em, n)))
+		return
+	}
+	c_nx_use(em, l, c, n, c_nx_tk(em, n))
+}
+
+fn c_nx_const(mut &em: Emitter, k: ast.ConstDecl) -> int {
+	return c_nx_decl(em, k.path, k.name_line, k.name_col, k.name, ast.NK_CONST)
+}
+
+# c_nx_type_name records the identifier `target` is when it NAMES A TYPE — the `Colour` of
+# `Colour.Red`, the `P` of `P.make()` — which the arm that lowers the member never lowers.
+fn c_nx_type_name(mut &em: Emitter, target: ast.Expr, tn: str) {
+	match target {
+		Expr.EIdent(_, tl, tc) => c_nx_use(em, tl, tc, tn, c_nx_tk(em, tn))
+		_ => c_skip()
+	}
+}
+
+# c_nx_field records a field read against the struct the target's type names.
+fn c_nx_field(mut &em: Emitter, tt: ast.Ty, fld: str, l: int, c: int) {
+	return if not em.want_index
+
+	c_nx_use_dep(em, l, c, fld, c_nx_fld_of(em, c_named_of(tt), fld))
+}
+
+fn c_nx_fld_of(mut &em: Emitter, sn: str, fld: str) -> int {
+	return -1 if not em.want_index
+
+	mut i := 0
+	for i < em.fld_struct.len() {
+		return em.fld_nx[i] if em.fld_struct[i] == sn and em.fld_name[i] == fld
+		i = i + 1
+	}
+	return -1
+}
+
+# c_nx_named_arg records the name of `name: value` against the parameter or field it picks.
+fn c_nx_named_arg(mut &em: Emitter, e: ast.Expr, d: int) {
+	return if not em.want_index
+
+	match e {
+		Expr.ENamedArg(nm, _, l, c) => c_nx_use_dep(em, l, c, nm, d)
+		_ => c_skip()
+	}
+}
+
+# c_nx_method records a method call against what the dispatch picked: the implementation's
+# declaration — or, inside generic code whose type parameter is bounded by a spec that declares
+# the method, the spec's REQUIREMENT, which is the one declaration every instantiation shares. A
+# field holding a function is recorded here too; a function a namespace names, and a type's
+# associated fn, are recorded by c_free_method's arms, which are what resolve them.
+fn c_nx_method(mut &em: Emitter, target: ast.Expr, tty: ast.Ty, recv: str, written: str, meth: str, kind: MethKind, l: int, c: int) {
+	return if not em.want_index
+
+	if c_nx_dispatched(kind) {
+		mut i := 0
+		for i < em.bnd_fn.len() {
+			if em.bnd_fn[i] == em.cur_fn and em.bnd_ty[i] == recv {
+				r := c_sig_row(em, c_sig_key(em.bnd_of[i], written))
+				if r >= 0 {
+					c_nx_use_method(em, l, c, written, em.sig_nx[r])
+					return
+				}
+			}
+			i = i + 1
+		}
+		c_nx_use_method(em, l, c, written, c_nx_sig(em, c_sig_row(em, c_sig_key(recv, meth))))
+		return
+	}
+	if c_nx_fn_field(kind) {
+		c_nx_field(em, tty, written, l, c)
+	}
+}
+
+# c_nx_use_dep records a name whose declaration depends on a TYPE — a field, a named argument, a
+# variant pattern — so a generic body walked once per instantiation may resolve one token two
+# ways. The answer may not be whichever instantiation was walked first, and unlike a method there
+# is no requirement both could be keeping.
+#
+# The use is SHARED rather than dropped: each declaration it resolved to is kept as a candidate
+# (ast.nx_share), which is what a reader — and `make lsp`'s rename of the group — needs.
+fn c_nx_use_dep(mut &em: Emitter, l: int, c: int, name: str, d: int) {
+	return if d == -1
+
+	u := ast.nx_use(em.nx, em.at_path, l, c, name, -1, d)
+	return if u < 0
+
+	ast.nx_share(em.nx, u, em.nx.u_decl[u])
+	ast.nx_share(em.nx, u, d)
+}
+
+# c_nx_use_method records a dispatched method call, and settles a call ONE BODY resolves two ways
+# — a spec's provided method walked once per implementer, an `impl` of a generic type walked
+# once per instantiation — the way the fn-level bound above does: the requirement both
+# implementations keep. A call whose implementations keep no common requirement is SHARED between
+# them (c_nx_use_dep) rather than whichever instantiation was walked first.
+fn c_nx_use_method(mut &em: Emitter, l: int, c: int, name: str, d: int) {
+	return if d == -1
+
+	u := ast.nx_use(em.nx, em.at_path, l, c, name, -1, d)
+	return if u < 0
+
+	rq := c_nx_common_req(em, em.nx.u_decl[u], d, name)
+	if rq >= 0 {
+		em.nx.u_decl[u] = rq
+		return
+	}
+	ast.nx_share(em.nx, u, em.nx.u_decl[u])
+	ast.nx_share(em.nx, u, d)
+}
+
+# c_nx_common_req is the requirement `name` of a spec that both declarations keep — each is that
+# requirement, or a method of a type implementing the spec — or -1.
+fn c_nx_common_req(mut &em: Emitter, a: int, b: int, name: str) -> int {
+	return -1 if a < 0 or b < 0
+
+	mut r := 0
+	for r < em.sig_names.len() {
+		sp := c_nx_key_recv(em.sig_names[r])
+		if sp != "" and c_sig_meth_of(em.sig_names[r]) == name and c_is_spec_name(em, sp) {
+			rq := em.sig_nx[r]
+			return rq if rq >= 0 and c_nx_keeps(em, a, rq, sp, name) and c_nx_keeps(em, b, rq, sp, name)
+		}
+		r = r + 1
+	}
+	return -1
+}
+
+fn c_nx_keeps(mut &em: Emitter, d: int, rq: int, sp: str, name: str) -> bool {
+	return true if d == rq
+
+	mut r := 0
+	for r < em.sig_names.len() {
+		return true if em.sig_nx[r] == d and c_sig_meth_of(em.sig_names[r]) == name and c_impls(em, c_nx_key_recv(em.sig_names[r]), sp)
+		r = r + 1
+	}
+	return false
+}
+
+# c_nx_key_recv is the type half of a signature key — everything before the `#` — or "".
+fn c_nx_key_recv(key: str) -> str {
+	r := c_nx_until(key, b'#', b'#')
+	return "" if r == key
+
+	return r
+}
+
+fn c_nx_dispatched(k: MethKind) -> bool {
+	return match k {
+		MethKind.MRecv => true
+		MethKind.MSpec => true
+		_ => false
+	}
+}
+
+fn c_nx_fn_field(k: MethKind) -> bool {
+	return match k {
+		MethKind.MFnField => true
+		_ => false
+	}
+}
+
+# c_nx_types records every TYPE NAME the program wrote (File.ty_uses) — a type parameter against
+# the innermost declaration in scope that declares it (File.tp_scopes), anything else against
+# the type registry — and each module qualifier a type position wrote, against its import.
+fn c_nx_types(mut &em: Emitter, f: ast.File) {
+	mut tps: list[ast.TyUse] = []
+	mut own: list[int] = []
+	mut ids: list[int] = []
+	for u in f.ty_uses {
+		# an `impl` target's argument declares when it names no type — c_tpl_params' rule
+		if u.tparam == ast.TP_DECL or (u.tparam == ast.TP_MAYBE and c_nx_impl_declares(em, f, u)) {
+			tps.append(u)
+			own.append(c_nx_scope_of(f, u.path, u.line, u.col))
+			ids.append(c_nx_decl(em, u.path, u.line, u.col, u.name, ast.NK_TPARAM))
+		}
+	}
+	for u in f.ty_uses {
+		continue if u.tparam != ast.TP_USE
+
+		mut d := -1
+		mut best := -1
+		mut i := 0
+		for i < tps.len() {
+			if tps[i].name == u.name and tps[i].path == u.path and own[i] >= 0 and c_nx_scope_holds(f.tp_scopes[own[i]], u.line, u.col) and (best < 0 or c_nx_pos_lt(f.tp_scopes[best].line, f.tp_scopes[best].col, f.tp_scopes[own[i]].line, f.tp_scopes[own[i]].col)) {
+				best = own[i]
+				d = ids[i]
+			}
+			i = i + 1
+		}
+		if best < 0 {
+			d = c_nx_tk(em, u.name)
+		}
+		ast.nx_use(em.nx, u.path, u.line, u.col, u.name, u.len, d)
+	}
+	for q in f.ty_quals {
+		if q.ns != "" {
+			ast.nx_use(em.nx, q.path, q.line, q.col, q.ns, -1, c_nx_ns_row(em, q.ns, q.path))
+		}
+	}
+}
+
+# c_nx_impl_declares is whether an `impl` target's argument declares a type parameter — the answer
+# c_tpl_params gives for the application the parser recorded it under, the one the compiler acts on.
+fn c_nx_impl_declares(mut &em: Emitter, f: ast.File, u: ast.TyUse) -> bool {
+	return u.app != "" and c_name_in(c_tpl_params(em, f, u.app), u.name)
+}
+
+# c_nx_scope_of is the innermost type-parameter scope holding a place, or -1.
+fn c_nx_scope_of(f: ast.File, path: str, line: int, col: int) -> int {
+	mut best := -1
+	mut i := 0
+	for i < f.tp_scopes.len() {
+		sc := f.tp_scopes[i]
+		if sc.path == path and c_nx_scope_holds(sc, line, col) and (best < 0 or c_nx_pos_lt(f.tp_scopes[best].line, f.tp_scopes[best].col, sc.line, sc.col)) {
+			best = i
+		}
+		i = i + 1
+	}
+	return best
+}
+
+fn c_nx_scope_holds(sc: ast.TyScope, line: int, col: int) -> bool {
+	return false if c_nx_pos_lt(line, col, sc.line, sc.col)
+	return true if sc.end_line == 0
+
+	return c_nx_pos_lt(line, col, sc.end_line, sc.end_col)
+}
+
+fn c_nx_pos_lt(al: int, ac: int, bl: int, bc: int) -> bool {
+	return al < bl or (al == bl and ac < bc)
+}
+
+# c_let_at / c_forin_at / c_iflet_at / c_del_at are the statements that bind or name a local,
+# with the place its NAME was written — which the lowering beneath them has no use for, so the
+# row it makes is settled here, once it exists.
+fn c_let_at(mut &em: Emitter, name: str, ty: ast.Ty, has_type: bool, is_mut: bool, is_const: bool, ival: ast.Expr, l: int, c: int, ind: str) -> str {
+	return c_let(em, name, ty, has_type, is_mut, is_const, ival, ind) if not em.want_index
+
+	start := em.env_names.len()
+	out := c_let(em, name, ty, has_type, is_mut, is_const, ival, ind)
+	c_nx_bind_new(em, start, name, l, c, false)
+	return out
+}
+
+fn c_forin_at(mut &em: Emitter, var: str, iter: ast.Expr, body: list[ast.Stmt], l: int, c: int, ind: str) -> str {
+	return c_forin(em, var, iter, body, ind) if not em.want_index
+
+	start := em.env_names.len()
+	out := c_forin(em, var, iter, body, ind)
+	c_nx_bind_new(em, start, var, l, c, true)
+	return out
+}
+
+fn c_iflet_at(mut &em: Emitter, name: str, value: ast.Expr, then_body: list[ast.Stmt], has_else: bool, else_body: list[ast.Stmt], l: int, c: int, ind: str) -> str {
+	return c_iflet(em, name, value, then_body, has_else, else_body, ind) if not em.want_index
+
+	start := em.env_names.len()
+	out := c_iflet(em, name, value, then_body, has_else, else_body, ind)
+	c_nx_bind_new(em, start, name, l, c, true)
+	return out
+}
+
+fn c_del_at(mut &em: Emitter, name: str, l: int, c: int, ind: str) -> str {
+	if em.want_index {
+		idx := c_live_idx(em, name)
+		if idx >= 0 {
+			c_nx_use(em, l, c, name, em.env_nx[idx])
+		}
+	}
+	return c_del(em, name, ind)
+}
+
+# c_nx_release lets go of everything the walk kept for the index once it has been handed back:
+# a session asks for an index per check, and nothing here is read again.
+fn c_nx_release(mut &em: Emitter) {
+	em.nx = ast.no_index()
+	em.nx_rows = []
+	em.env_nx = []
+	em.sig_nx = []
+	em.fld_nx = []
+	em.var_nx = []
+	em.tk_nx = []
+	em.ns_nx = []
+	em.pr_nx = []
+	em.nx_sub_repls = []
+	em.nx_sub_decls = []
+}
+
+# c_nx_written is the name a declaration was WRITTEN with: a specialization is recorded under
+# `pick$int` and a parameterized spec's member under its key, and neither suffix is on the page.
+fn c_nx_written(nm: str) -> str {
+	return c_nx_until(nm, b'$', b'[')
+}
+
+# c_nx_until is `s` up to the first `a` or `b`, built in one list rather than a string a byte
+# at a time — it runs once per signature row and per type, every check.
+fn c_nx_until(s: str, a: byte, b: byte) -> str {
+	mut out: list[byte] = []
+	for c in bytearray(s) {
+		break if c == a or c == b
+
+		out.append(c)
+	}
+	return str(out)
+}
+
+fn c_nx_fn_kind(fn_d: ast.FnDecl) -> int {
+	return ast.NK_FN if fn_d.recv == ""
+
+	return ast.NK_METHOD
+}
+
+fn c_nx_ty_kind(kind: int) -> int {
+	return ast.NK_STRUCT if kind == TK_STRUCT
+	return ast.NK_ENUM if kind == TK_ENUM
+	return ast.NK_SPEC if kind == TK_SPEC
+
+	return ast.NK_TYPE
 }
 
 # EnvCols is those same eight columns as ONE value, for the sites that put a whole
@@ -2279,10 +2868,11 @@ struct EnvCols {
 	pub scope: list[int]
 	pub consts: list[bool]
 	pub cval: list[check.Folded]
+	pub nx: list[int]
 }
 
 fn c_env_save(mut &em: Emitter) -> EnvCols {
-	return EnvCols(em.env_names, em.env_tys, em.env_cnames, em.env_dead, em.env_mut, em.env_scope, em.env_const, em.env_cval)
+	return EnvCols(em.env_names, em.env_tys, em.env_cnames, em.env_dead, em.env_mut, em.env_scope, em.env_const, em.env_cval, em.env_nx)
 }
 
 fn c_env_restore(mut &em: Emitter, saved: EnvCols) {
@@ -2294,6 +2884,7 @@ fn c_env_restore(mut &em: Emitter, saved: EnvCols) {
 	em.env_scope = saved.scope
 	em.env_const = saved.consts
 	em.env_cval = saved.cval
+	em.env_nx = saved.nx
 }
 
 # c_no_shadow_sub refuses a binding that takes a name an ACTIVE substitution holds.
@@ -4094,6 +4685,9 @@ fn c_mod_collide(mut &em: Emitter, fn_i: ast.FnDecl, prev: ast.FnDecl) {
 fn c_add_sig(mut &em: Emitter, fn_i: ast.FnDecl) {
 	key := c_sig_key(fn_i.recv, fn_i.name)
 	em.sig_names.append(key)
+	if em.want_index {
+		em.sig_nx.append(c_nx_decl(em, fn_i.path, fn_i.name_line, fn_i.name_col, c_nx_written(fn_i.name), c_nx_fn_kind(fn_i)))
+	}
 	em.sig_mod.append(check.c_mod_of(em, fn_i.path))
 	em.sig_pub.append(fn_i.is_pub)
 	em.sig_path.append(fn_i.path)
@@ -4116,6 +4710,9 @@ fn c_add_sig(mut &em: Emitter, fn_i: ast.FnDecl) {
 		em.pr_path.append(fn_i.path)
 		em.pr_line.append(fn_i.line)
 		em.pr_col.append(fn_i.col)
+		if em.want_index {
+			em.pr_nx.append(c_nx_decl(em, fn_i.path, fn_i.params[j].line, fn_i.params[j].col, fn_i.params[j].name, ast.NK_PARAM))
+		}
 		j = j + 1
 	}
 }
@@ -5290,10 +5887,15 @@ const TK_TYPEDEF := 4
 # first declared", in the order the builders run — typedefs, structs, enums, then specs —
 # which is why the spec pass is last: `struct A` beside `spec A` is a struct with a
 # duplicate reported against it, and not a spec that no longer constructs.
-fn c_ty_register(mut &em: Emitter, nm: str, kind: int, under: ast.Ty, path: str, is_pub: bool) {
+#
+# `line` / `col` are where the declaration's NAME was written, for the name index.
+fn c_ty_register(mut &em: Emitter, nm: str, kind: int, under: ast.Ty, path: str, is_pub: bool, line: int, col: int) {
 	return if c_ty_row(em, nm) >= 0
 
 	em.tk_names.append(nm)
+	if em.want_index {
+		em.tk_nx.append(c_nx_decl(em, path, line, col, c_nx_written(nm), c_nx_ty_kind(kind)))
+	}
 	em.tk_kinds.append(kind)
 	em.tk_unders.append(under)
 	em.tk_mod.append(check.c_mod_of(em, path))
@@ -5803,7 +6405,7 @@ fn c_dup_report(mut &em: Emitter, name: str, prev: str, what: str, path: str, li
 # answer the constructor path needs: `struct A` beside `spec A` still constructs.
 fn c_build_specs(mut &em: Emitter, f: ast.File) {
 	for sp in f.specs {
-		c_ty_register(em, sp.name, TK_SPEC, ast.Ty.TUnknown, sp.path, sp.is_pub)
+		c_ty_register(em, sp.name, TK_SPEC, ast.Ty.TUnknown, sp.path, sp.is_pub, sp.name_line, sp.name_col)
 	}
 }
 
@@ -5812,7 +6414,7 @@ fn c_build_typedefs(mut &em: Emitter, f: ast.File) {
 		# chk_typedef ANSWERS the underlying type it validated, so the registry does not
 		# recompute it: a typedef whose underlying type nothing declares is registered as
 		# UNKNOWN, which keeps every USE quiet while the declaration carries the diagnostic.
-		c_ty_register(em, td.name, TK_TYPEDEF, check.chk_typedef(em, td, f), td.path, td.is_pub)
+		c_ty_register(em, td.name, TK_TYPEDEF, check.chk_typedef(em, td, f), td.path, td.is_pub, td.name_line, td.name_col)
 	}
 }
 
@@ -5826,10 +6428,13 @@ fn c_build_structs(mut &em: Emitter, f: ast.File) {
 # specialization minted on demand has to enter them the same way a declared type does — two
 # spellings of this walk would be two answers to "what does the program declare".
 fn c_register_struct(mut &em: Emitter, sd: ast.StructDecl) {
-	c_ty_register(em, sd.name, TK_STRUCT, ast.Ty.TUnknown, sd.path, sd.is_pub)
+	c_ty_register(em, sd.name, TK_STRUCT, ast.Ty.TUnknown, sd.path, sd.is_pub, sd.name_line, sd.name_col)
 	for fd in sd.fields {
 		em.fld_struct.append(sd.name)
 		em.fld_name.append(fd.name)
+		if em.want_index {
+			em.fld_nx.append(c_nx_decl(em, sd.path, fd.name_line, fd.name_col, fd.name, ast.NK_FIELD))
+		}
 		em.fld_ty.append(fd.ty)
 		em.fld_pub.append(fd.is_pub)
 		em.fld_hasdef.append(fd.has_def)
@@ -6436,7 +7041,7 @@ fn c_build_enums(mut &em: Emitter, f: ast.File) {
 # inline in the sweep above, an on-demand `Box[int]` had no variants, no tags and no payload
 # types — and `Full(42)` came out as `undefined function`.
 fn c_register_enum(mut &em: Emitter, ed: ast.EnumDecl) {
-	c_ty_register(em, ed.name, TK_ENUM, ast.Ty.TUnknown, ed.path, ed.is_pub)
+	c_ty_register(em, ed.name, TK_ENUM, ast.Ty.TUnknown, ed.path, ed.is_pub, ed.name_line, ed.name_col)
 
 	mut next := 0
 	mut taken: list[int] = []
@@ -6456,6 +7061,9 @@ fn c_register_enum(mut &em: Emitter, ed: ast.EnumDecl) {
 		taken.append(tag)
 		next = tag + 1
 		em.var_name.append(v.name)
+		if em.want_index {
+			em.var_nx.append(c_nx_decl(em, ed.path, v.line, v.col, v.name, ast.NK_VARIANT))
+		}
 		em.var_enum.append(ed.name)
 		em.var_tag.append(tag)
 		em.var_path.append(ed.path)
@@ -6597,6 +7205,7 @@ fn c_pat_env(mut &em: Emitter, pt: ast.Pat, st: ast.Ty) {
 		} else {
 			c_add_var(em, bn, st, false, false)
 		}
+		c_nx_bind_to(em, em.env_names.len() - 1, c_nx_pat_decl(em, pt))
 		return
 	}
 
@@ -6604,6 +7213,7 @@ fn c_pat_env(mut &em: Emitter, pt: ast.Pat, st: ast.Ty) {
 	# pattern under it is registered too, over the same type, because it is still destructuring
 	if c_pat_is_as(pt) {
 		c_add_var(em, c_pat_as_name(pt), st, false, false)
+		c_nx_bind_to(em, em.env_names.len() - 1, c_nx_pat_decl(em, pt))
 		c_pat_env(em, c_pat_as_inner(pt), st)
 		return
 	}
@@ -6700,6 +7310,9 @@ fn c_pat_env(mut &em: Emitter, pt: ast.Pat, st: ast.Ty) {
 		} else {
 			c_add_var(em, names[0], c_either_right(st), false, false)
 		}
+		if em.want_index {
+			c_nx_bind_to(em, em.env_names.len() - 1, c_nx_pat_decl(em, c_pat_payload(pt)[0]))
+		}
 		return
 	}
 
@@ -6707,6 +7320,9 @@ fn c_pat_env(mut &em: Emitter, pt: ast.Pat, st: ast.Ty) {
 	mut i := 0
 	for i < names.len() {
 		c_add_var(em, names[i], c_variant_field_ty(em, en, ctor, i), false, false)
+		if em.want_index {
+			c_nx_bind_to(em, em.env_names.len() - 1, c_nx_pat_decl(em, c_pat_payload(pt)[i]))
+		}
 		i = i + 1
 	}
 }
@@ -6768,6 +7384,9 @@ fn c_build_namespaces(mut &em: Emitter, f: ast.File) {
 		here := im.at
 		if not c_ns_bound_in(em, im.name, here) {
 			em.ns_names.append(im.name)
+			if em.want_index {
+				em.ns_nx.append(c_nx_decl(em, im.at, im.name_line, im.name_col, im.name, ast.NK_IMPORT))
+			}
 			em.ns_at.append(here)
 			em.ns_mods.append(c_imp_canon(em, im.at, im.path))
 			em.ns_pub.append(im.is_pub)
@@ -7032,7 +7651,13 @@ fn c_ns_unqualify(mut &em: Emitter, e: ast.Expr) -> ast.Expr {
 # the whole of `lib.Color` in `lib.Color.of(n)`. The target is rewritten too when the pair
 # is not one, because the qualifier sits at the ROOT of a `.`-chain and the segment that
 # names the type may be anywhere along it.
+#
+# THE QUALIFIER IS RECORDED IN THE NAME INDEX HERE, before the rewrite can drop it — this and
+# c_ns_unqualify_meth are the doors every `a.b` and `a.b(…)` passes on its way to being lowered.
 fn c_ns_unqualify_field(mut &em: Emitter, t: ast.Expr, f: str, l: int, c: int) -> ast.Expr {
+	if em.want_index {
+		c_nx_ns_target(em, t)
+	}
 	if c_ns_names_type(em, t, f) {
 		# THE QUALIFIER IS ABOUT TO BE DROPPED, so this is the last point that knows one was
 		# written. `lib.Colour.Red` names a real module and a real type, and whether THIS
@@ -7048,6 +7673,9 @@ fn c_ns_unqualify_field(mut &em: Emitter, t: ast.Expr, f: str, l: int, c: int) -
 # c_ns_unqualify_meth is `lib.Point(1, 2)` — a CONSTRUCTION, which is a call whose callee is
 # a type name and so becomes the ECall the unqualified spelling parses to.
 fn c_ns_unqualify_meth(mut &em: Emitter, t: ast.Expr, m: str, args: list[ast.Expr], l: int, c: int) -> ast.Expr {
+	if em.want_index {
+		c_nx_ns_target(em, t)
+	}
 	if c_ns_names_type(em, t, m) {
 		# `lib.Counter("a")` — a CONSTRUCTION through a namespace, the field path's question
 		# one node up
@@ -7676,21 +8304,21 @@ fn c_expr_node(mut &em: Emitter, e: ast.Expr, sb: Subst) -> str {
 		Expr.EStr(v) => c_str_cell(em, v)
 		Expr.EBool(b) => c_bool(b)
 		Expr.ENil => "0"
-		Expr.EIdent(n, _, _) => c_ident_val(em, n, sb)
+		Expr.EIdent(n, l, c) => c_ident_val(em, n, l, c, sb)
 		Expr.EUnary(oper, x) => c_unexpr(em, oper, x, sb)
 		Expr.EBinary(oper, a, b) => c_binexpr(em, oper, a, b, sb)
-		Expr.ECall(name, args, ts, _, _) => c_call_written(em, name, args, ts, sb)
+		Expr.ECall(name, args, ts, l, c) => c_call_written(em, name, args, ts, l, c, sb)
 		Expr.ECallVal(callee, args) => c_call_val(em, callee, args, sb)
 
 		# A NAMED ARGUMENT REACHING THE LOWERING was written where a name means nothing —
 		# every call site reorders and unwraps its own, so one that survives to here is in a
 		# position that has no parameters to name.
 		Expr.ENamedArg(nm, _, _, _) => c_named_arg_misplaced(em, nm)
-		Expr.EField(target, fld, _, _) => c_fieldref(em, target, fld, sb)
-		Expr.EOptChain(target, fld, _, _) => c_optchain(em, target, fld, sb)
+		Expr.EField(target, fld, l, c) => c_fieldref(em, target, fld, l, c, sb)
+		Expr.EOptChain(target, fld, l, c) => c_optchain(em, target, fld, l, c, sb)
 		Expr.ETry(x) => c_try(em, x, sb)
 		Expr.EIndex(target, idx) => c_index(em, target, idx, sb)
-		Expr.EMethod(target, meth, args, _, _) => c_method(em, target, meth, args, sb)
+		Expr.EMethod(target, meth, args, l, c) => c_method(em, target, meth, args, l, c, sb)
 		Expr.EListLit(elems) => c_list_lit(em, elems, sb)
 		Expr.EFill(v, n) => c_fill_lit(em, v, n, sb)
 		Expr.EConv(ty, x, nm) => c_conv(em, ty, x, nm, sb)
@@ -10266,12 +10894,18 @@ fn c_meth_kind(mut &em: Emitter, tty: ast.Ty, meth: str) -> MethKind {
 	return MethKind.MFree
 }
 
-fn c_method(mut &em: Emitter, target: ast.Expr, meth: str, args: list[ast.Expr], sb: Subst) -> str {
+fn c_method(mut &em: Emitter, target: ast.Expr, meth: str, args: list[ast.Expr], l: int, c: int, sb: Subst) -> str {
 	# `E.of(n)` is not a method on a value: the target NAMES A TYPE. It is answered before
 	# inference is asked anything, because an enum name is not a binding and infers to
 	# nothing — which is why this used to come out as "the method `of` on a ?".
 	en := c_ident_name(target)
-	return c_enum_of(em, en, meth, args, sb) if en != "" and c_is_enum_name(em, en)
+	if en != "" and c_is_enum_name(em, en) {
+		if em.want_index {
+			c_nx_type_name(em, target, en)
+			c_nx_use(em, l, c, meth, c_nx_var_in(em, en, meth))
+		}
+		return c_enum_of(em, en, meth, args, sb)
+	}
 
 	# A GENERIC ENUM'S TEMPLATE NAMES NO ENUM — it was removed in favour of its specializations
 	# — so this used to fall through to inference and come out as `undefined name `Side``, about
@@ -10281,6 +10915,10 @@ fn c_method(mut &em: Emitter, target: ast.Expr, meth: str, args: list[ast.Expr],
 	# specialization here: `Full(42)` names a `Box[int]` no source wrote. Only one that leaves a
 	# parameter needs a position, and only that one is refused.
 	if en != "" and c_is_gen_enum_name(em, en) {
+		if em.want_index {
+			c_nx_type_name(em, target, en)
+			c_nx_gen_variant(em, en, meth, l, c)
+		}
 		ap := c_gen_enum_solved(em, en, meth, args)
 		return c_variant_ctor(em, ap, meth, args, sb) if ap != ""
 
@@ -10306,8 +10944,13 @@ fn c_method(mut &em: Emitter, target: ast.Expr, meth: str, args: list[ast.Expr],
 	# template has no signature of its own (c_build_generics says why), so every rule below —
 	# the family test, the argument fitting, the return type — has to be asked of `pick$int`
 	# and not of `pick`.
+	written := meth
 	meth := c_meth_resolved(em, recv, c_gen_meth_resolved(em, recv, meth, target, args))
-	return match c_meth_kind(em, tty, meth) {
+	kind := c_meth_kind(em, tty, meth)
+	if em.want_index {
+		c_nx_method(em, target, tty, recv, written, meth, kind, l, c)
+	}
+	return match kind {
 		MethKind.MRender => c_render_meth(em, target, meth, tty, sb)
 		MethKind.MList => c_list_method(em, target, meth, args, tty, sb)
 		MethKind.MArr => c_arr_method(em, target, meth, tty, sb)
@@ -10318,7 +10961,7 @@ fn c_method(mut &em: Emitter, target: ast.Expr, meth: str, args: list[ast.Expr],
 		MethKind.MSpec => c_spec_call(em, recv, meth, target, args, sb)
 		MethKind.MRecv => c_recv_call(em, recv, meth, target, args, sb)
 		MethKind.MFnField => c_fnfield_call(em, recv, meth, target, args, sb)
-		_ => c_free_method(em, target, meth, args, sb)
+		_ => c_free_method(em, target, meth, args, l, c, sb)
 	}
 }
 
@@ -10588,9 +11231,12 @@ fn c_enum_of(mut &em: Emitter, en: str, meth: str, args: list[ast.Expr], sb: Sub
 # THE TWO REFUSALS ARE ONE RULE FROM ITS TWO SIDES. A method reached through its type has no
 # receiver to be called on, and an associated fn reached through an instance has nowhere to put
 # one — so each names what the declaration is and what the other spelling would be.
-fn c_assoc_call(mut &em: Emitter, tn: str, meth: str, args: list[ast.Expr], sb: Subst) -> str {
+fn c_assoc_call(mut &em: Emitter, tn: str, meth: str, args: list[ast.Expr], l: int, c: int, sb: Subst) -> str {
 	key := c_assoc_key(em, tn, meth, args)
 	r := c_sig_row(em, key)
+	if em.want_index {
+		c_nx_use(em, l, c, meth, c_nx_sig(em, r))
+	}
 
 	raise c_diag(em, rule.Rule.NoSuchAssociatedFn, f"`{tn}` declares no `{meth}` — an `impl` of it declares the methods and associated fns it has, and they share one namespace (GRAMMAR#impl-decl)") if r < 0
 	if not em.sig_assoc[r] {
@@ -10633,13 +11279,20 @@ fn c_refuse_assoc_through_instance(mut &em: Emitter, recv: str, meth: str) {
 	raise c_diag(em, rule.Rule.AssocFnThroughAnInstance, f"`{meth}` is an ASSOCIATED FN of `{recv}` — its body does not use `this`, so it takes no receiver and is reached through the type (`{recv}.{meth}(…)`) (GRAMMAR#impl-decl)")
 }
 
-fn c_free_method(mut &em: Emitter, target: ast.Expr, meth: str, args: list[ast.Expr], sb: Subst) -> str {
+#
+# `l` / `c` are where `meth` was written, recorded in the name index by the arm that resolves it.
+fn c_free_method(mut &em: Emitter, target: ast.Expr, meth: str, args: list[ast.Expr], l: int, c: int, sb: Subst) -> str {
 	# `Type.f(…)` is an ASSOCIATED FUNCTION (GRAMMAR#impl-decl) — the named-constructor form,
 	# `User.from_json(…)`. A TYPE NAME on the left is how a reader spells one, and the answer
 	# used to be "the method `make` on a ?": the target is a type rather than a value, so
 	# inference had nothing to name and the message pointed at the hole rather than at the form.
 	tn := c_ident_name(target)
-	return c_assoc_call(em, tn, meth, args, sb) if tn != "" and c_is_struct_name(em, tn)
+	if tn != "" and c_is_struct_name(em, tn) {
+		if em.want_index {
+			c_nx_type_name(em, target, tn)
+		}
+		return c_assoc_call(em, tn, meth, args, l, c, sb)
+	}
 
 	# WHAT THE PREFIX NAMES, asked once (c_ns_kind) and answered here for both halves of a
 	# qualified call. It used to be asked by NOBODY on this path: whatever stood to the left
@@ -10657,13 +11310,13 @@ fn c_free_method(mut &em: Emitter, target: ast.Expr, meth: str, args: list[ast.E
 		# and a template reached this way has to be instantiated exactly as one reached
 		# directly. Asking the sig table first would find nothing, a template having no
 		# signature.
-		return c_call(em, meth, args, sb) if c_is_generic(em, meth)
+		return c_call(em, meth, args, l, c, sb) if c_is_generic(em, meth)
 
 		# AND A NAMESPACED GENERIC TYPE, for the same reason one line up: `boxmod.Box(4)` is
 		# the construction of a template that module declares, and a template has no signature
 		# either — so the check below reported the module as having no `Box` while it was
 		# sitting in the generic-type table.
-		return c_call(em, meth, args, sb) if c_gen_struct_row(em, meth) >= 0
+		return c_call(em, meth, args, l, c, sb) if c_gen_struct_row(em, meth) >= 0
 
 		# a REAL module and a member no module declares — the same rule the field path
 		# reports (c_fieldref), because it is the same mistake. Falling through said "the
@@ -10692,8 +11345,12 @@ fn c_free_method(mut &em: Emitter, target: ast.Expr, meth: str, args: list[ast.E
 		# else's module out loud. A public name two modules declare is two symbols, and this is
 		# where the right one is chosen (#92).
 		callee_mod := c_ns_mod_of(em, tn)
+		callee := c_sig_row_in(em, callee_mod, c_sig_key("", meth))
+		if em.want_index {
+			c_nx_use(em, l, c, meth, c_nx_sig(em, callee))
+		}
 
-		c_chk_visible_fn(em, meth, c_sig_row_in(em, callee_mod, c_sig_key("", meth)))
+		c_chk_visible_fn(em, meth, callee)
 
 		return f"{c_fn_cname_in(em, callee_mod, "", meth)}({c_call_args(em, meth, args, sb)})"
 	}
@@ -10883,8 +11540,12 @@ fn c_list_lit_vals(mut &em: Emitter, ety: ast.Ty, vals: list[str]) -> str {
 #
 # The branch that reported a written argument on a non-template went with the form: with the
 # parser refusing it, no call can arrive here naming something that is not generic.
-fn c_call_written(mut &em: Emitter, name: str, args: list[ast.Expr], ts: list[ast.Ty], sb: Subst) -> str {
-	return c_call(em, name, args, sb) if ts.len() == 0
+fn c_call_written(mut &em: Emitter, name: str, args: list[ast.Expr], ts: list[ast.Ty], l: int, c: int, sb: Subst) -> str {
+	return c_call(em, name, args, l, c, sb) if ts.len() == 0
+
+	if em.want_index and c_is_generic(em, name) {
+		c_nx_use(em, l, c, name, c_nx_template(em, name))
+	}
 
 	# A BUILT-IN TYPE CONSTRUCTOR IS NOT A GENERIC FUNCTION, and the rule below says the
 	# opposite: "`map` is not generic" is a false statement about `map[str, int]()`, which
@@ -10897,7 +11558,7 @@ fn c_call_written(mut &em: Emitter, name: str, args: list[ast.Expr], ts: list[as
 	c_builtin_check(em, name)
 	raise c_diag(em, rule.Rule.NotYetGenericConstructor, f"NotImplemented: `{name}[…](…)` as a constructor — this compiler builds an empty map with the literal `{{:}}` and an empty list with `[]`, so a built-in container's type arguments come from what it is bound to (GRAMMAR#type-args)") if name == "map"
 
-	return c_call(em, c_instantiate_at(em, name, ts), args, sb)
+	return c_call(em, c_instantiate_at(em, name, ts), args, 0, 0, sb)
 }
 
 # c_infer_call_written is the same choice for the pass that types a call rather than emits
@@ -10939,7 +11600,10 @@ fn c_call_val(mut &em: Emitter, callee: ast.Expr, args: list[ast.Expr], sb: Subs
 	return f"({{ zg_fnptr {v} = {c_expr(em, callee, sb)}; ({c_fnptr_cast(fty)}{v}.fn)({v}.env{c_args_after(em, fty, args, sb)}); }})"
 }
 
-fn c_call(mut &em: Emitter, name: str, args: list[ast.Expr], sb: Subst) -> str {
+#
+# `l` / `c` are where the callee's name was written; each branch that resolves it records the
+# answer in the name index, and 0, 0 is a call nobody wrote or one already recorded.
+fn c_call(mut &em: Emitter, name: str, args: list[ast.Expr], l: int, c: int, sb: Subst) -> str {
 	# `set(xs)` IS A CONSTRUCTOR, and it is read here rather than anywhere a type is read,
 	# because `set` is not a declared name: GRAMMAR#map-lit's note is that a set has no literal
 	# — `{1}` cannot be told from a one-statement block — so the call IS the spelling.
@@ -10981,7 +11645,10 @@ fn c_call(mut &em: Emitter, name: str, args: list[ast.Expr], sb: Subst) -> str {
 	# calling a BINDING that holds a function: cast the stored generic pointer back to the
 	# signature its type carries, then call through it
 	bt := c_lookup_var(em, name)
-	return f"({c_fnptr_cast(bt)}({c_ident_val(em, name, sb)}).fn)({c_ident_val(em, name, sb)}.env{c_args_after(em, bt, args, sb)})" if c_is_fn(bt)
+	if em.want_index and c_is_fn(bt) {
+		c_nx_use(em, l, c, name, em.env_nx[c_live_idx(em, name)])
+	}
+	return f"({c_fnptr_cast(bt)}({c_ident_val(em, name, 0, 0, sb)}).fn)({c_ident_val(em, name, 0, 0, sb)}.env{c_args_after(em, bt, args, sb)})" if c_is_fn(bt)
 
 	# A BINDING THAT IS NOT A FUNCTION SHADOWS ONE ALL THE SAME. The name is looked up as a
 	# binding first, because a binding holding a function is a call — and when it holds
@@ -11000,6 +11667,9 @@ fn c_call(mut &em: Emitter, name: str, args: list[ast.Expr], sb: Subst) -> str {
 	# function `Full`", about a variant declared at the top of the same file.
 	gb := c_gen_variant_owner(em, name)
 	if gb != "" {
+		if em.want_index {
+			c_nx_gen_variant(em, gb, name, l, c)
+		}
 		ap := c_gen_enum_solved(em, gb, name, args)
 		return c_variant_ctor(em, ap, name, args, sb) if ap != ""
 
@@ -11007,6 +11677,9 @@ fn c_call(mut &em: Emitter, name: str, args: list[ast.Expr], sb: Subst) -> str {
 	}
 
 	if c_names_a_type(em, name) or c_is_variant(em, name) {
+		if em.want_index {
+			c_nx_type_call(em, name, l, c)
+		}
 		if c_call_is_variant(em, name) {
 			c_bare_variant(em, name)
 
@@ -11063,7 +11736,10 @@ fn c_call(mut &em: Emitter, name: str, args: list[ast.Expr], sb: Subst) -> str {
 	# is, so the call is rewritten to name it and handed back to this same function — which
 	# then finds an ordinary free function and applies the argument rules to a signature with
 	# real types in it. Nothing below this line knows a generic was involved.
-	return c_call(em, c_instantiate(em, name, args), args, sb) if c_is_generic(em, name)
+	if em.want_index and c_is_generic(em, name) {
+		c_nx_use(em, l, c, name, c_nx_template(em, name))
+	}
+	return c_call(em, c_instantiate(em, name, args), args, 0, 0, sb) if c_is_generic(em, name)
 
 	# A GENERIC TYPE'S CONSTRUCTOR SOLVES ITS OWN PARAMETERS, from the ARGUMENTS and never from
 	# where the answer lands — docs/core/type-system.md states it for a call, and a construction
@@ -11076,6 +11752,9 @@ fn c_call(mut &em: Emitter, name: str, args: list[ast.Expr], sb: Subst) -> str {
 	# constructions below because a template is not a type — it was removed from the program
 	# with the other templates — so the branch that asks "is this name a type" never sees it,
 	# and what it reached instead was `undefined function`.
+	if em.want_index and c_gen_struct_row(em, name) >= 0 {
+		c_nx_use(em, l, c, name, c_nx_tk(em, name))
+	}
 	return c_gen_construct(em, name, args, sb) if c_gen_struct_row(em, name) >= 0
 
 	# NOTHING DECLARES THIS FUNCTION. It used to be spelled `zg_<name>(…)` and handed to
@@ -11095,6 +11774,9 @@ fn c_call(mut &em: Emitter, name: str, args: list[ast.Expr], sb: Subst) -> str {
 	# ONE ROW FOR BOTH: they read different columns of the same signature row, and looking it
 	# up once here is the difference between one scan of that table per call site and two.
 	sr := c_sig_row_of(em, name)
+	if em.want_index {
+		c_nx_use(em, l, c, name, c_nx_sig(em, sr))
+	}
 	c_chk_visible_fn(em, name, sr)
 	c_chk_bare_fn(em, name, sr)
 	c_chk_unsafe_fn(em, name, "this call is in safe code", sr)
@@ -11372,6 +12054,9 @@ fn c_struct_args_named(mut &em: Emitter, sname: str, args: list[ast.Expr]) -> li
 		} else {
 			seen_named = true
 			at := c_name_index(names, nm)
+			if em.want_index {
+				c_nx_named_arg(em, args[i], c_nx_fld_of(em, sname, nm))
+			}
 
 			if at < 0 {
 				c_named_unknown(em, nm, f"field of `{sname}`")
@@ -11807,6 +12492,9 @@ fn c_args_named(mut &em: Emitter, key: str, base: int, args: list[ast.Expr]) -> 
 		} else {
 			seen_named = true
 			at := c_param_named(em, key, nm)
+			if em.want_index and at >= 0 {
+				c_nx_named_arg(em, args[i], em.pr_nx[c_param_row(em, key, at)])
+			}
 
 			if at < 0 {
 				c_named_unknown(em, nm, "parameter of this call")
@@ -12307,14 +12995,25 @@ fn c_variant_ctor(mut &em: Emitter, en: str, name: str, args: list[ast.Expr], sb
 
 # c_ident_val resolves a bare name: a match binding wins, then a nullary enum variant
 # (constructed as a tag-only literal), otherwise a mangled variable reference.
-fn c_ident_val(mut &em: Emitter, n: str, sb: Subst) -> str {
+#
+# `l` / `c` are where the name was written, and each branch that resolves it records the
+# answer in the name index there — 0, 0 for a name the caller has already recorded.
+fn c_ident_val(mut &em: Emitter, n: str, l: int, c: int, sb: Subst) -> str {
 	mut i := 0
 	for i < sb.names.len() {
-		return sb.repls[i] if sb.names[i] == n
+		if sb.names[i] == n {
+			if em.want_index {
+				c_nx_use(em, l, c, n, c_nx_sub(em, sb.repls[i]))
+			}
+			return sb.repls[i]
+		}
 		i = i + 1
 	}
 	vr := c_var_row(em, n)
 	if vr >= 0 {
+		if em.want_index {
+			c_nx_use(em, l, c, n, c_nx_var(em, vr))
+		}
 		c_bare_variant(em, n)
 		return "(zg_" + em.var_enum[vr] + "){.tag = " + strconv.to_string(em.var_tag[vr], 10) + "}"
 	}
@@ -12330,6 +13029,10 @@ fn c_ident_val(mut &em: Emitter, n: str, sb: Subst) -> str {
 	c_live_use(em, n)
 
 	if c_is_ref_name(em, n) {
+		if em.want_index {
+			c_nx_use(em, l, c, n, em.env_nx[c_live_idx(em, n)])
+		}
+
 		# a mutable-reference parameter is a pointer; dereference it on use
 		return f"(*{c_var_cname(em, n)})"
 	}
@@ -12338,6 +13041,10 @@ fn c_ident_val(mut &em: Emitter, n: str, sb: Subst) -> str {
 	# only reached when nothing has bound the name, so a binding always wins — which is the
 	# ordinary scoping rule, and it means a local can shadow a function without surprise.
 	if c_is_free_fn(em, n) and not c_is_bound(em, n) {
+		if em.want_index {
+			c_nx_use(em, l, c, n, c_nx_sig(em, c_sig_row_of(em, n)))
+		}
+
 		# NAMING ONE IS SAFE NOW, AND CALLING IT IS STILL CHECKED. This used to be refused —
 		# "naming it here would hand safe code the same call" — and it was true while a
 		# function TYPE could not carry the marker: the value became a plain `fn` and the
@@ -12396,6 +13103,13 @@ fn c_ident_val(mut &em: Emitter, n: str, sb: Subst) -> str {
 	idx := c_live_idx(em, n)
 	if idx >= 0 and check.chk_is_module_binding(em, idx) {
 		c_chk_visible_const(em, n)
+	}
+	if em.want_index {
+		if idx >= 0 {
+			c_nx_use(em, l, c, n, em.env_nx[idx])
+		} else {
+			c_nx_use(em, l, c, n, c_nx_tk(em, n))
+		}
 	}
 	return c_var_cname(em, n)
 }
@@ -13258,14 +13972,14 @@ fn c_pat_subst(mut &em: Emitter, pt: ast.Pat, s: str, st: ast.Ty, sb: Subst) -> 
 	#
 	# `_` IS NOT A NAMED BINDING and keeps matching everything: it binds nothing, so there is
 	# no payload for it to be wrong about.
-	return c_extend(sb, bn, c_res_val(em, st, s)) if bn != "" and c_is_carrier(st)
+	return c_extend_bound(em, sb, bn, c_res_val(em, st, s), pt) if bn != "" and c_is_carrier(st)
 
-	return c_extend(sb, bn, s) if bn != ""
+	return c_extend_bound(em, sb, bn, s, pt) if bn != ""
 
 	# `pattern as name` BINDS THE WHOLE and keeps destructuring: the name reads the subject
 	# itself, and the pattern inside it binds through the same accessor. Both, in that order,
 	# because the inner one may bind a name of its own and neither shadows the other.
-	return c_pat_subst(em, c_pat_as_inner(pt), s, st, c_extend(sb, c_pat_as_name(pt), s)) if c_pat_is_as(pt)
+	return c_pat_subst(em, c_pat_as_inner(pt), s, st, c_extend_bound(em, sb, c_pat_as_name(pt), s, pt)) if c_pat_is_as(pt)
 
 	# AN OR-PATTERN'S BINDING IS WHICHEVER SIDE MATCHED, and a substitution is TEXT, so it is
 	# written as the choice it is: `x` becomes `(condA ? accA : accB)`. Both sides bind the same
@@ -13334,14 +14048,18 @@ fn c_pat_subst(mut &em: Emitter, pt: ast.Pat, s: str, st: ast.Ty, sb: Subst) -> 
 	ctor := c_pat_ctor(pt)
 	return sb if ctor == ""
 
-	names := c_payload_names(c_pat_payload(pt))
+	if em.want_index {
+		c_nx_pat_ctor(em, pt, st)
+	}
+	ps := c_pat_payload(pt)
+	names := c_payload_names(ps)
 	if c_is_either(st) {
 		# `Left(v)` reads the value, `Right(e)` the Err; neither is a tagged union of the
 		# kind the variant table describes, so the field is named directly
 		return sb if names.len() == 0
-		return c_extend(sb, names[0], c_res_val(em, st, s)) if c_result_tag(em, ctor) == 0
+		return c_extend_bound(em, sb, names[0], c_res_val(em, st, s), ps[0]) if c_result_tag(em, ctor) == 0
 
-		return c_extend(sb, names[0], c_res_err(s))
+		return c_extend_bound(em, sb, names[0], c_res_err(s), ps[0])
 	}
 
 	en := c_named_of(st)
@@ -13353,7 +14071,7 @@ fn c_pat_subst(mut &em: Emitter, pt: ast.Pat, s: str, st: ast.Ty, sb: Subst) -> 
 			# unbox a self-recursive payload back to the enum value
 			acc = f"(*({c_ty_cname(en)}*)zrt_ref_payload({acc}))"
 		}
-		r = c_extend(r, names[i], acc)
+		r = c_extend_bound(em, r, names[i], acc, ps[i])
 		i = i + 1
 	}
 	return r
@@ -14293,7 +15011,7 @@ fn c_infer_binary(mut &em: Emitter, oper: str, a: ast.Expr, b: ast.Expr) -> ast.
 
 fn c_stmt(mut &em: Emitter, s: ast.Stmt, ind: str) -> str {
 	return match s {
-		Stmt.SLet(name, ty, has_type, is_mut, is_const, ival, _, _) => c_let(em, name, ty, has_type, is_mut, is_const, ival, ind)
+		Stmt.SLet(name, ty, has_type, is_mut, is_const, ival, l, c) => c_let_at(em, name, ty, has_type, is_mut, is_const, ival, l, c, ind)
 		Stmt.SAssign(lhs, rhs) => c_assign(em, lhs, rhs, ind)
 		Stmt.SDestructure(t, v, is_bind, is_mut, is_const) => c_destructure(em, t, v, is_bind, is_mut, is_const, ind)
 		Stmt.SPrint(e) => c_print(em, e, ind)
@@ -14301,9 +15019,9 @@ fn c_stmt(mut &em: Emitter, s: ast.Stmt, ind: str) -> str {
 		Stmt.SReturnIf(val, cond) => c_return_if(em, val, cond, ind)
 		Stmt.SExpr(e) => c_expr_stmt(em, e, ind)
 		Stmt.SIf(cond, then_body, has_else, else_body) => c_if(em, cond, then_body, has_else, else_body, ind)
-		Stmt.SIfLet(name, value, then_body, has_else, else_body, _, _) => c_iflet(em, name, value, then_body, has_else, else_body, ind)
+		Stmt.SIfLet(name, value, then_body, has_else, else_body, l, c) => c_iflet_at(em, name, value, then_body, has_else, else_body, l, c, ind)
 		Stmt.SFor(has_cond, cond, body) => c_for(em, has_cond, cond, body, ind)
-		Stmt.SForIn(var, iter, body, _, _) => c_forin(em, var, iter, body, ind)
+		Stmt.SForIn(var, iter, body, l, c) => c_forin_at(em, var, iter, body, l, c, ind)
 		Stmt.SRaise(x, hc, c) => c_raise(em, x, hc, c, ind)
 		Stmt.SAssert(body) => c_assert(em, body, ind)
 		Stmt.SScope(body, is_unsafe) => c_scope(em, body, is_unsafe, ind)
@@ -14312,7 +15030,7 @@ fn c_stmt(mut &em: Emitter, s: ast.Stmt, ind: str) -> str {
 		Stmt.SSend(ch, v) => c_send(em, ch, v, ind)
 		Stmt.SSelect(arms) => c_select(em, arms, ind, false)
 		Stmt.SForSelect(arms) => c_for_select(em, arms, ind)
-		Stmt.SDel(n, _, _) => c_del(em, n, ind)
+		Stmt.SDel(n, l, c) => c_del_at(em, n, l, c, ind)
 		Stmt.SClose(ch, at_exit) => c_close(em, ch, at_exit, ind)
 		Stmt.SBreak => c_jump(em, "break", ind)
 		Stmt.SContinue => c_jump(em, "continue", ind)
@@ -14923,7 +15641,7 @@ fn c_const_globals(mut &em: Emitter, f: ast.File, own: ast.File, whole: bool) ->
 		c_spelled_register(em, ty)
 		if whole {
 			out = out + f"static {c_type(ty)} {c_const_cname(c)};\n"
-		} else if c_const_in(own, c.name) {
+		} else if c_const_in(own, c) {
 			out = out + f"{c_type(ty)} {c_const_cname(c)};\n"
 		} else {
 			out = out + f"extern {c_type(ty)} {c_const_cname(c)};\n"
@@ -14970,6 +15688,9 @@ fn c_const_bind(mut &em: Emitter, c: ast.ConstDecl, ty: ast.Ty) {
 	# row there rather than reading this column, so the constant has exactly one value and no
 	# way for two copies of it to drift.
 	em.env_cval.append(check.Folded(false, 0))
+	if em.want_index {
+		em.env_nx.append(c_nx_decl(em, c.path, c.name_line, c.name_col, c.name, ast.NK_CONST))
+	}
 }
 
 # c_const_here is whether a module constant is one THIS FILE may name bare (#57): its own, or
@@ -15002,9 +15723,15 @@ fn c_const_from_sibling(mut &em: Emitter, n: str) -> bool {
 	return false
 }
 
-fn c_const_in(f: ast.File, name: str) -> bool {
+# c_const_in is whether this unit declares the constant `k`, which is where its global is DEFINED —
+# every other unit declares it `extern`. Compared by the name it is REACHED by (c_const_scope_name),
+# not its bare name: an associated `P.LIMIT` and a module `LIMIT` are two constants, and a unit
+# holding the second used to define the first's global as well, which a linker without common
+# symbols — GCC's default on Linux — refused as a multiple definition.
+fn c_const_in(f: ast.File, k: ast.ConstDecl) -> bool {
+	want := c_const_scope_name(k)
 	for c in f.consts {
-		return true if c.name == name
+		return true if c_const_scope_name(c) == want
 	}
 	return false
 }
@@ -16108,6 +16835,7 @@ fn c_select(mut &em: Emitter, arms: list[ast.SelArm], ind: str, loop: bool) -> s
 			# already in this arm's receive temp. Writing the columns out here instead is
 			# what left `env_cval` one row short of the rest (c_add_var_named).
 			c_add_var_named(em, a.bind, elem, f"zgt_rv{tag}_{k - 1}", false, false)
+			c_nx_bind(em, em.env_names.len() - 1, a.bind_line, a.bind_col, ast.NK_LOCAL)
 		}
 		c_live_restore(em, entry)
 		out = out + c_block(em, a.body, in2 + "    ")
@@ -16220,6 +16948,17 @@ fn c_lambda(mut &em: Emitter, ps: list[ast.Param], has_ret: bool, ret: ast.Ty, b
 		cvals.append(c_copied(em, cp.ty, ast.Expr.EIdent(cp.name, 0, 0), c_nosub()))
 	}
 
+	# AND WHAT EACH CAPTURE IS IN THE NAME INDEX: the binding it copies, so a use inside the body
+	# is a reference of that binding. The lifted function binds its parameters before anything
+	# else — the captures first — so their rows are the next ones c_nx_row hands out.
+	mut cap_nx: list[int] = []
+	if em.want_index {
+		for cn in caps {
+			cap_nx.append(em.env_nx[c_live_idx(em, cn)])
+		}
+	}
+	nx_from := em.nx_rows.len()
+
 	mut allps := cps
 	for pm in ps {
 		allps.append(pm)
@@ -16253,6 +16992,11 @@ fn c_lambda(mut &em: Emitter, ps: list[ast.Param], has_ret: bool, ret: ast.Ty, b
 	saved_sub := em.sub
 	em.sub = c_nosub()
 	em.lam_defs.append(c_fn(em, ast.FnDecl(name, "", allps, has_ret, ret, body, false, em.at_path, em.at_line, em.at_col, [], [], em.in_unsafe_fn, false, false, true, false, "", 0, 0)))
+	mut ci := 0
+	for ci < cap_nx.len() {
+		em.nx_rows[nx_from + ci] = cap_nx[ci]
+		ci = ci + 1
+	}
 	em.sub = saved_sub
 	c_env_restore(em, saved_env)
 	em.open_scopes = saved_open
@@ -18249,7 +18993,7 @@ fn c_field_ty_of(mut &em: Emitter, target: ast.Expr, fld: str) -> ast.Ty {
 	return c_field_ty(em, c_named_of(t), fld)
 }
 
-fn c_fieldref(mut &em: Emitter, target: ast.Expr, fld: str, sb: Subst) -> str {
+fn c_fieldref(mut &em: Emitter, target: ast.Expr, fld: str, l: int, c: int, sb: Subst) -> str {
 	# `Color.Red` — a variant NAMED BY ITS ENUM. The bare `Red` is what the grammar makes
 	# normative (a bare name is a variant when it resolves to one, GRAMMAR#variant-pat), and it
 	# stays; this is the same value said unambiguously, which is what a reader reaches for
@@ -18257,7 +19001,13 @@ fn c_fieldref(mut &em: Emitter, target: ast.Expr, fld: str, sb: Subst) -> str {
 	# answered before inference for the reason `E.of(n)` is: an enum name is not a binding,
 	# so `c_infer` has nothing to say about it and the message was `undefined name `Color``.
 	en := c_qualified_variant(em, target, fld)
-	return "(" + c_ty_cname(en) + "){.tag = " + strconv.to_string(c_variant_tag_in(em, en, fld), 10) + "}" if en != ""
+	if en != "" {
+		if em.want_index {
+			c_nx_type_name(em, target, en)
+			c_nx_use(em, l, c, fld, c_nx_var_in(em, en, fld))
+		}
+		return "(" + c_ty_cname(en) + "){.tag = " + strconv.to_string(c_variant_tag_in(em, en, fld), 10) + "}"
+	}
 
 	# and the same for a generic enum's template, whose payload-less variant is written in this
 	# shape rather than as a call. It carries no argument to solve anything from, so unless the
@@ -18266,6 +19016,10 @@ fn c_fieldref(mut &em: Emitter, target: ast.Expr, fld: str, sb: Subst) -> str {
 	mut noargs: list[ast.Expr] = []
 	gb := c_ident_name(target)
 	if gb != "" and c_is_gen_enum_name(em, gb) {
+		if em.want_index {
+			c_nx_type_name(em, target, gb)
+			c_nx_gen_variant(em, gb, fld, l, c)
+		}
 		ap := c_gen_enum_solved(em, gb, fld, noargs)
 		return "(" + c_ty_cname(ap) + "){.tag = " + strconv.to_string(c_variant_tag_in(em, ap, fld), 10) + "}" if ap != ""
 
@@ -18305,7 +19059,13 @@ fn c_fieldref(mut &em: Emitter, target: ast.Expr, fld: str, sb: Subst) -> str {
 	# has no room for, and it was reachable for every struct in the language.
 	if tn != "" and c_is_struct_name(em, tn) {
 		qn := f"{tn}.{fld}"
-		return c_ident_val(em, qn, sb) if c_is_bound(em, qn)
+		if c_is_bound(em, qn) {
+			if em.want_index {
+				c_nx_type_name(em, target, tn)
+				c_nx_use(em, l, c, fld, em.env_nx[c_live_idx(em, qn)])
+			}
+			return c_ident_val(em, qn, 0, 0, sb)
+		}
 
 		raise c_diag(em, rule.Rule.NoAssociatedValue, f"`{tn}` has no associated value `{fld}` — a type is not a value, so `{tn}.{fld}` reads one an `impl {tn}` declares with `{fld} := …`")
 	}
@@ -18345,6 +19105,9 @@ fn c_fieldref(mut &em: Emitter, target: ast.Expr, fld: str, sb: Subst) -> str {
 		# Whether this module may read it is the same question a call asks
 		# (c_chk_visible_fn), against the rows c_const_globals recorded.
 		if c_k_idx(em, fld) >= 0 and c_ns_names_mod(em, ns, check.c_mod_of(em, em.k_decls[c_k_idx(em, fld)].path)) {
+			if em.want_index {
+				c_nx_use(em, l, c, fld, c_nx_const(em, em.k_decls[c_k_idx(em, fld)]))
+			}
 			c_chk_visible_const(em, fld)
 			return "zg_" + fld
 		}
@@ -18371,6 +19134,9 @@ fn c_fieldref(mut &em: Emitter, target: ast.Expr, fld: str, sb: Subst) -> str {
 
 	tgt := c_expr(em, target, sb)
 	tt := c_infer(em, target)
+	if em.want_index {
+		c_nx_field(em, tt, fld, l, c)
+	}
 
 	if c_all_digits(fld) {
 		# `.0` IS A TUPLE'S ACCESSOR AND NOTHING ELSE'S, and it was spelled `.f0` onto whatever
@@ -19962,6 +20728,9 @@ fn c_fn(mut &em: Emitter, fn_d: ast.FnDecl) -> str {
 			pm := fn_d.params[i]
 			c_add_var(em, pm.name, pm.ty, pm.is_ref, false)
 			pc := c_var_cname(em, pm.name)
+			if em.want_index {
+				c_nx_bind(em, em.env_names.len() - 1, pm.line, pm.col, ast.NK_PARAM)
+			}
 
 			# A BY-VALUE PARAMETER IS THIS FUNCTION'S OWN. Every call site copies what it
 			# hands over (c_arg, through c_copied) — for a str that copy is a retain, for a
@@ -20199,15 +20968,17 @@ pub fn emit_files_diag(srcs: list[str], paths: list[str], ms: Mods, mut &diags: 
 # for asking it three times.
 pub fn check_files_diag(srcs: list[str], paths: list[str], ms: Mods, mut &diags: list[ast.Diag]) {
 	mut lints: list[ast.Diag] = []
+	mut nx := ast.no_index()
 	f := merge_files_at(srcs, paths)
-	c_emit_unit(f, f, ms, true, false, true, diags, lints)
+	c_emit_unit(f, f, ms, true, false, true, false, diags, lints, nx)
 }
 
 # emit_unit_at is emit_unit that also reports what it found. A build refuses to hand the
 # C to cc when this list comes back non-empty.
 pub fn emit_unit_at(prog: ast.File, own: ast.File, ms: Mods, mut &diags: list[ast.Diag]) -> str {
 	mut lints: list[ast.Diag] = []
-	return c_emit_unit(prog, own, ms, false, false, false, diags, lints)
+	mut nx := ast.no_index()
+	return c_emit_unit(prog, own, ms, false, false, false, false, diags, lints, nx)
 }
 
 # lint_conversions is the L5xx family, and it is the one lint that cannot be answered from
@@ -20229,12 +21000,25 @@ pub fn lint_conversions(srcs: list[str], paths: list[str], ms: Mods) -> list[ast
 # finding: `want_lints` is read by `chk_note_at` alone, so `diags` is what check_files_diag
 # reports, and `make check-equal` holds that walk to the build's.
 pub fn lint_conversions_of(f: ast.File, ms: Mods, mut &diags: list[ast.Diag]) -> list[ast.Diag] {
+	mut nx := ast.no_index()
+	return c_lint_walk(f, ms, false, diags, nx)
+}
+
+# lint_index_of is lint_conversions_of that also fills `nx` — the name index (#24) — from the
+# same walk. It is the language server's question, and it costs no second walk: the index is
+# recorded where that walk resolves each name. An ABORT raises out of here with `nx` untouched,
+# which is what makes the server's answer null until the next check that reaches the end.
+pub fn lint_index_of(f: ast.File, ms: Mods, mut &diags: list[ast.Diag], mut &nx: ast.NameIndex) -> list[ast.Diag] {
+	return c_lint_walk(f, ms, true, diags, nx)
+}
+
+fn c_lint_walk(f: ast.File, ms: Mods, want_index: bool, mut &diags: list[ast.Diag], mut &nx: ast.NameIndex) -> list[ast.Diag] {
 	mut lints: list[ast.Diag] = []
 
 	# MERGED ONCE and handed over twice. emit_unit's own comment records that re-parsing the
 	# whole program per unit "is where its time went", and two calls in one argument list is
 	# that mistake at its smallest.
-	c_emit_unit(f, f, ms, true, true, true, diags, lints)
+	c_emit_unit(f, f, ms, true, true, true, want_index, diags, lints, nx)
 
 	return [] if diags.len() > 0
 
@@ -20257,6 +21041,7 @@ pub fn merge_asts(fs: list[ast.File]) -> ast.File {
 	mut ty_quals: list[ast.TyQual] = []
 	mut ty_apps: list[ast.TyApp] = []
 	mut ty_uses: list[ast.TyUse] = []
+	mut tp_scopes: list[ast.TyScope] = []
 	for f in fs {
 		for q in f.ty_quals {
 			ty_quals.append(q)
@@ -20266,6 +21051,9 @@ pub fn merge_asts(fs: list[ast.File]) -> ast.File {
 		}
 		for u in f.ty_uses {
 			ty_uses.append(u)
+		}
+		for sc in f.tp_scopes {
+			tp_scopes.append(sc)
 		}
 		for c in f.consts {
 			consts.append(c)
@@ -20310,12 +21098,13 @@ pub fn merge_asts(fs: list[ast.File]) -> ast.File {
 	# because it reads one file at a time, and the length is part of the TYPE — so it has to
 	# become a number before anything compares two types, and this is the one door every path
 	# into the emitter goes through.
-	return generic.gen_resolve_lens(ast.File(imports, structs, enums, specs, impls, fns, types, consts, derive_on, derive_spec, stmts, ty_quals, ty_apps, ty_uses))
+	return generic.gen_resolve_lens(ast.File(imports, structs, enums, specs, impls, fns, types, consts, derive_on, derive_spec, stmts, ty_quals, ty_apps, ty_uses, tp_scopes))
 }
 
 fn c_emit_file_at(f: ast.File, ms: Mods, mut &diags: list[ast.Diag]) -> str {
 	mut lints: list[ast.Diag] = []
-	return c_emit_unit(f, f, ms, true, false, false, diags, lints)
+	mut nx := ast.no_index()
+	return c_emit_unit(f, f, ms, true, false, false, false, diags, lints, nx)
 }
 
 # c_emit_unit lowers ONE compilation unit. `prog` is the whole program — every type and
@@ -21646,7 +22435,9 @@ fn c_section(parts: list[str], budget: int, at: str, mut &sofar: int) -> str {
 # `check` is the walk that answers whether this is a program without answering what C it
 # becomes: every pass and every rule below runs unchanged, and only the TEXT is dropped
 # (c_lowered). The returned C is empty, which is what a caller in this mode asked for.
-fn c_emit_unit(prog0: ast.File, own0: ast.File, ms: Mods, whole: bool, want_lints: bool, checking: bool, mut &diags: list[ast.Diag], mut &lints: list[ast.Diag]) -> str {
+#
+# `want_index` asks for the name index as well, handed back in `nx` (lint_index_of says who asks).
+fn c_emit_unit(prog0: ast.File, own0: ast.File, ms: Mods, whole: bool, want_lints: bool, checking: bool, want_index: bool, mut &diags: list[ast.Diag], mut &lints: list[ast.Diag], mut &nx: ast.NameIndex) -> str {
 	# the derive expansion runs over the program the builtin specs are already in, because
 	# what it writes is `impl Eq for …` and the spec that names has to be there to meet it.
 	#
@@ -21664,7 +22455,7 @@ fn c_emit_unit(prog0: ast.File, own0: ast.File, ms: Mods, whole: bool, want_lint
 	# is what makes that invariant hold for a multi-unit program, at the place it already lives,
 	# and it is what lets the declaration passes below go back to reading the WHOLE program.
 	seen := diags.len()
-	mut em := Emitter([], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], false, false, false, false, [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], 0, [], 0, [], [], false, "", "", [], [], ast.Ty.TVoid, 0, "", 0, 0, diags, 0, 0, [], [], [], [], [], false, 0, false, "", 0, false, false, [], [], [], [], [], [], [], [], [], [], [], "", want_lints, [], [], [], [], [], [], [], [], [], [], [], [], false, 0, [], [], "", c_nosub(), [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [])
+	mut em := Emitter([], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], false, false, false, false, [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], 0, [], 0, [], [], false, "", "", [], [], ast.Ty.TVoid, 0, "", 0, 0, diags, 0, 0, [], [], [], [], [], false, 0, false, "", 0, false, false, [], [], [], [], [], [], [], [], [], [], [], "", want_lints, [], [], [], [], [], [], [], [], [], [], [], [], false, 0, [], [], "", c_nosub(), [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], false, ast.no_index(), [], [], [], [], [], [], [], [], [], [])
 
 	# ASSIGNED, NOT PASSED. Every argument above is a zero value, and `layering` asserts that
 	# — it lines the call up with the fields by KIND, which only works while nothing in it
@@ -21675,6 +22466,7 @@ fn c_emit_unit(prog0: ast.File, own0: ast.File, ms: Mods, whole: bool, want_lint
 	em.imp_at = ms.imp_at
 	em.imp_path = ms.imp_path
 	em.imp_mod = ms.imp_mod
+	em.want_index = want_index
 
 	# THE TEMPLATES ARE RECORDED AND THEN REMOVED, before any other pass sees the program.
 	# A template is not a function, and this is the honest way to say so: from here down —
@@ -22000,6 +22792,15 @@ fn c_emit_unit(prog0: ast.File, own0: ast.File, ms: Mods, whole: bool, want_lint
 	}
 	for d in em.lints {
 		lints.append(d)
+	}
+
+	# THE TYPE NAMES LAST, because they are the one kind of use the walk does not pass: a type is
+	# resolved by the tables, not by a lowering, and every table is full by now.
+	if want_index {
+		c_nx_types(em, f0)
+		ast.nx_seal(em.nx, em.nx_rows)
+		nx = em.nx
+		c_nx_release(em)
 	}
 
 	# and the header, which is the one section built from literals rather than from a

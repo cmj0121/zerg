@@ -24,6 +24,7 @@
 import (
 	"io"
 	"json"
+	"os"
 
 	"/zerg"
 )
@@ -71,6 +72,14 @@ struct Server {
 	pub buf: list[byte]
 	pub stop: bool
 	pub down: bool
+
+	# nx is THE NAME INDEX of the last check that reached its end — the one table
+	# `definition` and `references` answer from, replaced whole by every check and DROPPED
+	# (has_nx false) by one that aborted, so a question after a refusal answers null rather
+	# than from a program the compiler no longer agrees is this one. Its places are already
+	# LSP's: a 0-based line and UTF-16 columns, converted once when stored (ls_nx_utf16).
+	pub nx: zerg.NameIndex
+	pub has_nx: bool
 }
 
 # Change is what a `didChange` carried: the new text, and whether there WAS one. The flag is
@@ -90,7 +99,7 @@ struct Change {
 pub fn serve(load: fn (str, str) -> Program) -> int {
 	mut docs: list[Doc] = []
 	mut buf: list[byte] = []
-	mut s := Server(docs, buf, false, false)
+	mut s := Server(docs, buf, false, false, zerg.no_index(), false)
 	for {
 		body := ls_read_frame(s)
 		break if s.stop
@@ -261,6 +270,10 @@ fn ls_handle(mut &s: Server, body: str, load: fn (str, str) -> Program) {
 		ls_reply(id, ls_code_action_result(s, uri, ls_req_span(params), load))
 	} else if method == "textDocument/documentSymbol" {
 		ls_reply(id, ls_document_symbol_result(s, json.as_str(json.walk3(msg, "params", "textDocument", "uri"))))
+	} else if method == "textDocument/definition" {
+		ls_reply(id, ls_definition_result(s, json.get(msg, "params")))
+	} else if method == "textDocument/references" {
+		ls_reply(id, ls_references_result(s, json.get(msg, "params")))
 	} else if has_id {
 		# EVERY request gets an answer. A client that is left waiting for one it will never
 		# get is a client that stops sending the next one, and the editor goes quiet with
@@ -316,9 +329,13 @@ fn ls_initialize_result() -> json.Val {
 	json.put(caps, "codeActionProvider", json.of_obj(ca))
 
 	# The outline. It is the one answer that needs NO name resolution — a declaration knows
-	# what it is called and where it was written — which is why it is here while `hover`,
-	# `definition` and `references` are not.
+	# what it is called and where it was written.
 	json.put_bool(caps, "documentSymbolProvider", true)
+
+	# A name's declaration and its uses — both answered from the one index the check builds
+	# (#24), which is the compiler's resolution recorded as it happened.
+	json.put_bool(caps, "definitionProvider", true)
+	json.put_bool(caps, "referencesProvider", true)
 
 	mut info: list[json.Field] = []
 	json.put_str(info, "name", "zerg")
@@ -395,7 +412,7 @@ fn ls_has_doc(s: Server, uri: str) -> bool {
 fn ls_publish(mut &s: Server, uri: str, load: fn (str, str) -> Program) {
 	text := ls_doc_text(s, uri)
 	path := ls_uri_path(uri)
-	ls_send(ls_notification("textDocument/publishDiagnostics", ls_diagnostics_params(uri, ls_check(path, text, load))))
+	ls_send(ls_notification("textDocument/publishDiagnostics", ls_diagnostics_params(uri, ls_check(s, path, text, load))))
 }
 
 fn ls_diagnostics_params(uri: str, ds: list[json.Val]) -> json.Val {
@@ -412,8 +429,14 @@ fn ls_diagnostics_params(uri: str, ds: list[json.Val]) -> json.Val {
 # stops there for the same reason: a parser handed unreadable text can only say something
 # untrue about it. Reporting a parse error beside `E1001 a string literal is not closed`
 # would be exactly that untrue thing.
-fn ls_check(path: str, text: str, load: fn (str, str) -> Program) -> list[json.Val] {
+#
+# EVERY CHECK REPLACES THE SESSION'S NAME INDEX: dropped first, and stored again only by a walk
+# that reached its end — so a buffer that stops lexing, loading or lowering answers `definition`
+# with null until one that does, rather than with the positions of a program it no longer is.
+fn ls_check(mut &s: Server, path: str, text: str, load: fn (str, str) -> Program) -> list[json.Val] {
 	mut out: list[json.Val] = []
+	s.nx = zerg.no_index()
+	s.has_nx = false
 	lex := zerg.lex_diags(text, path)
 	if lex.len() > 0 {
 		for d in lex {
@@ -460,10 +483,14 @@ fn ls_check(path: str, text: str, load: fn (str, str) -> Program) -> list[json.V
 	# The block ends in `ds.len()` because a `guard` carries a value and this call answers
 	# through its out-parameters. The count is not read; what is read is whether the walk
 	# reached the end of it at all.
+	#
+	# AND THE NAME INDEX FROM THE SAME WALK (`check_lint_index`), which costs recording and not a
+	# second walk. It is written only if the walk returns.
 	mut ds: list[zerg.Diag] = []
 	mut lints: list[zerg.Finding] = []
+	mut nx := zerg.no_index()
 	err := match guard {
-		lints = zerg.check_and_lint(prog.srcs, prog.paths, zerg.mods_of(prog.paths, prog.mods, prog.imp_at, prog.imp_path, prog.imp_mod), ds)
+		lints = zerg.check_lint_index(prog.srcs, prog.paths, zerg.mods_of(prog.paths, prog.mods, prog.imp_at, prog.imp_path, prog.imp_mod), ds, nx)
 		ds.len()
 	} {
 		Either.Left(_)  => ""
@@ -477,6 +504,9 @@ fn ls_check(path: str, text: str, load: fn (str, str) -> Program) -> list[json.V
 		out.append(ls_abort_diag(path, text, err))
 		return out
 	}
+	ls_nx_utf16(nx, prog.paths, prog.srcs)
+	s.nx = nx
+	s.has_nx = true
 
 	for d in ds {
 		if d.path == path {
@@ -593,6 +623,172 @@ fn ls_diagnostic_at(text: str, line: int, col: int, code: str, msg: str, severit
 	return json.of_obj(fs)
 }
 
+# --- names -------------------------------------------------------------------------------
+#
+# `definition` and `references` are two views of ONE index (zerg.NameIndex): the use under the
+# cursor names a declaration, and a declaration's references are every use naming it — its own
+# name included, since a declaration is recorded as its own use. Neither resolves anything: an
+# answer the index does not hold is null, which is what a name the compiler resolved to nothing
+# (a built-in, an intrinsic, a template nobody instantiated) honestly has.
+
+# ls_nx_utf16 is the index with its places in LSP's units — a 0-based line and a UTF-16 column
+# and length — converted ONCE, as it is stored, so no request reads a source again and none has
+# to be kept for it.
+#
+# Each file is read as bytes once, with where every line starts, and every column is counted by
+# the one rule the diagnostics use (ls_utf16_from).
+fn ls_nx_utf16(mut &nx: zerg.NameIndex, paths: list[str], srcs: list[str]) {
+	mut text: list[list[byte]] = []
+	mut starts: list[list[int]] = []
+	for p in nx.files {
+		b := bytearray(ls_src_of(paths, srcs, p))
+		text.append(b)
+		starts.append(ls_line_starts(b))
+	}
+	mut i := 0
+	for i < nx.u_file.len() {
+		f := nx.u_file[i]
+		at := ls_start_of(starts[f], nx.u_line[i] - 1)
+		c0 := ls_utf16_from(text[f], at, nx.u_col[i] - 1)
+		nx.u_len[i] = ls_utf16_from(text[f], at, nx.u_col[i] - 1 + nx.u_len[i]) - c0
+		nx.u_col[i] = c0
+		nx.u_line[i] = nx.u_line[i] - 1
+		i = i + 1
+	}
+	i = 0
+	for i < nx.d_file.len() {
+		f := nx.d_file[i]
+		at := ls_start_of(starts[f], nx.d_line[i] - 1)
+		c0 := ls_utf16_from(text[f], at, nx.d_col[i] - 1)
+		nx.d_len[i] = ls_utf16_from(text[f], at, nx.d_col[i] - 1 + nx.d_len[i]) - c0
+		nx.d_col[i] = c0
+		nx.d_line[i] = nx.d_line[i] - 1
+		i = i + 1
+	}
+}
+
+fn ls_line_starts(b: list[byte]) -> list[int] {
+	mut st: list[int] = [0]
+	mut i := 0
+	for i < b.len() {
+		if b[i] == b'\n' {
+			st.append(i + 1)
+		}
+		i = i + 1
+	}
+	return st
+}
+
+fn ls_start_of(st: list[int], ln: int) -> int {
+	return st[ln] if ln >= 0 and ln < st.len()
+	return 0
+}
+
+fn ls_src_of(paths: list[str], srcs: list[str], path: str) -> str {
+	mut i := 0
+	for i < paths.len() {
+		return srcs[i] if paths[i] == path
+		i = i + 1
+	}
+	return ""
+}
+
+# ls_use_under is the use at a request's position, or -1. A cursor just past a name's last
+# character is on it too, which is where a click after a word lands.
+fn ls_use_under(s: Server, params: json.Val) -> int {
+	return -1 if not s.has_nx
+
+	path := ls_uri_path(json.as_str(json.walk(params, "textDocument", "uri")))
+	line := json.as_int(json.walk(params, "position", "line"))
+	ch := json.as_int(json.walk(params, "position", "character"))
+	mut u := zerg.nx_use_at(s.nx, path, line, ch)
+	if u < 0 and ch > 0 {
+		u = zerg.nx_use_at(s.nx, path, line, ch - 1)
+	}
+	return u
+}
+
+# A SHARED use — a generic body's `x.n` at two types — has more than one declaration, and answers
+# with all of them: LSP's `definition` may be a list, which is what an editor offers to choose from.
+fn ls_definition_result(s: Server, params: json.Val) -> json.Val {
+	u := ls_use_under(s, params)
+	return json.null() if u < 0
+
+	nx := s.nx
+	ds := zerg.nx_decls_of(nx, u)
+	return ls_decl_location(nx, ds[0]) if ds.len() == 1
+
+	mut out: list[json.Val] = []
+	for d in ds {
+		out.append(ls_decl_location(nx, d))
+	}
+	return json.of_list(out)
+}
+
+fn ls_decl_location(nx: zerg.NameIndex, d: int) -> json.Val {
+	return ls_location(nx.files[nx.d_file[d]], nx.d_line[d], nx.d_col[d], nx.d_len[d])
+}
+
+# The references of the name at the cursor are every use of any declaration it resolves to — a
+# shared use among them, since it may be one. `context.includeDeclaration` false leaves out the
+# uses that ARE a declaration's own name.
+fn ls_references_result(s: Server, params: json.Val) -> json.Val {
+	u := ls_use_under(s, params)
+	return json.null() if u < 0
+
+	nx := s.nx
+	ds := zerg.nx_decls_of(nx, u)
+	skip_decl := json.encode(json.walk(params, "context", "includeDeclaration")) == "false"
+	mut out: list[json.Val] = []
+	mut i := 0
+	for i < nx.u_decl.len() {
+		mut hit := false
+		mut own := false
+		for d in ds {
+			if zerg.nx_is_use_of(nx, i, d) {
+				hit = true
+				own = own or (nx.u_file[i] == nx.d_file[d] and nx.u_line[i] == nx.d_line[d] and nx.u_col[i] == nx.d_col[d])
+			}
+		}
+		if hit and not (skip_decl and own) {
+			out.append(ls_location(nx.files[nx.u_file[i]], nx.u_line[i], nx.u_col[i], nx.u_len[i]))
+		}
+		i = i + 1
+	}
+	return json.of_list(out)
+}
+
+fn ls_location(path: str, line: int, col: int, len: int) -> json.Val {
+	mut fs: list[json.Field] = []
+	json.put_str(fs, "uri", ls_path_uri(path))
+	json.put(fs, "range", ls_range_of(line, col, line, col + len))
+	return json.of_obj(fs)
+}
+
+# ls_path_uri is ls_uri_path's inverse: a `file://` URI, with every byte a URI reserves escaped.
+#
+# A RELATIVE path is made absolute first, against the directory the server was started in. The
+# loader answers one for the standard library when the compiler runs from outside its own tree,
+# and `file://src/stdlib/x.zg` is not a relative URI but a file on a host called `src`.
+fn ls_path_uri(path: str) -> str {
+	mut abs := path
+	if not ls_starts_with(path, "/") {
+		abs = (os.env("PWD") ?? ".") + "/" + path
+	}
+	hex := bytearray("0123456789ABCDEF")
+	mut out := bytearray("file://")
+	for c in bytearray(abs) {
+		if (c >= b'a' and c <= b'z') or (c >= b'A' and c <= b'Z') or (c >= b'0' and c <= b'9') or c == b'/' or c == b'.' or c == b'_' or c == b'-' or c == b'~' {
+			out.append(c)
+		} else {
+			out.append(b'%')
+			out.append(hex[int(c) / 16])
+			out.append(hex[int(c) % 16])
+		}
+	}
+	return str(out)
+}
+
 # --- positions -------------------------------------------------------------------------
 #
 # The compiler answers with a 1-based LINE and a 1-based BYTE column, marking where the
@@ -679,9 +875,15 @@ fn ls_position(line: int, ch: int) -> json.Val {
 # continuation byte adds nothing, a code point outside the basic plane adds two, and
 # everything else adds one.
 fn ls_utf16_col(b: list[byte], upto: int) -> int {
+	return ls_utf16_from(b, 0, upto)
+}
+
+# ls_utf16_from is the same count for the `upto` bytes that start at `at` — a line inside a whole
+# file's bytes — stopping at the line's end.
+fn ls_utf16_from(b: list[byte], at: int, upto: int) -> int {
 	mut n := 0
-	mut i := 0
-	for i < upto and i < b.len() {
+	mut i := at
+	for i < at + upto and i < b.len() and b[i] != b'\n' {
 		c := int(b[i])
 		if c < 128 or c >= 192 {
 			n = n + 1

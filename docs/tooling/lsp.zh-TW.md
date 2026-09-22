@@ -48,14 +48,15 @@ module 擁有協定;driver 擁有檔案系統。
 | ------------------------------------------------------------- | -------------------------------------------- |
 | `initialize` / `shutdown` / `exit`                            | session 本身                                 |
 | `textDocument/didOpen` · `didChange` · `didSave` · `didClose` | 全文同步                                     |
-| `textDocument/publishDiagnostics`                             | `lex_diags`、`check_and_lint`                |
+| `textDocument/publishDiagnostics`                             | `lex_diags`、`check_lint_index`              |
 | `textDocument/formatting`                                     | `fmt_src_off`——`zerg fmt` 呼叫的同一個函式   |
 | `textDocument/codeAction`                                     | 一則 finding 帶著的 `fix`,包成一個 quick fix |
 | `textDocument/documentSymbol`                                 | `file_symbols`——被剖析的檔案裡的宣告         |
+| `textDocument/definition` · `references`                      | [名稱索引](#一個名字從同一份索引回答)        |
 
-`initialize` 宣告**三項 capability**——`documentFormattingProvider`、`codeActionProvider`、
-`documentSymbolProvider`——外加 `textDocumentSync: 1`。其他每一個請求都會收到 **method-not-found
-錯誤**,而不是沉默。一個在等永遠不會來的回覆的 client 會停止送下一個請求,然後編輯器就靜掉了,什麼也沒說。
+`initialize` 為上表文件同步之外的**每一個請求宣告 capability**——`documentFormattingProvider`、
+`codeActionProvider`、`documentSymbolProvider`、`definitionProvider`、`referencesProvider`——外加
+`textDocumentSync: 1`。其他每一個請求都會收到 **method-not-found 錯誤**,而不是沉默。一個在等永遠不會來的回覆的 client 會停止送下一個請求,然後編輯器就靜掉了,什麼也沒說。
 
 **session 是一台狀態機,而 exit status 是它的一部分。** `shutdown` 之後 server 只接受 `exit`;之後才到的 request 會收
 到 `InvalidRequest`,因為在等回覆的 client 會停止送下一個。`shutdown` 後的 `exit` 以 **0** 結束,沒有 `shutdown` 的
@@ -248,7 +249,7 @@ x: float = 1 / 2      # 兩則 finding:這個 `1` 在這裡是 float,那個 `2` 
 ## 大綱是 parser 的清單,不是 server 的
 
 `textDocument/documentSymbol` 是填滿編輯器大綱、麵包屑與 `gO` 的東西。它是唯一一個**不需要名稱解析**的互動答案——一個
-宣告知道自己叫什麼、寫在哪裡——這也就是為什麼它做好了,而 `hover`、`definition`、`references` 沒有。
+宣告知道自己叫什麼、寫在哪裡——這也就是為什麼它最先做好。
 
 這一頁講的那條規則決定了它的形狀。編譯器回答 `file_symbols`,它走過一個被剖析的檔案,交出名字、**以「詞」表示的
 kind**、以及位置;server 把那個詞對映到 LSP 的 `SymbolKind` 數字,除此之外什麼都不做。兩邊都不會漂進對方的工作:編譯器
@@ -272,6 +273,80 @@ kind**、以及位置;server 把那個詞對映到 LSP 的 `SymbolKind` 數字,�
 **兩件它不做的事。** 一個 struct 的欄位與一個 enum 的 variant 不是子節點——協定有樹狀結構,而這裡是一份平的清單,反正
 編輯器顯示的也是這個。以及 `range` 與 `selectionRange` 是同一個範圍(那個識別字的),因為編譯器對兩者都沒有結束位置
 ——跟診斷是同一個缺口。跳過去會落在名字上;client 沒辦法把游標所在的整個宣告標起來。
+
+## 一個名字從同一份索引回答
+
+`textDocument/definition` 與 `textDocument/references` 是**同一張表**的兩個視角:位置到宣告的索引 `NameIndex`。游標下
+的使用點指向一個宣告,而一個宣告的 references 是每一個指向它的使用點。hover(#192)與 completion、signature help、
+workspace symbol、rename(#194)讀的是同一張表;它們沒有一個自己解析名字,而索引答不了的問題,是索引該長大的理由,不是
+某個 handler 去走一遍程式的理由。
+
+**它記錄在編譯器解析每個名字的地方。** 檢查走訪本來就會為它 lower 的每個名字決定它指的是哪個宣告——仍在範圍內最內層的
+綁定、dispatch 選中的 method、target 型別所指 struct 的 field。設了 `want_index`,它就在同一行把那個決定寫下來,所以索引
+為一個使用點給出的宣告,就是編譯器把它 lower 成的那一個——在做出那個決定的分支裡寫下。這一頁的規則,套用在名字上。
+
+**有兩種答案是推導出來而不是記錄下來的,因為編譯器從不解析它們。** 型別名是走訪之後在檢查器讀的那份型別表裡查的,因為沒有
+任何 lowering 經過型別;型別參數是對到範圍涵蓋它的最內層宣告,因為替換在任何東西能解析它之前就把它拿掉了。兩者都由
+`make lsp` 的位置與 rename 性質 held 到編譯器。
+
+**它是同一趟走訪。** `check_lint_index` 就是也交回索引的 `check_and_lint`,成本是記錄,不是走訪,而 `make lsp` 的一趟走訪
+案例量的正是建出索引的那次檢查。build 不要索引,每個記錄點只付一次判斷——走訪旁的那些表連一欄都不會多長。
+
+**鍵是宣告的名字 token**——它的檔案、行號與 byte 欄位。泛型的特化是保留樣板位置的副本,所以一個以兩種型別呼叫的樣板是
+**一個**宣告,每次呼叫都在它的 references 裡。宣告被記成自己的使用點,所以一個名字的 references 包含它被宣告的地方,游標
+停在宣告上也有答案。
+
+| 游標下的名字             | 回答                                                  |
+| ------------------------ | ----------------------------------------------------- |
+| 綁定、參數               | 仍在範圍內最內層的綁定——遮蔽已被解析                  |
+| closure 捕獲的名字       | closure 複製的那個綁定                                |
+| 呼叫、函式值             | 那個函式;泛型則是它的樣板                             |
+| 呼叫裡的 `name: value`   | 它指名的參數;在建構裡則是 field                       |
+| method                   | dispatch 選中的實作                                   |
+| 泛型程式碼裡的method     | 型別參數的 bound 宣告了它時,是 spec 的 requirement    |
+| 一個本體兩種解析的method | 兩個實作共同遵守的 spec requirement                   |
+| field、`?.`、variant     | field、variant、associated function 或值              |
+| 一個本體兩種解析的field  | 它解析到的每一個 field——兩種型別的泛型 `x.n` 是共用的 |
+| namespace、`ns.f`        | 在這個檔案裡綁定它的 `import`,以及它指的成員          |
+| 型別名、型別參數         | 宣告;範圍涵蓋該使用點的那個 `[T]`                     |
+| 內建、intrinsic          | 沒有——`null`,對一個沒人寫過的名字這才是誠實的答案     |
+
+**中止的檢查會丟掉它。** 每次檢查都取代 session 唯一的那一格,只有走到終點的走訪才會存一份新的。一個不再能 lex、載入或
+lower 的 buffer,兩個請求都回 `null`,直到下一次完成的檢查——而不是回答一個編譯器已不再認為是這個程式的位置。
+
+**位置只轉換一次。** 編譯器記錄 1-based 行號與 byte 欄位;索引在存下時就轉成 0-based 行號與 UTF-16 欄位,用的是診斷用的
+同一條規則(`ls_utf16_from`),而原始碼不保留。留下的是整數欄與宣告的名字——在編譯器自身程式上是幾 MB,相對於峰值數百 MB 的
+一次檢查。
+
+**共用的使用點以它可能是的每一個宣告回答。** 泛型本體每個實例化走一次,而它經由型別參數讀的 field——以 `P` 與 `Q` 呼叫的
+`x.n`——在一次走訪解析成 `P.n`,另一次解析成 `Q.n`。索引把兩者都留作候選,所以 `definition` 回答一個位置的**清單**(LSP
+允許),而這個使用點出現在每一個候選的 references 裡。兩者都不是「先被走訪的那個」:答案不能取決於實例化的順序。以兩種方式
+解析的 method,則在有共同 requirement 時以它回答。所以只有一個宣告的名字,`definition` 回答**一個** `Location` 物件;
+共用的使用點回答一個 `Location` **清單**,依各自宣告的位置排序——檔案、行、欄。
+
+`make lsp` 用三種方式把它 held 住,每一種抓不同的錯誤索引。手寫的**位置**:被遮蔽的綁定、旁邊有同名 local 的參數、以兩種
+型別呼叫的泛型 method、經由 spec bound 的呼叫、一個本體兩種解析的 method、field 與具名引數(各自以反過來的實例化順序再問
+一次,因為答案不能取決於哪個先被走訪)、經由被綁定遮蔽的型別取的 variant 與 associated 名字、closure 的捕獲、`impl` 的
+型別參數、具名引數、建構的 field、`?.` field、解構出的綁定、另一個檔案的成員、namespace、標準函式庫、intrinsic,以及一行
+CJK 之後的名字。**對稱性**:fixture 裡每一個有 definition 的名字,都在那個
+definition 的 references 裡,而且沒有宣告在同拼寫的名字回不出答案時還一個 reference 都沒有——那是被丟掉的使用點留下的形狀。
+共用的使用點是從索引的回答推導出來的,必須恰好是 fixture 寫的那些,兩個方向都要。
+以及 **rename**,held 到 `zerg build --emit check` 與程式印出的東西:把一個宣告與它每一個 reference 改成新名字,兩者都必須一
+樣;改掉除了宣告以外的每一個 reference,則不能 build——索引漏掉的 reference 是留在舊名字底下的使用點,歸錯綁定的則會讀到
+別的值。共用的使用點與它可能是的每一個宣告一起改名,當作一組。rename 略過的東西——標準函式庫、import 的路徑、契約——每一種
+理由都有下限,所以一個越長越大的過濾器沒辦法靠什麼都不改名讓這項性質變綠。
+
+**它不做的事。**
+
+- **hover 文字。** 索引找到宣告;hover 顯示的是那個宣告的文件,那是 #192。
+- **completion、signature help、workspace symbol、rename。** 每一個都是這份索引的一個視角,每一個都是 #194。
+- **沒有人實例化的樣板。** 泛型本體每個特化走一次,所以沒有呼叫抵達的樣板從未被走訪,它的名字沒有條目。
+- **契約。** spec 的 requirement 與每個遵守它的 method 是各自的宣告。單獨改名其中一個,依設計就會弄壞程式,而 rename 要怎麼
+  處理契約是 #194 的決定。
+- **or-pattern 綁的名字。** `A(x) | B(x)` 在兩側各綁一次 `x`,本體讀的是匹配到的那一側——一個名字兩個宣告,所以回 `null`,
+  而不是其中一個。
+- **共用使用點的單一宣告。** 泛型本體以兩種方式解析的 field、具名引數、variant pattern,或沒有共同 requirement 的
+  method,回答它解析到的每一個宣告,而不是先被走訪的那個實例化。rename 該帶走哪一個,是 #194 的決定。
 
 ## 一份被寫了兩次的文法
 
@@ -310,7 +385,7 @@ gate 都弱,而且弱的方式跟 `fmt-corpus` 一模一樣:它只看得見某�
 ## 讓編輯器保持誠實
 
 這棵樹裡其他每一樣東西都是靠**呼叫**編譯器來held 住的——`zerg fmt` 就是 formatter,而 server 是去問
-`check_and_lint`,不是自己檢查任何東西,所以沒有第二份會漂移的副本。編輯器檔案是唯一的例外,而且沒辦法不是:vim 是
+`check_lint_index`,不是自己檢查任何東西,所以沒有第二份會漂移的副本。編輯器檔案是唯一的例外,而且沒辦法不是:vim 是
 從一份寫在 vimscript 裡的關鍵字清單上色的,而 nvim 必須在任何 Zerg 工具跑起來之前就知道怎麼縮排。
 
 所以那些事實有自己的 gate——`make editor-align`:
@@ -342,16 +417,15 @@ diff 把兩邊綁在一起。**
 
 | 缺的                                              | 在等                                                |
 | ------------------------------------------------- | --------------------------------------------------- |
-| `hover`、`definition`、`references`、`rename`     | 沒有任何東西能把位置對映到宣告                      |
-| `completion`、`signatureHelp`、`workspace/symbol` | 同一套 query surface                                |
+| `hover`                                           | #192——索引找到宣告,不是它的文件                     |
+| `completion`、`signatureHelp`、`workspace/symbol` | #194——同一份索引的視角                              |
+| `rename`                                          | #194——以及 rename 要怎麼處理 spec 契約              |
 | `semanticTokens`                                  | `Kind` 的 variant 無法在 `zerg` module 之外被 match |
 | 診斷的**結束**位置                                | 編譯器追蹤一個東西從哪開始,不追蹤到哪結束           |
 | 增量同步、debounce、取消                          | 一次量測;Phase 1 每次按鍵都重檢整個程式             |
 
-前兩列是真正的缺口,所有互動功能都卡在它們後面。資訊是存在的——`check.zg` 全都算了出來——只是在 build 之後被丟掉。
-需要的不是把那些型別一個一個公開,而是一個 **query surface**:給一個 path 與一個位置,那裡宣告了什麼、它在哪裡被
-宣告、它的型別是什麼。它們不是七個功能(算上 `declaration` 是八個——它就是對另一種節點問的 `definition`),而是一個
-索引;反過來做,只會得到每個方法各一份、對同一個問題的私有答案。
+前三列原本是同一個缺口,而[名稱索引](#一個名字從同一份索引回答)補上了它的前半:給一個 path 與一個位置,那裡宣告了什麼、
+在哪裡。剩下的讀那份索引,而不是再建第二份——它找到的宣告的文件、某個位置在範圍內的宣告、以及一個宣告的每個使用點。
 
 `semanticTokens` 是另一種缺,值得這樣點名:它會需要一張把 token kind 對映到 LSP token type 的表,而那正是上一節存在
 就是為了防止的那種**重複的語言事實清單**。vim 語法檔已經在為 Zerg 上色,而且它有 gate。

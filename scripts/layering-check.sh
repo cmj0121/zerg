@@ -350,6 +350,7 @@ kind_of_arg() {
 	'""') printf 'str\n' ;;
 	Ty.* | *.Ty.*) printf 'Ty\n' ;;
 	"c_nosub()") printf 'Subst\n' ;;
+	"ast.no_index()") printf 'NameIndex\n' ;;
 	[0-9]*) printf 'int\n' ;;
 	*) printf 'UNKNOWN(%s)\n' "$1" ;;
 	esac
@@ -365,8 +366,8 @@ else
 		sed -E "s/^$TAB(pub )?[a-z_][A-Za-z0-9_]*: //" >"$TMPD/fields"
 	while read -r f; do kind_of_field "$f"; done <"$TMPD/fields" >"$TMPD/fkinds"
 
-	# and the argument KINDS, in call order. `c_nosub()` is the only call among them, and it
-	# holds no comma, so splitting on `,` and trimming each side is safe.
+	# and the argument KINDS, in call order. `c_nosub()` and `ast.no_index()` are the only calls
+	# among them, and neither holds a comma, so splitting on `,` and trimming each side is safe.
 	printf '%s\n' "$ctor" | tr ',' '\n' | sed 's/^ *//; s/ *$//' >"$TMPD/args"
 	while read -r a; do kind_of_arg "$a"; done <"$TMPD/args" >"$TMPD/akinds"
 

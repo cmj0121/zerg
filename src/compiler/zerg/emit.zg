@@ -725,6 +725,38 @@ pub struct Emitter {
 	pub fld_path: list[str]
 	pub fld_line: list[int]
 	pub fld_col: list[int]
+
+	# want_index / nx are THE NAME INDEX (#24): asked for by the language server and nothing else,
+	# so a build carries the empty one and every recording site answers at its first line. It is
+	# filled where the walk RESOLVES a name — the declaration it records for a use is the one the
+	# walk lowered that use to — which is what makes it the compiler's answer and not a second one.
+	pub want_index: bool
+	pub nx: ast.NameIndex
+
+	# nx_rows settles a binding whose declaration is learned only AFTER its uses were lowered: a
+	# loop variable's body is walked inside the call that binds it, and the place its name was
+	# written is known to the statement, not to that call. Such a row starts PENDING (c_nx_row)
+	# and its uses record the pending id; ast.nx_seal settles them through this table.
+	pub nx_rows: list[int]
+
+	# env_nx / sig_nx / fld_nx / var_nx / tk_nx / ns_nx / pr_nx are each row's DECLARATION in `nx`,
+	# row for row beside the table it annotates — -1 when nobody wrote the name, and a pending id
+	# (below -1) for a binding still waiting on nx_rows. The key they stand for is the
+	# declaration's NAME token, which a specialization shares with its template. They are filled
+	# only when an index was asked for, and read only then: a build appends nothing to them.
+	pub env_nx: list[int]
+	pub sig_nx: list[int]
+	pub fld_nx: list[int]
+	pub var_nx: list[int]
+	pub tk_nx: list[int]
+	pub ns_nx: list[int]
+	pub pr_nx: list[int]
+
+	# nx_sub_repls / nx_sub_decls are the pattern binders a substitution's TEXT stands for, row for
+	# row: a binder is not a binding — c_ident_val splices its accessor in — so its declaration
+	# rides beside the text rather than in an environment row (c_extend_bound).
+	pub nx_sub_repls: list[str]
+	pub nx_sub_decls: list[int]
 }
 
 # Subst is an active set of identifier substitutions: an EIdent whose name appears in
@@ -2146,6 +2178,7 @@ fn c_reset_env(mut &em: Emitter) {
 	em.env_scope = []
 	em.env_const = []
 	em.env_cval = []
+	em.env_nx = []
 	em.frz_idxs = []
 	em.frz_paths = []
 
@@ -2254,6 +2287,87 @@ fn c_env_row(mut &em: Emitter, name: str, t: ast.Ty, cname: str, is_mut: bool, i
 	# declaration of that name was, silently, which is exactly the shape of bug a column
 	# parallel to env_names exists to prevent.
 	em.env_cval.append(check.Folded(false, 0))
+
+	# and where its name was written, which only some binders know here — the rest settle it
+	# through c_nx_bind once the statement that made the row has
+	if em.want_index {
+		em.env_nx.append(c_nx_row(em))
+	}
+}
+
+# --- the name index ------------------------------------------------------------------
+#
+# Every function here answers at its first line when no index was asked for, which is what
+# keeps a build from paying for one: the tables above still grow a column, of -1s.
+
+# c_nx_decl records a declaration by its name token and answers its id in the index.
+fn c_nx_decl(mut &em: Emitter, path: str, line: int, col: int, name: str, kind: int) -> int {
+	return -1 if not em.want_index
+
+	return ast.nx_decl(em.nx, path, line, col, name, kind, check.c_mod_of(em, path))
+}
+
+# c_nx_use records that the name written at `line`:`col` of the file being walked resolves to
+# `decl` — an id c_nx_decl answered, a pending one, or -1 for a name that resolved to nothing a
+# reader declared.
+fn c_nx_use(mut &em: Emitter, line: int, col: int, name: str, decl: int) {
+	return if not em.want_index or decl == -1
+
+	ast.nx_use(em.nx, em.at_path, line, col, name, -1, decl)
+}
+
+# c_nx_row is the id a NEW environment row starts with: pending, until c_nx_bind says where its
+# name was written.
+fn c_nx_row(mut &em: Emitter) -> int {
+	return -1 if not em.want_index
+
+	em.nx_rows.append(-1)
+	return -(em.nx_rows.len() + 1)
+}
+
+# c_nx_bind says where environment row `row`'s name was written, settling any use recorded
+# while it was pending.
+fn c_nx_bind(mut &em: Emitter, row: int, line: int, col: int, kind: int) {
+	return if not em.want_index or row < 0
+
+	d := c_nx_decl(em, em.at_path, line, col, em.env_names[row], kind)
+	code := em.env_nx[row]
+	if code < -1 {
+		em.nx_rows[-code - 2] = d
+	}
+	em.env_nx[row] = d
+}
+
+# c_nx_written is the name a declaration was WRITTEN with: a specialization is recorded under
+# `pick$int` and a parameterized spec's member under its key, and neither suffix is on the page.
+fn c_nx_written(nm: str) -> str {
+	return c_nx_until(nm, b'$', b'[')
+}
+
+# c_nx_until is `s` up to the first `a` or `b`, built in one list rather than a string a byte
+# at a time — it runs once per signature row and per type, every check.
+fn c_nx_until(s: str, a: byte, b: byte) -> str {
+	mut out: list[byte] = []
+	for c in bytearray(s) {
+		break if c == a or c == b
+
+		out.append(c)
+	}
+	return str(out)
+}
+
+fn c_nx_fn_kind(fn_d: ast.FnDecl) -> int {
+	return ast.NK_FN if fn_d.recv == ""
+
+	return ast.NK_METHOD
+}
+
+fn c_nx_ty_kind(kind: int) -> int {
+	return ast.NK_STRUCT if kind == TK_STRUCT
+	return ast.NK_ENUM if kind == TK_ENUM
+	return ast.NK_SPEC if kind == TK_SPEC
+
+	return ast.NK_TYPE
 }
 
 # EnvCols is those same eight columns as ONE value, for the sites that put a whole
@@ -2279,10 +2393,11 @@ struct EnvCols {
 	pub scope: list[int]
 	pub consts: list[bool]
 	pub cval: list[check.Folded]
+	pub nx: list[int]
 }
 
 fn c_env_save(mut &em: Emitter) -> EnvCols {
-	return EnvCols(em.env_names, em.env_tys, em.env_cnames, em.env_dead, em.env_mut, em.env_scope, em.env_const, em.env_cval)
+	return EnvCols(em.env_names, em.env_tys, em.env_cnames, em.env_dead, em.env_mut, em.env_scope, em.env_const, em.env_cval, em.env_nx)
 }
 
 fn c_env_restore(mut &em: Emitter, saved: EnvCols) {
@@ -2294,6 +2409,7 @@ fn c_env_restore(mut &em: Emitter, saved: EnvCols) {
 	em.env_scope = saved.scope
 	em.env_const = saved.consts
 	em.env_cval = saved.cval
+	em.env_nx = saved.nx
 }
 
 # c_no_shadow_sub refuses a binding that takes a name an ACTIVE substitution holds.
@@ -4094,6 +4210,9 @@ fn c_mod_collide(mut &em: Emitter, fn_i: ast.FnDecl, prev: ast.FnDecl) {
 fn c_add_sig(mut &em: Emitter, fn_i: ast.FnDecl) {
 	key := c_sig_key(fn_i.recv, fn_i.name)
 	em.sig_names.append(key)
+	if em.want_index {
+		em.sig_nx.append(c_nx_decl(em, fn_i.path, fn_i.name_line, fn_i.name_col, c_nx_written(fn_i.name), c_nx_fn_kind(fn_i)))
+	}
 	em.sig_mod.append(check.c_mod_of(em, fn_i.path))
 	em.sig_pub.append(fn_i.is_pub)
 	em.sig_path.append(fn_i.path)
@@ -4116,6 +4235,9 @@ fn c_add_sig(mut &em: Emitter, fn_i: ast.FnDecl) {
 		em.pr_path.append(fn_i.path)
 		em.pr_line.append(fn_i.line)
 		em.pr_col.append(fn_i.col)
+		if em.want_index {
+			em.pr_nx.append(c_nx_decl(em, fn_i.path, fn_i.params[j].line, fn_i.params[j].col, fn_i.params[j].name, ast.NK_PARAM))
+		}
 		j = j + 1
 	}
 }
@@ -5290,10 +5412,15 @@ const TK_TYPEDEF := 4
 # first declared", in the order the builders run — typedefs, structs, enums, then specs —
 # which is why the spec pass is last: `struct A` beside `spec A` is a struct with a
 # duplicate reported against it, and not a spec that no longer constructs.
-fn c_ty_register(mut &em: Emitter, nm: str, kind: int, under: ast.Ty, path: str, is_pub: bool) {
+#
+# `line` / `col` are where the declaration's NAME was written, for the name index.
+fn c_ty_register(mut &em: Emitter, nm: str, kind: int, under: ast.Ty, path: str, is_pub: bool, line: int, col: int) {
 	return if c_ty_row(em, nm) >= 0
 
 	em.tk_names.append(nm)
+	if em.want_index {
+		em.tk_nx.append(c_nx_decl(em, path, line, col, c_nx_written(nm), c_nx_ty_kind(kind)))
+	}
 	em.tk_kinds.append(kind)
 	em.tk_unders.append(under)
 	em.tk_mod.append(check.c_mod_of(em, path))
@@ -5803,7 +5930,7 @@ fn c_dup_report(mut &em: Emitter, name: str, prev: str, what: str, path: str, li
 # answer the constructor path needs: `struct A` beside `spec A` still constructs.
 fn c_build_specs(mut &em: Emitter, f: ast.File) {
 	for sp in f.specs {
-		c_ty_register(em, sp.name, TK_SPEC, ast.Ty.TUnknown, sp.path, sp.is_pub)
+		c_ty_register(em, sp.name, TK_SPEC, ast.Ty.TUnknown, sp.path, sp.is_pub, sp.name_line, sp.name_col)
 	}
 }
 
@@ -5812,7 +5939,7 @@ fn c_build_typedefs(mut &em: Emitter, f: ast.File) {
 		# chk_typedef ANSWERS the underlying type it validated, so the registry does not
 		# recompute it: a typedef whose underlying type nothing declares is registered as
 		# UNKNOWN, which keeps every USE quiet while the declaration carries the diagnostic.
-		c_ty_register(em, td.name, TK_TYPEDEF, check.chk_typedef(em, td, f), td.path, td.is_pub)
+		c_ty_register(em, td.name, TK_TYPEDEF, check.chk_typedef(em, td, f), td.path, td.is_pub, td.name_line, td.name_col)
 	}
 }
 
@@ -5826,10 +5953,13 @@ fn c_build_structs(mut &em: Emitter, f: ast.File) {
 # specialization minted on demand has to enter them the same way a declared type does — two
 # spellings of this walk would be two answers to "what does the program declare".
 fn c_register_struct(mut &em: Emitter, sd: ast.StructDecl) {
-	c_ty_register(em, sd.name, TK_STRUCT, ast.Ty.TUnknown, sd.path, sd.is_pub)
+	c_ty_register(em, sd.name, TK_STRUCT, ast.Ty.TUnknown, sd.path, sd.is_pub, sd.name_line, sd.name_col)
 	for fd in sd.fields {
 		em.fld_struct.append(sd.name)
 		em.fld_name.append(fd.name)
+		if em.want_index {
+			em.fld_nx.append(c_nx_decl(em, sd.path, fd.name_line, fd.name_col, fd.name, ast.NK_FIELD))
+		}
 		em.fld_ty.append(fd.ty)
 		em.fld_pub.append(fd.is_pub)
 		em.fld_hasdef.append(fd.has_def)
@@ -6436,7 +6566,7 @@ fn c_build_enums(mut &em: Emitter, f: ast.File) {
 # inline in the sweep above, an on-demand `Box[int]` had no variants, no tags and no payload
 # types — and `Full(42)` came out as `undefined function`.
 fn c_register_enum(mut &em: Emitter, ed: ast.EnumDecl) {
-	c_ty_register(em, ed.name, TK_ENUM, ast.Ty.TUnknown, ed.path, ed.is_pub)
+	c_ty_register(em, ed.name, TK_ENUM, ast.Ty.TUnknown, ed.path, ed.is_pub, ed.name_line, ed.name_col)
 
 	mut next := 0
 	mut taken: list[int] = []
@@ -6456,6 +6586,9 @@ fn c_register_enum(mut &em: Emitter, ed: ast.EnumDecl) {
 		taken.append(tag)
 		next = tag + 1
 		em.var_name.append(v.name)
+		if em.want_index {
+			em.var_nx.append(c_nx_decl(em, ed.path, v.line, v.col, v.name, ast.NK_VARIANT))
+		}
 		em.var_enum.append(ed.name)
 		em.var_tag.append(tag)
 		em.var_path.append(ed.path)
@@ -6768,6 +6901,9 @@ fn c_build_namespaces(mut &em: Emitter, f: ast.File) {
 		here := im.at
 		if not c_ns_bound_in(em, im.name, here) {
 			em.ns_names.append(im.name)
+			if em.want_index {
+				em.ns_nx.append(c_nx_decl(em, im.at, im.name_line, im.name_col, im.name, ast.NK_IMPORT))
+			}
 			em.ns_at.append(here)
 			em.ns_mods.append(c_imp_canon(em, im.at, im.path))
 			em.ns_pub.append(im.is_pub)
@@ -14970,6 +15106,9 @@ fn c_const_bind(mut &em: Emitter, c: ast.ConstDecl, ty: ast.Ty) {
 	# row there rather than reading this column, so the constant has exactly one value and no
 	# way for two copies of it to drift.
 	em.env_cval.append(check.Folded(false, 0))
+	if em.want_index {
+		em.env_nx.append(c_nx_decl(em, c.path, c.name_line, c.name_col, c.name, ast.NK_CONST))
+	}
 }
 
 # c_const_here is whether a module constant is one THIS FILE may name bare (#57): its own, or
@@ -21674,7 +21813,7 @@ fn c_emit_unit(prog0: ast.File, own0: ast.File, ms: Mods, whole: bool, want_lint
 	# is what makes that invariant hold for a multi-unit program, at the place it already lives,
 	# and it is what lets the declaration passes below go back to reading the WHOLE program.
 	seen := diags.len()
-	mut em := Emitter([], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], false, false, false, false, [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], 0, [], 0, [], [], false, "", "", [], [], ast.Ty.TVoid, 0, "", 0, 0, diags, 0, 0, [], [], [], [], [], false, 0, false, "", 0, false, false, [], [], [], [], [], [], [], [], [], [], [], "", want_lints, [], [], [], [], [], [], [], [], [], [], [], [], false, 0, [], [], "", c_nosub(), [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [])
+	mut em := Emitter([], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], false, false, false, false, [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], 0, [], 0, [], [], false, "", "", [], [], ast.Ty.TVoid, 0, "", 0, 0, diags, 0, 0, [], [], [], [], [], false, 0, false, "", 0, false, false, [], [], [], [], [], [], [], [], [], [], [], "", want_lints, [], [], [], [], [], [], [], [], [], [], [], [], false, 0, [], [], "", c_nosub(), [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], false, ast.no_index(), [], [], [], [], [], [], [], [], [], [])
 
 	# ASSIGNED, NOT PASSED. Every argument above is a zero value, and `layering` asserts that
 	# — it lines the call up with the fields by KIND, which only works while nothing in it

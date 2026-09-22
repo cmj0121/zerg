@@ -1204,6 +1204,340 @@ pub struct TopStmt {
 	pub col: int
 }
 
+# NameIndex is THE POSITION-TO-DECLARATION INDEX (#24): every declaration a checked program
+# makes, and every place a name in it was written, each pointing at the declaration it
+# resolves to. Go-to-definition, references, and the questions #192 and #194 ask are all views
+# of this one table; none of them resolves a name on its own.
+#
+# It is built by the checking walk while it resolves (emit.zg, `want_index`), so an answer here
+# IS the compiler's answer: the declaration a use points at is the one the walk lowered it to.
+# A GENERIC's copies share their template's name token, which is the key — so a template called
+# at two types is one declaration, and one never instantiated has no entries at all.
+#
+# It holds NO AST REFERENCE, only positions and integers, so it outlives the walk cheaply:
+#
+#   files, mods                each path and each module, once; the `_file` / `_mod` columns
+#                              index them
+#   d_file d_line d_col d_len  a declaration's NAME token: 1-based line, BYTE column, length
+#   d_kind d_mod               what kind of thing it is (NK_*), which module
+#   d_text d_off               what it is called — every name's bytes in one list, the name
+#                              d_len bytes from d_off
+#   u_file u_line u_col u_len  a use: where its token starts, and its length in bytes
+#   u_decl                     the declaration that use resolves to, or -1 for none
+#   sh_use sh_decl             a SHARED use — one a generic body resolves to a different
+#                              declaration per instantiation, so it has no one answer — and
+#                              each declaration it resolved to, a row per pair; its u_decl is -1
+#
+# NOT ONE STRING PER DECLARATION, and that is what the index costs a session. A string kept per
+# row is a small allocation made in the middle of the walk and kept after everything around it
+# is freed, so a page the walk no longer needs cannot go back; one list of bytes is one block.
+#
+# A DECLARATION IS ALSO ITS OWN USE, so the references of a name include where it is declared
+# and a cursor on a declaration's name answers too.
+#
+# `d_slots` / `u_slots` are open-addressing tables keyed by place, which is what keeps a
+# declaration and a use recorded once however often the walk passes them (a template body is
+# walked once per instantiation). They serve the build alone; `nx_seal` empties them.
+pub struct NameIndex {
+	pub files: list[str]
+	pub mods: list[str]
+	pub d_file: list[int]
+	pub d_line: list[int]
+	pub d_col: list[int]
+	pub d_len: list[int]
+	pub d_kind: list[int]
+	pub d_mod: list[int]
+	pub d_text: list[byte]
+	pub d_off: list[int]
+	pub u_file: list[int]
+	pub u_line: list[int]
+	pub u_col: list[int]
+	pub u_len: list[int]
+	pub u_decl: list[int]
+	pub sh_use: list[int]
+	pub sh_decl: list[int]
+	pub d_slots: list[int]
+	pub u_slots: list[int]
+	pub last_path: str
+	pub last_file: int
+}
+
+# no_index is the empty index — what a walk that was not asked for one carries.
+pub fn no_index() -> NameIndex {
+	return NameIndex([], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], "", -1)
+}
+
+# What kind of declaration a row is. Numbers rather than words for the reason the struct says.
+pub const NK_FN := 0
+pub const NK_METHOD := 1
+pub const NK_PARAM := 2
+pub const NK_LOCAL := 3
+pub const NK_FIELD := 4
+pub const NK_VARIANT := 5
+pub const NK_STRUCT := 6
+pub const NK_ENUM := 7
+pub const NK_SPEC := 8
+pub const NK_TYPE := 9
+pub const NK_CONST := 10
+pub const NK_IMPORT := 11
+pub const NK_TPARAM := 12
+
+fn nx_mod_of(mut &nx: NameIndex, m: str) -> int {
+	mut i := 0
+	for i < nx.mods.len() {
+		return i if nx.mods[i] == m
+		i = i + 1
+	}
+	nx.mods.append(m)
+	return i
+}
+
+# nx_file_of is a path's id in `files`, or -1 for a file nobody wrote — a compiler-written source
+# (`<derive:…>`) has a path in angle brackets. It is asked at every recording, so the last answer
+# is kept.
+fn nx_file_of(mut &nx: NameIndex, path: str) -> int {
+	return nx.last_file if nx.last_path == path and nx.last_path != ""
+
+	nx.last_path = path
+	nx.last_file = -1
+	return -1 if path == ""
+
+	pb := bytearray(path)
+	return -1 if pb[0] == b'<'
+
+	mut i := 0
+	for i < nx.files.len() and nx.files[i] != path {
+		i = i + 1
+	}
+	if i == nx.files.len() {
+		nx.files.append(path)
+	}
+	nx.last_file = i
+	return i
+}
+
+fn nx_hash(file: int, line: int, col: int, n: int) -> int {
+	return (file * 7919 + line * 131 + col) % n
+}
+
+# nx_grown is the size a table holding `count` rows needs: a power of two at most half full, so
+# a probe stays short and the list backing it is exactly as long as it holds.
+fn nx_grown(count: int) -> int {
+	mut n := 4096
+	for n < count * 2 {
+		n = n * 2
+	}
+	return n
+}
+
+# nx_slot is the slot a place occupies in `slots`, or the empty one it would take.
+fn nx_slot(slots: list[int], fs: list[int], ls: list[int], cs: list[int], file: int, line: int, col: int) -> int {
+	n := slots.len()
+	mut h := nx_hash(file, line, col, n)
+	for slots[h] != 0 {
+		id := slots[h] - 1
+		return h if fs[id] == file and ls[id] == line and cs[id] == col
+		h = (h + 1) % n
+	}
+	return h
+}
+
+# nx_rehash is a table of `size` slots holding every row so far. Its caller lets go of the old one
+# FIRST: a rehash reads the rows, never the slots, and holding both at the peak is what a
+# session's resident size would pay.
+fn nx_rehash(fs: list[int], ls: list[int], cs: list[int], size: int) -> list[int] {
+	mut out: list[int] = []
+	for out.len() < size {
+		out.append(0)
+	}
+	mut id := 0
+	for id < fs.len() {
+		out[nx_slot(out, fs, ls, cs, fs[id], ls[id], cs[id])] = id + 1
+		id = id + 1
+	}
+	return out
+}
+
+# nx_decl records a declaration by its name token and answers its id — the one it already has
+# when the place was recorded before — or -1 for a place nobody wrote.
+pub fn nx_decl(mut &nx: NameIndex, path: str, line: int, col: int, name: str, kind: int, mod: str) -> int {
+	return -1 if line <= 0 or col <= 0
+
+	f := nx_file_of(nx, path)
+	return -1 if f < 0
+
+	if nx.d_slots.len() < (nx.d_file.len() + 1) * 2 {
+		nx.d_slots = []
+		nx.d_slots = nx_rehash(nx.d_file, nx.d_line, nx.d_col, nx_grown(nx.d_file.len() + 1))
+	}
+	h := nx_slot(nx.d_slots, nx.d_file, nx.d_line, nx.d_col, f, line, col)
+	return nx.d_slots[h] - 1 if nx.d_slots[h] != 0
+
+	id := nx.d_file.len()
+	nx.d_file.append(f)
+	nx.d_line.append(line)
+	nx.d_col.append(col)
+	nx.d_kind.append(kind)
+	nx.d_mod.append(nx_mod_of(nx, mod))
+	nx.d_off.append(nx.d_text.len())
+	b := bytearray(name)
+	for c in b {
+		nx.d_text.append(c)
+	}
+	nx.d_len.append(b.len())
+	nx.d_slots[h] = id + 1
+	nx_use(nx, path, line, col, name, b.len(), id)
+	return id
+}
+
+# nx_known is the declaration already recorded at a place, or -1.
+pub fn nx_known(mut &nx: NameIndex, path: str, line: int, col: int) -> int {
+	return -1 if line <= 0 or col <= 0 or nx.d_slots.len() == 0
+
+	f := nx_file_of(nx, path)
+	return -1 if f < 0
+
+	h := nx_slot(nx.d_slots, nx.d_file, nx.d_line, nx.d_col, f, line, col)
+	return nx.d_slots[h] - 1
+}
+
+# nx_use records that the token at a place resolves to `decl`. The token's length is `len`, or the
+# byte length of `name` when `len` is negative — worked out only for a place recorded the first
+# time, since the walk passes most tokens more than once. A place already recorded keeps its
+# first answer unless that answer was still PENDING (a negative id below -1, emit.zg's
+# `c_nx_row`), which a later pass may settle.
+#
+# A place already settled to a DIFFERENT declaration is answered with its use's index, and -1
+# otherwise. That is a body walked once per instantiation resolving one token two ways, and
+# what it means is the caller's to decide — keeping the first would make the answer depend on
+# which instantiation happened to be walked first.
+pub fn nx_use(mut &nx: NameIndex, path: str, line: int, col: int, name: str, len: int, decl: int) -> int {
+	return -1 if decl == -1 or line <= 0 or col <= 0
+
+	f := nx_file_of(nx, path)
+	return -1 if f < 0
+
+	if nx.u_slots.len() < (nx.u_file.len() + 1) * 2 {
+		nx.u_slots = []
+		nx.u_slots = nx_rehash(nx.u_file, nx.u_line, nx.u_col, nx_grown(nx.u_file.len() + 1))
+	}
+	h := nx_slot(nx.u_slots, nx.u_file, nx.u_line, nx.u_col, f, line, col)
+	if nx.u_slots[h] != 0 {
+		id := nx.u_slots[h] - 1
+		if nx.u_decl[id] < -1 {
+			nx.u_decl[id] = decl
+		}
+		return id if nx.u_decl[id] != decl and nx.u_decl[id] >= -1
+
+		return -1
+	}
+	nx.u_file.append(f)
+	nx.u_line.append(line)
+	nx.u_col.append(col)
+	if len < 0 {
+		b := bytearray(name)
+		nx.u_len.append(b.len())
+	} else {
+		nx.u_len.append(len)
+	}
+	nx.u_decl.append(decl)
+	nx.u_slots[h] = nx.u_file.len()
+	return -1
+}
+
+# nx_seal settles what the walk left pending through `rows` — a pending id `-(k + 2)` is what
+# `rows[k]` names, a declaration or another pending id — and empties the build-time tables. A use
+# that still resolves to nothing is left in place as -1 rather than copied away, which would hold
+# every column twice at the moment the walk is largest; a reader skips it.
+pub fn nx_seal(mut &nx: NameIndex, rows: list[int]) {
+	mut i := 0
+	for i < nx.u_file.len() {
+		# a pending row may be settled to ANOTHER pending row — a closure's capture is the
+		# enclosing binding, which may itself be waiting on its statement — so it is followed
+		mut d := nx.u_decl[i]
+		for d < -1 {
+			d = rows[-d - 2]
+		}
+		nx.u_decl[i] = d
+		i = i + 1
+	}
+	nx.d_slots = []
+	nx.u_slots = []
+}
+
+# nx_use_at is the use whose token covers column `col` of `line` in `path`, or -1. The column is
+# in whatever unit the index was built or converted in — a byte column as the walk leaves it.
+pub fn nx_use_at(nx: NameIndex, path: str, line: int, col: int) -> int {
+	mut f := 0
+	for f < nx.files.len() and nx.files[f] != path {
+		f = f + 1
+	}
+	return -1 if f == nx.files.len()
+
+	mut i := 0
+	for i < nx.u_file.len() {
+		return i if nx.u_file[i] == f and nx.u_line[i] == line and nx.u_col[i] <= col and col < nx.u_col[i] + nx.u_len[i] and nx_decls_of(nx, i).len() > 0
+		i = i + 1
+	}
+	return -1
+}
+
+# nx_share records that use `u` resolved to `d` in one instantiation of the body it sits in, and
+# makes the use SHARED: it has no one declaration, and every one it resolved to is a candidate.
+pub fn nx_share(mut &nx: NameIndex, u: int, d: int) {
+	nx.u_decl[u] = -1
+	return if d < 0 or nx_is_use_of(nx, u, d)
+
+	nx.sh_use.append(u)
+	nx.sh_decl.append(d)
+}
+
+# nx_decls_of is what use `u` resolves to: its declaration, a shared use's candidates, or none.
+# Candidates come back in the order of where they are declared — file, line, column — and never
+# in the order the walk met them, which is the order the instantiations happened to be walked.
+pub fn nx_decls_of(nx: NameIndex, u: int) -> list[int] {
+	return [nx.u_decl[u]] if nx.u_decl[u] >= 0
+
+	mut out: list[int] = []
+	mut i := 0
+	for i < nx.sh_use.len() {
+		if nx.sh_use[i] == u {
+			d := nx.sh_decl[i]
+			mut k := out.len()
+			out.append(d)
+			for k > 0 and nx_decl_before(nx, d, out[k - 1]) {
+				out[k] = out[k - 1]
+				k = k - 1
+			}
+			out[k] = d
+		}
+		i = i + 1
+	}
+	return out
+}
+
+fn nx_decl_before(nx: NameIndex, a: int, b: int) -> bool {
+	fa := nx.files[nx.d_file[a]]
+	fb := nx.files[nx.d_file[b]]
+
+	return fa < fb if fa != fb
+	return nx.d_line[a] < nx.d_line[b] if nx.d_line[a] != nx.d_line[b]
+
+	return nx.d_col[a] < nx.d_col[b]
+}
+
+# nx_is_use_of is whether use `u` resolves to `d` — as its declaration, or as a candidate.
+pub fn nx_is_use_of(nx: NameIndex, u: int, d: int) -> bool {
+	return nx.u_decl[u] == d if nx.u_decl[u] >= 0
+
+	mut i := 0
+	for i < nx.sh_use.len() {
+		return true if nx.sh_use[i] == u and nx.sh_decl[i] == d
+		i = i + 1
+	}
+	return false
+}
+
 # last_segment is the name a module path ends with — `util/text` ends with `text`. It is
 # what an import with no `as` binds (GRAMMAR#import-spec) and what a diagnostic calls a
 # module, and it lives HERE, beside the declaration that needs it, because it used to live

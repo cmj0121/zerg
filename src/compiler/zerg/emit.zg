@@ -2231,7 +2231,12 @@ fn c_add_var_named(mut &em: Emitter, name: str, t: ast.Ty, cname: str, is_mut: b
 	check.chk_const_rebind(em, name)
 	check.chk_no_shadow_ns(em, name)
 	c_no_shadow_sub(em, name)
+	c_env_row(em, name, t, cname, is_mut, is_const)
+}
 
+# c_env_row appends the row itself, with none of the binding rules: a parameter bound AGAIN for
+# a default to read (c_default_bind) was judged where its function declared it.
+fn c_env_row(mut &em: Emitter, name: str, t: ast.Ty, cname: str, is_mut: bool, is_const: bool) {
 	em.env_names.append(name)
 	em.env_tys.append(t)
 	em.env_cnames.append(cname)
@@ -2311,15 +2316,20 @@ fn c_no_shadow_sub(mut &em: Emitter, name: str) {
 
 # c_fresh_cname is the C name a new binding takes: `zg_<name>`, or `zg_<name>__<n>` when
 # that is already taken by a binding still in scope.
+#
+# OR BY A TOP-LEVEL DECLARATION. A function, a type and a module constant are file-scope C
+# symbols spelled `zg_<name>` too, and a C local of that spelling hides the symbol for the rest
+# of its block: `g := g() + 1` called the local, and so did a default lowered into that block
+# that spells `g()` (#197) — the Zerg name was never in scope there, the C one was. Every
+# candidate is asked, not only the first: beside a `fn g__1`, `zg_g__1` hides that one.
 fn c_fresh_cname(mut &em: Emitter, name: str) -> str {
-	base := "zg_" + name
-	mut cand := base
+	mut stem := name
 	mut n := 0
-	for c_cname_taken(em, cand) {
+	for c_cname_taken(em, "zg_" + stem) or c_name_in(em.top_names, stem) {
 		n = n + 1
-		cand = f"{base}__{n}"
+		stem = f"{name}__{n}"
 	}
-	return cand
+	return "zg_" + stem
 }
 
 # c_in_scope is whether a binding's block is still open. A closed block's bindings stay in
@@ -5651,13 +5661,14 @@ fn c_check_private_field(mut &em: Emitter, sd: ast.StructDecl, fd: ast.FieldDef)
 # above. With a module constant called `a` it is worse: the default quietly reads the
 # constant, and `P(3).b` was 200 for `a := 100` where the field would have made it 6.
 #
-# It is the same refusal `docs/code/functions.md` records for a parameter default that reads
-# an earlier parameter, for the same reason, and the seed has gated it on both since it was
-# written. Refusing by name is what this compiler owes a form it cannot lower.
+# A parameter default that reads an earlier parameter was the same refusal, and is built: the
+# call binds the earlier arguments for the default to read (c_default_enter). A construction
+# has no such binding yet, and the seed gates both. Refusing by name is what this compiler owes
+# a form it cannot lower.
 fn c_check_field_default(sd: ast.StructDecl, fnames: list[str], earlier: list[str], fd: ast.FieldDef) {
 	return if not fd.has_def
 
-	nm := c_default_names_field(fnames, fd.def)
+	nm := c_default_reads(fnames, fd.def)
 
 	# ONE NUMBER, THREE PROGRAMS (#87). `fnames` is EVERY field, including this one and the
 	# ones after it, so all three arrived at the raise below wearing `NotImplemented:`.
@@ -5676,16 +5687,24 @@ fn c_check_field_default(sd: ast.StructDecl, fnames: list[str], earlier: list[st
 	raise c_diag_at(sd.path, fd.line, fd.col, rule.Rule.NotYetDefaultReadsField, f"NotImplemented: the default on field `{fd.name}` of `{sd.name}` reads the field `{nm}` — a default is materialised at the construction, where a field is not a name in scope, so `{nm}` would resolve to whatever else carries that name (or to nothing at all) (GRAMMAR#field)") if nm != ""
 }
 
-# c_default_names_field is the first of `fnames` a default expression mentions, or "". The
-# walk is ITERATIVE over `expr_parts` for the reason `p_expr_root`'s is: a walk that runs
-# over an arbitrary program's expression must not be able to fail at depth.
-fn c_default_names_field(fnames: list[str], e: ast.Expr) -> str {
+# c_default_reads is the first of `names` a default expression reads, or "" — the fields a
+# field default may not read, or the earlier parameters a parameter default does. The walk
+# is ITERATIVE over `expr_parts` for the reason `p_expr_root`'s is: a walk that runs over an
+# arbitrary program's expression must not be able to fail at depth.
+#
+# A form that carries STATEMENTS — a closure, a block, a guard, `unsafe`, a `??` that jumps —
+# is not opened by `expr_parts`, and what its statements read without binding is a read like
+# any other: `fn () -> int { return n * 2 }` and `{ n * 2 }` both read `n`.
+fn c_default_reads(names: list[str], e: ast.Expr) -> str {
 	mut nodes: list[ast.Expr] = [e]
 	mut i := 0
 	for i < nodes.len() {
 		nm := c_ident_name(nodes[i])
-		return nm if nm != "" and c_name_in(fnames, nm)
+		return nm if nm != "" and c_name_in(names, nm)
 
+		for id in c_stmts_free(nodes[i]) {
+			return id if c_name_in(names, id)
+		}
 		for k in ast.expr_parts(nodes[i]) {
 			nodes.append(k)
 		}
@@ -10748,7 +10767,10 @@ fn c_recv_args(mut &em: Emitter, key: str, target: ast.Expr, args: list[ast.Expr
 	# c_args_from below asks it again of the same list and gets the same answer, its `lead`
 	# saying that this operand stands in front. A `mut fn`'s receiver is a `mut &` like any
 	# other and is left where it stands for the same reason.
-	seq := c_needs_order_args(args, c_ref_args(em, key, 1, args), 0)
+	#
+	# A default that reads an earlier parameter puts every argument in a temporary
+	# (c_args_from), and those run before the receiver unless it is held in one as well.
+	seq := c_needs_order_args(args, c_ref_args(em, key, 1, args), 0) or c_defaults_read_earlier(em, key, 1, args.len(), c_args_filled(em, key, 1, args))
 	recv := c_ordered(em, seq and not c_is_ref_param(em, key, 0), c_arg(em, key, 0, 0, target, sb))
 	return recv + c_args_from(em, key, 1, args, true, sb)
 }
@@ -11483,7 +11505,7 @@ fn c_struct_filled(mut &em: Emitter, sname: str, written: list[ast.Expr]) -> lis
 # programmer wrote: a field with an `=` is filled from that expression whatever its type, so
 # a `T?` with a default gets the default rather than `nil`. The expression is rendered HERE,
 # at the construction that omitted the field, which is what makes it evaluated per
-# construction — the same backfill, and the same consequence, as `c_default_args` gives a
+# construction — the same backfill, and the same consequence, as `c_args_from` gives a
 # parameter default at a call.
 fn c_struct_rest(mut &em: Emitter, sname: str, given: int, lead: bool) -> str {
 	mut out := ""
@@ -11611,6 +11633,12 @@ fn c_args_from(mut &em: Emitter, key: str, base: int, written: list[ast.Expr], l
 	# is lowered in its own file (c_default_enter), not in this one
 	filled := c_args_filled(em, key, base, written)
 
+	# A DEFAULT THAT READS AN EARLIER PARAMETER reads the ARGUMENT, so every slot of such a call
+	# is held in a temporary the default can name — in call order, which is the order the
+	# arguments run in anyway. `prior` stays empty for every other call, and so does its C.
+	need := c_defaults_read_earlier(em, key, base, args.len(), filled)
+	mut prior: list[str] = []
+
 	mut out := ""
 	mut i := 0
 	for i < args.len() {
@@ -11625,13 +11653,50 @@ fn c_args_from(mut &em: Emitter, key: str, base: int, written: list[ast.Expr], l
 		mut saved := c_default_stay(em)
 		if c_is_filled(filled, i) {
 			s = c_nosub()
-			saved = c_default_enter(em, c_param_row(em, key, base + i))
+			saved = c_default_enter(em, key, base + i, base, prior)
 		}
-		out = out + c_ordered(em, seq and not refs[i], c_arg(em, key, base + i, i + 1, args[i], s))
+		v := c_ordered(em, (seq or need) and not refs[i], c_arg(em, key, base + i, i + 1, args[i], s))
 		c_default_leave(em, saved)
+		if need {
+			prior.append(v)
+		}
+		out = out + v
 		i = i + 1
 	}
-	return out + c_default_args(em, key, base + args.len(), lead or args.len() > 0)
+
+	mut j := base + args.len()
+	for d in c_defaults_from(em, key, j) {
+		if lead or j > base {
+			out = out + ", "
+		}
+		v := c_ordered(em, need, c_default_arg(em, key, j, base, prior, d))
+		if need {
+			prior.append(v)
+		}
+		out = out + v
+		j = j + 1
+	}
+	return out
+}
+
+# c_defaults_read_earlier is whether a default this call lowers — a slot a name skipped
+# (`filled`) or one past the `n` it wrote — names a parameter declared before it.
+fn c_defaults_read_earlier(mut &em: Emitter, key: str, base: int, n: int, filled: list[bool]) -> bool {
+	first := c_param_row(em, key, base)
+	return false if first < 0
+
+	mut names: list[str] = []
+	mut k := 0
+	for first + k < em.pr_fn.len() and em.pr_fn[first + k] == key and em.pr_idx[first + k] == base + k {
+		row := first + k
+
+		return false if k >= n and not em.pr_hasdef[row]
+		return true if (k >= n or c_is_filled(filled, k)) and c_default_reads(names, em.pr_def[row]) != ""
+
+		names.append(em.pr_name[row])
+		k = k + 1
+	}
+	return false
 }
 
 # c_args_filled is, per slot of c_args_named's answer, whether the call wrote nothing there —
@@ -11904,6 +11969,11 @@ fn c_call_releasing(mut &em: Emitter, cfn: str, key: str, args: list[ast.Expr], 
 	refs := c_ref_args(em, key, 0, args)
 	seq := c_needs_order_args(args, refs, 1)
 
+	# the temporaries a default reading an earlier parameter names, as c_args_from keeps them —
+	# declared among this call's own, since they are read inside its statement expression
+	need := c_defaults_read_earlier(em, key, 0, args.len(), [])
+	mut prior: list[str] = []
+
 	mut decls := ""
 	mut call := cfn + "("
 	mut frees := ""
@@ -11912,24 +11982,41 @@ fn c_call_releasing(mut &em: Emitter, cfn: str, key: str, args: list[ast.Expr], 
 		if i > 0 {
 			call = call + ", "
 		}
-		rendered := c_arg(em, key, i, i + 1, args[i], sb)
+		mut v := c_arg(em, key, i, i + 1, args[i], sb)
 		if rels[i] == "" {
-			if seq and not refs[i] {
+			if (seq or need) and not refs[i] {
 				on := c_tmp(em, "zgt_ord")
-				decls = decls + c_ord_decl(on, rendered)
-				call = call + on
-			} else {
-				call = call + rendered
+				decls = decls + c_ord_decl(on, v)
+				v = on
 			}
 		} else {
 			tn := c_tmp(em, "zgt_t")
-			decls = decls + f"zrt_chan *{tn} = {rendered}; "
-			call = call + tn
+			decls = decls + f"zrt_chan *{tn} = {v}; "
 			frees = frees + f"{rels[i]}({tn}); "
+			v = tn
 		}
+		if need {
+			prior.append(v)
+		}
+		call = call + v
 		i = i + 1
 	}
-	call = call + c_default_args(em, key, args.len(), args.len() > 0) + ")"
+	mut j := args.len()
+	for d in c_defaults_from(em, key, j) {
+		if j > 0 {
+			call = call + ", "
+		}
+		mut v := c_default_arg(em, key, j, 0, prior, d)
+		if need {
+			on := c_tmp(em, "zgt_ord")
+			decls = decls + c_ord_decl(on, v)
+			v = on
+			prior.append(v)
+		}
+		call = call + v
+		j = j + 1
+	}
+	call = call + ")"
 
 	ret := c_lookup_sig_ret(em, key)
 	return f"({{ {decls}{call}; {frees}}})" if ast.ty_eq(ret, ast.Ty.TVoid)
@@ -11986,10 +12073,20 @@ fn c_arg(mut &em: Emitter, fname: str, idx: int, pos: int, a: ast.Expr, sb: Subs
 
 # c_callee_enter is c_default_enter for the idx-th argument of a `spawn` or `defer` callee: an
 # appended DEFAULT enters the file that wrote it, and a written argument stays where it is.
-fn c_callee_enter(mut &em: Emitter, cal: Callee, idx: int) -> DefAt {
+#
+# `env` spells where the arguments before it are stored — each is a field of the statement's
+# env, `<env>0`, `<env>1`, …, already written by the time the default is rendered — and those are
+# what a default that reads an earlier parameter reads.
+fn c_callee_enter(mut &em: Emitter, cal: Callee, idx: int, env: str) -> DefAt {
 	return c_default_stay(em) if cal.given < 0 or idx < cal.given
 
-	return c_default_enter(em, c_param_row(em, cal.key, idx))
+	mut prior: list[str] = []
+	mut k := 0
+	for k < idx {
+		prior.append(env + strconv.to_string(k, 10))
+		k = k + 1
+	}
+	return c_default_enter(em, cal.key, idx, 0, prior)
 }
 
 # c_captured renders the value a `spawn` or a `defer` stores in its env — the same value
@@ -12038,8 +12135,8 @@ fn c_param_ty(mut &em: Emitter, fname: str, idx: int) -> ast.Ty {
 	return em.pr_ty[row]
 }
 
-# c_default_args fills in the parameters a call left off the end, in declaration order,
-# taking each one's declared default. C has no such notion, so the backfill happens here:
+# A call fills in the parameters it left off the end (c_args_from, c_call_releasing), in
+# declaration order, taking each one's declared default. C has no such notion, so the backfill happens here:
 # every emitted call is fully applied whatever the source wrote.
 #
 # It stops at the first parameter with no default, which is also where the language stops
@@ -12080,18 +12177,44 @@ fn c_defaults_from(mut &em: Emitter, key: str, at: int) -> list[ast.Expr] {
 # `em.sub` — what an enclosing block arm left standing — into whatever it is handed, so a
 # default under `Some(beep) => { … }` spelled the arm's `beep` for its own file's function.
 #
-# THE CALLER'S BINDINGS ARE STILL VISIBLE to a default, which the language does not allow: a
-# default is lowered into the caller's C block, where a caller's local can capture a name the
-# default spells. The file swap cannot close that on its own, and #197 does.
-struct DefAt {
+# NO CALLER BINDING IS VISIBLE EITHER (#197). The default is lowered into the caller's C block
+# with the caller's scopes open, so a caller's `beep := fn …` captured the `beep()` a default
+# spelled, and a caller's `a` answered a default's read of the parameter `a`. Entering closes
+# every scope but the module's — the open-scope list IS visibility (c_in_scope), so the rows
+# stay and only stop answering — and opens one scope of the default's own, where the parameters
+# BEFORE it are bound to the C values the call gave them. The `mut &` names go with the scopes:
+# c_is_ref_name answers by name alone.
+pub struct DefAt {
 	pub path: str
 	pub line: int
 	pub col: int
 	pub sub: Subst
+	pub open: list[int]
+	pub cur: int
+	pub refs: list[str]
 }
 
-fn c_default_enter(mut &em: Emitter, row: int) -> DefAt {
-	return c_default_enter_at(em, em.pr_path[row], em.pr_line[row], em.pr_col[row])
+# c_default_enter enters the default of parameter idx of `key`, with `prior` the C values of
+# the parameters from `base` up to it, in order — the ones the default may read.
+fn c_default_enter(mut &em: Emitter, key: str, idx: int, base: int, prior: list[str]) -> DefAt {
+	row := c_param_row(em, key, idx)
+	saved := c_default_enter_at(em, em.pr_path[row], em.pr_line[row], em.pr_col[row])
+	first := row - (idx - base)
+	mut k := 0
+	for k < prior.len() {
+		c_default_bind(em, em.pr_name[first + k], em.pr_ty[first + k], em.pr_ref[first + k], prior[k])
+		k = k + 1
+	}
+	return saved
+}
+
+# c_default_bind makes one earlier parameter a name the default can read, spelled as the C
+# value the call gave it. A `mut &` one holds the caller's ADDRESS, which a read dereferences.
+pub fn c_default_bind(mut &em: Emitter, name: str, t: ast.Ty, is_ref: bool, cval: str) {
+	c_env_row(em, name, t, cval, false, false)
+	if is_ref {
+		em.ref_names.append(name)
+	}
 }
 
 # c_field_default_enter is c_default_enter for the idx-th field's default of a struct.
@@ -12100,46 +12223,42 @@ fn c_field_default_enter(mut &em: Emitter, sname: str, idx: int) -> DefAt {
 	return c_default_enter_at(em, em.fld_path[row], em.fld_line[row], em.fld_col[row])
 }
 
-fn c_default_enter_at(mut &em: Emitter, path: str, line: int, col: int) -> DefAt {
+pub fn c_default_enter_at(mut &em: Emitter, path: str, line: int, col: int) -> DefAt {
 	saved := c_default_stay(em)
 	em.at_path = path
 	c_mark(em, line, col)
 	em.sub = c_nosub()
+	em.open_scopes = [0]
+	em.ref_names = []
+	c_scope_open(em)
 	return saved
 }
 
 # c_default_stay is a DefAt of the state as it stands, so a c_default_leave of it changes
 # nothing — what a written argument takes where a default would have entered its own file.
 fn c_default_stay(mut &em: Emitter) -> DefAt {
-	return DefAt(em.at_path, em.at_line, em.at_col, em.sub)
+	return DefAt(em.at_path, em.at_line, em.at_col, em.sub, em.open_scopes, em.scope_cur, em.ref_names)
 }
 
-fn c_default_leave(mut &em: Emitter, saved: DefAt) {
+pub fn c_default_leave(mut &em: Emitter, saved: DefAt) {
 	em.at_path = saved.path
 	c_mark(em, saved.line, saved.col)
 	em.sub = saved.sub
+	em.open_scopes = saved.open
+	em.scope_cur = saved.cur
+	em.ref_names = saved.refs
 }
 
-fn c_default_args(mut &em: Emitter, fname: str, given: int, sep: bool) -> str {
-	mut out := ""
-	mut lead := sep
-	mut i := given
-	for d in c_defaults_from(em, fname, given) {
-		if lead {
-			out = out + ", "
-		}
-		lead = true
-
-		# a default is an argument, so it meets its parameter's type like any other — which
-		# is what gives `fn take(xs: list[int] = [])` an element size. Rendered with c_expr
-		# it was the bare `(zrt_list){0}`, and every append into it memcpy'd nothing.
-		slot := check.chk_slot_says(fname, i + 1)
-		pt := c_param_ty(em, fname, i)
-		saved := c_default_enter(em, c_param_row(em, fname, i))
-		out = out + c_fit_copied(em, f"the default for {slot}", pt, d, c_nosub())
-		c_default_leave(em, saved)
-		i = i + 1
-	}
+# c_default_arg renders `d`, the default of parameter i, which a call left off the end.
+fn c_default_arg(mut &em: Emitter, fname: str, i: int, base: int, prior: list[str], d: ast.Expr) -> str {
+	# a default is an argument, so it meets its parameter's type like any other — which
+	# is what gives `fn take(xs: list[int] = [])` an element size. Rendered with c_expr
+	# it was the bare `(zrt_list){0}`, and every append into it memcpy'd nothing.
+	slot := check.chk_slot_says(fname, i + 1)
+	pt := c_param_ty(em, fname, i)
+	saved := c_default_enter(em, fname, i, base, prior)
+	out := c_fit_copied(em, f"the default for {slot}", pt, d, c_nosub())
+	c_default_leave(em, saved)
 	return out
 }
 
@@ -12212,7 +12331,7 @@ fn c_ident_val(mut &em: Emitter, n: str, sb: Subst) -> str {
 
 	if c_is_ref_name(em, n) {
 		# a mutable-reference parameter is a pointer; dereference it on use
-		return f"(*zg_{n})"
+		return f"(*{c_var_cname(em, n)})"
 	}
 
 	# A bare function NAME used where a value is wanted is that function as a value. It is
@@ -15646,7 +15765,7 @@ fn c_spawn(mut &em: Emitter, x: ast.Expr, ind: str) -> str {
 	mut i := 0
 	for i < args.len() {
 		fi := "f" + strconv.to_string(i, 10)
-		entered := c_callee_enter(em, cal, i)
+		entered := c_callee_enter(em, cal, i, f"zgt_se{tag}->f")
 		at := c_captured_ty(em, cal.key, i, args[i])
 		c_default_leave(em, entered)
 		fields = fields + " " + c_type(at) + " " + fi + ";"
@@ -15691,7 +15810,7 @@ fn c_spawn(mut &em: Emitter, x: ast.Expr, ind: str) -> str {
 	mut out := f"{ind}zg_spawnenv_{tag} *zgt_se{tag} = (zg_spawnenv_{tag}*)zrt_alloc(sizeof(zg_spawnenv_{tag}));\n"
 	mut j := 0
 	for j < args.len() {
-		entered := c_callee_enter(em, cal, j)
+		entered := c_callee_enter(em, cal, j, f"zgt_se{tag}->f")
 		mut v := c_captured(em, cal.key, j, args[j])
 		c_default_leave(em, entered)
 		if dirs[j] >= 0 {
@@ -16309,10 +16428,21 @@ fn c_lambda_ty(ps: list[ast.Param], has_ret: bool, ret: ast.Ty) -> ast.Ty {
 	return ast.Ty.TFn(tys, r)
 }
 
-# c_lambda_free_all is every name a lambda's body uses and does not bind — its CAPTURES.
-# A parameter, a name bound inside, a module constant and a function are all answered
-# elsewhere, so what is left is the enclosing function's bindings.
-fn c_lambda_free_all(mut &em: Emitter, ps: list[ast.Param], body: list[ast.Stmt]) -> list[str] {
+# c_stmts_free is c_body_free of the statements an expression carries, or nothing.
+fn c_stmts_free(e: ast.Expr) -> list[str] {
+	return match e {
+		Expr.EFn(ps, _, _, body) => c_body_free(ps, body)
+		Expr.ECoalesce(_, _, body) => c_body_free([], body)
+		Expr.EGuard(body) => c_body_free([], body)
+		Expr.EBlock(body) => c_body_free([], body)
+		Expr.EUnsafe(body) => c_body_free([], body)
+		_ => []
+	}
+}
+
+# c_body_free is every name a body of statements reads and does not bind, with `ps` the
+# parameters that bind around it (a closure's) — what the body would have to be handed.
+fn c_body_free(ps: list[ast.Param], body: list[ast.Stmt]) -> list[str] {
 	mut ids: list[str] = []
 	mut calls: list[str] = []
 	mut ns: list[str] = []
@@ -16324,7 +16454,20 @@ fn c_lambda_free_all(mut &em: Emitter, ps: list[ast.Param], body: list[ast.Stmt]
 	lint.collect_binds(body, bound)
 	mut out: list[str] = []
 	for id in ids {
-		if not c_name_in(bound, id) and c_k_idx(em, id) < 0 and not c_name_in(em.sig_names, id) and not c_name_in(out, id) {
+		if not c_name_in(bound, id) and not c_name_in(out, id) {
+			out.append(id)
+		}
+	}
+	return out
+}
+
+# c_lambda_free_all is every name a lambda's body uses and does not bind — its CAPTURES.
+# A parameter, a name bound inside, a module constant and a function are all answered
+# elsewhere, so what is left is the enclosing function's bindings.
+fn c_lambda_free_all(mut &em: Emitter, ps: list[ast.Param], body: list[ast.Stmt]) -> list[str] {
+	mut out: list[str] = []
+	for id in c_body_free(ps, body) {
+		if c_k_idx(em, id) < 0 and not c_name_in(em.sig_names, id) {
 			out.append(id)
 		}
 	}
@@ -16379,26 +16522,28 @@ fn c_defer_of(mut &em: Emitter, cal: Callee, ind: str) -> str {
 		return f"{ind}zrt_defer(zg_dfn_{tag}, NULL);\n"
 	}
 
+	# ONE STATEMENT PER FIELD, in order, rather than one initializer list: C leaves the order of
+	# an initializer's expressions unspecified, and a default that reads an earlier parameter
+	# reads the field that argument was stored in, which must already hold it.
 	mut fields := ""
 	mut vals := ""
 	mut call := ""
 	mut i := 0
 	for i < args.len() {
-		entered := c_callee_enter(em, cal, i)
+		entered := c_callee_enter(em, cal, i, f"zgt_de{tag}.f")
 		ft := c_type(c_captured_ty(em, cal.key, i, args[i]))
 		fields = fields + " " + ft + " f" + strconv.to_string(i, 10) + ";"
 		if i > 0 {
-			vals = vals + ", "
 			call = call + ", "
 		}
-		vals = vals + c_captured(em, cal.key, i, args[i])
+		vals = f"{vals}{ind}zgt_de{tag}.f{strconv.to_string(i, 10)} = {c_captured(em, cal.key, i, args[i])};\n"
 		c_default_leave(em, entered)
 		call = call + "e->f" + strconv.to_string(i, 10)
 		i = i + 1
 	}
 	em.dfn_decls.append("typedef struct {" + fields + " } zg_denv_" + tag + ";\n")
 	em.dfn_decls.append("static void zg_dfn_" + tag + "(void *p) { zg_denv_" + tag + " *e = (zg_denv_" + tag + "*)p; " + cal.cname + "(" + call + "); }\n")
-	mut out := ind + "zg_denv_" + tag + " zgt_de" + tag + " = { " + vals + " };\n"
+	mut out := f"{ind}zg_denv_{tag} zgt_de{tag};\n{vals}"
 	return f"{out}{ind}zrt_defer(zg_dfn_{tag}, &zgt_de{tag});\n"
 }
 
@@ -19816,6 +19961,7 @@ fn c_fn(mut &em: Emitter, fn_d: ast.FnDecl) -> str {
 			}
 			pm := fn_d.params[i]
 			c_add_var(em, pm.name, pm.ty, pm.is_ref, false)
+			pc := c_var_cname(em, pm.name)
 
 			# A BY-VALUE PARAMETER IS THIS FUNCTION'S OWN. Every call site copies what it
 			# hands over (c_arg, through c_copied) — for a str that copy is a retain, for a
@@ -19828,13 +19974,13 @@ fn c_fn(mut &em: Emitter, fn_d: ast.FnDecl) -> str {
 			# reference — so the callee dropping it is what frees the capture, and the two
 			# together are why a captured list is not leaked by either.
 			if not pm.is_ref {
-				pdefer = pdefer + c_pend_drop(em, pm.ty, "zg_" + pm.name, "    ")
+				pdefer = pdefer + c_pend_drop(em, pm.ty, pc, "    ")
 			}
 			if pm.is_ref {
 				em.ref_names.append(pm.name)
-				sig = sig + c_type(pm.ty) + "* zg_" + pm.name
+				sig = sig + c_type(pm.ty) + "* " + pc
 			} else {
-				sig = sig + c_type(pm.ty) + " zg_" + pm.name
+				sig = sig + c_type(pm.ty) + " " + pc
 			}
 			i = i + 1
 		}

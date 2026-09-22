@@ -405,11 +405,10 @@ over module constants) runs again for every construction that omits the field.
 
 > **[not yet]** A default that reads an EARLIER FIELD of the same struct is refused by name — _E9071
 > NotImplemented: the default on field `h` of `Box` reads the field `w` — a default is materialised at
-> the construction, where a field is not a name in scope_ — which is the field-wise reading of the same
-> limit a [parameter's default](../code/functions.md) has. Reading the field ITSELF, or one written
-> AFTER it, is not that limit and is not waiting for anything: evaluation is left to right, so neither
-> has a value to read in any order — _E4080 the default on field `a` of `P` reads the field `a`, which is
-> not an EARLIER field_.
+> the construction, where a field is not a name in scope_. Reading the field ITSELF, or one written AFTER
+> it, is not that limit and is not waiting for anything: evaluation is left to right, so neither has a
+> value to read in any order — _E4080 the default on field `a` of `P` reads the field `a`, which is not an
+> EARLIER field_.
 
 There are **no zero values**. A non-optional field with no default is therefore **required** at
 construction, and a construction short of one is an error naming the field. The **one implicit default**
@@ -421,11 +420,10 @@ field-wise constructor is public, so a required field is one every construction 
 rejected at the field's own declaration (`E4045`), naming the field.
 
 > **[not yet]** A default that **reads another field** — `struct P { pub a: int; pub b: int = a * 2 }` — is
-> the one shape that is not built, and it is the same shape (and the same reason) as a parameter default
-> reading an earlier parameter in [Functions & Closures](../code/functions.md). The default is materialised
-> at the **construction**, where a field is not a name in scope, so `a` would resolve to whatever else
-> carries that name. It reports _NotImplemented: the default on field `b` of `P` reads the field `a`_,
-> with the field's place, as _E9071_.
+> the one shape that is not built. The default is materialised at the **construction**, where a field is
+> not a name in scope, so `a` would resolve to a module-level name that carries it — never to a binding of
+> the constructing code, which a default does not see. It reports _NotImplemented: the default on field
+> `b` of `P` reads the field `a`_, with the field's place, as _E9071_.
 
 Field visibility is a **single knob covering read and write together** — a `pub` field is readable
 and, given a `mut` binding, writable; a private field is neither, and naming one from another module is

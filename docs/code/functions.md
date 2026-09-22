@@ -123,18 +123,19 @@ greet("Sam", "Hi", true)     # all positional
   shared-mutable-default trap; it is an ordinary expression and may read earlier parameters (evaluation is
   left-to-right). A parameter with no default stays **mandatory**.
 
-  > **[not yet]** A default that **reads an earlier parameter** — `fn g(a: int, b: int = a * 2)` — is the one
-  > shape that is not built. The default is materialised at the **call site**, where the callee's parameter
-  > names are not in scope, so the call reports _E3069 undefined name `a`_ instead of evaluating `a * 2`.
-  > Every other default is lowered as specified, a bare constant and a computed expression alike:
-  > `b: int = 1 + 2`, `b: int = side()` and `greeting: str = "a" + "b"` all evaluate at the call, each time.
-  >
+  A default belongs to the function that **declares** it. Its names mean what they mean in that function's
+  file, a name that is an earlier parameter reads **that call's argument** — written, skipped by a name, or
+  itself defaulted — and nothing the caller has bound is visible to it: not a local, a parameter, a loop or
+  `match` binding, or a closure's capture. `fn g(a: int, b: int = a * 2)` called as `g(3)` passes `b = 6`
+  whatever `a` means where the call is written, and a caller's `beep := …` does not change what a default's
+  `beep()` calls. The same holds for the defaults a `spawn` or a `defer` fills in, and for a struct field's.
+
   > **[not yet]** A default on an **anonymous** function's parameter is not built. `GRAMMAR` derives it —
   > `closure-param ::= ( 'mut' '&' )? identifier ( ':' type )? ( '=' expr )?`, the same `( '=' expr )?` tail a
   > declaration's parameter has — and `f := fn (x: int = 5) -> int { … }` reports _E9034 NotImplemented: a
-  > default on the closure parameter `x`_, with the place. The reason is the one above: a default is
-  > materialised at the **call site** out of the callee's **declaration**, and a closure is reached through a
-  > **value**, which carries no declaration to read one from. Pass the argument at every call.
+  > default on the closure parameter `x`_, with the place. A default is materialised at the **call site** out
+  > of the callee's **declaration**, and a closure is reached through a **value**, which carries no
+  > declaration to read one from. Pass the argument at every call.
 
 - A **named argument** passes a parameter by its name (`loud: true`) — which is what lets you **skip a
   defaulted parameter** in the middle. The rule is the usual one: positional arguments fill left-to-right,

@@ -338,9 +338,8 @@ literal 就可及。
 
 > **[not yet]** 讀同一個 struct 的**更早的欄位**的預設值會被按名字拒絕—— _E9071 NotImplemented: the default
 > on field `h` of `Box` reads the field `w` — a default is materialised at the construction, where a field
-> is not a name in scope_ ——這是[參數預設值](../code/functions.zh-TW.md)那個限制在欄位這一層的讀法。讀**自己**
-> 或讀寫在**後面**的欄位不是那個限制，也不在等任何東西：求值是由左到右，所以兩者在任何順序下都沒有值可讀——
-> _E4080 the default on field `a` of `P` reads the field `a`, which is not an EARLIER field_。
+> is not a name in scope_。讀**自己**或讀寫在**後面**的欄位不是那個限制，也不在等任何東西：求值是由左到右，
+> 所以兩者在任何順序下都沒有值可讀—— _E4080 the default on field `a` of `P` reads the field `a`, which is not an EARLIER field_。
 
 **沒有零值（zero value）**。因此沒有預設值的非 optional 欄位在建構時是**必填**的，少給就是錯誤、並且會指名該欄位。
 **唯一的隱含預設值**是 `T?` 欄位的 `nil`，那是它天生的「不存在」狀態——`T?` 不必寫 `=` 就可以省略。
@@ -349,9 +348,9 @@ literal 就可及。
 「沒有預設值的欄位」就是每次建構都得供值的欄位——而外部無法為一個自己讀不到的欄位供值。沒有預設值的私有欄位會在
 該欄位自己的宣告處被拒絕（`E4045`），並指名該欄位。
 
-> **[not yet]** 讀取**另一個欄位**的預設值——`struct P { pub a: int; pub b: int = a * 2 }`——是唯一未實作的形狀，
-> 而它與[函式與 Closure](../code/functions.zh-TW.md) 裡「參數預設值讀取前一個參數」是同一個形狀、同一個理由：
-> 預設值是在**建構處**才被具體化的，而欄位在那裡不是作用域中的名字，所以 `a` 會解析到別的同名東西。它會報
+> **[not yet]** 讀取**另一個欄位**的預設值——`struct P { pub a: int; pub b: int = a * 2 }`——是唯一未實作的形狀。
+> 預設值是在**建構處**才被具體化的，而欄位在那裡不是作用域中的名字，所以 `a` 會解析到 module 層級同名的東西
+> ——絕不會是建構那段程式碼的綁定，預設值看不到它們。它會報
 > _NotImplemented: the default on field `b` of `P` reads the field `a`_，並附上該欄位的位置。
 
 欄位可見性是**讀與寫綁在一起的單一旋鈕**——`pub` 欄位可讀、且在 `mut` binding 下可寫；private 欄位兩者皆否，

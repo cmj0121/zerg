@@ -636,6 +636,15 @@ fn p_ty_use(mut &p: Parser, t: token.Token) {
 	p.ty_uses.append(ast.TyUse(t.lexeme, p.path, t.line, t.col, bytearray(t.lexeme).len()))
 }
 
+# p_take_ty_uses carries a scratch parser's type uses back to the one that made it. A hole is
+# parsed by a parser of its own (p_scratch), and a type named inside one — `f"{e is Oops}"` — is
+# a type use of the enclosing file like any other.
+fn p_take_ty_uses(mut &p: Parser, mut &hp: Parser) {
+	for u in hp.ty_uses {
+		p.ty_uses.append(u)
+	}
+}
+
 # --- types ---------------------------------------------------------------------
 
 # parse_type reads a type expression, including the two DIRECTIONAL channel spellings
@@ -3700,7 +3709,7 @@ fn p_assert_claim(mut &p: Parser, at: token.Token, c: AClaim, mut &out: list[ast
 	# sameness is the claim `zerg desugar`'s D104 rests on: D104 writes this same f-string out
 	# as text, and the two are held to being one program down to the emitted C.
 	mut args: list[ast.Expr] = []
-	args.append(fstr_expr(p, assert_fstr(cond.msg, at)))
+	args.append(fstr_expr(p, assert_fstr(cond.msg, at), false))
 
 	# `raise AssertionError(msg) if not (cond)` — the postfix guard on a raise, written as the
 	# `if` block it is defined as, which is what parse_jump_guard would have made of it
@@ -4599,7 +4608,7 @@ fn parse_primary(mut &p: Parser) -> ast.Expr {
 	}
 	if k == token.Kind.FStr {
 		p_advance(p)
-		return fstr_expr(p, t)
+		return fstr_expr(p, t, true)
 	}
 	if k == token.Kind.True {
 		p_advance(p)
@@ -5221,7 +5230,11 @@ fn parse_arm(mut &p: Parser) -> ast.Arm {
 #
 # Every hole is wrapped in `str(…)`, which is `display()` for a scalar and identity for a
 # str, so a hole renders whatever it holds.
-fn fstr_expr(mut &p: Parser, t: token.Token) -> ast.Expr {
+#
+# `in_source` says whether the literal's text IS source text. It is for every f-string a reader
+# wrote, and then a hole's tokens are placed where they stand in the file; the one the `assert`
+# desugaring builds is text nobody wrote, so its holes take the place of the claim instead.
+fn fstr_expr(mut &p: Parser, t: token.Token, in_source: bool) -> ast.Expr {
 	src := bytearray(t.value)
 	n := src.len()
 	mut acc: ast.Expr = ast.Expr.ENil
@@ -5252,7 +5265,11 @@ fn fstr_expr(mut &p: Parser, t: token.Token) -> ast.Expr {
 			# written out by `zerg desugar` builds `("" + "n=") + str(n)`: the same answer, and
 			# not the same C, which is a difference the differential gate is entitled to see.
 			mut lead := ""
-			h := fstr_hole(p, t, fstr_slice(src, i + 1, end), lead)
+			mut at := (t.line, t.col)
+			if in_source {
+				at = fstr_body_at(t, 2, src, i + 1)
+			}
+			h := fstr_hole(p, t, fstr_slice(src, i + 1, end), at.0, at.1, lead)
 			if lead != "" {
 				acc = fstr_join(acc, have, ast.Expr.EStr(lead))
 				have = true
@@ -5307,10 +5324,12 @@ fn cmd_argv(mut &p: Parser, t: token.Token, body: str) -> list[ast.Expr] {
 			end := fstr_hole_end(b, i)
 			src := fstr_slice(b, i + 1, end)
 			mut toks := lexer.tokenize(src)
-			fstr_place(toks, t)
+			at := fstr_body_at(t, 1, b, i + 1)
+			fstr_place(toks, at.0, at.1)
 			mut hp := p_scratch(p, toks, 0)
 			e := parse_expr(hp)
 			p.saw_this = p.saw_this or hp.saw_this
+			p_take_ty_uses(p, hp)
 			cmd_one_expr(p, t, src, hp)
 
 			out.append(e)
@@ -5502,7 +5521,9 @@ fn fstr_unbrace(raw: str) -> str {
 # fstr_hole turns one hole's source into an expression. It is RE-LEXED and parsed by the
 # ordinary machinery, so anything the compiler can parse in an expression position works
 # inside a hole; p.impl_ty rides along so `this` resolves as it does outside one.
-fn fstr_hole(mut &p: Parser, t: token.Token, hole: str, mut &lead: str) -> ast.Expr {
+#
+# `line` / `col` are where the hole's first byte stands in the file.
+fn fstr_hole(mut &p: Parser, t: token.Token, hole: str, line: int, col: int, mut &lead: str) -> ast.Expr {
 	# THE THREE TAILS ARE PEELED OFF FIRST, in the order GRAMMAR#interp derives them —
 	# `'{' expr '='? conversion? format-spec? '}'` — so what is re-lexed below is an
 	# expression and only that.
@@ -5542,18 +5563,9 @@ fn fstr_hole(mut &p: Parser, t: token.Token, hole: str, mut &lead: str) -> ast.E
 
 	mut toks := lexer.tokenize(src)
 
-	# THE HOLE IS LEXED ON ITS OWN, so its tokens count from line 1 column 1 of the hole and not
-	# of the file. Every refusal below already says `t.line, t.col` for that reason — but a
-	# diagnostic made LATER, off a node the hole produced, had nothing to correct it. An
-	# f-string holding `1 + 2.5` reported `L502 the literal 1 is a float here` at 1:1 — a place
-	# in no file, to an author who is holding a real line number. Stamping the enclosing
-	# token's place on the hole's tokens is what those refusals do by hand, done once and for
-	# every node the hole goes on to produce.
-	#
-	# It is the f-string's place and not the literal's, because the hole's own column counts
-	# characters of a string this compiler never re-joined to the source. A place a reader can
-	# find beats a column that is exact about the wrong text.
-	fstr_place(toks, t)
+	# the hole is lexed on its own, so its tokens are moved to where they stand in the file; the
+	# refusals below still name the literal (`t`), which is the whole of what they are about
+	fstr_place(toks, line, col)
 
 	# the hole parser INHERITS the enclosing depth: its recursion continues on the same
 	# native stack, so an f-string could not be a fresh budget even if it wanted one. It
@@ -5566,6 +5578,7 @@ fn fstr_hole(mut &p: Parser, t: token.Token, hole: str, mut &lead: str) -> ast.E
 	# what it read has to be carried back — `f"{this.n}"` is a body that uses `this`, and the
 	# rule that tells a method from an associated fn (GRAMMAR#impl-decl) reads exactly that.
 	p.saw_this = p.saw_this or hp.saw_this
+	p_take_ty_uses(p, hp)
 
 	# a hole is ONE expression; emitting just the prefix of something longer is exactly the
 	# silent wrong answer this path exists to avoid
@@ -5578,14 +5591,40 @@ fn fstr_hole(mut &p: Parser, t: token.Token, hole: str, mut &lead: str) -> ast.E
 	return ast.Expr.EConv(ast.Ty.TStr, e, "str")
 }
 
-# fstr_place puts the enclosing f-string's line and column on every token of a re-lexed hole.
-fn fstr_place(mut &toks: list[token.Token], t: token.Token) {
+# fstr_place moves every token of a re-lexed hole to its place in the file, given where the
+# hole's first byte stands: a token on the hole's first line is shifted along that line, and one
+# on a later line keeps its own column, since the line it is on starts where the file's does.
+fn fstr_place(mut &toks: list[token.Token], line: int, col: int) {
 	mut i := 0
 	for i < toks.len() {
 		k := toks[i]
-		toks[i] = token.Token(k.kind, k.lexeme, k.value, t.line, t.col)
+		mut c := k.col
+		if k.line == 1 {
+			c = col + k.col - 1
+		}
+		toks[i] = token.Token(k.kind, k.lexeme, k.value, line + k.line - 1, c)
 		i = i + 1
 	}
+}
+
+# fstr_body_at is where byte `off` of a literal's value stands in the file. The value is the
+# source text between the delimiters, verbatim, so it starts `lead` bytes after the token —
+# `f"` is two, a backtick one — and a newline inside it (a command literal may hold one) starts
+# the next line.
+fn fstr_body_at(t: token.Token, lead: int, body: list[byte], off: int) -> (int, int) {
+	mut line := t.line
+	mut col := t.col + lead
+	mut k := 0
+	for k < off {
+		if body[k] == byte(10) {
+			line = line + 1
+			col = 1
+		} else {
+			col = col + 1
+		}
+		k = k + 1
+	}
+	return (line, col)
 }
 
 # p_asm reads `asm(template, operand*)`. The operand heads `out` / `inout` / `clobber` are

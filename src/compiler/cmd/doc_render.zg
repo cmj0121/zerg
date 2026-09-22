@@ -288,7 +288,7 @@ fn doc_entry(mut &out: list[str], d: zerg.DocDecl, indent: int, brief: bool, col
 		return
 	}
 
-	if d.doc.len() == 0 {
+	if zerg.doc_marks_absence(false, d.doc) {
 		out.append(doc_at(indent + 4, doc_mark(col)))
 	} else {
 		doc_body(out, d.doc, indent + 4)
@@ -320,7 +320,7 @@ fn doc_members_brief(mut &out: list[str], d: zerg.DocDecl, indent: int) {
 # other thing to do here, and it is not done: `doc_at` leaves a blank line blank, and a blank
 # line that means "documented, but not in a sentence" is a distinction no reader can see.
 fn doc_summary(mut &out: list[str], d: zerg.DocDecl, indent: int, col: bool) {
-	if d.doc.len() == 0 {
+	if zerg.doc_marks_absence(false, d.doc) {
 		out.append(doc_at(indent, doc_mark(col)))
 		return
 	}
@@ -348,6 +348,11 @@ fn doc_members(mut &out: list[str], d: zerg.DocDecl, indent: int, col: bool) {
 		if mb.doc.len() > 0 {
 			doc_body(out, mb.doc, indent + 4)
 			doc_gap(out)
+		} else if zerg.doc_marks_absence(true, mb.doc) {
+			# ASKED, not assumed. A member with no comment is printed bare today, and this
+			# line is where the page would follow if that ever changed — the alternative is
+			# a rule stated in `doc_marks_absence` that one of its readers silently ignores.
+			out.append(doc_at(indent + 4, doc_mark(col)))
 		}
 	}
 
@@ -747,11 +752,13 @@ fn doc_bold(s: str, col: bool) -> str {
 	return "\u{1b}[1m" + s + "\u{1b}[0m"
 }
 
-# doc_mark is what stands where a comment was not written.
+# doc_mark is what stands where a comment was not written, in this document's colours. The WORD
+# is `zerg.doc_undocumented`'s, because an editor shows the same mark in a hover (#192) and two
+# spellings would be two answers to whether a declaration is documented.
 fn doc_mark(col: bool) -> str {
-	return "(undocumented)" if not col
+	return zerg.doc_undocumented() if not col
 
-	return "\u{1b}[33m(undocumented)\u{1b}[0m"
+	return "\u{1b}[33m" + zerg.doc_undocumented() + "\u{1b}[0m"
 }
 
 # --- small answers about a module ---------------------------------------------------------

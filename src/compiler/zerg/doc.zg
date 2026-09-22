@@ -215,8 +215,14 @@ pub struct DocDecl {
 # DocMember is one field, variant, or required signature: a line, and whatever was written
 # above it.
 pub struct DocMember {
+	# the bare declared name, and the line it was written on — what `doc_decl_at` finds one
+	# BY, since a cursor arrives as a place and a member is not in `DocModule.decls`. The
+	# renderer needs neither: it prints the whole list under the type that holds it.
+	pub name: str
+
 	pub sig: str
 	pub doc: list[str]
+	pub line: int
 }
 
 # --- extraction -------------------------------------------------------------------------
@@ -244,14 +250,7 @@ pub fn doc_module(name: str, srcs: list[str], paths: list[str]) -> DocModule {
 	for i < srcs.len() {
 		path := paths[i]
 		mut tv := doc_trivia(srcs[i])
-		mut ok := false
-		parsed := guard {
-			parser.parse_at(srcs[i], path)
-		}
-		if f := parsed {
-			doc_file_decls(f, tv, decls)
-			ok = true
-		}
+		ok := doc_file_rows(srcs[i], path, false, tv, decls)
 
 		# after the claim pass, never before it: a header is the run no declaration wanted
 		files.append(DocFile(path, doc_header(tv), ok))
@@ -368,6 +367,110 @@ pub fn doc_find(m: DocModule, name: str) -> list[int] {
 	return out
 }
 
+# DocAt is one declaration as a document holds it — its signature and the comment above it —
+# found by WHERE ITS NAME IS WRITTEN rather than by what it is called (#192: hover is the
+# document of the name at the cursor).
+#
+# `ok` is whether there is an entry at all. A document covers declarations, and a cursor lands
+# on anything a program writes: a local binding, a parameter, a type parameter, the namespace
+# an import bound. None of those is in any document, and marking them undocumented would be a
+# claim about a comment nobody could have written — so they answer `ok` false, and what to say
+# about a name with no entry is the caller's.
+#
+# A SOURCE THAT COULD NOT BE READ answers `ok` false as well, and deliberately: a file handed
+# over empty, or one that will not parse, has no entry to give, and saying so as an absence is
+# the same sentence as "no document covers this". What a reader may NOT conclude from `ok`
+# false is that nothing was written — only that this extraction has nothing to show.
+pub struct DocAt {
+	pub ok: bool
+
+	# the signature as the document prints it — a declaration's, or the line a field, a variant
+	# or a spec's requirement is written as
+	pub sig: str
+
+	# the attached comment, stripped; empty means UNDOCUMENTED, exactly as `DocDecl.doc` does
+	pub doc: list[str]
+
+	# whether the page MARKS the absence here — `doc_marks_absence`, which is the ONE author of
+	# that rule and which `zerg doc`'s renderer asks as well. A document marks a declaration
+	# nobody wrote about `(undocumented)` and prints a member with no comment BARE; a reader
+	# that decided it for itself would be a second author, and the two would come to disagree
+	# about half of what a page shows without anyone editing either of them.
+	pub mark: bool
+}
+
+# doc_decl_at is the document of the declaration whose name is written at `line` in `src`, or
+# `ok` false. It is the SAME EXTRACTION `zerg doc` prints from, asked for one place instead of
+# a whole module: the same comment attachment (`doc_attach`), the same signature printer, the
+# same mark where nothing was written. A second reader of comments — in a server, or anywhere
+# else — would be a document the terminal does not have and a document the editor does not
+# share.
+#
+# It takes a NAME as well as a line because one line can declare more than one thing and a
+# `DocDecl` carries no column: the caller has the name (the index's declaration row does), and
+# a line and a name together are a key nothing in one file repeats.
+#
+# MEMBERS ARE SEARCHED TOO — a field, a variant, a spec's requirement — because each is
+# documented where it is written and a cursor reaches it exactly the way it reaches the type
+# above it.
+#
+# THE FILE IS PARSED HERE, from source handed in. Nothing is cached between calls: a hover is
+# a question a person asked, and one parse of one file is what it costs.
+pub fn doc_decl_at(src: str, path: str, line: int, name: str) -> DocAt {
+	mut none: list[str] = []
+	mut tv := doc_trivia(src)
+	mut ds: list[DocDecl] = []
+	doc_file_rows(src, path, true, tv, ds)
+
+	for d in ds {
+		return DocAt(true, d.sig, d.doc, doc_marks_absence(false, d.doc)) if d.line == line and d.name == name
+
+		for m in d.members {
+			return DocAt(true, m.sig, m.doc, doc_marks_absence(true, m.doc)) if m.line == line and m.name == name
+		}
+	}
+	return DocAt(false, "", none, false)
+}
+
+# doc_covers is whether a document can hold an entry for that kind of declaration (`ast.NK_*`).
+# The walk above emits a const, a struct, an enum, a type, a spec, a function and the members
+# of the three that have any — so what it answers NO for is the four a module's surface never
+# holds: a binding, a parameter, a type parameter, and the namespace an import bound. Written
+# as the four rather than as the nine, because a kind added to the language is a kind a
+# document may well hold, and the honest default is to go and look.
+#
+# It is here because it is a fact about THIS extraction, and its caller is whoever would go and
+# find a source to run the extraction over: `zerg lsp`'s hover asks first, and does not load a
+# program to be told there was never going to be an entry.
+pub fn doc_covers(kind: int) -> bool {
+	return false if kind == ast.NK_PARAM or kind == ast.NK_LOCAL or kind == ast.NK_TPARAM or kind == ast.NK_IMPORT
+
+	return true
+}
+
+# doc_marks_absence is whether a page prints the mark where no comment was written: beside a
+# DECLARATION it does, and beside a MEMBER — a field, a variant, a spec's requirement — it does
+# not, which is what a reader meets on a page today.
+#
+# It is one function because it had been two AGREEING PLACES: the renderer marked a declaration
+# and printed a member bare, each in its own branch, and nothing said the two were one rule. A
+# hover (#192) is the third reader of it, and a third place that happened to agree is how the
+# editor and the terminal come to say different things about the same line without anyone
+# editing either of them.
+pub fn doc_marks_absence(member: bool, body: list[str]) -> bool {
+	return false if member
+
+	return body.len() == 0
+}
+
+# doc_undocumented is the mark that stands where a comment was not written. It is a WORD and
+# not a rendering, which is why it is here: a document prints it in the middle of a page, an
+# editor shows it in a hover, and the two saying different things would be two answers to
+# "is this documented" — the question `zerg doc --check` exists to ask.
+pub fn doc_undocumented() -> str {
+	return "(undocumented)"
+}
+
 # doc_first_sentence is the one-line summary that a brief listing and a module index both
 # show: the first paragraph flattened onto one line, cut at the first `.` that ends a word.
 #
@@ -425,21 +528,27 @@ fn doc_is_banner(line: str) -> bool {
 # doc_file_decls walks one parsed file, claims a comment for EVERY declaration in it, and
 # appends the exposed ones to `out` in source order.
 #
-# The private ones are walked for their claim alone. That is what keeps `doc_header` honest —
-# a run a private function owns is not the file's header — and it costs one pass either way.
-# An `impl` head claims too: it declares nothing this document lists, but a comment above
-# `impl Display for Meters` is about that impl, and if the impl were the first thing in a file
-# the comment would otherwise be read as the module's header.
+# The private ones are walked for their claim alone, and `all` is what KEEPS them. A document
+# is what a module exposes, so `doc_module` asks for the exposed ones and nothing else; a
+# cursor is on whatever the author is looking at, so `doc_decl_at` asks for every declaration
+# and picks the one at a place. One walk, one attachment rule, one signature printer, and the
+# difference between the two questions is which rows come back.
+#
+# Walking the private ones is also what keeps `doc_header` honest — a run a private function
+# owns is not the file's header — and it costs one pass either way. An `impl` head claims too:
+# it declares nothing this document lists, but a comment above `impl Display for Meters` is
+# about that impl, and if the impl were the first thing in a file the comment would otherwise
+# be read as the module's header.
 #
 # The file's own lists are per KIND, so nothing in them is where the author left it; they are
 # collected and then put back into source order by `doc_sorted`.
-fn doc_file_decls(f: ast.File, mut &tv: DocTrivia, mut &out: list[DocDecl]) {
+fn doc_file_decls(f: ast.File, mut &tv: DocTrivia, mut &out: list[DocDecl], all: bool) {
 	mut ds: list[DocDecl] = []
 
 	for c in f.consts {
 		doc := doc_attach(tv, c.line)
 		mut none: list[DocMember] = []
-		if c.is_pub {
+		if c.is_pub or all {
 			ds.append(DocDecl("const", c.name, "", doc_const_sig(c), doc, none, 0, c.path, c.line))
 		}
 	}
@@ -450,13 +559,16 @@ fn doc_file_decls(f: ast.File, mut &tv: DocTrivia, mut &out: list[DocDecl]) {
 		mut hidden := 0
 		for fd in s.fields {
 			fdoc := doc_attach(tv, fd.line)
-			if fd.is_pub {
-				ms.append(DocMember(doc_field_sig(fd), fdoc))
+			if fd.is_pub or all {
+				ms.append(DocMember(fd.name, doc_field_sig(fd), fdoc, fd.line))
 			} else {
+				# `hidden` is how many were LEFT OUT, so it counts the ones this walk did not
+				# list — under `all` that is none of them, and a row saying otherwise would
+				# describe a constructor call the reader can see every field of.
 				hidden = hidden + 1
 			}
 		}
-		if s.is_pub {
+		if s.is_pub or all {
 			ds.append(DocDecl("struct", s.name, "", f"struct {s.name}{doc_tparams(s.tparams)}", doc, ms, hidden, s.path, s.line))
 		}
 	}
@@ -466,9 +578,9 @@ fn doc_file_decls(f: ast.File, mut &tv: DocTrivia, mut &out: list[DocDecl]) {
 		mut ms: list[DocMember] = []
 		for vd in e.variants {
 			vdoc := doc_attach(tv, vd.line)
-			ms.append(DocMember(doc_variant_sig(vd), vdoc))
+			ms.append(DocMember(vd.name, doc_variant_sig(vd), vdoc, vd.line))
 		}
-		if e.is_pub {
+		if e.is_pub or all {
 			ds.append(DocDecl("enum", e.name, "", "enum " + e.name, doc, ms, 0, e.path, e.line))
 		}
 	}
@@ -476,7 +588,7 @@ fn doc_file_decls(f: ast.File, mut &tv: DocTrivia, mut &out: list[DocDecl]) {
 	for t in f.types {
 		doc := doc_attach(tv, t.line)
 		mut none: list[DocMember] = []
-		if t.is_pub {
+		if t.is_pub or all {
 			ds.append(DocDecl("type", t.name, "", f"type {t.name} = {ast.ty_name(t.under)}", doc, none, 0, t.path, t.line))
 		}
 	}
@@ -486,9 +598,9 @@ fn doc_file_decls(f: ast.File, mut &tv: DocTrivia, mut &out: list[DocDecl]) {
 		mut ms: list[DocMember] = []
 		for req in sp.reqs {
 			rdoc := doc_attach(tv, req.line)
-			ms.append(DocMember(doc_fn_sig(req), rdoc))
+			ms.append(DocMember(req.name, doc_fn_sig(req), rdoc, req.line))
 		}
-		if sp.is_pub {
+		if sp.is_pub or all {
 			ds.append(DocDecl("spec", sp.name, "", doc_spec_sig(sp), doc, ms, 0, sp.path, sp.line))
 		}
 	}
@@ -500,7 +612,7 @@ fn doc_file_decls(f: ast.File, mut &tv: DocTrivia, mut &out: list[DocDecl]) {
 	for fd in f.fns {
 		doc := doc_attach(tv, fd.line)
 		mut none: list[DocMember] = []
-		if fd.is_pub {
+		if fd.is_pub or all {
 			ds.append(DocDecl("fn", fd.name, fd.recv, doc_fn_sig(fd), doc, none, 0, fd.path, fd.line))
 		}
 	}
@@ -508,6 +620,24 @@ fn doc_file_decls(f: ast.File, mut &tv: DocTrivia, mut &out: list[DocDecl]) {
 	for d in doc_sorted(ds) {
 		out.append(d)
 	}
+}
+
+# doc_file_rows is one file turned into rows: parse it, and claim a comment for everything in
+# it. It answers whether it PARSED, and leaves the trivia with the caller — a module header is
+# the run nothing claimed, which only a whole document asks about.
+#
+# EVERY FILE IS PARSED UNDER `guard`, and that is why this is one function rather than two
+# call sites: a module that cannot be parsed must still yield its header and an honest marker,
+# and a second reader with its own raise policy would answer differently about the same file.
+fn doc_file_rows(src: str, path: str, all: bool, mut &tv: DocTrivia, mut &out: list[DocDecl]) -> bool {
+	parsed := guard {
+		parser.parse_at(src, path)
+	}
+	if f := parsed {
+		doc_file_decls(f, tv, out, all)
+		return true
+	}
+	return false
 }
 
 # doc_sorted puts one file's declarations back into source order.

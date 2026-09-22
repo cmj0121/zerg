@@ -498,26 +498,58 @@ n_setters=$(grep -cE '^pub fn set_' "$code")
 grep -qE '^pub fn rank\(' "$code" && note "\`rank\` is public — \`rank(OFF)\` is -1, and a caller comparing two of them reads OFF as the most verbose level there is"
 grep -qE '^pub fn current\(' "$code" && note "\`current()\` is back — deriving from the installed logger reads as mid-flight reconfiguration, which the cell is not safe for"
 
-# AND THE ONE CONSTRUCTOR IS `new`. `Logger()` exists whatever this module wants (`E4045` makes
-# every private field carry a default), and it is out of a caller's reach only for as long as
-# the consts its defaults name stay private. Publishing one would silently re-open a second
-# constructor, so the refusal is compiled here rather than described in a comment.
+# AND `Logger()` IS `new`. The struct literal is reachable wherever the type is — until
+# `#[sealed]` exists ([not yet]) nothing can close it — and a construction outside the module
+# leaves every private field off, so the DECLARATION decides them: the defaults are the
+# environment, and `new` is one line that returns `Logger()`. What must never come back is a
+# second constructor that silently ignores `ZERG_LOG`, so the literal and `new` are built side
+# by side and held to the same answers — every level's `enabled`, and the same line written
+# through each — under the environments that change them.
 cat >"$WORK/ctor.zg" <<'ZG'
 import "log"
 
+fn show(tag: str, lg: log.Logger) {
+	for l in [log.Level.TRACE, log.Level.DEBUG, log.Level.INFO, log.Level.WARN, log.Level.ERROR] {
+		print f"{tag} {lg.enabled(l)}"
+	}
+}
+
 fn main() {
-	print(log.Logger().enabled(log.Level.INFO))
+	show("lit", log.Logger())
+	show("new", log.new())
+	log.Logger().warn().str("via", "one").msg("same")
+	log.new().warn().str("via", "one").msg("same")
+	log.Logger().info().str("via", "one").msg("quiet")
+	log.new().info().str("via", "one").msg("quiet")
 }
 ZG
 
-rm -f "$WORK/ctor"
-if "$ZERG" build "$WORK/ctor.zg" -o "$WORK/ctor" >"$WORK/ctor.log" 2>&1; then
-	note "log.Logger() built outside the module — it is a second constructor that skips \`new\`"
-else
-	grep -q 'E3001' "$WORK/ctor.log" ||
-		note "log.Logger() was refused, but not by E3001: $(head -2 "$WORK/ctor.log")"
+# ctor_agree <label> — the run just made wrote ctor.out / ctor.err; the literal's answers and
+# lines are the odd ones and `new`'s the even ones, and the clock is the one field allowed to
+# differ, so it is taken off before comparing
+ctor_agree() {
+	lit=$(sed -n 's/^lit //p' "$WORK/ctor.out")
+	via=$(sed -n 's/^new //p' "$WORK/ctor.out")
+	[ -n "$lit" ] && [ "$lit" = "$via" ] ||
+		note "$1: log.Logger() and log.new() disagree about enabled: $(tr '\n' ' ' <"$WORK/ctor.out")"
+	sed -e 's/"t":"[^"]*",//' -e 's/^[^ {]* //' "$WORK/ctor.err" >"$WORK/ctor.lines"
+	odd=$(awk 'NR % 2 == 1' "$WORK/ctor.lines")
+	even=$(awk 'NR % 2 == 0' "$WORK/ctor.lines")
+	[ -n "$odd" ] && [ "$odd" = "$even" ] ||
+		note "$1: a line through log.Logger() is not the line through log.new(): $(cat "$WORK/ctor.err")"
+}
+
+if build ctor; then
+	"$WORK/ctor" >"$WORK/ctor.out" 2>"$WORK/ctor.err"
+	ctor_agree "no environment"
+	ZERG_LOG=json ZERG_LOG_LEVEL=warn "$WORK/ctor" >"$WORK/ctor.out" 2>"$WORK/ctor.err"
+	ctor_agree "ZERG_LOG=json ZERG_LOG_LEVEL=warn"
+	grep -q '"l":"warn","msg":"same","via":"one"' "$WORK/ctor.err" ||
+		note "under ZERG_LOG=json the literal and new did not both write JSON: $(cat "$WORK/ctor.err")"
+	ZERG_LOG_LEVEL=trace "$WORK/ctor" >"$WORK/ctor.out" 2>"$WORK/ctor.err"
+	ctor_agree "ZERG_LOG_LEVEL=trace"
+	checks=$((checks + 1))
 fi
-checks=$((checks + 1))
 
 [ "$fail" -eq 0 ] || {
 	printf 'log-check: the sources and streams are kept in %s\n' "$WORK" >&2

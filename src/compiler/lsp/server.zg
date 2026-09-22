@@ -434,7 +434,7 @@ fn ls_check(path: str, text: str, load: fn (str, str) -> Program) -> list[json.V
 		Either.Right(e) => e.message()
 	}
 	if lerr != "" {
-		out.append(ls_whole_file_diag(lerr))
+		out.append(ls_abort_diag(path, text, lerr))
 		return out
 	}
 	prog := match res {
@@ -465,12 +465,11 @@ fn ls_check(path: str, text: str, load: fn (str, str) -> Program) -> list[json.V
 		Either.Right(e) => e.message()
 	}
 
-	# An ABORT is a refusal or a parse error, and neither carries a place: the compiler
-	# raises a sentence. So it lands at the top of the file rather than being invented a
-	# position — an underline in the wrong place is worse than one at the top, because it
-	# accuses a line that is not the problem.
+	# An ABORT is a refusal or a parse error, raised as a sentence. Where that sentence names
+	# a place in this buffer the finding is published there, and where it names none it
+	# lands at the top of the file — ls_abort_diag says which.
 	if err != "" {
-		out.append(ls_whole_file_diag(err))
+		out.append(ls_abort_diag(path, text, err))
 		return out
 	}
 
@@ -517,9 +516,58 @@ fn ls_severity(sev: str) -> int {
 	return 2
 }
 
+# ls_abort_diag publishes an abort AT THE PLACE ITS SENTENCE NAMES, when it names one in this
+# buffer. A raise carries no `Diag`, only a string, so the place is read back out of the one
+# layout the compiler writes it in: a last line that is exactly `ast.place_line`'s
+# `  --> file:line:col`, which is what `zerg build` prints under the sentence. Nothing looser
+# is read — a pathless `  --> line:col` knows no file, and a number that is not all digits is
+# not a place — because an underline in the wrong place is worse than one at the top: it
+# accuses a line that is not the problem.
+#
+# A place in ANOTHER file of the program is not this buffer's to underline, so that finding
+# stays at the top with its trailer intact: the sentence is then the only thing that says
+# where to look. In this buffer the trailer is dropped, because the range now says it.
+fn ls_abort_diag(path: str, text: str, msg: str) -> json.Val {
+	b := bytearray(msg)
+	nl := ls_last_byte(b, b'\n', b.len() - 1)
+	return ls_whole_file_diag(msg) if nl < 0 or not ls_starts_with(ls_slice_str(b, nl + 1, b.len()), "  --> ")
+
+	# the path starts past `\n  --> `, and runs to the second-last colon: a path may hold one
+	at := nl + 7
+	c2 := ls_last_byte(b, b':', b.len() - 1)
+	c1 := ls_last_byte(b, b':', c2 - 1)
+	return ls_whole_file_diag(msg) if c1 <= at
+
+	line := ls_digits(ls_slice_str(b, c1 + 1, c2))
+	col := ls_digits(ls_slice_str(b, c2 + 1, b.len()))
+	return ls_whole_file_diag(msg) if line < 1 or col < 1 or ls_slice_str(b, at, c1) != path
+
+	return ls_diagnostic_at(text, line, col, "", ls_slice_str(b, 0, nl), 1)
+}
+
+# ls_last_byte is the index of the last `c` at or before `upto`, and -1 when there is none.
+fn ls_last_byte(b: list[byte], c: byte, upto: int) -> int {
+	mut i := upto
+	for i >= 0 and b[i] != c {
+		i = i - 1
+	}
+	return i
+}
+
+# ls_digits is a run of decimal digits as a number, and -1 for anything else — an empty run
+# included, and a run with anything after it, whose front ls_int_of would read.
+fn ls_digits(s: str) -> int {
+	b := bytearray(s)
+	return -1 if b.len() == 0
+	for c in b {
+		return -1 if c < b'0' or c > b'9'
+	}
+	return ls_int_of(s)
+}
+
 # ls_whole_file_diag is the abort's sentence, with a range of NOTHING at the top of the
 # file. A zero-width range and not the word there: an underline drawn under `fn` says the
-# `fn` is wrong, and the one thing known about this finding is that nobody knows where it is.
+# `fn` is wrong, and the one thing known about this finding is that it has no place in this buffer.
 fn ls_whole_file_diag(msg: str) -> json.Val {
 	mut fs: list[json.Field] = []
 	json.put(fs, "range", ls_range_of(0, 0, 0, 0))

@@ -274,6 +274,8 @@ fn ls_handle(mut &s: Server, body: str, load: fn (str, str) -> Program) {
 		ls_reply(id, ls_definition_result(s, json.get(msg, "params")))
 	} else if method == "textDocument/references" {
 		ls_reply(id, ls_references_result(s, json.get(msg, "params")))
+	} else if method == "textDocument/hover" {
+		ls_reply(id, ls_hover_result(s, json.get(msg, "params"), load))
 	} else if has_id {
 		# EVERY request gets an answer. A client that is left waiting for one it will never
 		# get is a client that stops sending the next one, and the editor goes quiet with
@@ -336,6 +338,10 @@ fn ls_initialize_result() -> json.Val {
 	# (#24), which is the compiler's resolution recorded as it happened.
 	json.put_bool(caps, "definitionProvider", true)
 	json.put_bool(caps, "referencesProvider", true)
+
+	# And that declaration's DOCUMENT (#192) — the comment `zerg doc` prints for it, extracted
+	# by `zerg doc`'s own reader rather than by a second one living here.
+	json.put_bool(caps, "hoverProvider", true)
 
 	mut info: list[json.Field] = []
 	json.put_str(info, "name", "zerg")
@@ -775,6 +781,145 @@ fn ls_references_result(s: Server, params: json.Val) -> json.Val {
 	return json.of_list(out)
 }
 
+# --- hover -------------------------------------------------------------------------------
+
+# ls_hover_result is the DOCUMENT of the name at the cursor (#192). The index finds the
+# declaration — `definition`'s own answer, so a hover can never name a place a jump would not
+# — and `zerg doc`'s extraction prints it. There is ONE reader of comments in this tree, and a
+# hover that grew a second one would show a document the terminal does not have.
+#
+# THE INDEX DOES NOT CARRY THE TEXT. A comment kept per declaration would be a string per row
+# held for a whole session, paid on every check whether or not anybody hovers, and it is the
+# accumulation #23 measures. What is stored is what `definition` already needed — a place —
+# and the document is extracted from the source when the question is asked: one parse of the
+# ONE file the declaration is in.
+#
+# The SOURCE comes from the loader, not from the disk and not from a cache. The declaration is
+# routinely in another file of the program — a stdlib function, a sibling of the module — and
+# `load` is what turns this buffer into the whole program it belongs to, with the unsaved text
+# standing in for what was written. A load that raises leaves no source, which answers with
+# what the index knows and nothing more, rather than with a sentence about a file.
+#
+# It answers only for a buffer the client has OPEN, because that buffer is the text the
+# document is read from. A position in a file this session never saw is a question about a
+# program it cannot see.
+fn ls_hover_result(s: Server, params: json.Val, load: fn (str, str) -> Program) -> json.Val {
+	u := ls_use_under(s, params)
+	return json.null() if u < 0
+
+	uri := json.as_str(json.walk(params, "textDocument", "uri"))
+	return json.null() if not ls_has_doc(s, uri)
+
+	nx := s.nx
+	ds := zerg.nx_decls_of(nx, u)
+	return json.null() if ds.len() == 0
+
+	# THE SOURCE IS FETCHED ONLY WHEN IT IS SOMEWHERE ELSE. What the extraction needs is the
+	# text of the file the declaration is in; for the file under the cursor the client already
+	# sent it, and it is the same text the loader would substitute. So the whole program is
+	# loaded only when a declaration lives in another file AND is of a kind a document can hold
+	# at all — `doc_covers` is the extraction's own answer to the second half, asked before
+	# paying for a source rather than after reading nothing out of it. A hover on a local
+	# binding or a parameter, which is most of the identifiers in a body, now loads nothing.
+	path := ls_uri_path(uri)
+	text := ls_doc_text(s, uri)
+	mut fetch := false
+	for d in ds {
+		fetch = fetch or (zerg.doc_covers(nx.d_kind[d]) and nx.files[nx.d_file[d]] != path)
+	}
+	mut prog := program([], [], [], [], [], [])
+	if fetch {
+		prog = ls_loaded(load, path, text)
+	}
+
+	# A SHARED use — a generic body's `x.n` at two types — may be any of several declarations,
+	# and `definition` answers with all of them. A hover that picked one would be the editor
+	# saying something the jump does not, so it shows each, in the same order, under a rule.
+	mut body := ""
+	for d in ds {
+		if body != "" {
+			body = body + "\n\n---\n\n"
+		}
+		body = body + ls_hover_md(nx, d, ls_hover_src(nx, d, path, text, prog))
+	}
+
+	mut cs: list[json.Field] = []
+	json.put_str(cs, "kind", "markdown")
+	json.put_str(cs, "value", body)
+
+	mut fs: list[json.Field] = []
+	json.put(fs, "contents", json.of_obj(cs))
+	json.put(fs, "range", ls_range_of(nx.u_line[u], nx.u_col[u], nx.u_line[u], nx.u_col[u] + nx.u_len[u]))
+	return json.of_obj(fs)
+}
+
+# ls_hover_md is one declaration as MARKDOWN — the kind LSP's `MarkupContent` carries, and the
+# right one here: a doc comment in this tree is already prose with ` ```zerg ` fences in it, so
+# it is passed through as written and an editor renders the examples as examples. Plain text
+# would show the fences as three backticks.
+#
+# The SIGNATURE goes in a fence of its own, above the prose, because that is the line a reader
+# is looking for and the compiler's own type printer spelled it.
+#
+# A DECLARATION THE DOCUMENT DOES NOT COVER — a local binding, a parameter, a type parameter,
+# the namespace an import bound — is its kind and its name, and NOT `(undocumented)`: nobody
+# could have written a comment for it, so the mark would be a complaint about the author.
+#
+# WHETHER AN ABSENT COMMENT IS MARKED IS THE DOCUMENT'S ANSWER, not this function's: a page
+# marks a declaration nobody wrote about and prints a member with nothing above it bare, and
+# `DocAt.mark` is that answer carried here. Deciding it again would be the editor and the
+# terminal disagreeing about the same line.
+fn ls_hover_md(nx: zerg.NameIndex, d: int, src: str) -> str {
+	name := zerg.nx_name(nx, d)
+
+	# the index's line is LSP's by now (0-based); the extraction counts a source's lines as the
+	# compiler does
+	at := zerg.doc_decl_at(src, nx.files[nx.d_file[d]], nx.d_line[d] + 1, name)
+	return ls_hover_fence(f"{zerg.nk_word(nx.d_kind[d])} {name}") if not at.ok
+
+	head := ls_hover_fence(at.sig)
+	if at.doc.len() == 0 {
+		return f"{head}\n\n{zerg.doc_undocumented()}" if at.mark
+
+		return head
+	}
+
+	mut out := head + "\n"
+	for line in at.doc {
+		out = out + "\n" + line
+	}
+	return out
+}
+
+# ls_hover_src is the text of the file declaration `d` is in: the buffer's own, which the
+# client sent, or the program's copy of another file. A source that is neither — a kind no
+# document covers, or a load that raised — is the empty string, and the extraction answers
+# about it the way it answers about a name no document holds.
+fn ls_hover_src(nx: zerg.NameIndex, d: int, path: str, text: str, prog: Program) -> str {
+	p := nx.files[nx.d_file[d]]
+	return text if p == path
+
+	return ls_src_of(prog.paths, prog.srcs, p)
+}
+
+fn ls_hover_fence(sig: str) -> str {
+	return f"```zerg\n{sig}\n```"
+}
+
+# ls_loaded is the program a buffer belongs to, or an EMPTY one where the loader raised. It is
+# for the answers that are a view rather than a verdict: a refusal inside `load` is a finding
+# `ls_check` publishes with the sentence it raised, and a hover or a code action that repeated
+# it would say the same thing twice in two places. What they do instead is answer with less.
+fn ls_loaded(load: fn (str, str) -> Program, path: str, text: str) -> Program {
+	res := guard {
+		load(path, text)
+	}
+	return match res {
+		Either.Left(p)  => p
+		Either.Right(_) => program([], [], [], [], [], [])
+	}
+}
+
 fn ls_location(path: str, line: int, col: int, len: int) -> json.Val {
 	mut fs: list[json.Field] = []
 	json.put_str(fs, "uri", ls_path_uri(path))
@@ -996,13 +1141,7 @@ fn ls_code_action_result(s: Server, uri: str, req: Span, load: fn (str, str) -> 
 # offers nothing, because the user learns the menu lies.
 fn ls_fixable(path: str, text: str, load: fn (str, str) -> Program) -> list[zerg.Diag] {
 	mut out: list[zerg.Diag] = []
-	res := guard {
-		load(path, text)
-	}
-	prog := match res {
-		Either.Left(p)  => p
-		Either.Right(_) => program([], [], [], [], [], [])
-	}
+	prog := ls_loaded(load, path, text)
 	return out if prog.srcs.len() == 0
 
 	lints := match guard {

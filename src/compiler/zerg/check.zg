@@ -925,17 +925,26 @@ pub fn chk_recv_mut(mut &em: emit.Emitter, target: ast.Expr, meth: str) {
 pub fn c_check_defaults(mut &em: emit.Emitter, f: ast.File) {
 	for fn_d in f.fns {
 		key := emit.c_sig_key(fn_d.recv, fn_d.name)
-		for pm in fn_d.params {
-			chk_param_default(em, key, pm, fn_d.path, fn_d.line, fn_d.col)
+		mut i := 0
+		for i < fn_d.params.len() {
+			chk_param_default(em, key, fn_d, i)
+			i = i + 1
 		}
 	}
 }
 
-# chk_param_default raises on a default that could never be legal at any call. It takes the
-# declaration's PLACE rather than the declaration: this runs before any statement is
-# emitted, so the SAt markers have said nothing and `em.at_*` still holds whatever the last
-# unit left there.
-fn chk_param_default(mut &em: emit.Emitter, key: str, pm: ast.Param, path: str, line: int, col: int) {
+# chk_param_default raises on a default that could never be legal at any call. It reads the
+# declaration's PLACE rather than the marker: this runs before any statement is emitted, so
+# the SAt markers have said nothing and `em.at_*` still holds whatever the last unit left
+# there.
+#
+# The default is typed as a call types it (emit.c_default_enter_at): in its own file, with
+# nothing bound but the module and the parameters before it.
+fn chk_param_default(mut &em: emit.Emitter, key: str, fn_d: ast.FnDecl, idx: int) {
+	pm := fn_d.params[idx]
+	path := fn_d.path
+	line := fn_d.line
+	col := fn_d.col
 	return if not pm.has_def
 
 	# a `mut &` takes the ADDRESS of a caller's variable; a default has none to take
@@ -944,7 +953,15 @@ fn chk_param_default(mut &em: emit.Emitter, key: str, pm: ast.Param, path: str, 
 		return
 	}
 
+	saved := emit.c_default_enter_at(em, path, line, col)
+	mut k := 0
+	for k < idx {
+		q := fn_d.params[k]
+		emit.c_default_bind(em, q.name, q.ty, q.is_ref, "zg_" + q.name)
+		k = k + 1
+	}
 	got := emit.c_infer(em, pm.def)
+	emit.c_default_leave(em, saved)
 	return if chk_fits_expr(em, pm.ty, got, pm.def)
 	chk_at_place(em, path, line, col, rule.Rule.ParamDefaultType, f"the default for `{pm.name}` of `{chk_call_name(key)}` is {ast.ty_name(got)}, and the parameter is {ast.ty_name(pm.ty)}")
 }

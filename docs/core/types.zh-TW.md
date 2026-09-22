@@ -259,7 +259,13 @@ a variant is named through its enum_。要是由「當下 scope 裡剛好有什�
 會改變另一個檔案裡某個名字的意思 —— 那正是 [Grammar](../surface/grammar.zh-TW.md) 為 pattern 位置給出的論證,而它
 在這裡一字不改地成立。一個 variant **就是**那一對,所以那一對就是它的寫法,在每一個位置都是。
 
-當兩個 enum 都宣告了這個名字,那句話裡建議的寫法會是其中第一個:它是兩種可行寫法之一,而知道要哪一個的是讀者。
+這條規則問的是**這個檔案的** enum,因為裸名字是這個檔案的([Module、Package 與 Program](../runtime/package.zh-TW.md))。另一個檔案宣告的
+variant 根本不會被這裡的裸寫法碰到:在一個宣告了 struct `Chan` 的檔案裡,`Chan(ch)` 建出的就是那個 struct,不管程式別處
+哪個 enum 有 `Chan`;而一個只有別的檔案把它宣告成 variant 的裸名字,是未定義的名字——那則訊息會透過這個檔案為該
+module 綁定、能直接或經由 re-export 走到那個 module 的命名空間說出那個 variant(`far.Remote.Chan`);這個檔案沒有任何
+import 走得到那個 module,或那個 enum 是私有的時候,則改為說出宣告它的檔案。預設值裡也是
+如此——預設值不管在哪裡被呼叫,都是宣告它的那個檔案的運算式——裝飾器展開出來的內容裡也是。當這個檔案的兩個 enum
+都宣告了這個名字,建議的寫法會是其中第一個:它是兩種可行寫法之一,而知道要哪一個的是讀者。
 
 要指定寬度就用 opt-in layout 裝飾器
 `#[repr]`（**[not yet]**——今天保留且會大聲拒絕,見 [Decorator](decorators.zh-TW.md)）;序列化/wire 形式則是

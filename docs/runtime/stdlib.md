@@ -361,10 +361,12 @@ the cell is not safe for that (see [Configuring is a startup act](#configuring-i
 the default is `log.install(log.new())` — the cell is initialised at its declaration by that same public
 constructor, so nothing needs to read it back, which is also how a test suite isolates itself.
 
-**`log.new()` is the only way to build a `Logger` from outside.** Every field carries a default, which a
-module-private field must (`E4045`), so `Logger()` exists whatever the module wants — and its defaults name
-module-private consts, so a caller writing `log.Logger()` gets `E3001` rather than a second constructor that
-silently ignores the environment.
+**`log.Logger()` builds exactly what `log.new()` builds.** Every field carries a default, which a
+module-private field must (`E4045`), so `Logger()` exists whatever the module wants, and a struct literal is
+reachable wherever its type is until `#[sealed]` is built ([Decorators](../core/decorators.md)). A construction
+from outside leaves the private fields off, so their declaration decides them: the defaults ARE the environment,
+read by `log`'s own private consts, and `new` is one line that returns `Logger()`. There is no second
+constructor that silently ignores the environment, and `scripts/log-check.sh` holds the two to the same answers.
 
 ### Configuring is a startup act
 

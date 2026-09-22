@@ -729,9 +729,9 @@ pub struct Diag {
 
 	# `end_line` / `end_col` are where the CONSTRUCT this finding is about finishes — the
 	# statement the SAt marker carried, read off the emitter's marker with the start. They are
-	# 0 for a finding whose channel knows a place and no extent (chk_at_place, a lint note, a
-	# driver's own finding), which is honest: a reader of this struct can tell a span from a
-	# point, where a start copied into both ends could not.
+	# 0 where the reporting channel carried no extent (chk_at_place, a lint note, a driver's
+	# own finding), which is honest in the one way that matters: a reader of this struct can
+	# tell a span from a point, where a start copied into both ends could not.
 	#
 	# It is here because a place with no width is a place somebody downstream has to guess a
 	# width for, and the one downstream reader — the language server — was guessing it by

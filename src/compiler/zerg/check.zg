@@ -98,8 +98,12 @@ pub fn chk_at_place(mut &em: emit.Emitter, path: str, line: int, col: int, code:
 
 # chk_span is what both of them record through, and the one difference between them is the
 # EXTENT. A rule reporting at the marker gets the statement's, because the marker carries it;
-# a rule that knows a place of its own knows a place and nothing more, and an end of 0 says so
-# rather than repeating the start into it.
+# a rule reporting through chk_at_place gets 0, which says THIS CHANNEL carries no extent —
+# not that the rule has none. Many of its callers hold a declaration node that now has one
+# (`ip.end_line`, `req.end_line`, …) and pass three values because that is what the signature
+# takes; widening those is a rule-by-rule change and each one moves an underline. What 0 must
+# not become is the start repeated into the end, which would be a point wearing a span's name
+# and would leave no way to tell the two apart.
 fn chk_span(mut &em: emit.Emitter, path: str, line: int, col: int, el: int, ec: int, code: rule.Rule, msg: str) {
 	return if chk_seen(em.diags, path, line, col, msg)
 
@@ -501,9 +505,11 @@ pub fn chk_assoc_projections(mut &em: emit.Emitter, f: ast.File) {
 
 pub fn chk_ty_quals(mut &em: emit.Emitter, f: ast.File) {
 	for q in f.ty_quals {
+		# a qualifier is a place and not an extent, so the marker is posed with c_mark, which
+		# CLEARS the end — see emit.zg's `c_mark_to`, and the paragraph above it for why no
+		# writer here sets the fields itself
 		em.at_path = q.path
-		em.at_line = q.line
-		em.at_col = q.col
+		emit.c_mark(em, q.line, q.col)
 
 		# AN EMPTY `ns` IS A TYPE WRITTEN BARE, which the parser records for this rule alone:
 		# #57 makes the file the unit of naming, so a type position naming a SIBLING's type
@@ -3075,8 +3081,7 @@ pub fn chk_typedef(mut &em: emit.Emitter, td: ast.TypeDecl, f: ast.File) -> ast.
 		# name the last unit's. The finding below already carries `td`'s place explicitly; a
 		# refusal raised inside the funnel can only read it from here.
 		em.at_path = td.path
-		em.at_line = td.line
-		em.at_col = td.col
+		emit.c_mark(em, td.line, td.col)
 		emit.c_builtin_check(em, nm)
 
 		chk_at_place(em, td.path, td.line, td.col, rule.Rule.TypedefNamesNoType, f"`type {td.name} = {nm}` names no type — `{nm}` is not declared in this program")

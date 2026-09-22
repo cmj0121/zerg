@@ -12994,6 +12994,14 @@ pub struct DefAt {
 	pub path: str
 	pub line: int
 	pub col: int
+
+	# and where the marker ENDED, because a save that drops half a place does not put it back:
+	# c_default_leave restoring through c_mark would clear the extent of the statement the
+	# default was entered from, and a finding made after it would carry a place with no width
+	# where the one before it had one. `c_guard` and the constant walks round-trip the pair
+	# for the same reason.
+	pub end_line: int
+	pub end_col: int
 	pub sub: Subst
 	pub open: list[int]
 	pub cur: int
@@ -13043,12 +13051,12 @@ pub fn c_default_enter_at(mut &em: Emitter, path: str, line: int, col: int) -> D
 # c_default_stay is a DefAt of the state as it stands, so a c_default_leave of it changes
 # nothing — what a written argument takes where a default would have entered its own file.
 fn c_default_stay(mut &em: Emitter) -> DefAt {
-	return DefAt(em.at_path, em.at_line, em.at_col, em.sub, em.open_scopes, em.scope_cur, em.ref_names)
+	return DefAt(em.at_path, em.at_line, em.at_col, em.at_end_line, em.at_end_col, em.sub, em.open_scopes, em.scope_cur, em.ref_names)
 }
 
 pub fn c_default_leave(mut &em: Emitter, saved: DefAt) {
 	em.at_path = saved.path
-	c_mark(em, saved.line, saved.col)
+	c_mark_to(em, saved.line, saved.col, saved.end_line, saved.end_col)
 	em.sub = saved.sub
 	em.open_scopes = saved.open
 	em.scope_cur = saved.cur
@@ -15217,7 +15225,7 @@ fn c_assert(mut &em: Emitter, body: list[ast.Stmt], ind: str) -> str {
 # emission; before this they carried no position at all and their refusals pointed at the
 # enclosing declaration. Setting `em.at_*` in each of them would have been a second place
 # that knows how a statement's place is recorded.
-fn c_mark(mut &em: Emitter, l: int, c: int) {
+pub fn c_mark(mut &em: Emitter, l: int, c: int) {
 	c_mark_to(em, l, c, 0, 0)
 }
 
@@ -15225,7 +15233,27 @@ fn c_mark(mut &em: Emitter, l: int, c: int) {
 # statement's whole extent. c_mark above is for the rest, and it clears the end rather than
 # leaving the previous statement's: an end belonging to another statement is worse than none,
 # because a reader cannot tell it is not this one's.
-fn c_mark_to(mut &em: Emitter, l: int, c: int, el: int, ec: int) {
+#
+# EVERY MARKER GOES THROUGH ONE OF THESE TWO, which is why they are `pub`: five places used to
+# assign `em.at_line` and `em.at_col` by hand — the two constant walks and `c_fn` here, and
+# `chk_ty_quals` and `chk_typedef` in check.zg — and each of them left `at_end_*` holding
+# whatever the last statement of the previous declaration ended at. A finding about a
+# constant's initializer or about a parameter then carried another construct's extent, and it
+# went unnoticed because it degrades safely while the stale end happens to lie past the start:
+# the server publishes a range that is merely too long. A stale end AT or BEFORE the start
+# reads as "no extent" and falls back to the word — right by accident.
+#
+# THE DISCIPLINE IS ALL THERE IS. check.zg and this file are one module, so `pub` cannot keep a
+# writer out: the four fields are reachable from check.zg however they are marked, and the
+# language has no narrower visibility to express it with. What holds is that there is one way
+# in and it is the obvious one.
+#
+# AND EVERY SAVE PUTS BACK ALL FOUR. Three places pose the marker and restore it — `c_guard`,
+# the two constant walks, and `DefAt` — and a save that keeps three of the four is not a
+# restore: coming back through `c_mark` would CLEAR the extent of the statement the walk was
+# entered from, so a finding made after it would carry a place with no width where the one
+# made before it had one. The pair travels with the start or it is not saved at all.
+pub fn c_mark_to(mut &em: Emitter, l: int, c: int, el: int, ec: int) {
 	em.at_line = l
 	em.at_col = c
 	em.at_end_line = el
@@ -15712,6 +15740,8 @@ fn c_const_globals(mut &em: Emitter, f: ast.File, own: ast.File, whole: bool) ->
 	keep_path := em.at_path
 	keep_line := em.at_line
 	keep_col := em.at_col
+	keep_end_line := em.at_end_line
+	keep_end_col := em.at_end_col
 
 	# IN DEPENDENCY ORDER, for the same reason the assignments are — and for a second one.
 	# This walk INFERS each constant's type, and it infers it by asking c_infer, which reads
@@ -15731,8 +15761,7 @@ fn c_const_globals(mut &em: Emitter, f: ast.File, own: ast.File, whole: bool) ->
 	for i in c_const_order(em, f) {
 		c := f.consts[i]
 		em.at_path = c.path
-		em.at_line = c.line
-		em.at_col = c.col
+		c_mark(em, c.line, c.col)
 
 		# Every module flattens into ONE namespace, so two that declare the same constant
 		# mangle to one symbol. The FUNCTION case has been refused by name since the tables
@@ -15804,8 +15833,7 @@ fn c_const_globals(mut &em: Emitter, f: ast.File, own: ast.File, whole: bool) ->
 		}
 	}
 	em.at_path = keep_path
-	em.at_line = keep_line
-	em.at_col = keep_col
+	c_mark_to(em, keep_line, keep_col, keep_end_line, keep_end_col)
 	return out
 }
 
@@ -15906,6 +15934,8 @@ fn c_const_assigns(mut &em: Emitter, f: ast.File) -> str {
 	keep_path := em.at_path
 	keep_line := em.at_line
 	keep_col := em.at_col
+	keep_end_line := em.at_end_line
+	keep_end_col := em.at_end_col
 	mut out := ""
 
 	# IN DEPENDENCY ORDER, NOT SOURCE ORDER. These are assignments that RUN, so a constant
@@ -15920,8 +15950,7 @@ fn c_const_assigns(mut &em: Emitter, f: ast.File) -> str {
 	for i in c_const_order(em, f) {
 		c := f.consts[i]
 		em.at_path = c.path
-		em.at_line = c.line
-		em.at_col = c.col
+		c_mark(em, c.line, c.col)
 
 		# the value is rendered AGAINST the recorded type — row i of k_tys, appended by
 		# c_const_globals from this same list — so an annotated declaration gets c_let's
@@ -15942,8 +15971,7 @@ fn c_const_assigns(mut &em: Emitter, f: ast.File) -> str {
 		out = out + f"    {c_const_cname(c)} = {val};\n"
 	}
 	em.at_path = keep_path
-	em.at_line = keep_line
-	em.at_col = keep_col
+	c_mark_to(em, keep_line, keep_col, keep_end_line, keep_end_col)
 	return out
 }
 
@@ -17185,7 +17213,7 @@ fn c_lambda(mut &em: Emitter, ps: list[ast.Param], has_ret: bool, ret: ast.Ty, b
 	# the substitution still in force.
 	saved_sub := em.sub
 	em.sub = c_nosub()
-	em.lam_defs.append(c_fn(em, ast.FnDecl(name, "", allps, has_ret, ret, body, false, em.at_path, em.at_line, em.at_col, [], [], em.in_unsafe_fn, false, false, true, false, "", 0, 0, em.at_end_line, em.at_end_col)))
+	em.lam_defs.append(c_fn(em, ast.FnDecl(name, "", allps, has_ret, ret, body, false, em.at_path, em.at_line, em.at_col, [], [], em.in_unsafe_fn, false, false, true, false, "", 0, 0, 0, 0)))
 	mut ci := 0
 	for ci < cap_nx.len() {
 		em.nx_rows[nx_from + ci] = cap_nx[ci]
@@ -20915,8 +20943,7 @@ fn c_fn(mut &em: Emitter, fn_d: ast.FnDecl) -> str {
 	# emitted, so the SAt markers have said nothing yet and `em.at_*` still holds the
 	# previous function's last statement
 	em.at_path = fn_d.path
-	em.at_line = fn_d.line
-	em.at_col = fn_d.col
+	c_mark(em, fn_d.line, fn_d.col)
 	outer_fn := em.cur_fn
 	em.cur_fn = fn_d.name
 

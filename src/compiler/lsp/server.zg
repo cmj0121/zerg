@@ -569,7 +569,42 @@ fn ls_abort_diag(path: str, text: str, msg: str) -> json.Val {
 	col := ls_digits(ls_slice_str(b, c2 + 1, b.len()))
 	return ls_whole_file_diag(msg) if line < 1 or col < 1 or ls_slice_str(b, at, c1) != path
 
-	return ls_diagnostic_at(text, line, col, "", ls_slice_str(b, 0, nl), 1)
+	sentence := ls_slice_str(b, 0, nl)
+	return ls_diagnostic_at(text, line, col, ls_abort_code(sentence), ls_abort_says(sentence), 1)
+}
+
+# ls_abort_code is the rule's identity at the front of a raised sentence, and ls_abort_says is
+# what is left once it has been taken off.
+#
+# A CHECKED FINDING HAS THE TWO APART (`Diag.code`) and a raised one does not: a raise carries
+# a string, so the channel that builds one writes the code into the front of it (parser.zg,
+# p_diag_at). Published as it arrives, the code reached the editor as the first word of a
+# sentence — so a client filtering or grouping by rule saw every abort as a finding with no
+# rule, while every checked finding beside it had one. Splitting it here is the same split the
+# compiler made, read back at the one place that has to undo the raise's packing.
+#
+# NOTHING LOOSER IS READ. A code is a letter and then digits and then a space, which is what
+# `rule_code` renders; a message opening with anything else — `internal:`, a sentence — has no
+# code, and guessing one would invent a rule the catalogue does not carry.
+fn ls_abort_code(msg: str) -> str {
+	b := bytearray(msg)
+	mut i := 1
+	for i < b.len() and b[i] >= b'0' and b[i] <= b'9' {
+		i = i + 1
+	}
+
+	return "" if i < 2 or i >= b.len() or b[i] != b' '
+	return "" if b[0] < b'A' or b[0] > b'Z'
+
+	return ls_slice_str(b, 0, i)
+}
+
+fn ls_abort_says(msg: str) -> str {
+	n := bytearray(ls_abort_code(msg)).len()
+	return msg if n == 0
+
+	b := bytearray(msg)
+	return ls_slice_str(b, n + 1, b.len())
 }
 
 # ls_last_byte is the index of the last `c` at or before `upto`, and -1 when there is none.
@@ -596,12 +631,7 @@ fn ls_digits(s: str) -> int {
 # file. A zero-width range and not the word there: an underline drawn under `fn` says the
 # `fn` is wrong, and the one thing known about this finding is that it has no place in this buffer.
 fn ls_whole_file_diag(msg: str) -> json.Val {
-	mut fs: list[json.Field] = []
-	json.put(fs, "range", ls_range_of(0, 0, 0, 0))
-	json.put_int(fs, "severity", 1)
-	json.put_str(fs, "source", "zerg")
-	json.put_str(fs, "message", msg)
-	return json.of_obj(fs)
+	return ls_diagnostic_over(Span(0, 0, 0, 0), ls_abort_code(msg), ls_abort_says(msg), 1)
 }
 
 # A finding that carries an EXTENT is published over it — the statement the compiler named —

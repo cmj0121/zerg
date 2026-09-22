@@ -1451,23 +1451,23 @@ pub fn parse_at(src: str, path: str) -> ast.File {
 			is_test := p_deco_is_test(pending)
 			is_fixture := p_deco_is_fixture(pending)
 			pending = []
-			fns.append(parse_fn(p, is_pub, "", false, in_unsafe, is_test, is_fixture))
+			fns.append(parse_fn_at(p, t, is_pub, "", false, in_unsafe, is_test, is_fixture, false, ""))
 		} else if p_at(p, token.Kind.Struct) {
 			# a struct may be declared `pub` (GRAMMAR#struct-decl), and the marker is CARRIED.
 			# It used to be read and dropped, because type visibility was not enforced and a
 			# flag nothing reads is a lie the next reader believes; now the type registry
 			# records it and chk_ty_visible asks it.
-			sd := parse_struct(p, is_pub)
+			sd := parse_struct(p, t, is_pub)
 			p_take_derives(sd.name, pending, derive_on, derive_spec)
 			structs.append(sd)
 		} else if p_at(p, token.Kind.Enum) {
 			# `pub enum` — carried, the struct arm's reason
-			ed := parse_enum(p, is_pub)
+			ed := parse_enum(p, t, is_pub)
 			p_take_derives(ed.name, pending, derive_on, derive_spec)
 			enums.append(ed)
 		} else if p_at(p, token.Kind.Spec) {
 			# `pub spec` — carried, the struct arm's reason
-			sp := parse_spec(p, is_pub)
+			sp := parse_spec(p, t, is_pub)
 			p_take_derives(sp.name, pending, derive_on, derive_spec)
 			specs.append(sp)
 		} else if p_at(p, token.Kind.Const) {
@@ -1486,7 +1486,7 @@ pub fn parse_at(src: str, path: str) -> ast.File {
 			raise p_diag_at(p, t.line, t.col, rule.Rule.PubOnImpl, "`pub` does not go on an `impl` block — an `impl` fulfils a spec, and visibility lives on the `spec` and the type it is for") if is_pub
 			parse_impl(p, fns, impls, consts, in_unsafe)
 		} else if p_at(p, token.Kind.Type) {
-			types.append(parse_typedecl(p, is_pub))
+			types.append(parse_typedecl(p, t, is_pub))
 		} else if p_at(p, token.Kind.Hash) {
 			# GRAMMAR#decorated-decl — a decorator LEADS the declaration and `pub` sits inside it, so
 			# the order is `#[…] pub fn`, never `pub #[…]`
@@ -2105,8 +2105,7 @@ fn parse_map_lit(mut &p: Parser) -> ast.Expr {
 # compiled, so nothing in it is checked — a `this.x` naming a field no implementor has, a
 # call to a function that does not exist, a type error. It reads like the method that will
 # run and is not, which is the shape this compiler turns away by name everywhere else.
-fn parse_spec(mut &p: Parser, is_pub: bool) -> ast.SpecDecl {
-	kw := cur(p)
+fn parse_spec(mut &p: Parser, start: token.Token, is_pub: bool) -> ast.SpecDecl {
 	p_advance(p) # 'spec'
 	nt := cur(p)
 	name := p_type_name(p, "a spec")
@@ -2174,7 +2173,7 @@ fn parse_spec(mut &p: Parser, is_pub: bool) -> ast.SpecDecl {
 			# tracks whether the declaration sits inside a module-level `unsafe { … }` GROUP
 			# (the sig_unsafe column), and a `spec` member sits in no group. The signature is
 			# discarded by the raise below in any case.
-			sig := parse_fn_head(p, false, "This", u_mut, false)
+			sig := parse_fn_head(p, u, false, "This", u_mut, false)
 
 			# IT IS NOT AN UNBUILT FORM ANY MORE, and it never becomes one. `unsafe` says
 			# the compiler makes no guarantee and somebody vouches; a `spec` says what a
@@ -2195,6 +2194,7 @@ fn parse_spec(mut &p: Parser, is_pub: bool) -> ast.SpecDecl {
 		# the requirement silent in both directions — a spec asking for `mut fn` was
 		# satisfied by a plain one, and a plain one by a `mut fn`.
 		mut recv_mut := false
+		mt := cur(p)
 		if p_at(p, token.Kind.Mut) and peek_kind(p, 1) == token.Kind.Fn {
 			p_advance(p)
 			recv_mut = true
@@ -2203,8 +2203,7 @@ fn parse_spec(mut &p: Parser, is_pub: bool) -> ast.SpecDecl {
 			# The receiver is `This` — the implementing type, which is not known here. Giving
 			# it a name makes a required signature the same SHAPE as a supplied one, so the
 			# two are compared position for position with nothing to offset.
-			start := cur(p)
-			sig := parse_fn_head(p, false, "This", recv_mut, false)
+			sig := parse_fn_head(p, mt, false, "This", recv_mut, false)
 
 			# A PROVIDED METHOD — `fn f() { … }` in a spec. GRAMMAR#spec-member is `fn-sig |
 			# fn-decl`, so a member with a body is the second alternative, and it is a DEFAULT:
@@ -2220,7 +2219,7 @@ fn parse_spec(mut &p: Parser, is_pub: bool) -> ast.SpecDecl {
 			} else {
 				reqs.append(sig)
 			}
-			p_tp_scope(p, start, sig.tparams.len())
+			p_tp_scope(p, mt, sig.tparams.len())
 		} else if p_at(p, token.Kind.Type) {
 			raise p_diag(p, rule.Rule.AssocTypeNotSpecMember, "an associated type is not a `spec` member — a spec carries BEHAVIOUR and nothing else (GRAMMAR#spec-member), so `type Item` names a type nothing here binds. Take the type as a parameter of the spec instead")
 		} else if p_at(p, token.Kind.Ident) and peek_kind(p, 1) == token.Kind.Colon {
@@ -2237,8 +2236,8 @@ fn parse_spec(mut &p: Parser, is_pub: bool) -> ast.SpecDecl {
 	}
 	expect(p, token.Kind.RBrace)
 	e := p_ended(p)
-	p_tp_scope(p, kw, params.len())
-	return ast.SpecDecl(name, params, supers, super_args, reqs, is_pub, p.path, kw.line, kw.col, nt.line, nt.col, e.line, e.col)
+	p_tp_scope(p, start, params.len())
+	return ast.SpecDecl(name, params, supers, super_args, reqs, is_pub, p.path, start.line, start.col, nt.line, nt.col, e.line, e.col)
 }
 
 # parse_typedecl reads `type X = Y` — a NEW, DISTINCT type that takes on Y's representation
@@ -2251,8 +2250,7 @@ fn parse_spec(mut &p: Parser, is_pub: bool) -> ast.SpecDecl {
 # A GENERIC one is `[not yet]` and says so. It is read far enough to know that is what it is,
 # because refusing at the `[` with the parser's ordinary message would name a bracket rather
 # than the feature.
-fn parse_typedecl(mut &p: Parser, is_pub: bool) -> ast.TypeDecl {
-	kw := cur(p)
+fn parse_typedecl(mut &p: Parser, start: token.Token, is_pub: bool) -> ast.TypeDecl {
 	p_advance(p)
 
 	# p_name, and not a bare `expect(p, Kind.Ident)`. Every other declaration in this file
@@ -2277,7 +2275,7 @@ fn parse_typedecl(mut &p: Parser, is_pub: bool) -> ast.TypeDecl {
 
 	under := parse_type(p)
 	e := p_ended(p)
-	return ast.TypeDecl(name, under, is_pub, p.path, kw.line, kw.col, nt.line, nt.col, e.line, e.col)
+	return ast.TypeDecl(name, under, is_pub, p.path, start.line, start.col, nt.line, nt.col, e.line, e.col)
 }
 
 # parse_init reads `init() { … }`, the lazy-setup declaration, as an ordinary function so
@@ -2405,6 +2403,12 @@ fn parse_import(mut &p: Parser, mut &imports: list[ast.ImportDecl]) {
 # and every `at.…` in the file was a name nothing declared. The alias is the binding when it
 # is there, which is a fact about the surface and so the parser's to record.
 fn parse_import_spec(mut &p: Parser) -> ast.ImportDecl {
+	# THE SPEC'S FIRST TOKEN, taken before the marker is consumed. An `import pub "…"` is a
+	# re-export and the `pub` is inside the production GRAMMAR#import-spec derives it from, so
+	# it is inside the declaration — the same rule the other seven forms follow. This one is
+	# read here rather than handed down because this is where the marker is read: the statement
+	# above holds `import`, which belongs to the statement and not to any one spec of it.
+	st := cur(p)
 	mut is_pub := false
 	if p_at(p, token.Kind.Pub) {
 		is_pub = true
@@ -2444,7 +2448,7 @@ fn parse_import_spec(mut &p: Parser) -> ast.ImportDecl {
 			at := cur(p)
 			p_advance(p)
 			e := p_ended(p)
-			return ast.ImportDecl(t.value, at.lexeme, true, is_pub, p.path, t.line, t.col, at.line, at.col, e.line, e.col)
+			return ast.ImportDecl(t.value, at.lexeme, true, is_pub, p.path, st.line, st.col, at.line, at.col, e.line, e.col)
 		}
 	}
 
@@ -2454,7 +2458,7 @@ fn parse_import_spec(mut &p: Parser) -> ast.ImportDecl {
 	seg := ast.last_segment(t.value)
 	seg_col := t.col + 1 + bytearray(t.value).len() - bytearray(seg).len()
 	e := p_ended(p)
-	return ast.ImportDecl(t.value, seg, false, is_pub, p.path, t.line, t.col, t.line, seg_col, e.line, e.col)
+	return ast.ImportDecl(t.value, seg, false, is_pub, p.path, st.line, st.col, t.line, seg_col, e.line, e.col)
 }
 
 # p_import_path_guess reassembles the bare path the reader wrote, so the refusal above can
@@ -2481,8 +2485,7 @@ fn p_import_path_guess(mut &p: Parser) -> str {
 	return out
 }
 
-fn parse_enum(mut &p: Parser, is_pub: bool) -> ast.EnumDecl {
-	kw := cur(p)
+fn parse_enum(mut &p: Parser, start: token.Token, is_pub: bool) -> ast.EnumDecl {
 	p_advance(p) # 'enum'
 	nt := cur(p)
 	name := p_type_name(p, "an enum")
@@ -2553,8 +2556,8 @@ fn parse_enum(mut &p: Parser, is_pub: bool) -> ast.EnumDecl {
 	# had its discriminant read and then quietly dropped.
 	raise p_diag(p, rule.Rule.DiscriminantOnPayloadEnum, f"enum `{name}` carries a payload, so its tag is opaque — a discriminant (on `{spelled[0]}`) belongs to an enum whose every variant is fieldless") if payload and spelled.len() > 0
 	e := p_ended(p)
-	p_tp_scope(p, kw, tparams.len())
-	return ast.EnumDecl(name, variants, tparams, is_pub, p.path, kw.line, kw.col, nt.line, nt.col, e.line, e.col)
+	p_tp_scope(p, start, tparams.len())
+	return ast.EnumDecl(name, variants, tparams, is_pub, p.path, start.line, start.col, nt.line, nt.col, e.line, e.col)
 }
 
 # is_pascal reports whether a name starts with an uppercase ASCII letter — the tell for
@@ -2566,8 +2569,7 @@ fn is_pascal(s: str) -> bool {
 	return v >= 65 and v <= 90
 }
 
-fn parse_struct(mut &p: Parser, is_pub: bool) -> ast.StructDecl {
-	kw := cur(p)
+fn parse_struct(mut &p: Parser, start: token.Token, is_pub: bool) -> ast.StructDecl {
 	p_advance(p) # 'struct'
 	nt := cur(p)
 	name := p_type_name(p, "a struct")
@@ -2622,8 +2624,8 @@ fn parse_struct(mut &p: Parser, is_pub: bool) -> ast.StructDecl {
 	}
 	expect(p, token.Kind.RBrace)
 	e := p_ended(p)
-	p_tp_scope(p, kw, tparams.len())
-	return ast.StructDecl(name, fields, is_pub, p.path, kw.line, kw.col, tparams, nt.line, nt.col, e.line, e.col)
+	p_tp_scope(p, start, tparams.len())
+	return ast.StructDecl(name, fields, is_pub, p.path, start.line, start.col, tparams, nt.line, nt.col, e.line, e.col)
 }
 
 # parse_decorator reads `#[ … ]` (GRAMMAR#decorator). It used to reach the top-level fallback,
@@ -2937,6 +2939,8 @@ fn parse_impl(mut &p: Parser, mut &fns: list[ast.FnDecl], mut &impls: list[ast.I
 	outer := p.impl_ty
 	p.impl_ty = target
 	for not p_at(p, token.Kind.RBrace) and not p_at(p, token.Kind.Eof) {
+		# the item's FIRST token, markers included, taken before any of them is consumed
+		it := cur(p)
 		mut is_pub := false
 		if p_at(p, token.Kind.Pub) {
 			p_advance(p)
@@ -2974,13 +2978,12 @@ fn parse_impl(mut &p: Parser, mut &fns: list[ast.FnDecl], mut &impls: list[ast.I
 			recv_mut = true
 		}
 		if p_at(p, token.Kind.Fn) {
-			fns.append(parse_fn_at(p, is_pub, target, recv_mut, fn_unsafe, false, false, sp == "", p_impl_spec_of(sp, args)))
+			fns.append(parse_fn_at(p, it, is_pub, target, recv_mut, fn_unsafe, false, false, sp == "", p_impl_spec_of(sp, args)))
 		} else if p_at(p, token.Kind.Ident) and peek_kind(p, 1) == token.Kind.Walrus {
 			# `LIMIT := 5` — an associated VALUE (GRAMMAR#val-bind). It is a module constant that
 			# belongs to a TYPE: the same declaration in every way but its name, so it is read by
 			# the same function and joins the same list, carrying the impl's target.
-			vt := cur(p)
-			consts.append(p_top_binding(p, target, false, false, is_pub, in_unsafe, vt.line, vt.col))
+			consts.append(p_top_binding(p, target, false, false, is_pub, in_unsafe, it.line, it.col))
 		} else if p_at(p, token.Kind.Type) {
 			raise p_diag(p, rule.Rule.NotYetImplAssocType, "NotImplemented: an associated type binding `type … = …` in an `impl` (GRAMMAR#impl-item)")
 		} else {
@@ -3002,16 +3005,8 @@ fn parse_impl(mut &p: Parser, mut &fns: list[ast.FnDecl], mut &impls: list[ast.I
 	p_tp_scope(p, kw, tp_names.len() + maybe)
 }
 
-# `is_test` and `is_fixture` are the `#[test]` / `#[fixture]` the caller took off the pending
-# decorator list. They arrive as parameters rather than being read here because a decorator is
-# its own top-level item — it is read before the `fn` under it exists — and only the arm that
-# dispatched to this one has the list in hand.
-fn parse_fn(mut &p: Parser, is_pub: bool, recv: str, recv_mut: bool, in_unsafe: bool, is_test: bool, is_fixture: bool) -> ast.FnDecl {
-	return parse_fn_at(p, is_pub, recv, recv_mut, in_unsafe, is_test, is_fixture, false, "")
-}
-
-# parse_fn_at is parse_fn with the one question an INHERENT `impl` adds: is this a method or an
-# ASSOCIATED FN? GRAMMAR#impl-decl answers it by the body — *a named constructor
+# parse_fn_at reads a `fn` declaration, and answers the one question an INHERENT `impl` adds:
+# is this a method or an ASSOCIATED FN? GRAMMAR#impl-decl answers it by the body — *a named constructor
 # `User.from_json(…)` (an associated fn, no `this`) or a private method `u.recompute()` (uses
 # `this`)* — and there is no other spelling, so the body is what decides.
 #
@@ -3023,6 +3018,11 @@ fn parse_fn(mut &p: Parser, is_pub: bool, recv: str, recv_mut: bool, in_unsafe: 
 # A SPEC IMPL NEVER ASKS. `impl Show for P` implements members the spec DECLARED as methods, so
 # what the body happens to read decides nothing there — which is also why `assoc_ok` is a
 # parameter rather than a test on `recv`.
+#
+# `is_test` and `is_fixture` are the `#[test]` / `#[fixture]` the CALLER took off the pending
+# decorator list. They arrive as parameters rather than being read here because a decorator is
+# its own top-level item — it is read before the `fn` under it exists — and only the arm that
+# dispatched here has the list in hand.
 # p_impl_spec_of is the key a method inherits from the `impl` it was written in, and it is
 # EMPTY for an unparameterized spec: the coherence rule gives a type one implementation of
 # such a spec, so its method name alone is already unique and folding a key in would rename
@@ -3033,9 +3033,8 @@ fn p_impl_spec_of(sp: str, args: list[ast.Ty]) -> str {
 	return ast.spec_key(sp, args)
 }
 
-fn parse_fn_at(mut &p: Parser, is_pub: bool, recv: str, recv_mut: bool, in_unsafe: bool, is_test: bool, is_fixture: bool, assoc_ok: bool, spec_of: str) -> ast.FnDecl {
-	start := cur(p)
-	head := parse_fn_head_at(p, is_pub, recv, recv_mut, in_unsafe, not assoc_ok)
+fn parse_fn_at(mut &p: Parser, start: token.Token, is_pub: bool, recv: str, recv_mut: bool, in_unsafe: bool, is_test: bool, is_fixture: bool, assoc_ok: bool, spec_of: str) -> ast.FnDecl {
+	head := parse_fn_head_at(p, start, is_pub, recv, recv_mut, in_unsafe, not assoc_ok)
 
 	# SAVED AND RESTORED around the body, the discipline every parser flag here follows: a `fn`
 	# is read inside another declaration often enough — a closure in a default, a nested block —
@@ -3132,18 +3131,18 @@ fn p_type_params(mut &p: Parser, mut &names: list[str], mut &bounds: list[str]) 
 # whose body is empty. That is exactly a `fn-sig`, which is what a `spec` member is — so a
 # spec's requirement and an impl's supply are read by one piece of code, and a comparison
 # between them is a comparison of like with like rather than of two parsers' opinions.
-fn parse_fn_head(mut &p: Parser, is_pub: bool, recv: str, recv_mut: bool, in_unsafe: bool) -> ast.FnDecl {
-	return parse_fn_head_at(p, is_pub, recv, recv_mut, in_unsafe, true)
+fn parse_fn_head(mut &p: Parser, start: token.Token, is_pub: bool, recv: str, recv_mut: bool, in_unsafe: bool) -> ast.FnDecl {
+	return parse_fn_head_at(p, start, is_pub, recv, recv_mut, in_unsafe, true)
 }
 
 # parse_fn_head_at is the head with the receiver's synthesis made a QUESTION. An inherent
 # `impl`'s member cannot know whether it has one until its body has been read, so that caller
 # asks for the head without it and puts it back itself; everything else — a free function, a
 # spec's member, a spec impl's method — knows at the head and takes it here.
-fn parse_fn_head_at(mut &p: Parser, is_pub: bool, recv: str, recv_mut: bool, in_unsafe: bool, want_recv: bool) -> ast.FnDecl {
-	# where the declaration BEGINS, read before anything is consumed: a diagnostic about the
-	# signature is made before any statement is emitted, so no SAt marker has spoken yet
-	kw := cur(p)
+fn parse_fn_head_at(mut &p: Parser, start: token.Token, is_pub: bool, recv: str, recv_mut: bool, in_unsafe: bool, want_recv: bool) -> ast.FnDecl {
+	# `start` is where the declaration BEGINS — the first token of it, markers included, which
+	# the caller took before consuming them. A diagnostic about the signature is made before any
+	# statement is emitted, so no SAt marker has spoken yet and this is the place it reports at.
 	p_advance(p) # 'fn'
 
 	nt := cur(p)
@@ -3211,7 +3210,7 @@ fn parse_fn_head_at(mut &p: Parser, is_pub: bool, recv: str, recv_mut: bool, in_
 	}
 	mut none: list[ast.Stmt] = []
 	e := p_ended(p)
-	return ast.FnDecl(name, recv, params, has_ret, ret, none, is_pub, p.path, kw.line, kw.col, tparams, tbounds, in_unsafe, false, false, false, false, "", nt.line, nt.col, e.line, e.col)
+	return ast.FnDecl(name, recv, params, has_ret, ret, none, is_pub, p.path, start.line, start.col, tparams, tbounds, in_unsafe, false, false, false, false, "", nt.line, nt.col, e.line, e.col)
 }
 
 # parse_block counts a nesting level per block, since statements nest through blocks and

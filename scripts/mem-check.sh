@@ -1043,6 +1043,172 @@ fn main() {
 }
 ZG
 
+# --- a value read out of a value nobody holds ------------------------------------------
+# The shapes a language server paid for on every check (#23), because the compiler is
+# written in them: `cur(p).lexeme`, `match c_unmark(t) { … }` and `c_ident_name(e) != ""`. In
+# each the expression is the only owner of a value it made, and each read the answer out and
+# walked away from it.
+#
+# A FIELD OR AN ELEMENT OF AN OWNED RVALUE is taken out of a temporary that is then dropped, so
+# it is already the reader's own; the reader copied it again as though it were somebody else's.
+case_run rvalue_projection no no <<'ZG'
+struct T {
+	pub s: str
+	pub n: int
+}
+
+fn mk(n: int) -> T {
+	return T(f"{n}abcdefghijklmnop", n)
+}
+
+fn mks(n: int) -> list[str] {
+	return [f"{n}abcdefghijklmnop", "b"]
+}
+
+fn size(s: str) -> int {
+	return bytearray(s).len()
+}
+
+fn main() {
+	mut n := 0
+	mut i := 0
+	r := rounds()
+	for i < r {
+		f := mk(i).s
+		n = n + size(f)
+		n = n + size(mks(i)[0])
+		i = i + 1
+	}
+	print n
+}
+ZG
+
+# A SCRUTINEE THE MATCH MADE was bound to a temporary and never given back, whatever the arm.
+case_run match_rvalue no no <<'ZG'
+enum E {
+	A(str)
+	B
+}
+
+fn mk(n: int) -> E {
+	return E.A(f"{n}abcdefghijklmnop")
+}
+
+fn main() {
+	mut n := 0
+	mut i := 0
+	r := rounds()
+	for i < r {
+		n = n + match mk(i) {
+			E.A(s) => bytearray(s).len()
+			E.B    => 0
+		}
+		i = i + 1
+	}
+	print n
+}
+ZG
+
+# A STR COMPARED is compared and not kept, and an operand the comparison owned was not released.
+case_run str_cmp_owned no no <<'ZG'
+fn mk(n: int) -> str {
+	return f"{n}abcdefghijklmnop"
+}
+
+fn main() {
+	mut n := 0
+	mut i := 0
+	r := rounds()
+	for i < r {
+		if mk(i) != "" {
+			n = n + 1
+		}
+		if "zzz" > mk(i) {
+			n = n + 1
+		}
+		i = i + 1
+	}
+	print n
+}
+ZG
+
+# AN INTRINSIC BORROWS whatever it is handed — no runtime leaf gives an argument back — so one
+# the call owned was never given back, whether the leaf answers something or nothing. The
+# write goes to standard output, which this gate discards; the counter is on standard error.
+case_run intrinsic_owned_arg no no <<'ZG'
+fn mk(n: int) -> str {
+	return f"/nonexistent/{n}abcdefghijklmnop"
+}
+
+fn main() {
+	mut n := 0
+	mut i := 0
+	r := rounds()
+	for i < r {
+		if __zrt_exists(mk(i)) {
+			n = n + 1
+		}
+		__zrt_write(1, mk(i))
+		i = i + 1
+	}
+	print n
+}
+ZG
+
+# AN ELEMENT OF A LIST A NAMED MAP HOLDS is borrowed, whole: `m["k"][0]` reads storage the map
+# still owns, so the consumer takes its own copy and the read takes none. The read used to copy
+# as well, and the consumer's copy was the only one ever given back.
+case_run map_elem_borrow no no <<'ZG'
+fn hs(n: int) -> str {
+	return f"{n}abcdefghijklmnop"
+}
+
+fn main() {
+	mut n := 0
+	mut i := 0
+	r := rounds()
+	for i < r {
+		m: map[str, list[str]] = {"k": [hs(i)]}
+		s := m["k"][0]
+		n = n + bytearray(s).len()
+		print m["k"][0]
+		i = i + 1
+	}
+	print n
+}
+ZG
+
+# A VALUE A STATEMENT OWNS AND NOBODY READS is given back where it is dropped: `r?` written
+# for its early return alone, on a carrier that names storage, copies the Left out — and a call
+# answering a `str`, written as a statement, hands one over too.
+case_run discarded_owned no no <<'ZG'
+fn hs(n: int) -> str {
+	return f"{n}abcdefghijklmnop"
+}
+
+fn rs(n: int) -> Result[str] {
+	return Either.Left(hs(n))
+}
+
+fn stmt_try(r: Result[str]) -> Result[int] {
+	r?
+	return Either.Left(1)
+}
+
+fn main() {
+	mut n := 0
+	mut i := 0
+	rr := rounds()
+	for i < rr {
+		r := rs(i)
+		n = n + (stmt_try(r) ?? 0)
+		hs(i)
+		i = i + 1
+	}
+	print n
+}
+ZG
+
 if [ "$fail" -ne 0 ]; then
 	printf '\nmem-check: a value outlives the scope that made it\n' >&2
 	printf 'mem-check: the sources, the C and the binaries are kept in %s\n' "$WORK" >&2

@@ -558,8 +558,10 @@ jobs:
       # with, and this is that sentence as a gate: a real stdio session per file, held to
       # what the command line says about it. It also drives the wire, which nothing else
       # in this repository does.
+      #
+      # Not behind the corpus fetch: it tolerates the corpus's absence, and gates-check.sh's
+      # ledger says why.
       - name: The language server says what the compiler says
-        if: steps.corpus_fetch.outputs.available == 'true'
         run: make lsp
 
   # The C dialect the emitted code is compiled with. `-std=c17` is the default and what

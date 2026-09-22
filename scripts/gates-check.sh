@@ -209,6 +209,7 @@ entry-path	it reads the corpus and skips when the file is not there
 examples	every example builds, is checked and is run without the corpus; only the comparison is missing
 gates	the only `test-data/` in gates-check.sh is the pattern this clause matches WITH, and a rule must not find itself
 grammar-cited	it reads `test-data/counterexamples/INVENTORY` and SKIPS when the file is not there
+lsp	the examples alone clear every floor it sets and its one-walk case reads only src/compiler; the corpus only widens the buffers
 oracle	it compares the two compilers over whatever programs it is handed
 treesitter	it parses the sources it is given, and the corpus only widens the set
 LEDGER

@@ -1120,16 +1120,49 @@ pub struct File {
 	# EQUALITY everywhere, so a place inside one would make two spellings of one type two
 	# types. Appended to, never read, here.
 	pub ty_uses: list[TyUse]
+
+	# tp_scopes are the extents of the declarations that have type parameters (TyScope), under
+	# the same rule: appended by the parser, never read by it.
+	pub tp_scopes: list[TyScope]
 }
 
 # TyUse is one type name as written: the name, the file, and the place and BYTE LENGTH of its
 # token — the last segment of a qualified name, the base of an applied one.
+#
+# tparam says whether the occurrence DECLARES a type parameter, so a `T` written later can be told
+# which `[T]` it names — the one whose declaration's scope (File.tp_scopes) holds both:
+#
+#   TP_USE      a use, which is every other occurrence
+#   TP_DECL     the `T` of `fn f[T]`, `struct S[T]`, `impl[T]`: a parameter, by where it stands
+#   TP_MAYBE    an argument of an `impl`'s target, `impl Box[T]`, which declares a parameter when
+#               it names no type — and names the type otherwise, `impl Box[int]`. Which one is a
+#               question about declarations, so the parser records the token and decides nothing.
+#
+# app is, for a TP_MAYBE, the application the argument belongs to — `Box[T]`, as `spec_key`
+# spells it — which is what the question is asked of; "" for every other occurrence.
 pub struct TyUse {
 	pub name: str
 	pub path: str
 	pub line: int
 	pub col: int
 	pub len: int
+	pub tparam: int
+	pub app: str
+}
+
+pub const TP_USE := 0
+pub const TP_DECL := 1
+pub const TP_MAYBE := 2
+
+# TyScope is the EXTENT of a declaration that has type parameters: from where it begins to the
+# token that follows it, which is how far its parameters are in scope. A method's parameters sit
+# inside its `impl`'s extent, and the innermost scope that declares a name is the one that wins.
+pub struct TyScope {
+	pub path: str
+	pub line: int
+	pub col: int
+	pub end_line: int
+	pub end_col: int
 }
 
 # TyQual is one such occurrence: the qualifier as written, and where.

@@ -20263,6 +20263,7 @@ pub fn merge_asts(fs: list[ast.File]) -> ast.File {
 	mut ty_quals: list[ast.TyQual] = []
 	mut ty_apps: list[ast.TyApp] = []
 	mut ty_uses: list[ast.TyUse] = []
+	mut tp_scopes: list[ast.TyScope] = []
 	for f in fs {
 		for q in f.ty_quals {
 			ty_quals.append(q)
@@ -20272,6 +20273,9 @@ pub fn merge_asts(fs: list[ast.File]) -> ast.File {
 		}
 		for u in f.ty_uses {
 			ty_uses.append(u)
+		}
+		for sc in f.tp_scopes {
+			tp_scopes.append(sc)
 		}
 		for c in f.consts {
 			consts.append(c)
@@ -20316,7 +20320,7 @@ pub fn merge_asts(fs: list[ast.File]) -> ast.File {
 	# because it reads one file at a time, and the length is part of the TYPE — so it has to
 	# become a number before anything compares two types, and this is the one door every path
 	# into the emitter goes through.
-	return generic.gen_resolve_lens(ast.File(imports, structs, enums, specs, impls, fns, types, consts, derive_on, derive_spec, stmts, ty_quals, ty_apps, ty_uses))
+	return generic.gen_resolve_lens(ast.File(imports, structs, enums, specs, impls, fns, types, consts, derive_on, derive_spec, stmts, ty_quals, ty_apps, ty_uses, tp_scopes))
 }
 
 fn c_emit_file_at(f: ast.File, ms: Mods, mut &diags: list[ast.Diag]) -> str {

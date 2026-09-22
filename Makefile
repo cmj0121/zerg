@@ -403,7 +403,7 @@ LINUX_IMAGE ?= golang:1.26-bookworm
 # There is no exclusion list any more. If one is ever needed again it owes the shape
 # CORPUS_SKIP now has: a name is a claim, and the gate checks the claim rather than
 # remembering it.
-LINT_ENTRIES := $(ZERG_ENTRY) $(wildcard src/stdlib/*.zg) $(wildcard $(EXAMPLE_SRCS))
+LINT_ENTRIES := $(ZERG_ENTRY) $(wildcard src/compiler/zerg/*_test.zg) $(wildcard src/stdlib/*.zg) $(wildcard $(EXAMPLE_SRCS))
 
 # A FLOOR under how many entries were linted, of the kind `corpus`, `examples` and `fmt-corpus`
 # carry. The one glob above reaches a directory, and a glob that matches nothing leaves a loop

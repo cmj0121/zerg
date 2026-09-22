@@ -389,6 +389,11 @@ jobs:
       - name: The standard library's own suites
         run: make stdlib-test
 
+      # And the compiler library's, which nothing ran — the package could not even be built
+      # while a bare name in `log` was answered by the compiler's own `Kind.Chan` (#195).
+      - name: The compiler library's own suites
+        run: make compiler-test
+
       # The digest that names every cached object, held to FIPS 180-4's vectors and to the
       # system tool. It needs a built compiler, which is why it is here and not in the
       # text-only job.

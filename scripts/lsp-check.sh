@@ -2396,4 +2396,539 @@ then
 	exit 1
 fi
 
-echo "lsp-check: $ran buffers agree with the compiler, $outlined outlines are the parser's own, $members module members are checked against their module, formatting is fmt's answer, every protocol case holds, the dump carries the type parameters the outline cannot show, a check is one walk, a name answers with the declaration the compiler resolved it to, a long session stays in the band of one check, a hover is the document zerg doc prints for it, the outline is a view of the program, and an outline of the largest source is not a walk of it"
+# --- 12. every open buffer is the program ----------------------------------------------------
+#
+# Every case above opens ONE buffer, and a server that reads every other file from disk answers
+# all of them correctly. An editor has several open at once, and the program is the one it
+# holds: an unsaved change in `lib.zg` is part of the program `main.zg` is checked against, and
+# a change that reaches only the file it was typed in leaves the other buffer showing findings
+# about a text nobody has any more (#193).
+#
+# THE FIXTURE IS TWO FILES IN ONE DIRECTORY, and that shape is the point rather than an
+# accident. `main.zg` imports `./lib`, so `main.zg`'s program contains both — and `lib.zg`'s
+# program, found the way section 4 describes, is `lib.zg` ALONE, because the search for an entry
+# never looks in the buffer's own directory. So the two directions are not symmetric and both
+# are asserted: a change in `main.zg` reaches `lib.zg` out of one walk's findings, and a change
+# in `lib.zg` reaches `main.zg` only because the server asks that buffer's own program whether
+# it contains the file that changed. A server that partitioned one check and stopped there would
+# pass half of this.
+#
+# WHAT IS ASSERTED IS "PUBLISHED IN THIS STEP", not "published at some point", which is what a
+# barrier request between the steps makes observable — a stale buffer that is never re-published
+# looks exactly like a correct one to a reader of the last frame alone.
+# AND A SECOND FIXTURE, because the first one alone cannot say whether the dependants pass is
+# needed: widen the entry search to the buffer's own directory and `main.zg` would arrive in
+# the partition, leaving a deleted pass green. `many/` is the shape no search rule absorbs —
+# TWO entries importing one module. `load_buffer` answers with ONE program, the first candidate
+# that reaches the buffer, so a change in `shared/` can reach the second entry only by asking
+# that buffer's own program what it contains.
+mkdir -p "$tmp/dep" "$tmp/many/shared" "$tmp/drv"
+cat >"$tmp/dep/lib.zg" <<'ZG'
+pub fn greet(s: str) -> str {
+	return "hello, " + s
+}
+ZG
+cat >"$tmp/dep/main.zg" <<'ZG'
+import "./lib"
+
+fn main() {
+	print lib.greet("world")
+}
+ZG
+cat >"$tmp/many/shared/mod.zg" <<'ZG'
+pub fn greet(s: str) -> str {
+	return "hello, " + s
+}
+ZG
+cat >"$tmp/many/one.zg" <<'ZG'
+import "./shared"
+
+fn main() {
+	print shared.greet("one")
+}
+ZG
+cat >"$tmp/many/two.zg" <<'ZG'
+import "./shared"
+
+fn main() {
+	print shared.greet("two")
+}
+ZG
+
+# AND A DECORATOR'S TREE, whose findings name a file the editor cannot have open: `#[derive]`
+# expands at `<derive:FILE>`, and a partition that compares a finding's path against a buffer's
+# drops every one of them. The fixture is the smallest program where the expansion is the only
+# thing that refuses — `Inner` has no `Eq`, so the `==` the derived member writes does not
+# compile, while both structs and `main` are correct as written.
+cat >"$tmp/drv/main.zg" <<'ZG'
+struct Inner {
+	pub v: int
+}
+
+#[derive(Eq)]
+struct Outer {
+	pub a: Inner
+}
+
+fn main() {
+	x := Outer(Inner(1))
+	y := Outer(Inner(1))
+	print x == y
+}
+ZG
+if ! "$PY" - "$ZERG" "$tmp/dep" "$tmp/many" "$tmp/drv" <<'PYEOF'
+import json, os, re, subprocess, sys
+
+zerg, root, many, drv = sys.argv[1], sys.argv[2], sys.argv[3], sys.argv[4]
+main_p, lib_p = os.path.join(root, "main.zg"), os.path.join(root, "lib.zg")
+main_uri = "file://" + os.path.abspath(main_p)
+lib_uri = "file://" + os.path.abspath(lib_p)
+MAIN = open(main_p, encoding="utf-8").read()
+GOOD = open(lib_p, encoding="utf-8").read()
+
+# The edit is a SIGNATURE, because that is the change whose consequence is in the other file:
+# `lib.zg` on its own builds either way, and `main.zg` is where the argument stops fitting.
+BAD = 'pub fn greet(n: int) -> str {\n\treturn "hello"\n}\n'
+
+bad = 0
+
+
+def opened(uri, text):
+    return {"jsonrpc": "2.0", "method": "textDocument/didOpen", "params": {
+        "textDocument": {"uri": uri, "languageId": "zerg", "version": 1, "text": text}}}
+
+
+def changed(uri, text, v):
+    return {"jsonrpc": "2.0", "method": "textDocument/didChange", "params": {
+        "textDocument": {"uri": uri, "version": v}, "contentChanges": [{"text": text}]}}
+
+
+def saved(uri):
+    return {"jsonrpc": "2.0", "method": "textDocument/didSave", "params": {"textDocument": {"uri": uri}}}
+
+
+def closed(uri):
+    return {"jsonrpc": "2.0", "method": "textDocument/didClose", "params": {"textDocument": {"uri": uri}}}
+
+
+# A BARRIER is what makes "published in THIS step" a question the wire can answer. The server
+# handles one request at a time in the order they arrive, so a reply is a fence: every publish
+# before it belongs to the steps before it. `documentSymbol` is the barrier because it is a
+# request that publishes nothing of its own.
+def barrier(k):
+    return {"jsonrpc": "2.0", "id": 100 + k, "method": "textDocument/documentSymbol",
+            "params": {"textDocument": {"uri": main_uri}}}
+
+
+def uri_of(path):
+    return "file://" + os.path.abspath(path)
+
+
+# A step is the LIST of publishes it carried, in order, and not a map of the last one per uri:
+# a buffer published twice in one round with two answers reads as one answer to a map, which is
+# the shape of a round that is not deterministic. `replies` carries whatever a step's requests
+# answered, for the cases that ask a question rather than type.
+def session(steps, asks=None):
+    msgs = [{"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {"capabilities": {}}}]
+    for k, st in enumerate(steps):
+        msgs += st
+        msgs.append(barrier(k))
+    msgs += [{"jsonrpc": "2.0", "id": 2, "method": "shutdown"}, {"jsonrpc": "2.0", "method": "exit"}]
+    wire = b"".join(b"Content-Length: %d\r\n\r\n%s" % (len(b), b)
+                    for b in (json.dumps(m).encode() for m in msgs))
+    out = subprocess.run([zerg, "lsp"], input=wire, stdout=subprocess.PIPE,
+                         stderr=subprocess.DEVNULL, timeout=600).stdout
+    per, cur, i = [], [], 0
+    while i < len(out):
+        j = out.find(b"\r\n\r\n", i)
+        if j < 0:
+            break
+        n = int(re.search(rb"Content-Length:\s*(\d+)", out[i:j], re.I).group(1))
+        f = json.loads(out[j + 4:j + 4 + n].decode("utf-8"))
+        if f.get("method") == "textDocument/publishDiagnostics":
+            cur.append((f["params"]["uri"], f["params"]["diagnostics"]))
+        elif isinstance(f.get("id"), int) and f["id"] >= 100:
+            per.append(cur)
+            cur = []
+        elif asks is not None and f.get("id") in asks:
+            asks[f["id"]] = f.get("result")
+        i = j + 4 + n
+    if len(per) != len(steps):
+        print("BUFFERS   a session of %d steps answered %d barriers" % (len(steps), len(per)))
+        sys.exit(1)
+    return per
+
+
+# as_map is a step read as "what each buffer was last told", which is what every case asserting
+# CONTENT wants; `sent` below is the one that asserts how often.
+def as_map(step):
+    return dict(step)
+
+
+def sent(step, uri):
+    return [u for u, _ in step].count(uri)
+
+
+def said(ds):
+    return [("%s %s" % (d.get("code", ""), d["message"])).strip() for d in ds if d.get("severity") == 1]
+
+
+def where(ds):
+    return [(d["range"]["start"]["line"], d["range"]["start"]["character"])
+            for d in ds if d.get("severity") == 1]
+
+
+def want_errors(step, uri, name, what):
+    global bad
+    m = as_map(step)
+    if uri not in m:
+        print("BUFFERS   %s: %s was not published at all" % (what, name))
+        bad += 1
+    elif not said(m[uri]):
+        print("BUFFERS   %s: %s is silent, and the compiler refuses the program it is in" % (what, name))
+        bad += 1
+
+
+def want_silent(step, uri, name, what):
+    global bad
+    m = as_map(step)
+    if uri not in m:
+        print("BUFFERS   %s: %s was not published at all" % (what, name))
+        bad += 1
+    elif said(m[uri]):
+        print("BUFFERS   %s: %s says %s about a program the compiler builds" % (what, name, said(m[uri])))
+        bad += 1
+
+
+# A. THE UNSAVED CHANGE, the save that follows it, and the change that undoes it. `lib.zg` is
+# edited in the editor and never written, and `main.zg` — whose program contains it — answers
+# for the text the editor is holding.
+a = session([
+    [opened(main_uri, MAIN), opened(lib_uri, GOOD)],
+    [changed(lib_uri, BAD, 2)],
+    [saved(lib_uri)],
+    [changed(lib_uri, GOOD, 3)],
+])
+want_silent(a[0], main_uri, "main.zg", "on open")
+want_silent(a[0], lib_uri, "lib.zg", "on open")
+want_errors(a[1], main_uri, "main.zg", "an unsaved change in lib.zg")
+want_silent(a[1], lib_uri, "lib.zg", "an unsaved change in lib.zg")
+if sent(a[2], main_uri) == 0:
+    print("BUFFERS   saving lib.zg did not re-publish main.zg")
+    bad += 1
+want_silent(a[3], main_uri, "main.zg", "the change that undoes it")
+
+# B. THE CLOSE. A closed buffer is the disk again, so what its text was causing is taken back
+# from the buffers whose program it is in.
+b = session([
+    [opened(main_uri, MAIN), opened(lib_uri, GOOD)],
+    [changed(lib_uri, BAD, 2)],
+    [closed(lib_uri)],
+])
+want_errors(b[1], main_uri, "main.zg", "an unsaved change in lib.zg")
+want_silent(b[2], main_uri, "main.zg", "closing lib.zg")
+
+# C. THE BUFFER OPENED AFTERWARDS reads the same program: `lib.zg` is already open and already
+# changed when `main.zg` arrives, and the disk still holds the version that builds. This is the
+# half a re-publish cannot fake — the check itself has to read the other buffer's text.
+c = session([
+    [opened(lib_uri, GOOD)],
+    [changed(lib_uri, BAD, 2)],
+    [opened(main_uri, MAIN)],
+])
+want_errors(c[2], main_uri, "main.zg", "a buffer opened after the change")
+
+# E. TWO ENTRIES, ONE MODULE — the shape that says the dependants pass is not a patch over the
+# entry search. `one.zg` and `two.zg` each import `shared/`, and `shared/mod.zg`'s own program
+# is whichever of them the search reaches first; the other is stale after a change to `shared/`
+# and no partition of one walk can answer for it.
+one_p, two_p = os.path.join(many, "one.zg"), os.path.join(many, "two.zg")
+sh_p = os.path.join(many, "shared", "mod.zg")
+one_uri, two_uri, sh_uri = uri_of(one_p), uri_of(two_p), uri_of(sh_p)
+ONE, TWO, SH = (open(p, encoding="utf-8").read() for p in (one_p, two_p, sh_p))
+SH_BAD = 'pub fn greet(n: int) -> str {\n\treturn "hello"\n}\n'
+e = session([
+    [opened(one_uri, ONE), opened(two_uri, TWO), opened(sh_uri, SH)],
+    [changed(sh_uri, SH_BAD, 2)],
+])
+want_silent(e[0], one_uri, "one.zg", "on open")
+want_silent(e[0], two_uri, "two.zg", "on open")
+want_errors(e[1], one_uri, "one.zg", "an unsaved change in shared/mod.zg")
+want_errors(e[1], two_uri, "two.zg", "an unsaved change in shared/mod.zg")
+
+# F. A BUFFER THAT DOES NOT LEX, which is what a buffer is for part of every word typed into
+# it. Its importers must not be checked against a program it is missing from: dropping it made
+# the open `main.zg` report `E3084 module `lib` has no `greet`` — a sentence about correct code
+# — for as long as the quote was unclosed. The lexical finding is `lib.zg`'s and is published
+# there; `main.zg` is left exactly as it was.
+HALF = 'pub fn greet(s: str) -> str {\n\treturn "hello, \n}\n'
+f = session([
+    [opened(main_uri, MAIN), opened(lib_uri, GOOD)],
+    [changed(lib_uri, HALF, 2)],
+    [changed(main_uri, MAIN + "\n", 2)],
+])
+if not said(as_map(f[1]).get(lib_uri, [])):
+    print("BUFFERS   a buffer mid-word: lib.zg does not report the string it left open")
+    bad += 1
+for step, what in ((f[1], "the buffer that stopped lexing"), (f[2], "a keystroke in main.zg while it does not lex")):
+    fabricated = said(as_map(step).get(main_uri, []))
+    if fabricated:
+        print("BUFFERS   %s: main.zg is told %s, about a file the compiler will not even read"
+              % (what, fabricated))
+        bad += 1
+
+# G. ONE PUBLISH PER BUFFER PER ROUND, and the same answer whichever buffer is typed in.
+# `shared/mod.zg` belongs to two programs, so two checks of one round can each speak for it;
+# published twice, what an editor ends up showing is whichever landed last. TYPING IN IT is the
+# case that does it — the round then checks both entries' programs, and both contain it.
+rounds = {}
+for subject, subject_text, name in ((one_uri, ONE, "one.zg"), (two_uri, TWO, "two.zg"), (sh_uri, SH, "shared/mod.zg")):
+    g = session([
+        [opened(one_uri, ONE), opened(two_uri, TWO), opened(sh_uri, SH)],
+        [changed(subject, subject_text + "\n", 2)],
+    ])
+    for u, who in ((one_uri, "one.zg"), (two_uri, "two.zg"), (sh_uri, "shared/mod.zg")):
+        if sent(g[1], u) > 1:
+            print("BUFFERS   typing in %s: %s is published %d times in one round"
+                  % (name, who, sent(g[1], u)))
+            bad += 1
+    rounds[name] = said(as_map(g[1]).get(sh_uri, []))
+for name in ("two.zg", "shared/mod.zg"):
+    if rounds[name] != rounds["one.zg"]:
+        print("BUFFERS   shared/mod.zg is told %s when one.zg is typed in and %s when %s is"
+              % (rounds["one.zg"], rounds[name], name))
+        bad += 1
+
+# H. A NAME STILL ANSWERS AFTER THE ROUND. The index is the ONE table `definition` reads, and a
+# round checks as many programs as the change reached — so the index has to be the SUBJECT's,
+# not whichever dependant was checked last, or a keystroke in a third file empties the answer
+# for the file the cursor is in.
+asks = {9: None}
+session([
+    [opened(one_uri, ONE), opened(two_uri, TWO), opened(sh_uri, SH)],
+    [changed(sh_uri, SH + "\n", 2)],
+    [{"jsonrpc": "2.0", "id": 9, "method": "textDocument/definition",
+      "params": {"textDocument": {"uri": one_uri}, "position": {"line": 3, "character": 15}}}],
+], asks)
+if not asks[9] or "uri" not in json.dumps(asks[9]):
+    print("BUFFERS   after a keystroke in shared/mod.zg, `greet` in one.zg has no declaration: %s" % (asks[9],))
+    bad += 1
+
+# I. A FINDING THE COMPILER RAISED IN A TREE IT WROTE ITSELF. `#[derive(Eq)]` expands at
+# `<derive:FILE>`, so its findings name no file the editor has open and were dropped by the
+# partition — an editor silent about an error `zerg build` prints and refuses over.
+drv_p = os.path.join(drv, "main.zg")
+drv_uri = uri_of(drv_p)
+i_step = session([[opened(drv_uri, open(drv_p, encoding="utf-8").read())]])
+p = subprocess.run([zerg, "build", "--emit", "check", drv_p],
+                   stdout=subprocess.PIPE, stderr=subprocess.STDOUT, timeout=600)
+want = re.findall(r"^error: (\S+)", p.stdout.decode("utf-8", "replace"), re.M)
+got = [d.get("code", "") or d["message"].split(" ")[0] for d in as_map(i_step[0]).get(drv_uri, [])
+       if d.get("severity") == 1]
+if not want:
+    print("BUFFERS   the derive fixture builds, so there is no dropped finding to look for")
+    bad += 1
+elif got != want:
+    print("BUFFERS   a derived tree's finding: the server says %s and the compiler says %s" % (got, want))
+    bad += 1
+
+# D. AND WHAT THE SESSION SAYS IS WHAT THE COMPILER SAYS about those same two texts on disk.
+# The oracle is `zerg build --emit check` over the program, whose findings are partitioned by
+# the file each one names — which is the partition the server publishes. Place included: a
+# server that published the right sentence against the wrong file, or at the place the finding
+# has in another buffer, would agree about every count.
+open(lib_p, "w", encoding="utf-8").write(BAD)
+p = subprocess.run([zerg, "build", "--emit", "check", main_p],
+                   stdout=subprocess.PIPE, stderr=subprocess.STDOUT, timeout=600)
+text = p.stdout.decode("utf-8", "replace")
+oracle = {}
+for m in re.finditer(r"^error: (\S+) (.*)\n\s*--> (.*):(\d+):(\d+)$", text, re.M):
+    code, msg, path, line, col = m.groups()
+    oracle.setdefault(os.path.abspath(path), []).append((code + " " + msg, int(line) - 1, int(col) - 1))
+open(lib_p, "w", encoding="utf-8").write(GOOD)
+if not oracle:
+    print("BUFFERS   `zerg build --emit check` named no file for its findings, so there is no oracle")
+    print("  " + text.replace("\n", "\n  "))
+    sys.exit(1)
+for uri, path, name in ((main_uri, main_p, "main.zg"), (lib_uri, lib_p, "lib.zg")):
+    ds = as_map(a[1]).get(uri, [])
+    got = [(s, l, c) for s, (l, c) in zip(said(ds), where(ds))]
+    want = oracle.get(os.path.abspath(path), [])
+    if got != want:
+        print("BUFFERS   %s: the session says %s and `zerg build --emit check` says %s" % (name, got, want))
+        bad += 1
+
+if bad:
+    sys.exit(1)
+print("BUFFERS   two buffers are one program: an unsaved change, a save, a close and a later open all reach it, "
+      "and a module's change reaches both entries that import it")
+PYEOF
+then
+	echo "lsp-check: an open buffer is not the program the editor holds"
+	exit 1
+fi
+# --- 12b. a keystroke costs one question per PROGRAM, not one per buffer --------------------
+#
+# Section 6 and section 8 each open exactly ONE buffer, and section 12 asserts what a session
+# says and not what it costs — so the dimension this change added is invisible to all three: a
+# buffer the checked program does not contain is asked whether ITS program contains the file
+# that changed, and asking means loading. Asked per buffer, four buffers of one other program
+# cost four loads of it on every keystroke; asked per program, one answers for all four.
+#
+# What is typed in is a fixture of one file whose program is itself, so its own check is
+# nothing; what is open beside it is a program of one entry and a four-file module that contains
+# none of it. Both sessions type the same keystrokes into the same file, and the only difference
+# between them is how many buffers of that other program are open — one, and then four.
+#
+# K IS NAMED HERE. The fix reads at or under 1, and asking per buffer reads several times that —
+# not quite four, because the one-buffer session reads the module's other files from disk where
+# the four-buffer one holds them; K sits between the two with room either side.
+#
+# THE KEYSTROKES HAVE TO BE MOST OF WHAT IS MEASURED, or the ratio is the noise of everything
+# else. A keystroke is the difference between a session with many of them and a session with
+# one, so whatever else a session costs is subtracted out — exactly where the unit counts
+# instructions, and only up to its noise where it is CPU seconds (a CI runner's virtual machine
+# counts no instructions). Opening a buffer CHECKS its program, and a check of the compiler's own
+# sources, which this used to open, is a lowering walk of them: four opens outweighed ten
+# keystrokes several times over, and on a runner timing in seconds the difference of two large
+# noisy numbers read 6.2 for the fix. So the other program is one whose LOAD is its cost: each
+# module file is one function under a long run of comment lines, which the loader reads and lexes
+# on every question and a walk never visits. And the probe refuses to judge — it fails, loudly —
+# when a session's keystrokes cost less than FLOOR times the rest of that session, because a
+# ratio the measurement cannot see is no answer in either direction.
+#
+# THE SUBJECT'S OWN ROUND HAS TO BE SMALL too. `probe/anchor.zg` is there to stop the entry
+# search climbing into the fixtures the sections above left lying in `$tmp` — the search stops at
+# the first level holding any source, and a program of one file that does not reach
+# `sub/solo.zg` costs nothing to try.
+LSP_PROBE_K=1.5
+LSP_PROBE_FLOOR=0.5
+mkdir -p "$tmp/probe/sub" "$tmp/probe/other/mod"
+cat >"$tmp/probe/anchor.zg" <<'ZG'
+fn main() {
+	print "anchor"
+}
+ZG
+cat >"$tmp/probe/sub/solo.zg" <<'ZG'
+fn main() {
+	print "solo"
+}
+ZG
+cat >"$tmp/probe/other/main.zg" <<'ZG'
+import "./mod"
+
+fn main() {
+	print mod.a() + mod.b() + mod.c() + mod.d()
+}
+ZG
+probe_rc=0
+"$PY" - "$ZERG" "$tmp/probe/sub/solo.zg" "$LSP_PROBE_K" "$LSP_PROBE_FLOOR" "$tmp/probe/other" <<'PYEOF' || probe_rc=$?
+import json, os, re, resource, subprocess, sys
+
+zerg, solo, k, floor, other = sys.argv[1], sys.argv[2], float(sys.argv[3]), float(sys.argv[4]), sys.argv[5]
+
+# The module's four files, each one function under a run of comment lines — the load is the
+# cost, and the walk has one function per file to lower.
+others = []
+for name, fn in (("mod", "a"), ("b", "b"), ("c", "c"), ("d", "d")):
+    path = os.path.join(other, "mod", name + ".zg")
+    with open(path, "w", encoding="utf-8") as f:
+        f.write("pub fn %s() -> int {\n\treturn 1\n}\n" % fn)
+        for i in range(40000):
+            f.write("# line %d of a comment the loader lexes on every question and no walk visits\n" % i)
+    others.append(path)
+ref = subprocess.run([zerg, "build", "--emit", "check", os.path.join(other, "main.zg")],
+                     stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+if ref.returncode != 0:
+    print("PROBE     the other program does not check, so its buffers are not one program: %s"
+          % ref.stderr.decode("utf-8", "replace").strip())
+    sys.exit(1)
+
+# The counter is DISCOVERED and decided once, as sections 6 and 8 do, so the two sessions
+# cannot be measured in different units and compared anyway.
+TIMER = ["/usr/bin/time", "-l"]
+try:
+    probe = subprocess.run(TIMER + ["true"], stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
+    counts = probe.returncode == 0 and b"instructions retired" in probe.stderr
+except OSError:
+    counts = False
+unit = "instructions" if counts else "CPU seconds"
+
+
+def uri_of(p):
+    return "file://" + os.path.abspath(p)
+
+
+def cost(wire):
+    run = lambda c: subprocess.run(c, input=wire, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=1800)
+    if counts:
+        p = run(TIMER + [zerg, "lsp"])
+        m = re.search(rb"(\d+)\s+instructions retired", p.stderr)
+        if not m:
+            print("PROBE     `time -l` counted no instructions for a session")
+            sys.exit(1)
+        return p, float(m.group(1))
+    before = resource.getrusage(resource.RUSAGE_CHILDREN)
+    p = run([zerg, "lsp"])
+    after = resource.getrusage(resource.RUSAGE_CHILDREN)
+    return p, (after.ru_utime + after.ru_stime) - (before.ru_utime + before.ru_stime)
+
+
+SOLO = open(solo, encoding="utf-8").read()
+
+
+def session(open_others, keystrokes):
+    msgs = [{"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {"capabilities": {}}},
+            {"jsonrpc": "2.0", "method": "textDocument/didOpen", "params": {
+                "textDocument": {"uri": uri_of(solo), "languageId": "zerg", "version": 1, "text": SOLO}}}]
+    for p in open_others:
+        msgs.append({"jsonrpc": "2.0", "method": "textDocument/didOpen", "params": {
+            "textDocument": {"uri": uri_of(p), "languageId": "zerg", "version": 1,
+                             "text": open(p, encoding="utf-8").read()}}})
+    for v in range(keystrokes):
+        msgs.append({"jsonrpc": "2.0", "method": "textDocument/didChange", "params": {
+            "textDocument": {"uri": uri_of(solo), "version": v + 2},
+            "contentChanges": [{"text": SOLO + "\n" * (v + 1)}]}})
+    msgs += [{"jsonrpc": "2.0", "id": 2, "method": "shutdown"}, {"jsonrpc": "2.0", "method": "exit"}]
+    return b"".join(b"Content-Length: %d\r\n\r\n%s" % (len(b), b) for b in (json.dumps(m).encode() for m in msgs))
+
+
+# One keystroke is the DIFFERENCE between a session of MANY and a session of one, divided by
+# the keystrokes between them, so the process start-up and the opens cancel out of both sides —
+# and the floor says whether what is left is large enough to be read at all.
+MANY = 21
+
+
+def per_keystroke(open_others):
+    p1, one = cost(session(open_others, 1))
+    pn, many = cost(session(open_others, MANY))
+    for p in (p1, pn):
+        if b"publishDiagnostics" not in p.stdout:
+            print("PROBE     a session published nothing, so no keystroke was measured")
+            sys.exit(1)
+    typed = many - one
+    if typed < floor * one:
+        print("PROBE     %d keystrokes with %d of the other program's buffers open cost %.4g %s against %.4g "
+              "for the rest of the session, under the floor of %.2g times it: the measurement cannot see "
+              "a keystroke, so it does not judge one" % (MANY - 1, len(open_others), typed, unit, one, floor))
+        sys.exit(2)
+    return typed / (MANY - 1)
+
+
+near = per_keystroke(others[:1])
+far = per_keystroke(others)
+ratio = far / near
+print("PROBE     a keystroke with %d buffers of another program costs %.2f times one with 1 (%s: %.4g, %.4g)"
+      % (len(others), ratio, unit, near, far))
+if ratio > k:
+    print("PROBE     the cost of a keystroke grows with the number of open buffers of one program")
+    sys.exit(1)
+PYEOF
+if [ "$probe_rc" -eq 2 ]; then
+	echo "lsp-check: a keystroke is too small a part of its session to be measured, so its cost was not judged"
+	exit 1
+elif [ "$probe_rc" -ne 0 ]; then
+	echo "lsp-check: a keystroke asks its question once per buffer instead of once per program"
+	exit 1
+fi
+echo "lsp-check: $ran buffers agree with the compiler, $outlined outlines are the parser's own, $members module members are checked against their module, formatting is fmt's answer, every protocol case holds, the dump carries the type parameters the outline cannot show, a check is one walk, a name answers with the declaration the compiler resolved it to, a long session stays in the band of one check, a hover is the document zerg doc prints for it, the outline is a view of the program, an outline of the largest source is not a walk of it, and every open buffer is the program the editor holds"

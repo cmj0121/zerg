@@ -1520,4 +1520,137 @@ then
 	echo "lsp-check: a name does not answer with the declaration the compiler resolved it to"
 	exit 1
 fi
-echo "lsp-check: $ran buffers agree with the compiler, $outlined outlines are the parser's own, $members module members are checked against their module, formatting is fmt's answer, every protocol case holds, the dump carries the type parameters the outline cannot show, a check is one walk, and a name answers with the declaration the compiler resolved it to"
+# --- 8. a long session stays in the band of one check ---------------------------------------
+#
+# Every case above is one check, and a server can answer each of them correctly while every
+# check leaves something behind. This one did (#23): whatever a check allocated and never gave
+# back stayed, and a session's memory rose with the number of publishes — the leaks were a few
+# small cells per identifier the parser named, scattered across the allocator's pages, and each
+# scattered cell pins a page the next check cannot hand back.
+#
+# So this measures a SESSION: N checks of the compiler's own program in one process against a
+# session of one, and fails when the long one peaks above K times the short one. A RATIO and not
+# a number, because the number is the machine's — Linux and macOS count differently, and the
+# same program is a different size on each — while "the same band as one check" is a ratio on
+# either.
+#
+# THE COUNTER IS DISCOVERED, as section 6's is, and both sessions are measured by the one found,
+# so its unit cancels in the ratio. Where `time -l` reports a PEAK FOOTPRINT (macOS) that is the
+# one read, because the resident size cannot see this defect there: macOS compresses pages
+# nobody touches, and the pages a leak pins are exactly those — the climbing server's resident
+# size had all but stopped moving after twenty checks while its footprint kept rising. Elsewhere
+# it is the maximum resident size, BSD `time -l` in bytes or GNU `time -v` in kilobytes, as
+# mem-peak-check.sh reads it; Linux has no compressor in the way.
+#
+# THE ALLOCATOR IS TOLD NOT TO HOARD (`MallocSpaceEfficient=1`, macOS's own switch; nothing
+# else reads it). By default the footprint also counts the free pages macOS's allocator keeps
+# for reuse, and a server that leaks nothing grows that cache over its first checks and then
+# holds it — how far depends on the machine and on which threads the walk ran on, so the healthy
+# ratio was anywhere from 1.1 to 1.5 and crossed any K that also caught the climb. Told to give
+# pages back, the healthy server's footprint after N checks is its footprint after one, and
+# what a leak pins is all that is left to see.
+#
+# K IS THE COUNTER'S, because the two counters see a leak with different sharpness. The Linux
+# resident size is quiet — a healthy server reads 1.00 to 1.01 at N, every run — so its K sits
+# just above that noise and catches a leak a fraction the size of the one #23 was: the compiler
+# with ONE of its fixes reverted (a `match` that never gave its scrutinee back, a few hundred
+# kilobytes a check) read 1.09 to 1.10 against it, and the climbing server of #23 1.53. The macOS
+# footprint is noisier — a healthy session reads 1.00 to 1.12 alone and once 1.36 among three
+# sessions at once — so its K sits above that, and it sees the climb of #23 (1.30 to 1.57) but not
+# a leak of that one reverted fix, which the footprint does not separate from flat.
+#
+# SO THIS IS THE AGGREGATE CHECK, AND IT IS NOT THE ONLY ONE. On Linux it catches a single
+# reverted fix; on macOS it catches a climb of the size #23 was. The per-shape guarantee is
+# `make mem-check`'s: each shape that leaked is a program there, counted allocation by allocation,
+# and red on its own the day its fix is reverted, on either platform. Reading leaked bytes here
+# instead would take `leaks(1)`, which needs a debuggable binary — a signing step this gate will
+# not add to CI.
+LSP_SESSION_N=30
+LSP_SESSION_K_FOOTPRINT=1.2
+LSP_SESSION_K_RSS=1.05
+if ! "$PY" - "$ZERG" src/compiler/zergc.zg "$LSP_SESSION_N" "$LSP_SESSION_K_FOOTPRINT" "$LSP_SESSION_K_RSS" <<'PYEOF'
+import json, os, re, subprocess, sys
+
+zerg, path, n = sys.argv[1], sys.argv[2], int(sys.argv[3])
+k_footprint, k_rss = float(sys.argv[4]), float(sys.argv[5])
+
+TIMER, counter, label = None, None, None
+for flag, pattern, what, kk in (("-l", rb"(\d+)\s+peak memory footprint", "peak footprint", k_footprint),
+                                ("-l", rb"(\d+)\s+maximum resident set size", "maximum resident size", k_rss),
+                                ("-v", rb"Maximum resident set size[^:]*:\s*(\d+)", "maximum resident size", k_rss)):
+    try:
+        probe = subprocess.run(["/usr/bin/time", flag, "true"], stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
+    except OSError:
+        break
+    if probe.returncode == 0 and re.search(pattern, probe.stderr):
+        TIMER, counter, label, k = ["/usr/bin/time", flag], pattern, what, kk
+        break
+if TIMER is None:
+    print("SESSION   /usr/bin/time understands neither -l nor -v, so nothing here can measure a peak")
+    sys.exit(1)
+
+text = open(path, encoding="utf-8").read()
+uri = "file://" + os.path.abspath(path)
+
+def peak(checks):
+    msgs = [{"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {"capabilities": {}}},
+            {"jsonrpc": "2.0", "method": "textDocument/didOpen", "params": {
+                "textDocument": {"uri": uri, "languageId": "zerg", "version": 1, "text": text}}}]
+    for v in range(2, checks + 1):
+        msgs.append({"jsonrpc": "2.0", "method": "textDocument/didChange", "params": {
+            "textDocument": {"uri": uri, "version": v}, "contentChanges": [{"text": text}]}})
+    msgs += [{"jsonrpc": "2.0", "id": 2, "method": "shutdown"}, {"jsonrpc": "2.0", "method": "exit"}]
+    wire = b"".join(b"Content-Length: %d\r\n\r\n%s" % (len(b), b) for b in (json.dumps(m).encode() for m in msgs))
+    env = dict(os.environ, MallocSpaceEfficient="1")
+    p = subprocess.run(TIMER + [zerg, "lsp"], input=wire, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=1800, env=env)
+
+    # A session that checked fewer times than it was asked to did not measure N checks, and one
+    # that ABORTED part-way costs less for that reason alone. The program builds, so every
+    # complete check publishes no error.
+    published, out, i = [], p.stdout, 0
+    while i < len(out):
+        j = out.find(b"\r\n\r\n", i)
+        if j < 0:
+            break
+        m = int(re.search(rb"Content-Length:\s*(\d+)", out[i:j], re.I).group(1))
+        frame = json.loads(out[j + 4:j + 4 + m].decode("utf-8"))
+        if frame.get("method") == "textDocument/publishDiagnostics":
+            published.append(frame["params"]["diagnostics"])
+        i = j + 4 + m
+    if len(published) != checks:
+        print("SESSION   a session of %d checks published %d times" % (checks, len(published)))
+        sys.exit(1)
+    errors = [d["message"] for ds in published for d in ds if d.get("severity") == 1]
+    if errors:
+        print("SESSION   the server reports an error in %s, which builds: %s" % (path, errors[0]))
+        sys.exit(1)
+    m = re.search(counter, p.stderr)
+    if not m or int(m.group(1)) == 0:
+        print("SESSION   `%s` printed no peak for a session of %d checks" % (" ".join(TIMER), checks))
+        sys.exit(1)
+    return int(m.group(1))
+
+# THE NOISE ONLY EVER ADDS. A machine under memory pressure moves pages in and out of the
+# footprint on the kernel's schedule, not the program's, and every stray reading measured here
+# was HIGH — a one-check session at a third over its usual peak, a healthy long one at a
+# quarter over flat. So each side is the lower of its readings: the baseline is the lower of two
+# one-check sessions, which costs one check, and a long session over K is run once more before
+# it fails the gate. A leak climbs every time it is run, so the confirmation keeps it red; a
+# passing run costs nothing extra.
+one = min(peak(1), peak(1))
+many = peak(n)
+ratio = many / one
+print("SESSION   %d checks in one session peak at %.2f times one check (%s: %d, then %d)" % (n, ratio, label, one, many))
+if ratio > k:
+    again = peak(n)
+    print("SESSION   confirming: a second session of %d checks peaks at %.2f times one check" % (n, again / one))
+    ratio = min(ratio, again / one)
+if ratio > k:
+    print("SESSION   a long session climbs past %.2f times one check" % k)
+    sys.exit(1)
+PYEOF
+then
+	echo "lsp-check: a long session climbs out of the band of one check"
+	exit 1
+fi
+echo "lsp-check: $ran buffers agree with the compiler, $outlined outlines are the parser's own, $members module members are checked against their module, formatting is fmt's answer, every protocol case holds, the dump carries the type parameters the outline cannot show, a check is one walk, a name answers with the declaration the compiler resolved it to, and a long session stays in the band of one check"

@@ -12647,7 +12647,7 @@ fn c_owned_args(mut &em: Emitter, key: str, base: int, args: list[ast.Expr]) -> 
 		# not to pay twice.
 		mut rel := ""
 		mut row := -1
-		if c_owns_value(args[i]) {
+		if c_chan_hands(args[i]) {
 			row = c_param_row(em, key, base + i)
 		}
 		if row >= 0 and ast.ty_is_chan(em.pr_ty[row]) {
@@ -16407,9 +16407,26 @@ fn c_chan_copy_fn(dir: int) -> str {
 # order, so the channel is never at zero in between. A borrowed end needs none of this: it is
 # copied by the slot's direction to begin with.
 fn c_chan_narrowed(mut &em: Emitter, v: str, have: ast.Ty, want: ast.Ty) -> str {
-	a := c_chan_dir(have)
-	b := c_chan_dir(want)
-	return v if a == b or not ast.ty_is_chan(have)
+	return v if not ast.ty_is_chan(have)
+	return c_chan_narrowed_dirs(em, v, c_chan_dir(have), c_chan_dir(want))
+}
+
+# c_chan_into hands a channel end to a slot that will hold a count of direction `want` — a
+# binding, a return, a spawn capture. A borrowed end is counted by the slot's direction; an
+# owned one (c_chan_hands) brings its count and is narrowed to it. It is the one spelling of
+# that rule, so the slots cannot drift apart on it.
+fn c_chan_into(mut &em: Emitter, e: ast.Expr, v: str, have: ast.Ty, want: int) -> str {
+	if not c_chan_hands(e) {
+		em.used_conc = true
+		return f"{c_chan_copy_fn(want)}({v})"
+	}
+	return v if not ast.ty_is_chan(have)
+	return c_chan_narrowed_dirs(em, v, c_chan_dir(have), want)
+}
+
+# c_chan_narrowed_dirs is c_chan_narrowed told the two directions rather than the two types.
+fn c_chan_narrowed_dirs(mut &em: Emitter, v: str, a: int, b: int) -> str {
+	return v if a == b
 
 	em.used_conc = true
 	tn := c_tmp(em, "zgt_ch")
@@ -16610,8 +16627,12 @@ fn c_spawn(mut &em: Emitter, x: ast.Expr, ind: str) -> str {
 		entered := c_callee_enter(em, cal, j, f"zgt_se{tag}->f")
 		mut v := c_captured(em, cal.key, j, args[j])
 		c_default_leave(em, entered)
+
+		# a capture HOLDS a count, which it takes from a borrowed end and is handed by an
+		# owned one (c_chan_hands) — narrowed to the parameter's direction, since that is the
+		# count the teardown gives back. Copying an owned end too kept a count nobody released.
 		if dirs[j] >= 0 {
-			v = f"{c_chan_copy_fn(dirs[j])}({v})"
+			v = c_chan_into(em, args[j], v, c_infer(em, args[j]), dirs[j])
 		}
 		out = out + ind + "zgt_se" + tag + "->f" + strconv.to_string(j, 10) + " = " + v + ";\n"
 		j = j + 1
@@ -19524,7 +19545,7 @@ fn c_forchan(mut &em: Emitter, var: str, iter: ast.Expr, t: ast.Ty, body: list[a
 	# the entries that can be live together and moves only when the program does. A borrowed
 	# handle registers nothing, so it keeps the plain name and its C is unchanged.
 	keep := em.rel_cnames.len()
-	owns := c_owns_value(iter)
+	owns := c_chan_hands(iter)
 	mut cit := "zgt_cit"
 	if owns {
 		cit = f"zgt_cit_{keep}"
@@ -19873,11 +19894,7 @@ fn c_let_chan(mut &em: Emitter, name: str, eff: ast.Ty, is_mut: bool, is_const: 
 	em.used_conc = true
 	dir := c_chan_dir(eff)
 	mut val := c_expr(em, ival, c_nosub())
-	if c_is_borrow(ival) {
-		val = f"{c_chan_copy_fn(dir)}({val})"
-	} else {
-		val = c_chan_narrowed(em, val, c_infer(em, ival), eff)
-	}
+	val = c_chan_into(em, ival, val, c_infer(em, ival), dir)
 	c_add_var(em, name, eff, is_mut, is_const)
 	cn := c_var_cname(em, name)
 	give := c_pend_release(em, cn, c_chan_defer_thunk(dir), ind)
@@ -20178,11 +20195,8 @@ fn c_return(mut &em: Emitter, has_val: bool, e: ast.Expr, ind: str) -> str {
 		# the caller gets a receive-only holder, `ch`'s own send end goes with this scope, and
 		# the producer is left as the last sender. Without the copy the release below would
 		# take the count the caller is about to rely on.
-		if ret_chan and c_is_borrow(e) {
-			em.used_conc = true
-			v = f"{c_chan_copy_fn(c_chan_dir(em.fn_ret))}({v})"
-		} else if ret_chan {
-			v = c_chan_narrowed(em, v, et, em.fn_ret)
+		if ret_chan {
+			v = c_chan_into(em, e, v, et, c_chan_dir(em.fn_ret))
 		}
 		return f"{ind}return {v};\n" if pre == ""
 
@@ -20415,8 +20429,29 @@ fn c_ternary(mut &em: Emitter, cond: ast.Expr, then_e: ast.Expr, else_e: ast.Exp
 	# freed it under its owner: `x := if c { s } else { "x" }` then `print s` read freed memory,
 	# and so did a `match` arm answering the same way. So a borrowed branch is copied, which is
 	# what makes the `if` owned in fact and not just in shape (#23).
+	#
+	# A CHANNEL END IS THE EXCEPTION, and c_chan_hands says why: an `if` whose branches all name
+	# a channel hands over no count, exactly as the name alone would not, so every consumer
+	# counts it the way it counts a name. Taking one here left a count only a binding, a return
+	# and a call argument gave back — a spawn captured a second one, and a method argument, a
+	# literal and a `defer` none, so the stream never ended.
 	t := c_infer(em, then_e)
+	return f"({c_expr(em, cond, sb)} ? {c_expr(em, then_e, sb)} : {c_expr(em, else_e, sb)})" if ast.ty_is_chan(t) and not (c_chan_hands(then_e) or c_chan_hands(else_e))
 	return f"({c_expr(em, cond, sb)} ? {c_owned_branch(em, t, then_e, sb)} : {c_owned_branch(em, t, else_e, sb)})"
+}
+
+# c_chan_hands is the channel form of c_owns_value: does this expression hand over a COUNT of
+# its own? Every channel consumer asks it, and only it, so an end is counted once whoever takes
+# it — a binding, a return, a call argument, a spawn capture, a `for … in`. A name, and a field
+# or element of one, hands over none; a call's result, a receive and a field read out of a
+# value nobody holds (c_taken) hand over one; and an `if` hands one over when any branch does —
+# c_ternary then counts the branches that do not, so both sides agree — and none when no
+# branch does, which is the case that must not invent a count nobody gives back.
+fn c_chan_hands(e: ast.Expr) -> bool {
+	return match e {
+		Expr.EIf(_, t, f) => c_chan_hands(t) or c_chan_hands(f)
+		_ => c_owns_value(e)
+	}
 }
 
 # c_owned_branch is one branch of a value-producing `if`, made the reader's own: c_taken's

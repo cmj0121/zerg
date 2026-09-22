@@ -24,13 +24,16 @@
 
 import "./diag"
 import "./doc_render"
+import "./doc_run"
 import "./layout"
 import "./source"
+import "./test"
 import "./test_fixture"
 import "./test_pkg"
 import (
 	"cli"
 	"io"
+	"strconv"
 
 	"/zerg"
 )
@@ -39,14 +42,15 @@ pub fn doc_cmd() -> cli.Command {
 	return (
 		cli.command("doc", "read what a module exposes and the comments that document it")
 		.flag("b", "brief", "one line for each declaration instead of the whole comment")
-		.flag("c", "check", "name the exposed declarations that carry no comment, and exit 1 if any do")
+		.flag("c", "check", "name the exposed declarations that carry no comment, run every example, and exit 1 if anything is missing or wrong")
+		.opt("t", "timeout", "under --check, seconds one module's examples may take to build, and then to run", f"{test.TEST_TIMEOUT}")
 		.add(cli.positional("name", "a module, one of its declarations, or a path to a source"))
 		.run(do_doc)
 	)
 }
 
 fn do_doc(c: cli.Ctx) -> int {
-	return run_doc_check(c.args()) if c.has("check")
+	return run_doc_check(c.args(), doc_timeout(c.get("timeout"))) if c.has("check")
 
 	return run_doc(c.args(), c.has("brief"))
 }
@@ -110,7 +114,7 @@ fn run_doc(args: list[str], brief: bool) -> int {
 # comment and neither is marked in the rendering, so checking them here would report work
 # nothing else in this tree calls owed. The rule this holds is the one the document already
 # states about itself.
-fn run_doc_check(args: list[str]) -> int {
+fn run_doc_check(args: list[str], secs: int) -> int {
 	raise "`zerg doc --check` reads one thing at a time — a module, or a path" if args.len() > 1
 
 	mut mods: list[zerg.DocModule] = []
@@ -124,6 +128,10 @@ fn run_doc_check(args: list[str]) -> int {
 	mut total := 0
 	mut undoc := 0
 	mut unread := 0
+	mut ran := 0
+	mut wrong := 0
+	mut strays := 0
+	tmp := doc_run.example_dir()
 	for m in mods {
 		for f in m.files {
 			if not f.ok {
@@ -138,13 +146,47 @@ fn run_doc_check(args: list[str]) -> int {
 				undoc = undoc + 1
 			}
 		}
+		for s in m.strays {
+			out = out + doc_stray_says(s)
+			strays = strays + 1
+		}
+		bad := doc_run.run_examples(m, tmp, secs, ran)
+		if bad != "" {
+			out = out + bad
+			wrong = wrong + 1
+		}
 	}
+	doc_run.drop_dir(tmp)
 
 	io.write(out)
-	io.write(f"{total} exposed declarations, {undoc} of them undocumented, {unread} file(s) unreadable\n")
-	return 1 if undoc + unread > 0
+	io.write(f"{total} exposed declarations, {undoc} of them undocumented, {unread} file(s) unreadable, {strays} fence(s) not recognised, {ran} example line(s) run, {wrong} module(s) whose examples are wrong\n")
+	return 1 if undoc + unread + strays + wrong > 0
 
 	return 0
+}
+
+# doc_stray_says is the finding for a fence line nothing ran — an orphaned ` ```output ` fence
+# named as that, and a misspelled fence as one.
+fn doc_stray_says(s: zerg.DocStray) -> str {
+	return f"{s.path}:{s.line}: an output fence with no example above it, so nothing is held to it\n" if s.orphan
+
+	return f"{s.path}:{s.line}: `{s.text}` is shaped like an example fence and is not one — a fence is exactly ```zerg or ```output after the `# `, so nothing ran it\n"
+}
+
+# doc_timeout reads `--timeout`, and refuses what is not a whole number of seconds from one up.
+# `int_of` would have read `abc` as the default and `0` as a limit every example outlasts, and
+# both are a typo that should be said rather than run.
+fn doc_timeout(v: str) -> int {
+	why := f"`--timeout` is a whole number of seconds, one or more — `{v}` is not"
+	b := bytearray(v)
+	raise why if b.len() == 0 or b.len() > 9
+	for x in b {
+		raise why if x < b'0' or x > b'9'
+	}
+	n := strconv.parse_int(v, 10)
+	raise why if n < 1
+
+	return n
 }
 
 # doc_check_one resolves the one name `--check` was given, by the same two doors `run_doc`

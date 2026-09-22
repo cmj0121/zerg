@@ -63,12 +63,14 @@ on disk. The module owns the protocol; the driver owns the filesystem.
 | `textDocument/codeAction`                                     | the `fix` a finding carries, as one quick fix      |
 | `textDocument/documentSymbol`                                 | `file_symbols` — the parsed file's declarations    |
 | `textDocument/definition` · `references`                      | the [name index](#a-name-answers-from-one-index)   |
+| `textDocument/hover`                                          | `doc_decl_at` — the document `zerg doc` prints     |
 
 **`initialize` declares a capability for every request above past the document sync** —
 `documentFormattingProvider`, `codeActionProvider`, `documentSymbolProvider`, `definitionProvider`,
-`referencesProvider` — which is the part a client reads before it sends anything. Every other
-request is answered with a **method-not-found error**, not with silence: a client left waiting for a
-reply it will never get stops sending the next one, and the editor goes quiet with nothing said.
+`referencesProvider`, `hoverProvider` — which is the part a client reads before it sends anything.
+Every other request is answered with a **method-not-found error**, not with silence: a client left
+waiting for a reply it will never get stops sending the next one, and the editor goes quiet with
+nothing said.
 
 **The session is a state machine, and the exit status is part of it.** `shutdown` closes the server
 to everything but `exit`; a request that arrives after it is answered with `InvalidRequest`, because a
@@ -423,8 +425,8 @@ by renaming nothing.
 
 **What it does not do.**
 
-- **Hover text.** The index finds the declaration; what a hover shows is that declaration's document,
-  which is #192.
+- **Read a comment.** The index finds the declaration and stops there; the document that declaration
+  carries is [the hover](#hover-is-the-declarations-document), extracted when it is asked for.
 - **Completion, signature help, workspace symbol, rename.** Each is a view of this index, and each is
   #194.
 - **A template nobody instantiated.** A generic body is walked once per specialization, so a template
@@ -437,6 +439,112 @@ by renaming nothing.
   generic body resolves two ways — the method with no common requirement — answers with every
   declaration it resolved to, never with whichever instantiation was walked first. Which of them a
   rename should take is #194's to decide.
+
+## Hover is the declaration's document
+
+`textDocument/hover` is what an editor shows when the cursor rests on a name. The
+[index](#a-name-answers-from-one-index) says which declaration that name is; what is shown is the
+**document `zerg doc` prints for it** — the comment above it, and the signature the compiler spells.
+
+> **There is one reader of comments in this tree.** A hover that scanned for `#` itself would be a
+> document the terminal does not have and a document the editor does not share.
+
+So the text comes from `doc_decl_at`, which is `zerg doc`'s own extraction asked for one place rather
+than for a whole module: the same attachment rules — a run of whole-line comments directly above the
+declaration, a decorator is not a break, a banner claims nothing ([Which comment documents which
+declaration](doc.md#which-comment-documents-which-declaration)) — the same signature from the
+compiler's type printer, and the same `(undocumented)` where nothing was written. One extraction, two
+readers.
+
+**It is asked for every declaration, and `zerg doc` for the exposed ones.** That is one walk with two
+questions, not two answers: a document is what a module _exposes_, and a cursor is on whatever the
+author is looking at — the compiler's own sources are private almost throughout, and a hover that
+went quiet inside them would be a tool for reading other people's code only.
+
+**The index carries positions, not text.** A comment kept per declaration would be a string per row
+held for the whole session and paid on every check, whether or not anybody hovers — the accumulation
+that issue #23 measures. What is stored is what `definition` already needed, and the document is
+extracted when the question is asked: **one parse of the one file the declaration is in**, kept by
+nothing afterwards.
+
+**The peak is the check's, and a hover does not add to it.** One check of the program rooted at this
+compiler's own entry peaks at **0.156 GB**; the same check followed by one, ten and a hundred hovers
+peaks at 0.155, 0.162 and 0.156 — a spread no wider than the one between two runs of the same
+measurement (0.156 and 0.153). Five checks and no hovers peak at **0.188 GB**, and five checks with
+five hovers at 0.182: another check costs more than a hundred hovers do. What a REQUEST leaves
+behind is below what a peak can see — three hundred `definition` requests leave it where one check
+put it (0.154 against 0.156) — and what a finer measurement does find there, a `definition` request
+leaves as much of as a hover: it is the request path's residue, not this answer's.
+
+**The source is the loader's.** The declaration is routinely in another file — a standard library
+function, a sibling of the module — so the whole program is loaded the way a check loads it, with the
+unsaved buffer standing in for what is on disk. A hover therefore answers about the text as it is
+being typed, and a load that raises answers with what the index knows and nothing more. It answers
+only for a buffer the client has **open**, because that buffer is what the document is read from.
+
+**And it is fetched only when it is somewhere else.** The declaration under the cursor is usually
+declared in the file under the cursor, whose text the client already sent — and it is the same text
+the loader would have substituted — so the program is loaded only for a declaration in ANOTHER file.
+It is not loaded at all for a kind no document can hold: `doc_covers` is the extraction's own answer
+to that, asked before paying for a source rather than after reading nothing out of it, so a hover on
+a local binding or a parameter — most of the identifiers in a body — loads nothing. What the
+remaining case costs is worth writing down: on the program rooted at this compiler's own entry, a
+hover that must load it takes about half a second, nearly all of it turning the buffer back into that
+program; the parse of the one file is the small half, and a one-file program is immediate.
+
+**It is markdown.** LSP's `MarkupContent` takes either, and a doc comment in this tree is already
+prose with ` ```zerg ` fences in it, so it is passed through as written and an editor renders the
+examples as examples. The signature goes in a fence of its own above the prose, which is the line a
+reader is looking for. Plain text would show every fence as three backticks.
+
+| The cursor is on                  | The hover shows                                    |
+| --------------------------------- | -------------------------------------------------- |
+| a documented declaration          | its signature, then its comment                    |
+| one with no comment               | its signature, then `(undocumented)`               |
+| a field, a variant, a requirement | the line the document prints, then its own comment |
+| a method                          | its signature, the receiver dropped                |
+| a private declaration             | the same, though no document lists it              |
+| a binding, a parameter            | what it is, and what it is called                  |
+| a type parameter, a namespace     | the same                                           |
+| a built-in, an intrinsic          | nothing                                            |
+
+A binding is **not** marked `(undocumented)`. Nobody could have written a comment for it, so the mark
+would be a complaint about the author rather than a fact about the code; what it gets is the word for
+what it is — `binding`, `parameter`, `type parameter`, `import` — and its name. A **private**
+declaration is marked, and that is the same rule rather than an exception to it: the mark answers
+whether a declaration carries document text, and a private function could have carried some. It is
+about what the author wrote, not about what the page lists.
+
+**A shared use shows every declaration it may be**, in the order `definition` lists them, one under
+the next. A hover that picked one of them would be the editor saying something the jump does not.
+
+**And three answers are nothing:** a name nobody declared, a position in a file this session never
+opened, and a buffer whose check **aborted** — every check replaces the one index and only a walk
+that reached its end stores a new one, so a hover after a refusal would be a document for a program
+the compiler no longer agrees is this one.
+
+`make lsp` holds the two texts together as a **property**, not a transcript: for each declaration it
+hovers, it asks `zerg doc` for the same one and compares the signature and the comment under it. The
+entry is found by the **declared name the case asked about**, never by the text the hover answered
+with, and there must be exactly one of that name — two declarations printing one signature (`log`
+has a `Logger.trace` and a free `trace`) would otherwise let a lookup keyed on the answer pick the
+wrong entry and agree with itself.
+
+Prose is compared **paragraph by paragraph** with whitespace collapsed, because `zerg doc` wraps to
+a page and a hover does not; a **fence is compared line for line**, because a ` ```zerg ` block
+inside a comment is code and its lines are not prose to reflow. Their **order** is compared with
+them — the blocks line up in the sequence they were written. Collapsing both would let a hover that
+joined a comment into one line agree about every word while destroying every paragraph break and
+every example in it.
+
+It holds the shape of the answers that are not a document — the mark, its absence on a binding and
+its absence on an uncommented member, both of which the fixture writes and hovers — and it holds
+hover to the index itself: over every identifier **of the open buffer**, hover answers for exactly
+the names `definition` answers for. Only of the open buffer, and that is the one place the two
+differ by design: a hover is read out of the text the client sent, so a position in a file this
+session never opened has none, while `definition` answers from the index for any file of the
+program. A hover that read the comments a second way disagrees about a word; one that answered a
+type instead of a document disagrees about all of them.
 
 ## A grammar written twice
 
@@ -527,17 +635,17 @@ Tracked as issue [#15](https://github.com/cmj0121/zerg/issues/15).
 
 | Missing                                           | Waiting on                                                    |
 | ------------------------------------------------- | ------------------------------------------------------------- |
-| `hover`                                           | #192 — the index finds the declaration, not its document      |
 | `completion`, `signatureHelp`, `workspace/symbol` | #194 — views of the same index                                |
 | `rename`                                          | #194 — and what a rename does with a spec contract            |
 | `semanticTokens`                                  | `Kind`'s variants cannot be matched outside the `zerg` module |
 | a diagnostic **end** position                     | the compiler tracks where a thing starts, not where it ends   |
 | incremental sync, debounce, cancellation          | a measurement; Phase 1 re-checks the program per keystroke    |
 
-The first three rows were one gap, and [the name index](#a-name-answers-from-one-index) is what
-closed its first half: given a path and a position, what is declared there and where. What is left
-reads that index rather than building a second one — the document of the declaration it finds, the
-declarations in scope at a position, and every use of one.
+Those rows and the hover above them were one gap, and [the name
+index](#a-name-answers-from-one-index) is what closed its first half: given a path and a position,
+what is declared there and where. [The hover](#hover-is-the-declarations-document) is the second half
+— the document of the declaration it finds — and what is left reads the same index rather than
+building a second one: the declarations in scope at a position, and every use of one.
 
 `semanticTokens` is a different kind of missing and worth naming as such: it would need a table
 mapping token kinds to LSP token types, which is exactly the sort of **repeated list of language

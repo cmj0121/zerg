@@ -58,16 +58,17 @@ on disk. The module owns the protocol; the driver owns the filesystem.
 | ------------------------------------------------------------- | -------------------------------------------------- |
 | `initialize` / `shutdown` / `exit`                            | the session                                        |
 | `textDocument/didOpen` · `didChange` · `didSave` · `didClose` | full-text sync                                     |
-| `textDocument/publishDiagnostics`                             | `lex_diags`, `check_and_lint`                      |
+| `textDocument/publishDiagnostics`                             | `lex_diags`, `check_lint_index`                    |
 | `textDocument/formatting`                                     | `fmt_src_off` — the same function `zerg fmt` calls |
 | `textDocument/codeAction`                                     | the `fix` a finding carries, as one quick fix      |
 | `textDocument/documentSymbol`                                 | `file_symbols` — the parsed file's declarations    |
+| `textDocument/definition` · `references`                      | the [name index](#a-name-answers-from-one-index)   |
 
-Those last three are the whole of what `initialize` **declares** — `documentFormattingProvider`,
-`codeActionProvider`, `documentSymbolProvider` — which is the part a client reads before it sends
-anything. Every other request is answered with a **method-not-found error**, not with silence: a
-client left waiting for a reply it will never get stops sending the next one, and the editor goes
-quiet with nothing said.
+**`initialize` declares a capability for every request above past the document sync** —
+`documentFormattingProvider`, `codeActionProvider`, `documentSymbolProvider`, `definitionProvider`,
+`referencesProvider` — which is the part a client reads before it sends anything. Every other
+request is answered with a **method-not-found error**, not with silence: a client left waiting for a
+reply it will never get stops sending the next one, and the editor goes quiet with nothing said.
 
 **The session is a state machine, and the exit status is part of it.** `shutdown` closes the server
 to everything but `exit`; a request that arrives after it is answered with `InvalidRequest`, because a
@@ -301,8 +302,7 @@ opinion — `1.5 + 1` is a legal program — and the formatter has none.
 
 `textDocument/documentSymbol` is what fills an editor's outline, its breadcrumbs and its `gO`. It is
 the one interactive answer that needs **no name resolution** — a declaration knows what it is called
-and where it was written — which is why it is built while `hover`, `definition` and `references` are
-not.
+and where it was written — which is why it was built first.
 
 The rule this page is about decides its shape. The compiler answers `file_symbols`, which walks a
 parsed file and returns a name, a **kind as a word**, and a place; the server maps the word onto
@@ -335,6 +335,108 @@ protocol has a tree and this is a flat list, which is what an editor shows anywa
 `selectionRange` are the same range, the identifier's, because the compiler has no end position for
 either — the same gap the diagnostics have. A jump lands on the name; a client cannot highlight the
 whole declaration a cursor is inside.
+
+## A name answers from one index
+
+`textDocument/definition` and `textDocument/references` are two views of **one table**: the
+position-to-declaration index, `NameIndex`. The use under the cursor names a declaration, and a
+declaration's references are every use that names it. Hover (#192) and completion, signature help,
+workspace symbol and rename (#194) read the same table; none of them resolves a name on its own, and
+a question the index cannot answer is a reason for the index to grow, not for a handler to walk the
+program.
+
+**It is recorded where the compiler resolves each name.** The check walk already decides, for every
+name it lowers, which declaration that name means — the innermost binding still in scope, the method
+the dispatch picked, the field of the struct the target's type names. With `want_index` set it writes
+that decision down in the branch that makes it, so the declaration the index gives for a use is the
+one the compiler lowered it to — this page's rule, applied to names.
+
+**Two answers are derived rather than recorded, because the compiler never resolves them.** A TYPE
+NAME is looked up in the type registry the checker reads, after the walk, since no lowering passes a
+type; a TYPE PARAMETER is matched to the innermost declaration whose extent holds it, since
+substitution removes it before anything could resolve it. Both are what `make lsp`'s positions and
+rename properties hold to the compiler.
+
+**It is the same walk.** `check_lint_index` is `check_and_lint` that also hands back the index, and
+the cost is recording, not walking, and `make lsp`'s one-walk case measures a check that builds it. A
+build asks for no index and pays one test per recording site — the tables beside the walk do not
+even grow a column.
+
+**The key is the declaration's name token** — its file, line and byte column. A generic's
+specializations are copies that keep their template's place, so a template called at two types is
+**one** declaration with every call among its references. A declaration is recorded as its own use,
+so the references of a name include where it is declared and a cursor on the declaration answers too.
+
+| Name at the cursor             | Answers with                                                         |
+| ------------------------------ | -------------------------------------------------------------------- |
+| a binding, a parameter         | the innermost binding still in scope — shadowing is resolved         |
+| a closure's captured name      | the binding the closure copies                                       |
+| a call, a function value       | the function; a generic's template                                   |
+| `name: value` in a call        | the parameter it names; in a construction, the field                 |
+| a method                       | the implementation the dispatch picked                               |
+| a method inside generic code   | the spec requirement, when the type parameter's bound declares it    |
+| a method a body resolves twice | the spec requirement both implementations keep                       |
+| a field, `?.`, a variant       | the field, the variant, the associated function or value             |
+| a field a body resolves twice  | every field it resolved to — a generic `x.n` at two types is SHARED  |
+| a namespace, `ns.f`            | the `import` that bound it in this file, and the member it names     |
+| a type name, a type parameter  | the declaration; the `[T]` whose scope holds the use                 |
+| a built-in, an intrinsic       | nothing — `null`, which is the honest answer for a name nobody wrote |
+
+**An aborted check drops it.** Every check replaces the session's one slot, and only a walk that
+reached its end stores a new one. A buffer that stops lexing, loading or lowering answers both
+requests with `null` until the next check that completes, rather than with the positions of a program
+the compiler no longer agrees is this one.
+
+**Positions are converted once.** The compiler records a 1-based line and a byte column; the index is
+converted to a 0-based line and UTF-16 columns as it is stored, counted by the one rule the
+diagnostics' columns are (`ls_utf16_from`), and the sources are not kept. What stays is columns of
+integers and the declared names — on the compiler's own program, a few megabytes against a check
+that peaks in the hundreds.
+
+**A shared use answers with every declaration it may be.** A generic body is walked once per
+instantiation, and a field it reads through a type parameter — `x.n` called with a `P` and a `Q` —
+resolves to `P.n` in one walk and `Q.n` in the other. The index keeps both as candidates, so
+`definition` answers with a LIST of locations (LSP allows one), and the use is among the references
+of each. Neither is "the first walked": the answer may not depend on the order of instantiation. A
+method that resolves two ways answers instead with the spec requirement both implementations keep,
+when there is one. So `definition` answers ONE `Location` object for a name with one declaration and
+a `Location` LIST for a shared use, ordered by where each is declared — file, line, column.
+
+`make lsp` holds it three ways, and each catches a different wrong index. Hand-written **positions**:
+a shadowed binding, a parameter beside a local of its name, a generic method called at two types, a
+call through a spec bound, a method, a field and a named argument a body resolves two ways (each
+asked again with the instantiations the other way round, since the answer may not depend on which
+was walked first), a variant and an associated name reached through a type a binding shadows, a
+closure's capture, an `impl`'s type parameter, a named argument, a construction's field, a `?.`
+field, a destructured binding, a member of another file, a namespace, the standard library, an
+intrinsic, and a name after a line of CJK. **Symmetry**: every name in the fixture that has a
+definition is among that definition's references, and no declaration is left with none while a name
+spelled like it answers nothing — the shape a dropped use leaves. The shared uses are derived from
+what the index answers and must be exactly the ones the fixture writes, in both directions. And
+**rename**, held to `zerg build --emit check` and to what the program prints: renaming a declaration
+and every reference to a fresh name leaves both as they were, and renaming every reference but the
+declaration does not build — a reference the index missed is a use left under the old name, and one
+it attributed to the wrong binding reads another value. A shared use and every declaration it may be
+are renamed together, as one group. What the rename leaves out — the standard library, an import's
+path, a contract — has a floor per reason, so a filter that grew could not turn the property green
+by renaming nothing.
+
+**What it does not do.**
+
+- **Hover text.** The index finds the declaration; what a hover shows is that declaration's document,
+  which is #192.
+- **Completion, signature help, workspace symbol, rename.** Each is a view of this index, and each is
+  #194.
+- **A template nobody instantiated.** A generic body is walked once per specialization, so a template
+  no call reaches is never walked and its names have no entries.
+- **A contract.** A spec requirement and each method keeping it are separate declarations. Renaming
+  one alone breaks the program by design, and what a rename does with a contract is #194's to decide.
+- **A name an or-pattern binds.** `A(x) | B(x)` binds `x` on each side, and the body reads whichever
+  matched — two declarations for one name, so it answers `null` rather than one of them.
+- **One declaration for a shared use.** A field, a named argument, a variant pattern or a method a
+  generic body resolves two ways — the method with no common requirement — answers with every
+  declaration it resolved to, never with whichever instantiation was walked first. Which of them a
+  rename should take is #194's to decide.
 
 ## A grammar written twice
 
@@ -386,7 +488,7 @@ further than any string rule and swallowed the closing quote. Neither a token pr
 ## Keeping the editor honest
 
 Everything else in this tree is held to the compiler by **calling** it — `zerg fmt` is the formatter,
-and the server asks `check_and_lint` rather than checking anything itself, so there is no second copy
+and the server asks `check_lint_index` rather than checking anything itself, so there is no second copy
 to drift. The editor files are the one exception and cannot be anything else: vim highlights from a
 keyword list written in vimscript, and nvim has to know how to indent before any Zerg tool has run.
 
@@ -425,17 +527,17 @@ Tracked as issue [#15](https://github.com/cmj0121/zerg/issues/15).
 
 | Missing                                           | Waiting on                                                    |
 | ------------------------------------------------- | ------------------------------------------------------------- |
-| `hover`, `definition`, `references`, `rename`     | nothing maps a position to a declaration                      |
-| `completion`, `signatureHelp`, `workspace/symbol` | the same query surface                                        |
+| `hover`                                           | #192 — the index finds the declaration, not its document      |
+| `completion`, `signatureHelp`, `workspace/symbol` | #194 — views of the same index                                |
+| `rename`                                          | #194 — and what a rename does with a spec contract            |
 | `semanticTokens`                                  | `Kind`'s variants cannot be matched outside the `zerg` module |
 | a diagnostic **end** position                     | the compiler tracks where a thing starts, not where it ends   |
 | incremental sync, debounce, cancellation          | a measurement; Phase 1 re-checks the program per keystroke    |
 
-The first two rows are the real gap and everything interactive is behind them. The information
-exists — `check.zg` computes all of it — and is discarded after the build. What is needed is not
-those types made public one by one but a **query surface**: given a path and a position, what is
-declared there, where was it declared, and what is its type. That is one index, not seven features —
-eight with `declaration`, which is `definition` asked of a different node.
+The first three rows were one gap, and [the name index](#a-name-answers-from-one-index) is what
+closed its first half: given a path and a position, what is declared there and where. What is left
+reads that index rather than building a second one — the document of the declaration it finds, the
+declarations in scope at a position, and every use of one.
 
 `semanticTokens` is a different kind of missing and worth naming as such: it would need a table
 mapping token kinds to LSP token types, which is exactly the sort of **repeated list of language

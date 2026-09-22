@@ -248,19 +248,19 @@ pub fn gen_resolve_lens(f: ast.File) -> ast.File {
 
 	mut structs: list[ast.StructDecl] = []
 	for sd in f.structs {
-		structs.append(ast.StructDecl(sd.name, subst_fields(su, sd.fields), sd.is_pub, sd.path, sd.line, sd.col, sd.tparams, sd.name_line, sd.name_col))
+		structs.append(ast.StructDecl(sd.name, subst_fields(su, sd.fields), sd.is_pub, sd.path, sd.line, sd.col, sd.tparams, sd.name_line, sd.name_col, sd.end_line, sd.end_col))
 	}
 	mut enums: list[ast.EnumDecl] = []
 	for ed in f.enums {
-		enums.append(ast.EnumDecl(ed.name, subst_variants(su, ed.variants), ed.tparams, ed.is_pub, ed.path, ed.line, ed.col, ed.name_line, ed.name_col))
+		enums.append(ast.EnumDecl(ed.name, subst_variants(su, ed.variants), ed.tparams, ed.is_pub, ed.path, ed.line, ed.col, ed.name_line, ed.name_col, ed.end_line, ed.end_col))
 	}
 	mut types: list[ast.TypeDecl] = []
 	for td in f.types {
-		types.append(ast.TypeDecl(td.name, subst_ty(su, td.under), td.is_pub, td.path, td.line, td.col, td.name_line, td.name_col))
+		types.append(ast.TypeDecl(td.name, subst_ty(su, td.under), td.is_pub, td.path, td.line, td.col, td.name_line, td.name_col, td.end_line, td.end_col))
 	}
 	mut consts: list[ast.ConstDecl] = []
 	for cd in f.consts {
-		consts.append(ast.ConstDecl(cd.name, cd.recv, subst_ty(su, cd.ty), cd.has_ty, cd.is_mut, cd.is_const, cd.is_pub, cd.in_unsafe, subst_expr(su, cd.value), cd.path, cd.line, cd.col, cd.name_line, cd.name_col))
+		consts.append(ast.ConstDecl(cd.name, cd.recv, subst_ty(su, cd.ty), cd.has_ty, cd.is_mut, cd.is_const, cd.is_pub, cd.in_unsafe, subst_expr(su, cd.value), cd.path, cd.line, cd.col, cd.name_line, cd.name_col, cd.end_line, cd.end_col))
 	}
 	mut fns: list[ast.FnDecl] = []
 	for fd in f.fns {
@@ -268,7 +268,7 @@ pub fn gen_resolve_lens(f: ast.File) -> ast.File {
 	}
 	mut specs: list[ast.SpecDecl] = []
 	for sp in f.specs {
-		specs.append(ast.SpecDecl(sp.name, sp.params, sp.supers, sp.super_args, gen_len_fns(su, sp.reqs), sp.is_pub, sp.path, sp.line, sp.col, sp.name_line, sp.name_col))
+		specs.append(ast.SpecDecl(sp.name, sp.params, sp.supers, sp.super_args, gen_len_fns(su, sp.reqs), sp.is_pub, sp.path, sp.line, sp.col, sp.name_line, sp.name_col, sp.end_line, sp.end_col))
 	}
 	return ast.File(f.imports, structs, enums, specs, f.impls, fns, types, consts, f.derive_on, f.derive_spec, f.stmts, f.ty_quals, f.ty_apps, f.ty_uses, f.tp_scopes)
 }
@@ -353,7 +353,7 @@ fn gen_len_binary(keys: list[str], vals: list[str], o: str, a: ast.Expr, b: ast.
 pub fn subst_fields(su: TySubst, fs: list[ast.FieldDef]) -> list[ast.FieldDef] {
 	mut out: list[ast.FieldDef] = []
 	for fd in fs {
-		out.append(ast.FieldDef(fd.name, subst_ty(su, fd.ty), fd.is_pub, fd.has_def, subst_expr(su, fd.def), fd.line, fd.col, fd.name_line, fd.name_col))
+		out.append(ast.FieldDef(fd.name, subst_ty(su, fd.ty), fd.is_pub, fd.has_def, subst_expr(su, fd.def), fd.line, fd.col, fd.name_line, fd.name_col, fd.end_line, fd.end_col))
 	}
 	return out
 }
@@ -364,7 +364,7 @@ pub fn subst_fields(su: TySubst, fs: list[ast.FieldDef]) -> list[ast.FieldDef] {
 pub fn subst_variants(su: TySubst, vs: list[ast.VariantDef]) -> list[ast.VariantDef] {
 	mut out: list[ast.VariantDef] = []
 	for v in vs {
-		out.append(ast.VariantDef(v.name, subst_tys(su, v.fields), v.has_discr, v.discr, v.line, v.col))
+		out.append(ast.VariantDef(v.name, subst_tys(su, v.fields), v.has_discr, v.discr, v.line, v.col, v.end_line, v.end_col))
 	}
 	return out
 }
@@ -380,7 +380,7 @@ fn gen_len_fns(su: TySubst, fs: list[ast.FnDecl]) -> list[ast.FnDecl] {
 # gen_len_fn is subst_fn without the mangling: the same walk over a declaration, for a
 # substitution that renames nothing.
 fn gen_len_fn(su: TySubst, fd: ast.FnDecl) -> ast.FnDecl {
-	return ast.FnDecl(fd.name, fd.recv, subst_params(su, fd.params), fd.has_ret, subst_ty(su, fd.ret), subst_block(su, fd.body), fd.is_pub, fd.path, fd.line, fd.col, fd.tparams, fd.tbounds, fd.in_unsafe, fd.is_test, fd.is_fixture, fd.has_body, fd.is_assoc, fd.spec_of, fd.name_line, fd.name_col)
+	return ast.FnDecl(fd.name, fd.recv, subst_params(su, fd.params), fd.has_ret, subst_ty(su, fd.ret), subst_block(su, fd.body), fd.is_pub, fd.path, fd.line, fd.col, fd.tparams, fd.tbounds, fd.in_unsafe, fd.is_test, fd.is_fixture, fd.has_body, fd.is_assoc, fd.spec_of, fd.name_line, fd.name_col, fd.end_line, fd.end_col)
 }
 
 # subst_method is subst_fn for a method of a template `impl`: the same walk, plus the RECEIVER
@@ -392,14 +392,14 @@ fn gen_len_fn(su: TySubst, fd: ast.FnDecl) -> ast.FnDecl {
 # signature and its `U` was reported to the caller as a type: _argument 1 of `Box[int].tag` is
 # U, and this gives str_.
 pub fn subst_method(su: TySubst, m: ast.FnDecl, recv: str) -> ast.FnDecl {
-	return ast.FnDecl(m.name, recv, subst_params(su, m.params), m.has_ret, subst_ty(su, m.ret), subst_block(su, m.body), m.is_pub, m.path, m.line, m.col, m.tparams, m.tbounds, m.in_unsafe, m.is_test, m.is_fixture, m.has_body, m.is_assoc, m.spec_of, m.name_line, m.name_col)
+	return ast.FnDecl(m.name, recv, subst_params(su, m.params), m.has_ret, subst_ty(su, m.ret), subst_block(su, m.body), m.is_pub, m.path, m.line, m.col, m.tparams, m.tbounds, m.in_unsafe, m.is_test, m.is_fixture, m.has_body, m.is_assoc, m.spec_of, m.name_line, m.name_col, m.end_line, m.end_col)
 }
 
 # subst_fn keeps `is_assoc`: a specialization of `impl P { fn make[U](…) }` is still an
 # associated fn, and the signature row it becomes is what tells `P.make(…)` from `p.make(…)`.
 pub fn subst_fn(tpl: ast.FnDecl, args: list[ast.Ty], at: str, apps: list[ast.TyApp]) -> ast.FnDecl {
 	su := TySubst(tpl.tparams, args, [], [], apps, at)
-	return ast.FnDecl(gen_mangle(tpl.name, args), tpl.recv, subst_params(su, tpl.params), tpl.has_ret, subst_ty(su, tpl.ret), subst_block(su, tpl.body), tpl.is_pub, tpl.path, tpl.line, tpl.col, [], [], tpl.in_unsafe, tpl.is_test, tpl.is_fixture, tpl.has_body, tpl.is_assoc, tpl.spec_of, tpl.name_line, tpl.name_col)
+	return ast.FnDecl(gen_mangle(tpl.name, args), tpl.recv, subst_params(su, tpl.params), tpl.has_ret, subst_ty(su, tpl.ret), subst_block(su, tpl.body), tpl.is_pub, tpl.path, tpl.line, tpl.col, [], [], tpl.in_unsafe, tpl.is_test, tpl.is_fixture, tpl.has_body, tpl.is_assoc, tpl.spec_of, tpl.name_line, tpl.name_col, tpl.end_line, tpl.end_col)
 }
 
 # subst_ty replaces a type parameter wherever a type is written, at any depth.
@@ -538,11 +538,11 @@ fn subst_stmt(su: TySubst, s: ast.Stmt) -> ast.Stmt {
 		#
 		# These five carry nothing a type argument could reach: two jumps, a nop, a `del` of
 		# a name, and a position marker.
-		Stmt.SBreak        => s
-		Stmt.SContinue     => s
-		Stmt.SNop          => s
-		Stmt.SDel(_, _, _) => s
-		Stmt.SAt(_, _)     => s
+		Stmt.SBreak          => s
+		Stmt.SContinue       => s
+		Stmt.SNop            => s
+		Stmt.SDel(_, _, _)   => s
+		Stmt.SAt(_, _, _, _) => s
 	}
 }
 

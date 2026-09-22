@@ -111,6 +111,44 @@ fn p_at(mut &p: Parser, k: token.Kind) -> bool {
 	return cur_kind(p) == k
 }
 
+# Ends is where a construct FINISHES — a line, and the column one past its last byte. It is a
+# pair and not two out-parameters because every caller wants both and a caller that was handed
+# them separately could pass one declaration's line with another's column.
+struct Ends {
+	pub line: int
+	pub col: int
+}
+
+# p_ended is that pair for the token the parser last CONSUMED. It is how every declaration
+# here learns its end (ast.zg, `decl-extent`): a construct is built after its closing token has
+# been taken, so the token behind the cursor is the construct's last one — and reading the
+# token AHEAD instead, which is what the type-parameter scopes do, would stretch the extent
+# over whatever separator, comment or blank line follows.
+#
+# A lexeme that SPANS LINES — a triple-quoted or a raw string — ends on its own last line, so
+# the count restarts at every newline rather than adding the whole length to the column it
+# started in.
+fn p_ended(mut &p: Parser) -> Ends {
+	mut i := p.pos - 1
+	if i >= p.toks.len() {
+		i = p.toks.len() - 1
+	}
+	return Ends(0, 0) if i < 0
+
+	t := p.toks[i]
+	mut line := t.line
+	mut col := t.col
+	for c in bytearray(t.lexeme) {
+		if c == b'\n' {
+			line = line + 1
+			col = 1
+		} else {
+			col = col + 1
+		}
+	}
+	return Ends(line, col)
+}
+
 fn p_advance(mut &p: Parser) {
 	p.pos = p.pos + 1
 }
@@ -1619,8 +1657,9 @@ fn p_is_nop(s: ast.Stmt) -> bool {
 # one place a top-level `mut` is legal (docs/runtime/ffi.md).
 fn p_top_binding(mut &p: Parser, recv: str, is_mut: bool, is_const: bool, is_pub: bool, in_unsafe: bool, line: int, col: int) -> ast.ConstDecl {
 	s := parse_binding(p, is_mut, is_const)
+	e := p_ended(p)
 	return match s {
-		Stmt.SLet(name, ty, has_ty, im, ic, value, nl, nc) => ast.ConstDecl(name, recv, ty, has_ty, im, ic, is_pub, in_unsafe, value, p.path, line, col, nl, nc)
+		Stmt.SLet(name, ty, has_ty, im, ic, value, nl, nc) => ast.ConstDecl(name, recv, ty, has_ty, im, ic, is_pub, in_unsafe, value, p.path, line, col, nl, nc, e.line, e.col)
 
 		# parse_binding only ever answers SLet; the arm is exhaustiveness, and it must be
 		# LOUD: fabricating a ConstDecl here would let a future non-SLet result flow into
@@ -1907,9 +1946,11 @@ fn parse_sel_body(mut &p: Parser) -> list[ast.Stmt] {
 	# one: a braceless body is a statement built outside that loop, so without it a
 	# diagnostic about the arm named the whole `select` rather than the arm.
 	t := cur(p)
-	one.append(ast.Stmt.SAt(t.line, t.col))
+	st := parse_stmt(p)
+	e := p_ended(p)
+	one.append(ast.Stmt.SAt(t.line, t.col, e.line, e.col))
 
-	one.append(parse_stmt(p))
+	one.append(st)
 	return one
 }
 
@@ -2173,7 +2214,9 @@ fn parse_spec(mut &p: Parser, is_pub: bool) -> ast.SpecDecl {
 			# method that does nothing and a signature is a requirement — two different things
 			# with the same body.
 			if p_at(p, token.Kind.LBrace) {
-				reqs.append(ast.FnDecl(sig.name, sig.recv, sig.params, sig.has_ret, sig.ret, parse_block(p), sig.is_pub, sig.path, sig.line, sig.col, sig.tparams, sig.tbounds, sig.in_unsafe, false, false, true, false, "", sig.name_line, sig.name_col))
+				b := parse_block(p)
+				e := p_ended(p)
+				reqs.append(ast.FnDecl(sig.name, sig.recv, sig.params, sig.has_ret, sig.ret, b, sig.is_pub, sig.path, sig.line, sig.col, sig.tparams, sig.tbounds, sig.in_unsafe, false, false, true, false, "", sig.name_line, sig.name_col, e.line, e.col))
 			} else {
 				reqs.append(sig)
 			}
@@ -2193,8 +2236,9 @@ fn parse_spec(mut &p: Parser, is_pub: bool) -> ast.SpecDecl {
 		skip_semis(p)
 	}
 	expect(p, token.Kind.RBrace)
+	e := p_ended(p)
 	p_tp_scope(p, kw, params.len())
-	return ast.SpecDecl(name, params, supers, super_args, reqs, is_pub, p.path, kw.line, kw.col, nt.line, nt.col)
+	return ast.SpecDecl(name, params, supers, super_args, reqs, is_pub, p.path, kw.line, kw.col, nt.line, nt.col, e.line, e.col)
 }
 
 # parse_typedecl reads `type X = Y` — a NEW, DISTINCT type that takes on Y's representation
@@ -2231,7 +2275,9 @@ fn parse_typedecl(mut &p: Parser, is_pub: bool) -> ast.TypeDecl {
 
 	expect(p, token.Kind.Assign)
 
-	return ast.TypeDecl(name, parse_type(p), is_pub, p.path, kw.line, kw.col, nt.line, nt.col)
+	under := parse_type(p)
+	e := p_ended(p)
+	return ast.TypeDecl(name, under, is_pub, p.path, kw.line, kw.col, nt.line, nt.col, e.line, e.col)
 }
 
 # parse_init reads `init() { … }`, the lazy-setup declaration, as an ordinary function so
@@ -2246,9 +2292,11 @@ fn parse_init(mut &p: Parser, at: int) -> ast.FnDecl {
 	p_advance(p) # 'init'
 	expect(p, token.Kind.LParen)
 	expect(p, token.Kind.RParen)
+
 	mut params: list[ast.Param] = []
 	body := parse_block(p)
-	return ast.FnDecl(init_name(at), "", params, false, ast.Ty.TVoid, body, false, p.path, kw.line, kw.col, [], [], false, false, false, true, false, "", 0, 0)
+	e := p_ended(p)
+	return ast.FnDecl(init_name(at), "", params, false, ast.Ty.TVoid, body, false, p.path, kw.line, kw.col, [], [], false, false, false, true, false, "", 0, 0, e.line, e.col)
 }
 
 # with_name is the binding a NAMELESS `with` gets, and is_with_name is how a rule that reads
@@ -2395,7 +2443,8 @@ fn parse_import_spec(mut &p: Parser) -> ast.ImportDecl {
 		if p_at(p, token.Kind.Ident) {
 			at := cur(p)
 			p_advance(p)
-			return ast.ImportDecl(t.value, at.lexeme, true, is_pub, p.path, t.line, t.col, at.line, at.col)
+			e := p_ended(p)
+			return ast.ImportDecl(t.value, at.lexeme, true, is_pub, p.path, t.line, t.col, at.line, at.col, e.line, e.col)
 		}
 	}
 
@@ -2404,7 +2453,8 @@ fn parse_import_spec(mut &p: Parser) -> ast.ImportDecl {
 	# the path in front of the segment
 	seg := ast.last_segment(t.value)
 	seg_col := t.col + 1 + bytearray(t.value).len() - bytearray(seg).len()
-	return ast.ImportDecl(t.value, seg, false, is_pub, p.path, t.line, t.col, t.line, seg_col)
+	e := p_ended(p)
+	return ast.ImportDecl(t.value, seg, false, is_pub, p.path, t.line, t.col, t.line, seg_col, e.line, e.col)
 }
 
 # p_import_path_guess reassembles the bare path the reader wrote, so the refusal above can
@@ -2484,7 +2534,8 @@ fn parse_enum(mut &p: Parser, is_pub: bool) -> ast.EnumDecl {
 			discr = parse_expr(p)
 			spelled.append(vname)
 		}
-		variants.append(ast.VariantDef(vname, fields, has_discr, discr, vt.line, vt.col))
+		ve := p_ended(p)
+		variants.append(ast.VariantDef(vname, fields, has_discr, discr, vt.line, vt.col, ve.line, ve.col))
 
 		# GRAMMAR#variant-list is `variant ( stmt-sep+ variant )*` — the same shape as a
 		# statement list, so the separator is REQUIRED and p_stmt_sep is the rule that says
@@ -2501,8 +2552,9 @@ fn parse_enum(mut &p: Parser, is_pub: bool) -> ast.EnumDecl {
 	# equal its position was indistinguishable from one that declared nothing, so `P(int) = 0`
 	# had its discriminant read and then quietly dropped.
 	raise p_diag(p, rule.Rule.DiscriminantOnPayloadEnum, f"enum `{name}` carries a payload, so its tag is opaque — a discriminant (on `{spelled[0]}`) belongs to an enum whose every variant is fieldless") if payload and spelled.len() > 0
+	e := p_ended(p)
 	p_tp_scope(p, kw, tparams.len())
-	return ast.EnumDecl(name, variants, tparams, is_pub, p.path, kw.line, kw.col, nt.line, nt.col)
+	return ast.EnumDecl(name, variants, tparams, is_pub, p.path, kw.line, kw.col, nt.line, nt.col, e.line, e.col)
 }
 
 # is_pascal reports whether a name starts with an uppercase ASCII letter — the tell for
@@ -2561,15 +2613,17 @@ fn parse_struct(mut &p: Parser, is_pub: bool) -> ast.StructDecl {
 			def = parse_expr(p)
 			has_def = true
 		}
-		fields.append(ast.FieldDef(fname, fty, is_pub, has_def, def, at.line, at.col, ft.line, ft.col))
+		fe := p_ended(p)
+		fields.append(ast.FieldDef(fname, fty, is_pub, has_def, def, at.line, at.col, ft.line, ft.col, fe.line, fe.col))
 
 		# GRAMMAR#field-list is `field ( stmt-sep+ field )*` — the separator is REQUIRED,
 		# the same rule the variant list states above and for the same reason.
 		p_stmt_sep(p, token.Kind.RBrace)
 	}
 	expect(p, token.Kind.RBrace)
+	e := p_ended(p)
 	p_tp_scope(p, kw, tparams.len())
-	return ast.StructDecl(name, fields, is_pub, p.path, kw.line, kw.col, tparams, nt.line, nt.col)
+	return ast.StructDecl(name, fields, is_pub, p.path, kw.line, kw.col, tparams, nt.line, nt.col, e.line, e.col)
 }
 
 # parse_decorator reads `#[ … ]` (GRAMMAR#decorator). It used to reach the top-level fallback,
@@ -2861,8 +2915,12 @@ fn parse_impl(mut &p: Parser, mut &fns: list[ast.FnDecl], mut &impls: list[ast.I
 		target = applied
 	}
 
+	# the head is built here and its END is written in once the block has been read: an `impl`
+	# is the one declaration whose extent is not known where it is constructed, because its
+	# items are parsed into the file's own lists rather than into it.
+	ip_at := impls.len()
 	if sp != "" {
-		impls.append(ast.ImplDecl(sp, args, target, tp_names, p.path, kw.line, kw.col))
+		impls.append(ast.ImplDecl(sp, args, target, tp_names, p.path, kw.line, kw.col, 0, 0))
 	}
 
 	# `impl Box[T]` — with no `impl[T]`, what makes it generic is that an argument of its target
@@ -2935,6 +2993,11 @@ fn parse_impl(mut &p: Parser, mut &fns: list[ast.FnDecl], mut &impls: list[ast.I
 		skip_semis(p)
 	}
 	expect(p, token.Kind.RBrace)
+	if sp != "" {
+		e := p_ended(p)
+		ip := impls[ip_at]
+		impls[ip_at] = ast.ImplDecl(ip.on, ip.args, ip.target, ip.tparams, ip.path, ip.line, ip.col, e.line, e.col)
+	}
 	p.impl_ty = outer
 	p_tp_scope(p, kw, tp_names.len() + maybe)
 }
@@ -2980,6 +3043,7 @@ fn parse_fn_at(mut &p: Parser, is_pub: bool, recv: str, recv_mut: bool, in_unsaf
 	outer_this := p.saw_this
 	p.saw_this = false
 	body := parse_block(p)
+	e := p_ended(p)
 	p_tp_scope(p, start, head.tparams.len())
 	is_assoc := assoc_ok and not p.saw_this and not p_is_rendering(head.name)
 	p.saw_this = outer_this or p.saw_this
@@ -2988,7 +3052,7 @@ fn parse_fn_at(mut &p: Parser, is_pub: bool, recv: str, recv_mut: bool, in_unsaf
 	if assoc_ok and not is_assoc {
 		params = p_with_receiver(recv, recv_mut, head.params)
 	}
-	return ast.FnDecl(head.name, head.recv, params, head.has_ret, head.ret, body, head.is_pub, head.path, head.line, head.col, head.tparams, head.tbounds, head.in_unsafe, is_test, is_fixture, true, is_assoc, spec_of, head.name_line, head.name_col)
+	return ast.FnDecl(head.name, head.recv, params, head.has_ret, head.ret, body, head.is_pub, head.path, head.line, head.col, head.tparams, head.tbounds, head.in_unsafe, is_test, is_fixture, true, is_assoc, spec_of, head.name_line, head.name_col, e.line, e.col)
 }
 
 # p_is_rendering names the two methods the LANGUAGE declares rather than the author:
@@ -3146,7 +3210,8 @@ fn parse_fn_head_at(mut &p: Parser, is_pub: bool, recv: str, recv_mut: bool, in_
 		has_ret = true
 	}
 	mut none: list[ast.Stmt] = []
-	return ast.FnDecl(name, recv, params, has_ret, ret, none, is_pub, p.path, kw.line, kw.col, tparams, tbounds, in_unsafe, false, false, false, false, "", nt.line, nt.col)
+	e := p_ended(p)
+	return ast.FnDecl(name, recv, params, has_ret, ret, none, is_pub, p.path, kw.line, kw.col, tparams, tbounds, in_unsafe, false, false, false, false, "", nt.line, nt.col, e.line, e.col)
 }
 
 # parse_block counts a nesting level per block, since statements nest through blocks and
@@ -3217,9 +3282,14 @@ fn parse_block(mut &p: Parser) -> list[ast.Stmt] {
 			continue
 		}
 
+		# THE STATEMENT IS READ FIRST, because the marker carries where it ENDS and the end is
+		# the last token it consumed. The marker still goes in front of it — a block answers
+		# with its last element, and that must stay the statement.
 		deco_seen = false
-		body.append(ast.Stmt.SAt(t.line, t.col))
-		body.append(parse_stmt(p))
+		st := parse_stmt(p)
+		e := p_ended(p)
+		body.append(ast.Stmt.SAt(t.line, t.col, e.line, e.col))
+		body.append(st)
 		p_stmt_sep(p, token.Kind.RBrace)
 	}
 	expect(p, token.Kind.RBrace)
@@ -4018,9 +4088,11 @@ fn p_else_body(mut &p: Parser) -> list[ast.Stmt] {
 	# scope — was reported against whatever statement spoke last, which is the closing line
 	# of the branch above it.
 	t := cur(p)
-	body.append(ast.Stmt.SAt(t.line, t.col))
+	st := parse_if(p)
+	e := p_ended(p)
+	body.append(ast.Stmt.SAt(t.line, t.col, e.line, e.col))
 
-	body.append(parse_if(p))
+	body.append(st)
 	p_shallower(p)
 	return body
 }

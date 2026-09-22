@@ -360,9 +360,16 @@ pub struct Emitter {
 	# at_line / at_col are where the statement being emitted STARTS, updated by the SAt
 	# marker the parser puts before each one. Every diagnostic reads them, which is what
 	# turns a message into a message with a place.
+	#
+	# at_end_line / at_end_col are where that same statement FINISHES, off the same marker —
+	# so a finding made about it carries the whole statement rather than a point an editor
+	# then has to guess a width for. They are 0 where the marker did not carry one, which is
+	# every place the marker is set by hand rather than read off an SAt (c_mark).
 	pub at_path: str
 	pub at_line: int
 	pub at_col: int
+	pub at_end_line: int
+	pub at_end_col: int
 
 	# diags is every ILL-FORMED-PROGRAM finding this emission has made, rendered, in the
 	# order they were found. They are COLLECTED rather than raised because an error was a
@@ -3589,7 +3596,7 @@ fn c_with_impl_insts(mut &em: Emitter, f: ast.File, record: bool) -> ast.File {
 		for applied in em.inst_tys {
 			continue if c_app_base(applied) != c_app_base(ip.target)
 
-			impls.append(ast.ImplDecl(ip.on, ip.args, applied, [], ip.path, ip.line, ip.col))
+			impls.append(ast.ImplDecl(ip.on, ip.args, applied, [], ip.path, ip.line, ip.col, ip.end_line, ip.end_col))
 		}
 	}
 
@@ -3787,7 +3794,7 @@ fn c_gen_enum_on_demand(mut &em: Emitter, tpl: ast.EnumDecl, applied: str, sol: 
 	mut novals: list[str] = []
 	su := generic.TySubst(tpl.tparams, sol, nokeys, novals, em.ty_apps, c_place(em))
 	mut notp: list[str] = []
-	ed := ast.EnumDecl(applied, generic.subst_variants(su, tpl.variants), notp, tpl.is_pub, tpl.path, tpl.line, tpl.col, tpl.name_line, tpl.name_col)
+	ed := ast.EnumDecl(applied, generic.subst_variants(su, tpl.variants), notp, tpl.is_pub, tpl.path, tpl.line, tpl.col, tpl.name_line, tpl.name_col, tpl.end_line, tpl.end_col)
 
 	c_register_enum(em, ed)
 	em.res_decls.append(c_enum_typedef(ed))
@@ -3951,13 +3958,13 @@ fn c_enum_inst(mut &em: Emitter, f: ast.File, tpl: ast.EnumDecl, a: ast.TyApp) -
 	c_subst_apps(em, su)
 
 	mut notp: list[str] = []
-	return ast.EnumDecl(a.name, generic.subst_variants(su, tpl.variants), notp, tpl.is_pub, tpl.path, tpl.line, tpl.col, tpl.name_line, tpl.name_col)
+	return ast.EnumDecl(a.name, generic.subst_variants(su, tpl.variants), notp, tpl.is_pub, tpl.path, tpl.line, tpl.col, tpl.name_line, tpl.name_col, tpl.end_line, tpl.end_col)
 }
 
 fn c_no_enum_inst() -> ast.EnumDecl {
 	mut nov: list[ast.VariantDef] = []
 	mut notp: list[str] = []
-	return ast.EnumDecl("", nov, notp, false, "", 0, 0, 0, 0)
+	return ast.EnumDecl("", nov, notp, false, "", 0, 0, 0, 0, 0, 0)
 }
 
 # c_type_inst is one specialization: the template's fields with its parameters replaced, under
@@ -3982,7 +3989,7 @@ fn c_type_inst(mut &em: Emitter, f: ast.File, tpl: ast.StructDecl, a: ast.TyApp)
 	# else. The loop above sees the new row on its next pass and builds it.
 	c_subst_apps(em, su)
 
-	return ast.StructDecl(a.name, generic.subst_fields(su, tpl.fields), tpl.is_pub, tpl.path, tpl.line, tpl.col, [], tpl.name_line, tpl.name_col)
+	return ast.StructDecl(a.name, generic.subst_fields(su, tpl.fields), tpl.is_pub, tpl.path, tpl.line, tpl.col, [], tpl.name_line, tpl.name_col, tpl.end_line, tpl.end_col)
 }
 
 # c_type_arity is the one place a type application's argument count is judged, whether the
@@ -4041,7 +4048,7 @@ fn c_tys_name_undeclared(f: ast.File, ts: list[ast.Ty]) -> bool {
 # c_no_inst is the StructDecl an open application does not produce — a declaration with no
 # name, which the caller drops. It is a function so the reason has somewhere to live.
 fn c_no_inst() -> ast.StructDecl {
-	return ast.StructDecl("", [], false, "", 0, 0, [], 0, 0)
+	return ast.StructDecl("", [], false, "", 0, 0, [], 0, 0, 0, 0)
 }
 
 # c_file_declares_ty asks the PROGRAM rather than the type table, because this runs before the
@@ -4613,7 +4620,7 @@ fn c_build_sigs(mut &em: Emitter, f: ast.File) {
 		# docs/core/specs.md's "re-boxing a `This`-returning result as the same spec".
 		mut noargs: list[ast.Ty] = []
 		mut notp: list[str] = []
-		self_ip := ast.ImplDecl(sp.name, noargs, sp.name, notp, sp.path, sp.line, sp.col)
+		self_ip := ast.ImplDecl(sp.name, noargs, sp.name, notp, sp.path, sp.line, sp.col, sp.end_line, sp.end_col)
 		for req in sp.reqs {
 			c_add_sig(em, c_default_method(sp, self_ip, req))
 
@@ -4648,7 +4655,7 @@ fn c_build_sigs(mut &em: Emitter, f: ast.File) {
 		# the impl is where they were written — so a finding about one of them (`chan[int?]`
 		# reached through `K`) belongs at the impl. Given the spec's coordinates it moved to the
 		# declaration, which says nothing about the argument that caused it.
-		app_ip := ast.ImplDecl(ip.on, ip.args, key, notp, ip.path, ip.line, ip.col)
+		app_ip := ast.ImplDecl(ip.on, ip.args, key, notp, ip.path, ip.line, ip.col, ip.end_line, ip.end_col)
 		for req in sp.reqs {
 			m := c_default_method(sp, app_ip, req)
 			continue if c_sig_seen(em, c_sig_key(key, m.name))
@@ -8714,8 +8721,10 @@ fn c_guard(mut &em: Emitter, body: list[ast.Stmt], sb: Subst) -> str {
 	# made while doing so belongs to it and not to the last line inside it
 	guard_line := em.at_line
 	guard_col := em.at_col
+	guard_end_line := em.at_end_line
+	guard_end_col := em.at_end_col
 	c_guard_no_jump(em, body, false)
-	c_mark(em, guard_line, guard_col)
+	c_mark_to(em, guard_line, guard_col, guard_end_line, guard_end_col)
 
 	vt := c_guard_val_ty(em, body)
 	cn := c_carrier_name(em, c_guard_elem(vt), ast.Ty.TErr)
@@ -8832,7 +8841,7 @@ fn c_expr_stmt_of(s: ast.Stmt) -> ast.Expr {
 fn c_guard_no_jump(mut &em: Emitter, body: list[ast.Stmt], in_loop: bool) {
 	for s in body {
 		match s {
-			Stmt.SAt(l, c) => c_mark(em, l, c)
+			Stmt.SAt(l, c, el, ec) => c_mark_to(em, l, c, el, ec)
 			Stmt.SReturn(has_val, e) => c_guard_jump_err(em, "return")
 			Stmt.SReturnIf(v, cond) => c_guard_jump_err(em, "return")
 			Stmt.SBreak => c_guard_loop_jump(em, "break", in_loop)
@@ -12105,7 +12114,7 @@ fn c_gen_type_on_demand(mut &em: Emitter, tpl: ast.StructDecl, applied: str, sol
 	mut nokeys: list[str] = []
 	mut novals: list[str] = []
 	su := generic.TySubst(tpl.tparams, sol, nokeys, novals, em.ty_apps, c_place(em))
-	sd := ast.StructDecl(applied, generic.subst_fields(su, tpl.fields), tpl.is_pub, tpl.path, tpl.line, tpl.col, [], tpl.name_line, tpl.name_col)
+	sd := ast.StructDecl(applied, generic.subst_fields(su, tpl.fields), tpl.is_pub, tpl.path, tpl.line, tpl.col, [], tpl.name_line, tpl.name_col, tpl.end_line, tpl.end_col)
 
 	c_register_struct(em, sd)
 	c_tpl_methods_late(em, applied)
@@ -15162,7 +15171,7 @@ fn c_stmt(mut &em: Emitter, s: ast.Stmt, ind: str) -> str {
 		Stmt.SNop => ""
 
 		# a marker, not a statement: it records where the next one starts and emits nothing
-		Stmt.SAt(l, c) => c_at(em, l, c)
+		Stmt.SAt(l, c, el, ec) => c_at(em, l, c, el, ec)
 	}
 }
 
@@ -15209,12 +15218,22 @@ fn c_assert(mut &em: Emitter, body: list[ast.Stmt], ind: str) -> str {
 # enclosing declaration. Setting `em.at_*` in each of them would have been a second place
 # that knows how a statement's place is recorded.
 fn c_mark(mut &em: Emitter, l: int, c: int) {
-	em.at_line = l
-	em.at_col = c
+	c_mark_to(em, l, c, 0, 0)
 }
 
-fn c_at(mut &em: Emitter, l: int, c: int) -> str {
-	c_mark(em, l, c)
+# c_mark_to is the same for a place that knows where it ENDS — an SAt marker, which carries a
+# statement's whole extent. c_mark above is for the rest, and it clears the end rather than
+# leaving the previous statement's: an end belonging to another statement is worse than none,
+# because a reader cannot tell it is not this one's.
+fn c_mark_to(mut &em: Emitter, l: int, c: int, el: int, ec: int) {
+	em.at_line = l
+	em.at_col = c
+	em.at_end_line = el
+	em.at_end_col = ec
+}
+
+fn c_at(mut &em: Emitter, l: int, c: int, el: int, ec: int) -> str {
+	c_mark_to(em, l, c, el, ec)
 	return "" if em.at_path == ""
 	ls := strconv.to_string(l, 10)
 	return f"\n#line {ls} \"{em.at_path}\"\n"
@@ -17166,7 +17185,7 @@ fn c_lambda(mut &em: Emitter, ps: list[ast.Param], has_ret: bool, ret: ast.Ty, b
 	# the substitution still in force.
 	saved_sub := em.sub
 	em.sub = c_nosub()
-	em.lam_defs.append(c_fn(em, ast.FnDecl(name, "", allps, has_ret, ret, body, false, em.at_path, em.at_line, em.at_col, [], [], em.in_unsafe_fn, false, false, true, false, "", 0, 0)))
+	em.lam_defs.append(c_fn(em, ast.FnDecl(name, "", allps, has_ret, ret, body, false, em.at_path, em.at_line, em.at_col, [], [], em.in_unsafe_fn, false, false, true, false, "", 0, 0, em.at_end_line, em.at_end_col)))
 	mut ci := 0
 	for ci < cap_nx.len() {
 		em.nx_rows[nx_from + ci] = cap_nx[ci]
@@ -20854,7 +20873,7 @@ fn c_proto(mut &em: Emitter, fn_d: ast.FnDecl) -> str {
 fn c_check_loop_jump(mut &em: Emitter, body: list[ast.Stmt], in_loop: bool) {
 	for s in body {
 		match s {
-			Stmt.SAt(l, c) => c_mark(em, l, c)
+			Stmt.SAt(l, c, el, ec) => c_mark_to(em, l, c, el, ec)
 			Stmt.SBreak => c_loop_jump_err(em, "break", in_loop)
 			Stmt.SContinue => c_loop_jump_err(em, "continue", in_loop)
 			Stmt.SIf(cond, then_b, has_else, else_b) => c_check_loop_jump_two(em, then_b, else_b, in_loop)
@@ -21501,7 +21520,7 @@ fn c_default_method(sp: ast.SpecDecl, ip: ast.ImplDecl, req: ast.FnDecl) -> ast.
 	for pm in req.params {
 		ps.append(ast.Param(pm.name, c_spec_subst(pm.ty, sp, ip), pm.is_ref, pm.has_def, pm.def, pm.line, pm.col))
 	}
-	return ast.FnDecl(req.name, ip.target, ps, req.has_ret, c_spec_subst(req.ret, sp, ip), req.body, req.is_pub, req.path, req.line, req.col, req.tparams, req.tbounds, req.in_unsafe, false, false, true, false, c_impl_spec_of(ip), req.name_line, req.name_col)
+	return ast.FnDecl(req.name, ip.target, ps, req.has_ret, c_spec_subst(req.ret, sp, ip), req.body, req.is_pub, req.path, req.line, req.col, req.tparams, req.tbounds, req.in_unsafe, false, false, true, false, c_impl_spec_of(ip), req.name_line, req.name_col, req.end_line, req.end_col)
 }
 
 # c_with_derived expands every `#[derive(…)]` into the impl it stands for.
@@ -22689,7 +22708,7 @@ fn c_emit_unit(prog0: ast.File, own0: ast.File, ms: Mods, whole: bool, want_lint
 	# is what makes that invariant hold for a multi-unit program, at the place it already lives,
 	# and it is what lets the declaration passes below go back to reading the WHOLE program.
 	seen := diags.len()
-	mut em := Emitter([], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], false, false, false, false, [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], 0, [], 0, [], [], false, "", "", [], [], ast.Ty.TVoid, 0, "", 0, 0, diags, 0, 0, [], [], [], [], [], false, 0, false, "", 0, false, false, [], [], [], [], [], [], [], [], [], [], [], "", want_lints, [], [], [], [], [], [], [], [], [], [], [], [], false, 0, [], [], "", c_nosub(), [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], false, ast.no_index(), [], [], [], [], [], [], [], [], [], [])
+	mut em := Emitter([], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], false, false, false, false, [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], 0, [], 0, [], [], false, "", "", [], [], ast.Ty.TVoid, 0, "", 0, 0, 0, 0, diags, 0, 0, [], [], [], [], [], false, 0, false, "", 0, false, false, [], [], [], [], [], [], [], [], [], [], [], "", want_lints, [], [], [], [], [], [], [], [], [], [], [], [], false, 0, [], [], "", c_nosub(), [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], false, ast.no_index(), [], [], [], [], [], [], [], [], [], [])
 
 	# ASSIGNED, NOT PASSED. Every argument above is a zero value, and `layering` asserts that
 	# — it lines the call up with the fields by KIND, which only works while nothing in it

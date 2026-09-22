@@ -171,6 +171,12 @@ pub struct Emitter {
 	pub var_enum: list[str]
 	pub var_tag: list[int]
 
+	# var_path is the FILE that declared each variant's enum, and it is what makes a BARE
+	# variant name this file's (#57): a program is one table, and a name another file declared
+	# is not one a bare spelling here can reach — whether that name is a variant, and this
+	# file's own `Chan` is a struct or a function, or both files declare a variant of it.
+	pub var_path: list[str]
+
 	# vf_enum is the OWNING ENUM of a payload row, and it is here for the same reason
 	# var_enum is: a variant name is a name INSIDE an enum, so a row keyed by the bare name
 	# alone answers whichever enum was declared first. Two enums that each declare a
@@ -704,6 +710,21 @@ pub struct Emitter {
 	pub imp_at: list[str]
 	pub imp_path: list[str]
 	pub imp_mod: list[str]
+
+	# pr_path / pr_line / pr_col are where each parameter's function was DECLARED, parallel to
+	# pr_def. A default is an expression the callee's file wrote and a call site lowers, so
+	# every bare name in it has to be answered as that file would answer it (#57) — its
+	# variants, its private functions, its imports — and not as the caller's. They are at the
+	# end of the struct rather than beside pr_def because `Emitter` is built positionally.
+	pub pr_path: list[str]
+	pub pr_line: list[int]
+	pub pr_col: list[int]
+
+	# fld_path / fld_line / fld_col are the same place for a struct FIELD's default, parallel to
+	# fld_def: a construction that omits the field lowers the struct's file's expression.
+	pub fld_path: list[str]
+	pub fld_line: list[int]
+	pub fld_col: list[int]
 }
 
 # Subst is an active set of identifier substitutions: an EIdent whose name appears in
@@ -3113,11 +3134,12 @@ pub fn c_is_gen_enum_name(mut &em: Emitter, nm: str) -> bool {
 # the template half of `c_variant_enum`, which reads rows a template has none of. Two templates
 # declaring one variant name answer "", the way the bare spelling is ambiguous anywhere else.
 fn c_gen_variant_owner(mut &em: Emitter, name: str) -> str {
+	here := check.c_origin_path(em, em.at_path)
 	mut found := ""
 	mut n := 0
 	for ed in em.gen_enums {
 		for v in ed.variants {
-			if v.name == name {
+			if v.name == name and ed.path == here {
 				found = ed.name
 				n = n + 1
 			}
@@ -4081,6 +4103,9 @@ fn c_add_sig(mut &em: Emitter, fn_i: ast.FnDecl) {
 		em.pr_ty.append(fn_i.params[j].ty)
 		em.pr_hasdef.append(fn_i.params[j].has_def)
 		em.pr_def.append(fn_i.params[j].def)
+		em.pr_path.append(fn_i.path)
+		em.pr_line.append(fn_i.line)
+		em.pr_col.append(fn_i.col)
 		j = j + 1
 	}
 }
@@ -5790,6 +5815,9 @@ fn c_register_struct(mut &em: Emitter, sd: ast.StructDecl) {
 		em.fld_pub.append(fd.is_pub)
 		em.fld_hasdef.append(fd.has_def)
 		em.fld_def.append(fd.def)
+		em.fld_path.append(sd.path)
+		em.fld_line.append(sd.line)
+		em.fld_col.append(sd.col)
 	}
 }
 
@@ -6411,6 +6439,7 @@ fn c_register_enum(mut &em: Emitter, ed: ast.EnumDecl) {
 		em.var_name.append(v.name)
 		em.var_enum.append(ed.name)
 		em.var_tag.append(tag)
+		em.var_path.append(ed.path)
 		mut k := 0
 		for k < v.fields.len() {
 			em.vf_enum.append(ed.name)
@@ -7034,7 +7063,32 @@ fn c_ns_names_type(mut &em: Emitter, t: ast.Expr, member: str) -> bool {
 # reason it never read as one is that the expression around it threw it away before anything
 # looked. The seed has said exactly that all along.
 pub fn c_undefined_name(mut &em: Emitter, n: str) {
-	check.chk_at(em, rule.Rule.UndefinedName, f"undefined name `{n}`")
+	check.chk_at(em, rule.Rule.UndefinedName, f"undefined name `{n}`{c_variant_elsewhere(em, n)}")
+}
+
+# c_variant_elsewhere is the note an undefined name carries when it SPELLS a variant another
+# file declares, or "". A bare name is this file's (#57), so that variant is not what the name
+# means — but it is almost certainly what the reader meant, and the spelling that reaches it
+# is a namespace THIS file bound that reaches the enum's module — directly, or through a module
+# that re-exports it (`import pub`), which is how `mid.K.Chan` names `sink`'s `K`. A module no
+# import of this file reaches, or an enum it does not export, has no such spelling, so the note
+# says where the enum is declared instead — never a spelling the reader would be refused for.
+fn c_variant_elsewhere(mut &em: Emitter, n: str) -> str {
+	r := c_var_row_any(em, n)
+	return "" if r < 0
+
+	en := em.var_enum[r]
+	declared := f"; `{n}` is a variant of `{en}`, declared in `{em.var_path[r]}`"
+	return declared if not c_ty_pub(em, en)
+
+	dmod := check.c_mod_of(em, em.var_path[r])
+	mut i := 0
+	for i < em.ns_names.len() {
+		ns := em.ns_names[i]
+		return f"; `{n}` is a variant of `{ns}.{en}` — name it through its module (`{ns}.{en}.{n}`)" if em.ns_at[i] == em.at_path and (em.ns_mods[i] == dmod or c_ns_reexports(em, em.ns_mods[i], dmod, 0))
+		i = i + 1
+	}
+	return declared
 }
 
 # c_undefined_fn is the same finding one position along — a name in CALLEE position that
@@ -7052,7 +7106,7 @@ pub fn c_undefined_name(mut &em: Emitter, n: str) {
 fn c_undefined_fn(mut &em: Emitter, n: str) {
 	c_builtin_check(em, n)
 
-	raise c_diag(em, rule.Rule.UndefinedFunction, f"undefined function `{n}`")
+	raise c_diag(em, rule.Rule.UndefinedFunction, f"undefined function `{n}`{c_variant_elsewhere(em, n)}")
 }
 
 # c_not_callable is the rule that A BINDING SHADOWS THE FUNCTION OF ITS NAME even when it
@@ -7082,7 +7136,8 @@ fn c_not_callable(mut &em: Emitter, n: str, bt: ast.Ty) {
 # spellings work; requiring the qualified one is a separate decision about a built-in's
 # documented surface (docs/code/errors.md).
 fn c_bare_variant(mut &em: Emitter, name: str) {
-	check.chk_at(em, rule.Rule.VariantNamedBare, f"`{name}` is a variant of `{c_variant_enum(em, name)}`, and a variant is named through its enum — write `{c_variant_enum(em, name)}.{name}`")
+	en := c_variant_enum(em, name)
+	check.chk_at(em, rule.Rule.VariantNamedBare, f"`{name}` is a variant of `{en}`, and a variant is named through its enum — write `{en}.{name}`")
 }
 
 # c_var_row is THE variant lookup BY BARE NAME. `var_name` / `var_enum` / `var_tag` are one
@@ -7093,12 +7148,33 @@ fn c_bare_variant(mut &em: Emitter, name: str) {
 # It matters more than the walk it saves: three scans are three chances for the answers to
 # disagree about which row they meant. They cannot now, because there is one row.
 #
-# A BARE NAME IS AMBIGUOUS BY CONSTRUCTION and this answers the FIRST enum that declares it,
-# which is all a bare name can mean. That is enough for the two questions asked of it — "is
-# this name a variant of anything" and "which enum should the reader have written" (E3079,
-# c_bare_variant) — and it is not enough for anything else. Every question about a variant a
-# spelling has already NAMED THE ENUM of goes to c_var_row_in below.
+# A BARE NAME IS THIS FILE'S (#57), so this answers only an enum the file being lowered
+# declared — the first of them, which is all a bare name can mean. That is enough for the
+# questions asked of it — "is this bare name a variant here" and "which enum should the reader
+# have written" (E3079, c_bare_variant) — and it is not enough for anything else. Every
+# question about a variant a spelling has already NAMED THE ENUM of goes to c_var_row_in below.
+#
+# IT WAS PROGRAM-WIDE, and the first declaration anywhere won. A program that declared `enum
+# Kind { Chan … }` took `log`'s own `Chan(ch)` — a struct construction in a file that cannot
+# see `Kind` — and refused it there, in a file the reader did not write; and a file writing a
+# bare variant of its own enum was told to qualify it with ANOTHER module's enum when that
+# module was loaded first. A tree a decorator expanded answers for the file it was expanded
+# from (check.c_origin_path), and `<builtin>` declares no enum, so no path reads the whole table.
 fn c_var_row(mut &em: Emitter, name: str) -> int {
+	here := check.c_origin_path(em, em.at_path)
+	mut i := 0
+	for i < em.var_name.len() {
+		return i if em.var_name[i] == name and em.var_path[i] == here
+		i = i + 1
+	}
+	return -1
+}
+
+# c_var_row_any is the PROGRAM-WIDE lookup, and it answers only questions that are not about
+# what a bare name MEANS here — which sentence to say: a pattern is typed by its subject and
+# `E.X` has named its enum, so each asks only whether some enum declares the name; `del` names
+# what a name is; and an undefined name is told where the variant it spells does live.
+fn c_var_row_any(mut &em: Emitter, name: str) -> int {
 	mut i := 0
 	for i < em.var_name.len() {
 		return i if em.var_name[i] == name
@@ -7126,6 +7202,17 @@ fn c_var_row_in(mut &em: Emitter, en: str, name: str) -> int {
 	return -1
 }
 
+# c_call_is_variant is whether a CALL of a bare name is a variant's construction. A type
+# ANOTHER file declares cannot be named bare (#57), so a call reaching here under such a
+# type's name is a qualified construction c_ns_unqualify took the prefix off — `sink.Chan(5)`
+# is sink's struct, whatever variant `Chan` this file's own enums declare.
+fn c_call_is_variant(mut &em: Emitter, name: str) -> bool {
+	return false if not c_is_variant(em, name)
+	return true if not c_names_a_type(em, name)
+
+	return c_ty_path(em, name) == check.c_origin_path(em, em.at_path)
+}
+
 fn c_is_variant(mut &em: Emitter, name: str) -> bool {
 	return c_var_row(em, name) >= 0
 }
@@ -7146,13 +7233,6 @@ fn c_variant_enum(mut &em: Emitter, name: str) -> str {
 	return "" if r < 0
 
 	return em.var_enum[r]
-}
-
-fn c_variant_tag(mut &em: Emitter, name: str) -> int {
-	r := c_var_row(em, name)
-	return 0 if r < 0
-
-	return em.var_tag[r]
 }
 
 # c_enum_typedef emits an enum as a C tagged union: an int32 tag plus a union of the
@@ -10905,7 +10985,7 @@ fn c_call(mut &em: Emitter, name: str, args: list[ast.Expr], sb: Subst) -> str {
 	}
 
 	if c_names_a_type(em, name) or c_is_variant(em, name) {
-		if c_is_variant(em, name) {
+		if c_call_is_variant(em, name) {
 			c_bare_variant(em, name)
 
 			# the bare spelling is already the finding; the enum it is built as is the one a
@@ -11343,16 +11423,50 @@ fn c_struct_args(mut &em: Emitter, sname: str, written: list[ast.Expr], sb: Subs
 	# the same reason.
 	seq := c_needs_order(args, 1)
 
+	# a field a NAME skipped holds its default, which is lowered in the struct's own file
+	filled := c_struct_filled(em, sname, written)
+
 	mut out := ""
 	mut i := 0
 	for i < args.len() {
 		if i > 0 {
 			out = out + ", "
 		}
-		out = out + c_ordered(em, seq, c_field_init(em, check.chk_field_says(em, sname, i + 1), c_struct_field_ty_at(em, sname, i), args[i], sb))
+		mut s := sb
+		mut saved := c_default_stay(em)
+		if c_is_filled(filled, i) {
+			s = c_nosub()
+			saved = c_field_default_enter(em, sname, i)
+		}
+		out = out + c_ordered(em, seq, c_field_init(em, check.chk_field_says(em, sname, i + 1), c_struct_field_ty_at(em, sname, i), args[i], s))
+		c_default_leave(em, saved)
 		i = i + 1
 	}
-	return out + c_struct_rest(em, sname, args.len(), args.len() > 0, sb)
+	return out + c_struct_rest(em, sname, args.len(), args.len() > 0)
+}
+
+# c_struct_filled is c_args_filled for a construction: per slot of c_struct_args_named's answer,
+# whether the construction wrote nothing there, so the slot holds the field's default.
+fn c_struct_filled(mut &em: Emitter, sname: str, written: list[ast.Expr]) -> list[bool] {
+	mut npos := 0
+	mut named: list[str] = []
+	for a in written {
+		nm := c_named_arg_name(a)
+		if nm == "" {
+			npos = npos + 1
+		} else {
+			named.append(nm)
+		}
+	}
+
+	mut picked: list[int] = []
+	if named.len() > 0 {
+		names := c_struct_field_names(em, sname)
+		for nm in named {
+			picked.append(c_name_index(names, nm))
+		}
+	}
+	return c_filled_mask(0, npos, picked)
 }
 
 # c_struct_rest fills the fields a construction left off the end. GRAMMAR group 7: there
@@ -11371,7 +11485,7 @@ fn c_struct_args(mut &em: Emitter, sname: str, written: list[ast.Expr], sb: Subs
 # at the construction that omitted the field, which is what makes it evaluated per
 # construction — the same backfill, and the same consequence, as `c_default_args` gives a
 # parameter default at a call.
-fn c_struct_rest(mut &em: Emitter, sname: str, given: int, lead: bool, sb: Subst) -> str {
+fn c_struct_rest(mut &em: Emitter, sname: str, given: int, lead: bool) -> str {
 	mut out := ""
 	mut i := given
 	mut sep := lead
@@ -11392,7 +11506,14 @@ fn c_struct_rest(mut &em: Emitter, sname: str, given: int, lead: bool, sb: Subst
 			# a default is an argument, so it meets its field's type like any other — which is
 			# what gives `xs: list[int] = []` an element size, exactly as it does for a
 			# parameter default
-			out = out + c_field_init(em, f"the default for {check.chk_field_says(em, sname, i + 1)}", ft, c_struct_field_def(em, sname, i), sb)
+			#
+			# IN THE STRUCT'S OWN FILE and under none of the caller's match substitution, as a
+			# parameter default is (c_default_enter): `Cfg()` on `n: int = beep()` calls the
+			# `beep` the struct's file declares, not the constructing file's
+			what := f"the default for {check.chk_field_says(em, sname, i + 1)}"
+			saved := c_field_default_enter(em, sname, i)
+			out = out + c_field_init(em, what, ft, c_struct_field_def(em, sname, i), c_nosub())
+			c_default_leave(em, saved)
 		} else if ast.ty_is_opt(ft) {
 			out = out + "(" + c_opt_name(em, c_opt_elem(ft)) + "){ .tag = 1 }"
 		} else {
@@ -11486,16 +11607,76 @@ fn c_args_from(mut &em: Emitter, key: str, base: int, written: list[ast.Expr], l
 	refs := c_ref_args(em, key, base, args)
 	seq := c_needs_order_args(args, refs, at)
 
+	# a parameter a NAME skipped was filled from its default by c_args_named, and that default
+	# is lowered in its own file (c_default_enter), not in this one
+	filled := c_args_filled(em, key, base, written)
+
 	mut out := ""
 	mut i := 0
 	for i < args.len() {
 		if lead or i > 0 {
 			out = out + ", "
 		}
-		out = out + c_ordered(em, seq and not refs[i], c_arg(em, key, base + i, i + 1, args[i], sb))
+
+		# a filled slot takes none of the caller's match substitution either — c_default_enter
+		# clears the standing one and this passes none: a match arm's binders are the caller's
+		# names, and a default that spells one means its own file's declaration
+		mut s := sb
+		mut saved := c_default_stay(em)
+		if c_is_filled(filled, i) {
+			s = c_nosub()
+			saved = c_default_enter(em, c_param_row(em, key, base + i))
+		}
+		out = out + c_ordered(em, seq and not refs[i], c_arg(em, key, base + i, i + 1, args[i], s))
+		c_default_leave(em, saved)
 		i = i + 1
 	}
 	return out + c_default_args(em, key, base + args.len(), lead or args.len() > 0)
+}
+
+# c_args_filled is, per slot of c_args_named's answer, whether the call wrote nothing there —
+# so the slot holds the parameter's default (c_filled_mask). A call with no names fills no slot
+# and answers the empty list.
+fn c_args_filled(mut &em: Emitter, key: str, base: int, written: list[ast.Expr]) -> list[bool] {
+	mut npos := 0
+	mut picked: list[int] = []
+	for a in written {
+		nm := c_named_arg_name(a)
+		if nm == "" {
+			npos = npos + 1
+		} else {
+			picked.append(c_param_named(em, key, nm))
+		}
+	}
+	return c_filled_mask(base, npos, picked)
+}
+
+# c_filled_mask is the rule both reorders share: a slot is WRITTEN when a positional reaches it
+# or a name picks it, and every other slot up to the last one written holds its default. The
+# mask starts at `base` — a method's receiver is not a slot — and is empty when nothing was
+# named, since then nothing was skipped.
+fn c_filled_mask(base: int, npos: int, picked: list[int]) -> list[bool] {
+	mut out: list[bool] = []
+	return out if picked.len() == 0
+
+	mut top := base + npos - 1
+	for k in picked {
+		if k > top {
+			top = k
+		}
+	}
+
+	mut j := base
+	for j <= top {
+		out.append(j >= base + npos and not c_slot_taken(picked, j))
+		j = j + 1
+	}
+	return out
+}
+
+# c_is_filled reads a mask c_filled_mask answered, which is empty for a call with no names.
+fn c_is_filled(filled: list[bool], i: int) -> bool {
+	return i < filled.len() and filled[i]
 }
 
 # c_args_named puts a call's arguments in PARAMETER order and fills what a name skipped.
@@ -11803,6 +11984,14 @@ fn c_arg(mut &em: Emitter, fname: str, idx: int, pos: int, a: ast.Expr, sb: Subs
 	return c_fit_copied(em, check.chk_slot_says(fname, pos), em.pr_ty[row], a, sb)
 }
 
+# c_callee_enter is c_default_enter for the idx-th argument of a `spawn` or `defer` callee: an
+# appended DEFAULT enters the file that wrote it, and a written argument stays where it is.
+fn c_callee_enter(mut &em: Emitter, cal: Callee, idx: int) -> DefAt {
+	return c_default_stay(em) if cal.given < 0 or idx < cal.given
+
+	return c_default_enter(em, c_param_row(em, cal.key, idx))
+}
+
 # c_captured renders the value a `spawn` or a `defer` stores in its env — the same value
 # the callee would OWN at an ordinary call, which is why it is copied. c_arg is the wrong
 # tool for it: that one renders straight into an argument list and asks the BORROW rules,
@@ -11876,6 +12065,61 @@ fn c_defaults_from(mut &em: Emitter, key: str, at: int) -> list[ast.Expr] {
 	return out
 }
 
+# DefAt is what lowering a default puts aside: the file, the place and the match substitution
+# of the CALL, which c_default_enter replaces with the callee's file and no substitution at all,
+# and c_default_leave gives back.
+#
+# A DEFAULT IS THE CALLEE'S EXPRESSION, written in the callee's file and lowered at every call
+# site. Lowered under the caller's `at_path` it resolved every bare name as the CALLER's file
+# would: `sink.dflt()` on `fn dflt(c: Chan = Chan(2))` built the caller's variant `Chan`, and
+# `x: int = beep()` called the caller's own private `beep` — silently, printing the wrong
+# number. The path is what every name rule reads (variants, functions, privacy, imports), so
+# swapping it answers all of them the way the declaration's file does.
+#
+# THE SUBSTITUTION IS CLEARED, not only left out of the argument: `c_sub_active` merges
+# `em.sub` — what an enclosing block arm left standing — into whatever it is handed, so a
+# default under `Some(beep) => { … }` spelled the arm's `beep` for its own file's function.
+#
+# THE CALLER'S BINDINGS ARE STILL VISIBLE to a default, which the language does not allow: a
+# default is lowered into the caller's C block, where a caller's local can capture a name the
+# default spells. The file swap cannot close that on its own, and #197 does.
+struct DefAt {
+	pub path: str
+	pub line: int
+	pub col: int
+	pub sub: Subst
+}
+
+fn c_default_enter(mut &em: Emitter, row: int) -> DefAt {
+	return c_default_enter_at(em, em.pr_path[row], em.pr_line[row], em.pr_col[row])
+}
+
+# c_field_default_enter is c_default_enter for the idx-th field's default of a struct.
+fn c_field_default_enter(mut &em: Emitter, sname: str, idx: int) -> DefAt {
+	row := c_struct_field_row(em, sname, idx)
+	return c_default_enter_at(em, em.fld_path[row], em.fld_line[row], em.fld_col[row])
+}
+
+fn c_default_enter_at(mut &em: Emitter, path: str, line: int, col: int) -> DefAt {
+	saved := c_default_stay(em)
+	em.at_path = path
+	c_mark(em, line, col)
+	em.sub = c_nosub()
+	return saved
+}
+
+# c_default_stay is a DefAt of the state as it stands, so a c_default_leave of it changes
+# nothing — what a written argument takes where a default would have entered its own file.
+fn c_default_stay(mut &em: Emitter) -> DefAt {
+	return DefAt(em.at_path, em.at_line, em.at_col, em.sub)
+}
+
+fn c_default_leave(mut &em: Emitter, saved: DefAt) {
+	em.at_path = saved.path
+	c_mark(em, saved.line, saved.col)
+	em.sub = saved.sub
+}
+
 fn c_default_args(mut &em: Emitter, fname: str, given: int, sep: bool) -> str {
 	mut out := ""
 	mut lead := sep
@@ -11889,7 +12133,11 @@ fn c_default_args(mut &em: Emitter, fname: str, given: int, sep: bool) -> str {
 		# a default is an argument, so it meets its parameter's type like any other — which
 		# is what gives `fn take(xs: list[int] = [])` an element size. Rendered with c_expr
 		# it was the bare `(zrt_list){0}`, and every append into it memcpy'd nothing.
-		out = out + c_fit_copied(em, f"the default for {check.chk_slot_says(fname, i + 1)}", c_param_ty(em, fname, i), d, c_nosub())
+		slot := check.chk_slot_says(fname, i + 1)
+		pt := c_param_ty(em, fname, i)
+		saved := c_default_enter(em, c_param_row(em, fname, i))
+		out = out + c_fit_copied(em, f"the default for {slot}", pt, d, c_nosub())
+		c_default_leave(em, saved)
 		i = i + 1
 	}
 	return out
@@ -11946,9 +12194,10 @@ fn c_ident_val(mut &em: Emitter, n: str, sb: Subst) -> str {
 		return sb.repls[i] if sb.names[i] == n
 		i = i + 1
 	}
-	if c_is_variant(em, n) {
+	vr := c_var_row(em, n)
+	if vr >= 0 {
 		c_bare_variant(em, n)
-		return "(zg_" + c_variant_enum(em, n) + "){.tag = " + strconv.to_string(c_variant_tag(em, n), 10) + "}"
+		return "(zg_" + em.var_enum[vr] + "){.tag = " + strconv.to_string(em.var_tag[vr], 10) + "}"
 	}
 
 	# EVERY READ OF A BINDING FUNNELS THROUGH HERE, which is what makes this the one place a
@@ -12537,7 +12786,7 @@ fn c_check_arm_pats(mut &em: Emitter, arms: list[ast.Arm], st: ast.Ty) {
 			# arm was refused as unable to match a subject it matches exactly.
 			en := c_named_of(st)
 
-			raise c_diag(em, rule.Rule.NoSuchVariantInPattern, f"no variant named `{ctor}` — a constructor pattern names a variant of the subject's enum") if not c_is_variant(em, ctor)
+			raise c_diag(em, rule.Rule.NoSuchVariantInPattern, f"no variant named `{ctor}` — a constructor pattern names a variant of the subject's enum") if c_var_row_any(em, ctor) < 0
 			raise c_diag(em, rule.Rule.VariantPatternWrongEnum, f"variant pattern `{ctor}` cannot match a subject of type {ast.ty_name(st)}") if not c_is_variant_in(em, en, ctor)
 
 			# THE QUALIFICATION MUST BE TRUE (GRAMMAR#variant-pat), and until now it was not
@@ -13731,7 +13980,7 @@ fn c_infer_call(mut &em: Emitter, name: str, args: list[ast.Expr]) -> ast.Ty {
 		return ast.Ty.TNamed(gap) if gap != ""
 	}
 
-	return ast.Ty.TNamed(c_variant_enum(em, name)) if c_is_variant(em, name)
+	return ast.Ty.TNamed(c_variant_enum(em, name)) if c_call_is_variant(em, name)
 
 	# a BUILT-IN ERROR constructor answers an `Err`, not a type of its own name. It reads as
 	# a constructor and it is PascalCase, so the ctor rule below would have typed
@@ -15396,7 +15645,9 @@ fn c_spawn(mut &em: Emitter, x: ast.Expr, ind: str) -> str {
 	mut i := 0
 	for i < args.len() {
 		fi := "f" + strconv.to_string(i, 10)
+		entered := c_callee_enter(em, cal, i)
 		at := c_captured_ty(em, cal.key, i, args[i])
+		c_default_leave(em, entered)
 		fields = fields + " " + c_type(at) + " " + fi + ";"
 		if i > 0 {
 			call = call + ", "
@@ -15439,7 +15690,9 @@ fn c_spawn(mut &em: Emitter, x: ast.Expr, ind: str) -> str {
 	mut out := f"{ind}zg_spawnenv_{tag} *zgt_se{tag} = (zg_spawnenv_{tag}*)zrt_alloc(sizeof(zg_spawnenv_{tag}));\n"
 	mut j := 0
 	for j < args.len() {
+		entered := c_callee_enter(em, cal, j)
 		mut v := c_captured(em, cal.key, j, args[j])
+		c_default_leave(em, entered)
 		if dirs[j] >= 0 {
 			v = f"{c_chan_copy_fn(dirs[j])}({v})"
 		}
@@ -15595,7 +15848,7 @@ fn c_del_target(mut &em: Emitter, name: str) {
 # environment, and they are asked in the order c_ident_val resolves them so the two agree
 # about what a name IS.
 fn c_del_kind(mut &em: Emitter, name: str) -> str {
-	return "variant" if c_is_variant(em, name)
+	return "variant" if c_var_row_any(em, name) >= 0
 	return "struct" if c_is_struct_name(em, name)
 	return "enum" if c_is_enum_name(em, name)
 	return "function" if c_is_free_fn(em, name)
@@ -16130,6 +16383,7 @@ fn c_defer_of(mut &em: Emitter, cal: Callee, ind: str) -> str {
 	mut call := ""
 	mut i := 0
 	for i < args.len() {
+		entered := c_callee_enter(em, cal, i)
 		ft := c_type(c_captured_ty(em, cal.key, i, args[i]))
 		fields = fields + " " + ft + " f" + strconv.to_string(i, 10) + ";"
 		if i > 0 {
@@ -16137,6 +16391,7 @@ fn c_defer_of(mut &em: Emitter, cal: Callee, ind: str) -> str {
 			call = call + ", "
 		}
 		vals = vals + c_captured(em, cal.key, i, args[i])
+		c_default_leave(em, entered)
 		call = call + "e->f" + strconv.to_string(i, 10)
 		i = i + 1
 	}
@@ -16157,6 +16412,11 @@ struct Callee {
 	pub cname: str
 	pub args: list[ast.Expr]
 	pub key: str
+
+	# given is how many of `args` the statement WROTE; the rest are defaults c_callee_of
+	# appended, each lowered in its own file (c_default_enter). -1 is a callee no default was
+	# appended to.
+	pub given: int = -1
 }
 
 # c_callee_of answers that question, or refuses by name. `what` is the statement asking,
@@ -16190,6 +16450,7 @@ fn c_callee_of(mut &em: Emitter, x: ast.Expr, what: str) -> Callee {
 
 	mut cal := raw
 	cal.args = c_with_defaults(em, cal.key, cal.args)
+	cal.given = raw.args.len()
 
 	# `spawn` and `defer` resolve a callee and render its arguments with a loop of their
 	# own, so neither has ever passed through c_args_from — the one place every other call
@@ -17904,8 +18165,9 @@ fn c_fieldref(mut &em: Emitter, target: ast.Expr, fld: str, sb: Subst) -> str {
 	}
 
 	if tn != "" and c_is_enum_name(em, tn) {
-		if c_is_variant(em, fld) {
-			check.chk_at(em, rule.Rule.VariantOfOtherEnum, f"`{fld}` is a variant of `{c_variant_enum(em, fld)}`, not of `{tn}`")
+		ar := c_var_row_any(em, fld)
+		if ar >= 0 {
+			check.chk_at(em, rule.Rule.VariantOfOtherEnum, f"`{fld}` is a variant of `{em.var_enum[ar]}`, not of `{tn}`")
 		} else {
 			check.chk_at(em, rule.Rule.NotAVariantOf, f"`{fld}` is not a variant of `{tn}`")
 		}
@@ -20074,7 +20336,11 @@ pub fn c_with_derived(prog: ast.File) -> ast.File {
 	mut i := 0
 	for i < prog.derive_on.len() {
 		src := c_derive_src(prog, prog.derive_on[i], prog.derive_spec[i])
-		gen := parser.parse_at(src, "<derive>")
+
+		# AT THE DECLARATION'S FILE, inside the synthetic mark: the expansion is compiler-written
+		# (every privacy silence still applies) but the bare names it writes are that file's
+		# (check.c_origin_path)
+		gen := parser.parse_at(src, f"<derive:{c_derive_origin(prog, prog.derive_on[i])}>")
 		for ip in gen.impls {
 			out.impls.append(ip)
 		}
@@ -20226,6 +20492,20 @@ fn c_obj_wrap_name(target: str) -> str {
 		i = i + 1
 	}
 	return str(out) + "_obj"
+}
+
+# c_derive_origin is the file that declared the type or spec a decorator stands on.
+fn c_derive_origin(prog: ast.File, target: str) -> str {
+	for sd in prog.structs {
+		return sd.path if sd.name == target
+	}
+	for ed in prog.enums {
+		return ed.path if ed.name == target
+	}
+	for sp in prog.specs {
+		return sp.path if sp.name == target
+	}
+	return ""
 }
 
 # c_derive_diag is the derive pass's way onto the channel, and it exists because this pass
@@ -21233,7 +21513,7 @@ fn c_emit_unit(prog0: ast.File, own0: ast.File, ms: Mods, whole: bool, want_lint
 	# is what makes that invariant hold for a multi-unit program, at the place it already lives,
 	# and it is what lets the declaration passes below go back to reading the WHOLE program.
 	seen := diags.len()
-	mut em := Emitter([], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], false, false, false, false, [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], 0, [], 0, [], [], false, "", "", [], [], ast.Ty.TVoid, 0, "", 0, 0, diags, 0, 0, [], [], [], [], [], false, 0, false, "", 0, false, false, [], [], [], [], [], [], [], [], [], [], [], "", want_lints, [], [], [], [], [], [], [], [], [], [], [], [], false, 0, [], [], "", c_nosub(), [], [], [], [], [], [], [], [], [], [])
+	mut em := Emitter([], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], false, false, false, false, [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], 0, [], 0, [], [], false, "", "", [], [], ast.Ty.TVoid, 0, "", 0, 0, diags, 0, 0, [], [], [], [], [], false, 0, false, "", 0, false, false, [], [], [], [], [], [], [], [], [], [], [], "", want_lints, [], [], [], [], [], [], [], [], [], [], [], [], false, 0, [], [], "", c_nosub(), [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [])
 
 	# ASSIGNED, NOT PASSED. Every argument above is a zero value, and `layering` asserts that
 	# — it lines the call up with the fields by KIND, which only works while nothing in it

@@ -298,12 +298,12 @@ fn emit(sk: Sink, line: str) {
 # would have made it a SECOND constructor that silently ignores `ZERG_LOG` — the kind of thing
 # nobody finds until a `ZERG_LOG=json` is quietly dropped on the floor.
 #
-# AND BECAUSE THE THREE CONSTS ARE PRIVATE, `log.Logger()` IS REFUSED OUTSIDE THIS MODULE —
-# `E3001 ENV_LEVEL is not a public member`, three times, at the construction. So the accidental
-# second constructor is not merely made to agree with `new`; it is gone, and `log.new()` is
-# the only way a Logger is built from outside. (The message names consts the caller cannot see,
-# and calls the module `stdlib` rather than `log`. Both are compiler defects worth reporting;
-# neither is a reason to prefer a silent second constructor over a loud refusal.)
+# AND `log.Logger()` IS REACHABLE OUTSIDE THIS MODULE, and builds exactly what `new` builds. The
+# literal is reachable wherever the type is — until `#[sealed]` exists ([not yet]) nothing closes
+# it — and a construction from outside leaves these private fields off, so the defaults here are
+# lowered in THIS file and read its private consts (#195). `scripts/log-check.sh` builds the
+# literal and `new` side by side and holds them to the same answers under the environments that
+# change them, so the two cannot drift apart.
 pub struct Logger {
 	lvl: Level = ENV_LEVEL
 	fmt: Format = ENV_FORMAT

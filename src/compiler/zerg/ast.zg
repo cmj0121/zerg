@@ -727,6 +727,19 @@ pub struct Diag {
 	pub line: int
 	pub col: int
 
+	# `end_line` / `end_col` are where the CONSTRUCT this finding is about finishes — the
+	# statement the SAt marker carried, read off the emitter's marker with the start. They are
+	# 0 for a finding whose channel knows a place and no extent (chk_at_place, a lint note, a
+	# driver's own finding), which is honest: a reader of this struct can tell a span from a
+	# point, where a start copied into both ends could not.
+	#
+	# It is here because a place with no width is a place somebody downstream has to guess a
+	# width for, and the one downstream reader — the language server — was guessing it by
+	# re-reading the source for the word standing at the column. That is a second reading of
+	# the program by a layer that has none (docs/tooling/lsp.md).
+	pub end_line: int
+	pub end_col: int
+
 	# `code` is the rule's IDENTITY — `E3006`, `L502` — and it is a field rather than the first
 	# word of `msg` because everything that reads a diagnostic wants it separately: the
 	# renderer puts it in front of the sentence, a gate pins it instead of the prose, and an
@@ -751,7 +764,7 @@ pub struct Diag {
 # so the constructor lives here, beside the struct, as an ordinary function a caller in
 # another module can reach.
 pub fn diag_at(path: str, line: int, col: int, code: rule.Rule, msg: str) -> Diag {
-	return Diag(path, line, col, rule.rule_code(code), msg, "")
+	return Diag(path, line, col, 0, 0, rule.rule_code(code), msg, "")
 }
 
 # place_line is the `  --> file:line:col` trailer every diagnostic of this compiler carries

@@ -604,16 +604,27 @@ fn ls_whole_file_diag(msg: str) -> json.Val {
 	return json.of_obj(fs)
 }
 
+# A finding that carries an EXTENT is published over it — the statement the compiler named —
+# and one that carries only a place still gets the word standing there. The two are told apart
+# and not blended: a `Diag` whose end is 0 is a rule that knows a place and nothing more
+# (ast.zg, `Diag.end_line`), and publishing the start twice would be a point wearing the name
+# of a span.
 fn ls_diagnostic(text: str, d: zerg.Diag, severity: int) -> json.Val {
-	return ls_diagnostic_at(text, d.line, d.col, d.code, d.msg, severity)
+	return ls_diagnostic_at(text, d.line, d.col, d.code, d.msg, severity) if d.end_line < d.line
+
+	return ls_diagnostic_over(ls_span_at(text, d.line, d.col, d.end_line, d.end_col), d.code, d.msg, severity)
 }
 
 # `code` is LSP's `Diagnostic.code`, and it is sent because the compiler has it as data
 # (`Diag.code`). A finding without one omits the field rather than sending an empty string,
 # which an editor would show as a rule named "".
 fn ls_diagnostic_at(text: str, line: int, col: int, code: str, msg: str, severity: int) -> json.Val {
+	return ls_diagnostic_over(ls_word_span(text, line, col), code, msg, severity)
+}
+
+fn ls_diagnostic_over(sp: Span, code: str, msg: str, severity: int) -> json.Val {
 	mut fs: list[json.Field] = []
-	json.put(fs, "range", ls_word_range(text, line, col))
+	json.put(fs, "range", ls_span_range(sp))
 	json.put_int(fs, "severity", severity)
 	json.put_str(fs, "source", "zerg")
 	if code != "" {
@@ -799,14 +810,13 @@ fn ls_path_uri(path: str) -> str {
 # this tree's own sources are full of em-dashes. Every diagnostic after one on the same line
 # would land one column early per byte of it.
 #
-# The range, because the compiler has no END positions to give. Inventing a field on `Diag`
-# and filling it with the start would be a span that is really a point wearing a second
-# name; deriving the end from the SOURCE is honest about which one knows. So the range is
-# the word at the position — an identifier if there is one there, one character otherwise.
-
-fn ls_word_range(text: str, line: int, col: int) -> json.Val {
-	return ls_span_range(ls_word_span(text, line, col))
-}
+# The range, because a place is not one. WHERE THE COMPILER HAS AN END it is used and nothing
+# is derived: a checked finding reports at the SAt marker, the marker carries the statement's
+# extent, and the underline is that statement. Where it has none — a rule that knows a place
+# of its own, a lint note about one literal, an abort whose place was read back out of its own
+# sentence — the range is the word at the position, an identifier if there is one there and
+# one character otherwise. That is a guess, it is made HERE rather than written into `Diag` as
+# though the compiler had said it, and it is the reason the two are told apart at all.
 
 fn ls_span_range(sp: Span) -> json.Val {
 	return ls_range_of(sp.sl, sp.sc, sp.el, sp.ec)

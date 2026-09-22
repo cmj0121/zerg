@@ -74,7 +74,7 @@ import (
 	"./rule"
 )
 pub fn chk_at(mut &em: emit.Emitter, code: rule.Rule, msg: str) {
-	chk_at_place(em, em.at_path, em.at_line, em.at_col, code, msg)
+	chk_span(em, em.at_path, em.at_line, em.at_col, em.at_end_line, em.at_end_col, code, msg)
 }
 
 # chk_at_place is the same, for a rule that KNOWS its place rather than reading the marker
@@ -93,9 +93,17 @@ pub fn chk_at(mut &em: emit.Emitter, code: rule.Rule, msg: str) {
 # ONE statement, and a single statement-level place is the SAt marker's already-documented
 # grain (see the header above).
 pub fn chk_at_place(mut &em: emit.Emitter, path: str, line: int, col: int, code: rule.Rule, msg: str) {
+	chk_span(em, path, line, col, 0, 0, code, msg)
+}
+
+# chk_span is what both of them record through, and the one difference between them is the
+# EXTENT. A rule reporting at the marker gets the statement's, because the marker carries it;
+# a rule that knows a place of its own knows a place and nothing more, and an end of 0 says so
+# rather than repeating the start into it.
+fn chk_span(mut &em: emit.Emitter, path: str, line: int, col: int, el: int, ec: int, code: rule.Rule, msg: str) {
 	return if chk_seen(em.diags, path, line, col, msg)
 
-	em.diags.append(ast.Diag(path, line, col, rule.rule_code(code), msg, ""))
+	em.diags.append(ast.Diag(path, line, col, el, ec, rule.rule_code(code), msg, ""))
 }
 
 # chk_seen is WHAT COUNTS AS THE SAME FINDING, and it is one function because it is one
@@ -658,7 +666,7 @@ fn chk_note_at(mut &em: emit.Emitter, line: int, col: int, code: str, msg: str, 
 
 	return if chk_seen(em.lints, em.at_path, line, col, msg)
 
-	em.lints.append(ast.Diag(em.at_path, line, col, code, msg, fix))
+	em.lints.append(ast.Diag(em.at_path, line, col, 0, 0, code, msg, fix))
 }
 
 # --- mutability ------------------------------------------------------------------

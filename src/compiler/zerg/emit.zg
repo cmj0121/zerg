@@ -4219,18 +4219,45 @@ fn c_ref_written(mut &em: Emitter, nm: str, s: Site) {
 	}
 }
 
-# c_intrinsic_args is c_args with one rule added, and it is the rule the runtime's own
-# signatures state: an intrinsic is written in terms of the VALUE, so a box is handed the
-# address of what it holds and never the cell.
-fn c_intrinsic_args(mut &em: Emitter, args: list[ast.Expr], sb: Subst) -> str {
+# c_intrinsic_call is c_args with two rules added, and both are the runtime's own signatures:
+# an intrinsic is written in terms of the VALUE, so a box is handed the address of what it
+# holds and never the cell — and it BORROWS every argument, since no leaf gives one back.
+#
+# So an argument this call owns is given back after it, as c_call_releasing gives back what
+# it is handed. `__zrt_exists(join_path(root, "src/runtime/csrc"))` built a path, asked about
+# it and walked away from it, on every probe for the installation root — which a language
+# server made again on every check (#23). When anything is held, every argument is bound in
+# source order, because the ones left inline would otherwise run after the ones bound.
+fn c_intrinsic_call(mut &em: Emitter, name: str, args: list[ast.Expr], sb: Subst) -> str {
+	mut tys: list[ast.Ty] = []
+	mut gives: list[bool] = []
+	mut held := false
+	for a in args {
+		t := c_infer(em, a)
+		g := c_owns_value(a) and c_needs_copy(em, t)
+		tys.append(t)
+		gives.append(g)
+		held = held or g
+	}
+
+	mut decls := ""
+	mut frees := ""
 	mut out := ""
 	mut i := 0
 	for i < args.len() {
 		if i > 0 {
 			out = out + ", "
 		}
-		x := c_expr(em, args[i], sb)
-		t := c_infer(em, args[i])
+		mut x := c_expr(em, args[i], sb)
+		t := tys[i]
+		if held {
+			tn := c_tmp(em, "zgt_t")
+			decls = decls + c_ord_decl(tn, x)
+			if gives[i] {
+				frees = frees + c_drop_stmt(em, t, tn) + " "
+			}
+			x = tn
+		}
 		if c_is_ref_box(t) {
 			out = out + "(" + c_type(c_ref_elem(em, t)) + "*)zrt_ref_payload(" + x + ")"
 		} else {
@@ -4238,7 +4265,15 @@ fn c_intrinsic_args(mut &em: Emitter, args: list[ast.Expr], sb: Subst) -> str {
 		}
 		i = i + 1
 	}
-	return out
+
+	call := f"{c_intrinsic(name)}({out})"
+	return call if not held
+
+	# a leaf that answers nothing has no value to hold across the give-back
+	return f"({{ {decls}{call}; {frees}}})" if c_is_nil_ty(c_intrinsic_ret(name))
+
+	rv := c_tmp(em, "zgt_tr")
+	return f"({{ {decls}__auto_type {rv} = {call}; {frees}{rv}; }})"
 }
 
 fn c_ref_call(mut &em: Emitter, args: list[ast.Expr], sb: Subst) -> str {
@@ -11696,7 +11731,7 @@ fn c_call(mut &em: Emitter, name: str, args: list[ast.Expr], l: int, c: int, sb:
 		# value — `zrt_atomic_load(int64_t *p)` — and a `Ref[int]` is a pointer to the CELL,
 		# whose first words are the refcount header. Passed whole, `atomic.load` read the header
 		# and answered a number that was neither the value nor an error.
-		return f"{c_intrinsic(name)}({c_intrinsic_args(em, args, sb)})"
+		return c_intrinsic_call(em, name, args, sb)
 	}
 
 	# a built-in error constructor, `ValueError("bad input")`. It is PascalCase, so without

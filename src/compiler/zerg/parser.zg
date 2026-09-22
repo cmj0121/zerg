@@ -63,6 +63,9 @@ pub struct Parser {
 	# ty_apps rides the same way and under the same rule: appended to, never read. What it
 	# collects is a reader having written type ARGUMENTS after a name (File.ty_apps).
 	pub ty_apps: list[ast.TyApp]
+
+	# ty_uses — every type NAME written (File.ty_uses), under the same rule: appended, never read
+	pub ty_uses: list[ast.TyUse]
 }
 
 fn cur(mut &p: Parser) -> token.Token {
@@ -623,8 +626,22 @@ fn p_stmt_sep(mut &p: Parser, end: token.Kind) {
 # and call targets in the subset), or "" for anything else.
 fn ident_name(e: ast.Expr) -> str {
 	return match e {
-		Expr.EIdent(n) => n
+		Expr.EIdent(n, _, _) => n
 		_ => ""
+	}
+}
+
+# p_ty_use records one type NAME as written — `t` is its token, the one a reader points at.
+fn p_ty_use(mut &p: Parser, t: token.Token) {
+	p.ty_uses.append(ast.TyUse(t.lexeme, p.path, t.line, t.col, bytearray(t.lexeme).len()))
+}
+
+# p_take_ty_uses carries a scratch parser's type uses back to the one that made it. A hole is
+# parsed by a parser of its own (p_scratch), and a type named inside one — `f"{e is Oops}"` — is
+# a type use of the enclosing file like any other.
+fn p_take_ty_uses(mut &p: Parser, mut &hp: Parser) {
+	for u in hp.ty_uses {
+		p.ty_uses.append(u)
 	}
 }
 
@@ -775,7 +792,7 @@ fn p_arr_len_key(mut &p: Parser) -> str {
 # constant from another module has, and the one an array length cannot resolve.
 fn p_is_qualified(e: ast.Expr) -> bool {
 	return match e {
-		Expr.EField(x, _) => p_name_of(x) != ""
+		Expr.EField(x, _, _, _) => p_name_of(x) != ""
 		_ => false
 	}
 }
@@ -814,7 +831,7 @@ fn p_len_binary(o: str, a: ast.Expr, b: ast.Expr) -> int {
 
 fn p_name_of(e: ast.Expr) -> str {
 	return match e {
-		Expr.EIdent(nm) => nm
+		Expr.EIdent(nm, _, _) => nm
 		_ => ""
 	}
 }
@@ -896,6 +913,7 @@ fn parse_base_type(mut &p: Parser) -> ast.Ty {
 	# own line and column to point a refusal at the type, and by then it is consumed.
 	kw := cur(p)
 	mut name := kw.lexeme
+	mut nt := kw
 	p_advance(p)
 
 	# A MODULE-QUALIFIED type, `cli.Opt`: every module of a program flattens into one
@@ -929,7 +947,8 @@ fn parse_base_type(mut &p: Parser) -> ast.Ty {
 		quals.append(name)
 
 		p_advance(p)
-		name = cur(p).lexeme
+		nt = cur(p)
+		name = nt.lexeme
 		p_advance(p)
 	}
 
@@ -1072,6 +1091,9 @@ fn parse_base_type(mut &p: Parser) -> ast.Ty {
 	# type stays a `TNamed`, so no walk over `Ty` has to learn a shape: 72 of this compiler's
 	# 73 matches over one carry a `_` arm, and a variant would fall into every one of them in
 	# silence.
+	# every built-in has returned by here, so this is a declared name — recorded BEFORE its
+	# arguments are read, which is what keeps `ty_uses` in the order the names were written
+	p_ty_use(p, nt)
 	targs := parse_ty_args(p)
 	if targs.len() > 0 {
 		applied := ast.spec_key(name, targs)
@@ -1143,6 +1165,7 @@ pub fn join_commas(names: list[str]) -> str {
 # answering two questions to serve one caller each.
 fn parse_supers(mut &p: Parser, mut &names: list[str], mut &args: list[list[ast.Ty]]) {
 	for p_at(p, token.Kind.Ident) {
+		p_ty_use(p, cur(p))
 		names.append(cur(p).lexeme)
 		p_advance(p)
 		args.append(parse_ty_args(p))
@@ -1155,6 +1178,7 @@ fn parse_supers(mut &p: Parser, mut &names: list[str], mut &args: list[list[ast.
 fn parse_bound(mut &p: Parser, whose: str, allow_args: bool) -> list[str] {
 	mut out: list[str] = []
 	for p_at(p, token.Kind.Ident) {
+		p_ty_use(p, cur(p))
 		name := cur(p).lexeme
 		p_advance(p)
 
@@ -1235,7 +1259,7 @@ fn conv_ty(name: str) -> ast.Ty {
 # than a second door that says it by default.
 pub fn parse_at(src: str, path: str) -> ast.File {
 	toks := lexer.tokenize(src)
-	mut p := Parser(toks, 0, "", path, false, 0, 0, [], [])
+	mut p := Parser(toks, 0, "", path, false, 0, 0, [], [], [])
 	mut imports: list[ast.ImportDecl] = []
 	mut structs: list[ast.StructDecl] = []
 	mut enums: list[ast.EnumDecl] = []
@@ -1518,7 +1542,7 @@ pub fn parse_at(src: str, path: str) -> ast.File {
 	# not the end of the file, because that is where the reader has to go.
 	raise p_diag_at(p, unsafe_line, unsafe_col, rule.Rule.UnsafeGroupUnterminated, "this module-level `unsafe { … }` group is never closed — a group marks a context and the context has to end, or every declaration after it is read as being inside") if in_unsafe
 
-	return ast.File(imports, structs, enums, specs, impls, fns, types, consts, derive_on, derive_spec, stmts, p.ty_quals, p.ty_apps)
+	return ast.File(imports, structs, enums, specs, impls, fns, types, consts, derive_on, derive_spec, stmts, p.ty_quals, p.ty_apps, p.ty_uses)
 }
 
 # p_take_top_stmt records a top-level statement for the build to refuse, and is the one
@@ -1552,7 +1576,7 @@ fn p_is_nop(s: ast.Stmt) -> bool {
 fn p_top_binding(mut &p: Parser, recv: str, is_mut: bool, is_const: bool, is_pub: bool, in_unsafe: bool, line: int, col: int) -> ast.ConstDecl {
 	s := parse_binding(p, is_mut, is_const)
 	return match s {
-		Stmt.SLet(name, ty, has_ty, im, ic, value) => ast.ConstDecl(name, recv, ty, has_ty, im, ic, is_pub, in_unsafe, value, p.path, line, col)
+		Stmt.SLet(name, ty, has_ty, im, ic, value, nl, nc) => ast.ConstDecl(name, recv, ty, has_ty, im, ic, is_pub, in_unsafe, value, p.path, line, col, nl, nc)
 
 		# parse_binding only ever answers SLet; the arm is exhaustiveness, and it must be
 		# LOUD: fabricating a ConstDecl here would let a future non-SLet result flow into
@@ -1724,7 +1748,7 @@ fn parse_fn_expr(mut &p: Parser) -> ast.Expr {
 			parse_expr(p)
 			raise p_diag_at(p, nt.line, nt.col, rule.Rule.NotYetClosureParamDefault, f"NotImplemented: a default on the closure parameter `{pname}` — GRAMMAR#closure-param derives `( '=' expr )?` and a named `fn` declaration honours it, but a default is filled in at the CALL SITE from the callee's declaration, and a closure is reached through a value that has not got one. Pass the argument at every call")
 		}
-		params.append(ast.Param(pname, pty, is_ref, false, ast.Expr.ENil))
+		params.append(ast.Param(pname, pty, is_ref, false, ast.Expr.ENil, nt.line, nt.col))
 		p_list_sep(p, token.Kind.RParen, ")", "a parameter list")
 	}
 	expect(p, token.Kind.RParen)
@@ -1787,15 +1811,19 @@ fn parse_sel_arm(mut &p: Parser) -> ast.SelArm {
 		head := p_name(p, "a select arm's binding")
 		raise p_diag(p, rule.Rule.SelectArmHead, f"`{head}` is not a select arm head — a select picks a ready arm, and `for select {{ … }}` is the loop that ends when every watched channel has") if head != "_"
 		p_advance(p) # '=>'
-		return ast.SelArm(3, "", ast.Expr.ENil, ast.Expr.ENil, parse_sel_body(p))
+		return ast.SelArm(3, "", ast.Expr.ENil, ast.Expr.ENil, parse_sel_body(p), 0, 0)
 	}
 
 	# `v := <-ch => …` — a named receive
 	mut bind := ""
+	mut bat := (0, 0)
 	if p_names_here(p, p.pos) and peek_kind(p, 1) == token.Kind.Walrus {
+		bt := cur(p)
 		bind = p_name(p, "a select arm's binding")
 		if bind == "_" {
 			bind = ""
+		} else {
+			bat = (bt.line, bt.col)
 		}
 		p_advance(p) # ':='
 	}
@@ -1803,7 +1831,7 @@ fn parse_sel_arm(mut &p: Parser) -> ast.SelArm {
 		p_advance(p)
 		ch := parse_expr(p)
 		expect(p, token.Kind.FatArrow)
-		return ast.SelArm(0, bind, ch, ast.Expr.ENil, parse_sel_body(p))
+		return ast.SelArm(0, bind, ch, ast.Expr.ENil, parse_sel_body(p), bat.0, bat.1)
 	}
 
 	# `ch <- v => …` — a send
@@ -1811,7 +1839,7 @@ fn parse_sel_arm(mut &p: Parser) -> ast.SelArm {
 	expect(p, token.Kind.LArrow)
 	v := parse_expr(p)
 	expect(p, token.Kind.FatArrow)
-	return ast.SelArm(1, "", ch, v, parse_sel_body(p))
+	return ast.SelArm(1, "", ch, v, parse_sel_body(p), 0, 0)
 }
 
 # parse_sel_body reads an arm's body. GRAMMAR says an arm is followed by an expression
@@ -1995,6 +2023,7 @@ fn parse_map_lit(mut &p: Parser) -> ast.Expr {
 fn parse_spec(mut &p: Parser, is_pub: bool) -> ast.SpecDecl {
 	kw := cur(p)
 	p_advance(p) # 'spec'
+	nt := cur(p)
 	name := p_type_name(p, "a spec")
 
 	# `spec Ix[K]` and `spec Ix[K: Ord]` — the spec's OWN type parameters. They are what a
@@ -2098,7 +2127,7 @@ fn parse_spec(mut &p: Parser, is_pub: bool) -> ast.SpecDecl {
 			# method that does nothing and a signature is a requirement — two different things
 			# with the same body.
 			if p_at(p, token.Kind.LBrace) {
-				reqs.append(ast.FnDecl(sig.name, sig.recv, sig.params, sig.has_ret, sig.ret, parse_block(p), sig.is_pub, sig.path, sig.line, sig.col, sig.tparams, sig.tbounds, sig.in_unsafe, false, false, true, false, ""))
+				reqs.append(ast.FnDecl(sig.name, sig.recv, sig.params, sig.has_ret, sig.ret, parse_block(p), sig.is_pub, sig.path, sig.line, sig.col, sig.tparams, sig.tbounds, sig.in_unsafe, false, false, true, false, "", sig.name_line, sig.name_col))
 			} else {
 				reqs.append(sig)
 			}
@@ -2117,7 +2146,7 @@ fn parse_spec(mut &p: Parser, is_pub: bool) -> ast.SpecDecl {
 		skip_semis(p)
 	}
 	expect(p, token.Kind.RBrace)
-	return ast.SpecDecl(name, params, supers, super_args, reqs, is_pub, p.path, kw.line, kw.col)
+	return ast.SpecDecl(name, params, supers, super_args, reqs, is_pub, p.path, kw.line, kw.col, nt.line, nt.col)
 }
 
 # parse_typedecl reads `type X = Y` — a NEW, DISTINCT type that takes on Y's representation
@@ -2140,6 +2169,7 @@ fn parse_typedecl(mut &p: Parser, is_pub: bool) -> ast.TypeDecl {
 	# read its identifier for itself and so was the one declaration the rule never reached.
 	# `type This = int` then meant a module-level synonym for `int` while `This` inside an
 	# `impl` still meant the implementing type — one word, two meanings, in one program.
+	nt := cur(p)
 	name := p_type_name(p, "a type alias")
 
 	# A code and a place, which this one refusal did without while its sibling — E9003 for a
@@ -2153,7 +2183,7 @@ fn parse_typedecl(mut &p: Parser, is_pub: bool) -> ast.TypeDecl {
 
 	expect(p, token.Kind.Assign)
 
-	return ast.TypeDecl(name, parse_type(p), is_pub, p.path, kw.line, kw.col)
+	return ast.TypeDecl(name, parse_type(p), is_pub, p.path, kw.line, kw.col, nt.line, nt.col)
 }
 
 # parse_init reads `init() { … }`, the lazy-setup declaration, as an ordinary function so
@@ -2170,7 +2200,7 @@ fn parse_init(mut &p: Parser, at: int) -> ast.FnDecl {
 	expect(p, token.Kind.RParen)
 	mut params: list[ast.Param] = []
 	body := parse_block(p)
-	return ast.FnDecl(init_name(at), "", params, false, ast.Ty.TVoid, body, false, p.path, kw.line, kw.col, [], [], false, false, false, true, false, "")
+	return ast.FnDecl(init_name(at), "", params, false, ast.Ty.TVoid, body, false, p.path, kw.line, kw.col, [], [], false, false, false, true, false, "", 0, 0)
 }
 
 # with_name is the binding a NAMELESS `with` gets, and is_with_name is how a rule that reads
@@ -2315,14 +2345,18 @@ fn parse_import_spec(mut &p: Parser) -> ast.ImportDecl {
 	if p_at(p, token.Kind.As) {
 		p_advance(p) # 'as'
 		if p_at(p, token.Kind.Ident) {
-			alias := cur(p).lexeme
+			at := cur(p)
 			p_advance(p)
-			return ast.ImportDecl(t.value, alias, true, is_pub, p.path, t.line, t.col)
+			return ast.ImportDecl(t.value, at.lexeme, true, is_pub, p.path, t.line, t.col, at.line, at.col)
 		}
 	}
 
 	# `t.value` is the decoded path, without its quotes
-	return ast.ImportDecl(t.value, ast.last_segment(t.value), false, is_pub, p.path, t.line, t.col)
+	# the segment's name is the tail of the string: past the opening quote, and past every byte of
+	# the path in front of the segment
+	seg := ast.last_segment(t.value)
+	seg_col := t.col + 1 + bytearray(t.value).len() - bytearray(seg).len()
+	return ast.ImportDecl(t.value, seg, false, is_pub, p.path, t.line, t.col, t.line, seg_col)
 }
 
 # p_import_path_guess reassembles the bare path the reader wrote, so the refusal above can
@@ -2352,6 +2386,7 @@ fn p_import_path_guess(mut &p: Parser) -> str {
 fn parse_enum(mut &p: Parser, is_pub: bool) -> ast.EnumDecl {
 	kw := cur(p)
 	p_advance(p) # 'enum'
+	nt := cur(p)
 	name := p_type_name(p, "an enum")
 
 	# `enum Either[X, Y] { … }` — read where GRAMMAR#enum-decl puts them, the same three lines
@@ -2418,7 +2453,7 @@ fn parse_enum(mut &p: Parser, is_pub: bool) -> ast.EnumDecl {
 	# equal its position was indistinguishable from one that declared nothing, so `P(int) = 0`
 	# had its discriminant read and then quietly dropped.
 	raise p_diag(p, rule.Rule.DiscriminantOnPayloadEnum, f"enum `{name}` carries a payload, so its tag is opaque — a discriminant (on `{spelled[0]}`) belongs to an enum whose every variant is fieldless") if payload and spelled.len() > 0
-	return ast.EnumDecl(name, variants, tparams, is_pub, p.path, kw.line, kw.col)
+	return ast.EnumDecl(name, variants, tparams, is_pub, p.path, kw.line, kw.col, nt.line, nt.col)
 }
 
 # is_pascal reports whether a name starts with an uppercase ASCII letter — the tell for
@@ -2433,6 +2468,7 @@ fn is_pascal(s: str) -> bool {
 fn parse_struct(mut &p: Parser, is_pub: bool) -> ast.StructDecl {
 	kw := cur(p)
 	p_advance(p) # 'struct'
+	nt := cur(p)
 	name := p_type_name(p, "a struct")
 
 	# `struct Box[T] { … }` — the TEMPLATE's parameters, read where GRAMMAR#struct-decl puts
@@ -2460,6 +2496,7 @@ fn parse_struct(mut &p: Parser, is_pub: bool) -> ast.StructDecl {
 			p_advance(p)
 			is_pub = true
 		}
+		ft := cur(p)
 		fname := p_name(p, "a struct field")
 		expect(p, token.Kind.Colon)
 		fty := parse_type(p)
@@ -2475,14 +2512,14 @@ fn parse_struct(mut &p: Parser, is_pub: bool) -> ast.StructDecl {
 			def = parse_expr(p)
 			has_def = true
 		}
-		fields.append(ast.FieldDef(fname, fty, is_pub, has_def, def, at.line, at.col))
+		fields.append(ast.FieldDef(fname, fty, is_pub, has_def, def, at.line, at.col, ft.line, ft.col))
 
 		# GRAMMAR#field-list is `field ( stmt-sep+ field )*` — the separator is REQUIRED,
 		# the same rule the variant list states above and for the same reason.
 		p_stmt_sep(p, token.Kind.RBrace)
 	}
 	expect(p, token.Kind.RBrace)
-	return ast.StructDecl(name, fields, is_pub, p.path, kw.line, kw.col, tparams)
+	return ast.StructDecl(name, fields, is_pub, p.path, kw.line, kw.col, tparams, nt.line, nt.col)
 }
 
 # parse_decorator reads `#[ … ]` (GRAMMAR#decorator). It used to reach the top-level fallback,
@@ -2677,6 +2714,8 @@ fn parse_impl(mut &p: Parser, mut &fns: list[ast.FnDecl], mut &impls: list[ast.I
 	# `impl Spec[args] for Target` and `impl Target` are the same three steps: a name, an
 	# optional type-argument list, and then `for` deciding which of the two the name was.
 	ftok := cur(p)
+	p_ty_use(p, ftok)
+
 	mut first := p_name(p, "an `impl`")
 	mut args := parse_ty_args(p)
 	mut sp := ""
@@ -2693,6 +2732,7 @@ fn parse_impl(mut &p: Parser, mut &fns: list[ast.FnDecl], mut &impls: list[ast.I
 		p_advance(p)
 		sp = first
 		ttok = cur(p)
+		p_ty_use(p, ttok)
 		target = p_name(p, "an `impl … for …` target")
 		targs = parse_ty_args(p)
 	}
@@ -2884,7 +2924,7 @@ fn parse_fn_at(mut &p: Parser, is_pub: bool, recv: str, recv_mut: bool, in_unsaf
 	if assoc_ok and not is_assoc {
 		params = p_with_receiver(recv, recv_mut, head.params)
 	}
-	return ast.FnDecl(head.name, head.recv, params, head.has_ret, head.ret, body, head.is_pub, head.path, head.line, head.col, head.tparams, head.tbounds, head.in_unsafe, is_test, is_fixture, true, is_assoc, spec_of)
+	return ast.FnDecl(head.name, head.recv, params, head.has_ret, head.ret, body, head.is_pub, head.path, head.line, head.col, head.tparams, head.tbounds, head.in_unsafe, is_test, is_fixture, true, is_assoc, spec_of, head.name_line, head.name_col)
 }
 
 # p_is_rendering names the two methods the LANGUAGE declares rather than the author:
@@ -2903,7 +2943,7 @@ fn p_is_rendering(name: str) -> bool {
 # put it. A method is an ordinary function whose first argument happens to be called `this`, and
 # everything below the parser depends on that being the first one.
 fn p_with_receiver(recv: str, recv_mut: bool, ps: list[ast.Param]) -> list[ast.Param] {
-	mut out: list[ast.Param] = [ast.Param("this", p_ty_of_name(recv), recv_mut, false, ast.Expr.ENil)]
+	mut out: list[ast.Param] = [ast.Param("this", p_ty_of_name(recv), recv_mut, false, ast.Expr.ENil, 0, 0)]
 	for pm in ps {
 		out.append(pm)
 	}
@@ -2977,6 +3017,7 @@ fn parse_fn_head_at(mut &p: Parser, is_pub: bool, recv: str, recv_mut: bool, in_
 	kw := cur(p)
 	p_advance(p) # 'fn'
 
+	nt := cur(p)
 	name := p_fn_name(p, recv)
 
 	# `fn f[T, U: Eq](…)` — the type parameters, and the spec each is bounded by. They are
@@ -2998,7 +3039,7 @@ fn parse_fn_head_at(mut &p: Parser, is_pub: bool, recv: str, recv_mut: bool, in_
 		# A scalar's name and a scalar are two things, and that function is where they meet. From this point on a method is an ordinary function whose first
 		# argument happens to be called `this`, which is why nothing below the parser needs
 		# a notion of methods at all.
-		params.append(ast.Param("this", p_ty_of_name(recv), recv_mut, false, ast.Expr.ENil))
+		params.append(ast.Param("this", p_ty_of_name(recv), recv_mut, false, ast.Expr.ENil, 0, 0))
 	}
 	for not p_at(p, token.Kind.RParen) and not p_at(p, token.Kind.Eof) {
 		# an optional `mut &` prefix marks a mutable-reference parameter
@@ -3015,6 +3056,7 @@ fn parse_fn_head_at(mut &p: Parser, is_pub: bool, recv: str, recv_mut: bool, in_
 			p_advance(p)
 			is_ref = true
 		}
+		pt := cur(p)
 		pname := p_name(p, "a parameter")
 		expect(p, token.Kind.Colon)
 		pty := parse_type(p)
@@ -3027,7 +3069,7 @@ fn parse_fn_head_at(mut &p: Parser, is_pub: bool, recv: str, recv_mut: bool, in_
 			def = parse_expr(p)
 			has_def = true
 		}
-		params.append(ast.Param(pname, pty, is_ref, has_def, def))
+		params.append(ast.Param(pname, pty, is_ref, has_def, def, pt.line, pt.col))
 		p_list_sep(p, token.Kind.RParen, ")", "a parameter list")
 	}
 	expect(p, token.Kind.RParen)
@@ -3039,7 +3081,7 @@ fn parse_fn_head_at(mut &p: Parser, is_pub: bool, recv: str, recv_mut: bool, in_
 		has_ret = true
 	}
 	mut none: list[ast.Stmt] = []
-	return ast.FnDecl(name, recv, params, has_ret, ret, none, is_pub, p.path, kw.line, kw.col, tparams, tbounds, in_unsafe, false, false, false, false, "")
+	return ast.FnDecl(name, recv, params, has_ret, ret, none, is_pub, p.path, kw.line, kw.col, tparams, tbounds, in_unsafe, false, false, false, false, "", nt.line, nt.col)
 }
 
 # parse_block counts a nesting level per block, since statements nest through blocks and
@@ -3066,15 +3108,18 @@ fn parse_with(mut &p: Parser) -> ast.Stmt {
 	line := cur(p).line
 	p_advance(p)
 	p_no_brace_head(p, "a `with` head", false)
+
 	value := parse_expr(p)
 
 	mut name := with_name(line)
+	mut wat := (0, 0)
 	if p_at(p, token.Kind.As) {
 		p_advance(p)
+		wat = (cur(p).line, cur(p).col)
 		name = p_name(p, "a `with` binding")
 	}
 
-	mut body: list[ast.Stmt] = [ast.Stmt.SLet(name, ast.Ty.TUnknown, false, false, false, value)]
+	mut body: list[ast.Stmt] = [ast.Stmt.SLet(name, ast.Ty.TUnknown, false, false, false, value, wat.0, wat.1)]
 	for st in parse_block(p) {
 		body.append(st)
 	}
@@ -3244,7 +3289,10 @@ fn p_target(mut &p: Parser, is_bind: bool) -> ast.Target {
 		return ast.Target.TgtWild
 	}
 
-	return ast.Target.TgtPlace(ast.Expr.EIdent(p_name(p, "a destructuring target"))) if is_bind
+	if is_bind {
+		bt := cur(p)
+		return ast.Target.TgtPlace(ast.Expr.EIdent(p_name(p, "a destructuring target"), bt.line, bt.col))
+	}
 
 	# AN ASSIGNMENT'S LEAF IS AN LVALUE, and it is read with the expression parser because that
 	# is the only thing that knows the postfix chain — `obj.f`, `xs[i]`, `t.0`. Whether what
@@ -3257,6 +3305,7 @@ fn p_target(mut &p: Parser, is_bind: bool) -> ast.Target {
 # field-target list GRAMMAR#assign-target derives). The shorthand is the common case and it is
 # the same thing written out: `P{x}` reads field `x` into the target `x`.
 fn p_target_struct(mut &p: Parser, is_bind: bool) -> ast.Target {
+	p_ty_use(p, cur(p))
 	name := p_name(p, "a destructuring target")
 	expect(p, token.Kind.LBrace)
 
@@ -3273,6 +3322,7 @@ fn p_target_struct(mut &p: Parser, is_bind: bool) -> ast.Target {
 			continue
 		}
 
+		ft := cur(p)
 		fname := p_name(p, "a field in a destructuring target")
 		fields.append(fname)
 		if p_at(p, token.Kind.Colon) {
@@ -3282,7 +3332,7 @@ fn p_target_struct(mut &p: Parser, is_bind: bool) -> ast.Target {
 			# THE SHORTHAND IS THE SAME THING WRITTEN OUT: `P{x}` reads field `x` into the
 			# target `x`, which is a fresh name for a binding and the existing one for an
 			# assignment — and in both spellings that target is the identifier itself.
-			ts.append(ast.Target.TgtPlace(ast.Expr.EIdent(fname)))
+			ts.append(ast.Target.TgtPlace(ast.Expr.EIdent(fname, ft.line, ft.col)))
 		}
 		p_list_sep(p, token.Kind.RBrace, "}", "a destructuring target")
 	}
@@ -3414,8 +3464,9 @@ fn parse_stmt_node(mut &p: Parser) -> ast.Stmt {
 
 	if k == token.Kind.Del {
 		p_advance(p)
+		dt := cur(p)
 		name := p_name(p, "a `del`")
-		return ast.Stmt.SDel(name)
+		return ast.Stmt.SDel(name, dt.line, dt.col)
 	}
 	return parse_close(p, false) if k == token.Kind.Close
 	if k == token.Kind.Defer {
@@ -3467,15 +3518,16 @@ fn parse_binding(mut &p: Parser, is_mut: bool, is_const: bool) -> ast.Stmt {
 	# the last naming position that still read whatever token was there: `print := 1` and
 	# `this := 1` were carried past and reported from the expression fallback, as `` `:=` is
 	# not an expression`` — the token after the name rather than the reserved word in it.
+	nt := cur(p)
 	name := p_name(p, "a binding")
 	if p_at(p, token.Kind.Walrus) {
 		p_advance(p)
-		return ast.Stmt.SLet(name, ast.Ty.TUnknown, false, is_mut, is_const, parse_expr(p))
+		return ast.Stmt.SLet(name, ast.Ty.TUnknown, false, is_mut, is_const, parse_expr(p), nt.line, nt.col)
 	}
 	expect(p, token.Kind.Colon)
 	ty := parse_type(p)
 	expect(p, token.Kind.Assign)
-	return ast.Stmt.SLet(name, ty, true, is_mut, is_const, parse_expr(p))
+	return ast.Stmt.SLet(name, ty, true, is_mut, is_const, parse_expr(p), nt.line, nt.col)
 }
 
 # parse_jump_guard reads the optional trailing `if cond` on a `break` or a `continue` —
@@ -3588,7 +3640,7 @@ fn parse_assert(mut &p: Parser) -> ast.Stmt {
 # token list: `p` and `p.toks` cannot both be `mut &` in one call — they alias — and a list is
 # copy-on-write, so the value here is a refcount and not the file.
 fn p_scratch(mut &p: Parser, toks: list[token.Token], pos: int) -> Parser {
-	return Parser(toks, pos, p.impl_ty, p.path, p.saw_this, p.depth, p.edepth, [], [])
+	return Parser(toks, pos, p.impl_ty, p.path, p.saw_this, p.depth, p.edepth, [], [], [])
 }
 
 # p_assert_claims is the split: one claim per conjunct of a top-level `and` chain, and ONE
@@ -3657,13 +3709,13 @@ fn p_assert_claim(mut &p: Parser, at: token.Token, c: AClaim, mut &out: list[ast
 	# sameness is the claim `zerg desugar`'s D104 rests on: D104 writes this same f-string out
 	# as text, and the two are held to being one program down to the emitted C.
 	mut args: list[ast.Expr] = []
-	args.append(fstr_expr(p, assert_fstr(cond.msg, at)))
+	args.append(fstr_expr(p, assert_fstr(cond.msg, at), false))
 
 	# `raise AssertionError(msg) if not (cond)` — the postfix guard on a raise, written as the
 	# `if` block it is defined as, which is what parse_jump_guard would have made of it
 	mut body: list[ast.Stmt] = []
 	mut none: list[ast.Stmt] = []
-	body.append(ast.Stmt.SRaise(ast.Expr.ECall("AssertionError", args, []), false, ast.Expr.ENil))
+	body.append(ast.Stmt.SRaise(ast.Expr.ECall("AssertionError", args, [], 0, 0), false, ast.Expr.ENil))
 	out.append(ast.Stmt.SIf(ast.Expr.EUnary("not", p_assert_parse(p, cond.toks)), body, false, none))
 }
 
@@ -3677,7 +3729,7 @@ fn p_assert_side(mut &p: Parser, lo: int, hi: int, name: str, mut &c: ACond) {
 	}
 	t := p.toks[lo]
 	mut span := p_assert_span(p, lo, hi)
-	c.pre.append(ast.Stmt.SLet(name, ast.Ty.TUnknown, false, false, false, p_assert_parse(p, span)))
+	c.pre.append(ast.Stmt.SLet(name, ast.Ty.TUnknown, false, false, false, p_assert_parse(p, span), 0, 0))
 	c.toks.append(token.Token(token.Kind.Ident, name, "", t.line, t.col))
 	c.msg = c.msg + assert_note(p.toks, lo, hi, name)
 }
@@ -3854,6 +3906,7 @@ fn parse_if(mut &p: Parser) -> ast.Stmt {
 	# this the `:=` was read as the start of a second expression and the rest of the
 	# function came apart, silently.
 	if p_names_here(p, p.pos) and peek_kind(p, 1) == token.Kind.Walrus {
+		nt := cur(p)
 		name := p_name(p, "an `if let` binding")
 		p_advance(p) # ':='
 		value := parse_expr(p)
@@ -3865,7 +3918,7 @@ fn parse_if(mut &p: Parser) -> ast.Stmt {
 			has_else_l = true
 			else_body_l = p_else_body(p)
 		}
-		return ast.Stmt.SIfLet(name, value, then_body, has_else_l, else_body_l)
+		return ast.Stmt.SIfLet(name, value, then_body, has_else_l, else_body_l, nt.line, nt.col)
 	}
 
 	cond := parse_expr(p)
@@ -3932,10 +3985,11 @@ fn parse_for(mut &p: Parser) -> ast.Stmt {
 
 	# for-in: `for name in iterable { ... }`
 	if p_names_here(p, p.pos) and peek_kind(p, 1) == token.Kind.In {
+		vt := cur(p)
 		vname := p_name(p, "a loop binding")
 		p_advance(p) # 'in'
 		iter := parse_expr(p)
-		return ast.Stmt.SForIn(vname, iter, parse_block(p))
+		return ast.Stmt.SForIn(vname, iter, parse_block(p), vt.line, vt.col)
 	}
 	cond := parse_expr(p)
 	body := parse_block(p)
@@ -4087,6 +4141,7 @@ fn parse_cmp(mut &p: Parser) -> ast.Expr {
 		# `e is StopIteration` an ident lookup for a name nothing declares. Refusing here
 		# is what keeps a malformed test from reaching the emitter as something else.
 		raise p_diag(p, rule.Rule.IsWantsTypeName, f"`is` wants a type name on its right, found `{token.says(cur(p))}`") if not p_at(p, token.Kind.Ident)
+		p_ty_use(p, cur(p))
 		name := cur(p).lexeme
 		p_advance(p)
 		return ast.Expr.EIs(left, name)
@@ -4183,8 +4238,9 @@ fn parse_chain_tail(mut &p: Parser, e0: ast.Expr) -> ast.Expr {
 	for p_at(p, token.Kind.Dot) or p_at(p, token.Kind.LBrack) or p_at(p, token.Kind.OptDot) {
 		if p_at(p, token.Kind.OptDot) {
 			p_advance(p)
+			ft := cur(p)
 			fld := p_field_name(p, "?.", false)
-			e = ast.Expr.EOptChain(e, fld)
+			e = ast.Expr.EOptChain(e, fld, ft.line, ft.col)
 		} else if p_at(p, token.Kind.LBrack) {
 			p_advance(p) # '['
 			idx := parse_expr(p)
@@ -4192,11 +4248,12 @@ fn parse_chain_tail(mut &p: Parser, e0: ast.Expr) -> ast.Expr {
 			e = ast.Expr.EIndex(e, idx)
 		} else {
 			p_advance(p) # '.'
+			ft := cur(p)
 			fld := p_field_name(p, ".", true)
 			if p_at(p, token.Kind.LParen) {
-				e = ast.Expr.EMethod(e, fld, parse_call_args(p))
+				e = ast.Expr.EMethod(e, fld, parse_call_args(p), ft.line, ft.col)
 			} else {
-				e = ast.Expr.EField(e, fld)
+				e = ast.Expr.EField(e, fld, ft.line, ft.col)
 			}
 		}
 	}
@@ -4253,7 +4310,7 @@ fn p_no_unsafe_fn(mut &p: Parser, u: token.Token) {
 
 fn is_opt_chain(e: ast.Expr) -> bool {
 	return match e {
-		Expr.EOptChain(_, _) => true
+		Expr.EOptChain(_, _, _, _) => true
 		_ => false
 	}
 }
@@ -4333,8 +4390,9 @@ fn parse_postfix(mut &p: Parser) -> ast.Expr {
 			# `a?.b` — the lexer has produced this token since it existed and no parser ever
 			# consumed it, so `x := p?.n` bound `p` and the `.n` was simply dropped.
 			p_advance(p)
+			ft := cur(p)
 			fld := p_field_name(p, "?.", false)
-			e = ast.Expr.EOptChain(e, fld)
+			e = ast.Expr.EOptChain(e, fld, ft.line, ft.col)
 		} else if p_at(p, token.Kind.LBrack) {
 			p_advance(p) # '['
 			idx := parse_expr(p)
@@ -4360,12 +4418,13 @@ fn parse_postfix(mut &p: Parser) -> ast.Expr {
 			}
 		} else if p_at(p, token.Kind.Dot) {
 			p_advance(p)
+			ft := cur(p)
 			fld := p_field_name(p, ".", true)
 			if p_at(p, token.Kind.LParen) {
 				# method call: target.method(args)
-				e = ast.Expr.EMethod(e, fld, parse_call_args(p))
+				e = ast.Expr.EMethod(e, fld, parse_call_args(p), ft.line, ft.col)
 			} else {
-				e = ast.Expr.EField(e, fld)
+				e = ast.Expr.EField(e, fld, ft.line, ft.col)
 			}
 		} else {
 			# free call: name(args), or a scalar type conversion like int(x)
@@ -4422,7 +4481,8 @@ fn parse_postfix(mut &p: Parser) -> ast.Expr {
 
 				e = ast.Expr.EConv(conv_ty(name), args[0], name)
 			} else {
-				e = ast.Expr.ECall(name, args, tyargs)
+				at := ast.ident_at(e)
+				e = ast.Expr.ECall(name, args, tyargs, at.0, at.1)
 			}
 		}
 	}
@@ -4459,7 +4519,8 @@ fn p_type_arg_call(mut &p: Parser, base: ast.Expr, first: ast.Expr) -> ast.Expr 
 	expect(p, token.Kind.RBrack)
 	raise p_diag(p, rule.Rule.TypeArgsNoCall, f"`{name}[…]` with no call after it — this compiler instantiates a generic at the call, so its type arguments have to arrive with the arguments") if not p_at(p, token.Kind.LParen)
 
-	return ast.Expr.ECall(name, parse_call_args(p), tyargs)
+	at := ast.ident_at(base)
+	return ast.Expr.ECall(name, parse_call_args(p), tyargs, at.0, at.1)
 }
 
 # p_written_type_args is the one complaint both shapes earn. `id[int](7)` is recovered from
@@ -4489,10 +4550,11 @@ fn parse_call_args(mut &p: Parser) -> list[ast.Expr] {
 		# decided here: which parameter it is, whether there is one, and where it goes are all
 		# questions about the CALLEE, which the parser does not have. The call site reorders.
 		if p_at(p, token.Kind.Ident) and peek_kind(p, 1) == token.Kind.Colon {
-			nm := token.says(cur(p))
+			nt := cur(p)
+			nm := token.says(nt)
 			p_advance(p)
 			p_advance(p)
-			args.append(ast.Expr.ENamedArg(nm, parse_expr(p)))
+			args.append(ast.Expr.ENamedArg(nm, parse_expr(p), nt.line, nt.col))
 			p_list_sep(p, token.Kind.RParen, ")", "an argument list")
 			continue
 		}
@@ -4546,7 +4608,7 @@ fn parse_primary(mut &p: Parser) -> ast.Expr {
 	}
 	if k == token.Kind.FStr {
 		p_advance(p)
-		return fstr_expr(p, t)
+		return fstr_expr(p, t, true)
 	}
 	if k == token.Kind.True {
 		p_advance(p)
@@ -4564,7 +4626,7 @@ fn parse_primary(mut &p: Parser) -> ast.Expr {
 		# the receiver reads as an ordinary binding, because the parser made it one
 		p_advance(p)
 		p.saw_this = true
-		return ast.Expr.EIdent("this")
+		return ast.Expr.EIdent("this", t.line, t.col)
 	}
 
 	# The INTERPOLATING form, `` f`…` ``, lexes as a bare `f` and then the command literal,
@@ -4611,7 +4673,7 @@ fn parse_primary(mut &p: Parser) -> ast.Expr {
 			return ast.Expr.EConv(ast.Ty.TList(elem), args[0], "list")
 		}
 		p_advance(p)
-		return ast.Expr.EIdent(t.lexeme)
+		return ast.Expr.EIdent(t.lexeme, t.line, t.col)
 	}
 	return parse_fn_expr(p) if k == token.Kind.Fn
 	if k == token.Kind.Chan {
@@ -4921,7 +4983,7 @@ fn p_at_literal_word(mut &p: Parser) -> bool {
 # this used to do — is a `(` a tuple pattern or a parenthesised one? — is gone.
 fn p_pat_unbuilt(mut &p: Parser, pt: ast.Pat, line: int, col: int) {
 	msg := match pt {
-		Pat.PVariant(_, _, ps) => p_payload_unbuilt(p, ps, line, col)
+		Pat.PVariant(_, _, ps, _, _) => p_payload_unbuilt(p, ps, line, col)
 		_ => ""
 	}
 
@@ -4937,9 +4999,9 @@ fn p_payload_unbuilt(mut &p: Parser, ps: list[ast.Pat], line: int, col: int) -> 
 
 fn p_pat_is_name(pt: ast.Pat) -> bool {
 	return match pt {
-		Pat.PBind(_) => true
-		Pat.PWild    => true
-		_            => false
+		Pat.PBind(_, _, _) => true
+		Pat.PWild => true
+		_ => false
 	}
 }
 
@@ -4962,7 +5024,8 @@ fn p_sub_pattern(mut &p: Parser) -> ast.Pat {
 	return core if not p_at(p, token.Kind.As)
 
 	p_advance(p)
-	return ast.Pat.PAs(core, p_name(p, "an `as` binding"))
+	at := cur(p)
+	return ast.Pat.PAs(core, p_name(p, "an `as` binding"), at.line, at.col)
 }
 
 # p_pattern_list reads `pattern ( ',' pattern )*` up to `close`, which is every place
@@ -4993,12 +5056,14 @@ fn p_pattern_core(mut &p: Parser) -> ast.Pat {
 		mut elems: list[ast.Pat] = []
 		mut rest := -1
 		mut rest_name := ""
+		mut rat := (0, 0)
 		for not p_at(p, token.Kind.RBrack) and not p_at(p, token.Kind.Eof) {
 			if p_at(p, token.Kind.DotDot) {
 				raise p_diag_at(p, lb.line, lb.col, rule.Rule.ListPatternTwoRests, "a list pattern takes ONE `..` — with two, no element has a position, since the ones after the first are counted from the front and the ones before the second from the back") if rest >= 0
 				p_advance(p)
 				rest = elems.len()
 				if p_at(p, token.Kind.Ident) {
+					rat = (cur(p).line, cur(p).col)
 					rest_name = p_name(p, "a rest binding")
 				}
 			} else {
@@ -5007,7 +5072,7 @@ fn p_pattern_core(mut &p: Parser) -> ast.Pat {
 			p_list_sep(p, token.Kind.RBrack, "]", "a list pattern")
 		}
 		expect(p, token.Kind.RBrack)
-		return ast.Pat.PList(elems, rest, rest_name)
+		return ast.Pat.PList(elems, rest, rest_name, rat.0, rat.1)
 	}
 
 	if p_at(p, token.Kind.Ident) {
@@ -5015,6 +5080,7 @@ fn p_pattern_core(mut &p: Parser) -> ast.Pat {
 		# is the reserved word an `Ident` can still be, and reading the lexeme here would have
 		# meant a second raise of E2013 — which `error-codes-check` refuses, and rightly: two
 		# spellings drift, and the one a reader meets decides what they believe.
+		mut nt := cur(p)
 		mut name := p_name(p, "a pattern")
 
 		# `Colour.Red` — a variant NAMED BY ITS ENUM. The qualifier is carried rather than
@@ -5024,7 +5090,9 @@ fn p_pattern_core(mut &p: Parser) -> ast.Pat {
 		mut qualified := false
 		if p_at(p, token.Kind.Dot) and peek_kind(p, 1) == token.Kind.Ident {
 			qual = name
+			p_ty_use(p, nt)
 			p_advance(p)
+			nt = cur(p)
 			name = p_name(p, "a variant pattern")
 			qualified = true
 		}
@@ -5032,6 +5100,7 @@ fn p_pattern_core(mut &p: Parser) -> ast.Pat {
 		# `P{x, y: inner}` — a STRUCT PATTERN. A `..` says the fields not written are not being
 		# asked about; without it the pattern names every field and the emitter says so.
 		if p_at(p, token.Kind.LBrace) {
+			p_ty_use(p, nt)
 			p_advance(p)
 
 			mut fields: list[str] = []
@@ -5044,6 +5113,7 @@ fn p_pattern_core(mut &p: Parser) -> ast.Pat {
 					p_list_sep(p, token.Kind.RBrace, "}", "a struct pattern")
 					continue
 				}
+				ft := cur(p)
 				f := p_name(p, "a field pattern")
 				fields.append(f)
 
@@ -5052,7 +5122,7 @@ fn p_pattern_core(mut &p: Parser) -> ast.Pat {
 					p_advance(p)
 					pats.append(p_pattern(p))
 				} else {
-					pats.append(ast.Pat.PBind(f))
+					pats.append(ast.Pat.PBind(f, ft.line, ft.col))
 				}
 				p_list_sep(p, token.Kind.RBrace, "}", "a struct pattern")
 			}
@@ -5068,14 +5138,14 @@ fn p_pattern_core(mut &p: Parser) -> ast.Pat {
 				p_advance(p)
 				payload = p_pattern_list(p, token.Kind.RParen, ")", "a pattern list")
 			}
-			return ast.Pat.PVariant(qual, name, payload)
+			return ast.Pat.PVariant(qual, name, payload, nt.line, nt.col)
 		}
 
 		# A BARE NAME IN PATTERN POSITION IS ALWAYS A FRESH BINDING. It used to be a
 		# constructor pattern when it started with a capital, which made an arm's meaning a
 		# NAMING CONVENTION: rename the binding `Value` to `value` and the same arm stopped
 		# matching a variant and started binding the subject.
-		return ast.Pat.PBind(name)
+		return ast.Pat.PBind(name, nt.line, nt.col)
 	}
 
 	# A RESERVED WORD IN PATTERN POSITION IS SOMEBODY NAMING A BINDING, and `p_name` owns that
@@ -5160,7 +5230,11 @@ fn parse_arm(mut &p: Parser) -> ast.Arm {
 #
 # Every hole is wrapped in `str(…)`, which is `display()` for a scalar and identity for a
 # str, so a hole renders whatever it holds.
-fn fstr_expr(mut &p: Parser, t: token.Token) -> ast.Expr {
+#
+# `in_source` says whether the literal's text IS source text. It is for every f-string a reader
+# wrote, and then a hole's tokens are placed where they stand in the file; the one the `assert`
+# desugaring builds is text nobody wrote, so its holes take the place of the claim instead.
+fn fstr_expr(mut &p: Parser, t: token.Token, in_source: bool) -> ast.Expr {
 	src := bytearray(t.value)
 	n := src.len()
 	mut acc: ast.Expr = ast.Expr.ENil
@@ -5191,7 +5265,11 @@ fn fstr_expr(mut &p: Parser, t: token.Token) -> ast.Expr {
 			# written out by `zerg desugar` builds `("" + "n=") + str(n)`: the same answer, and
 			# not the same C, which is a difference the differential gate is entitled to see.
 			mut lead := ""
-			h := fstr_hole(p, t, fstr_slice(src, i + 1, end), lead)
+			mut at := (t.line, t.col)
+			if in_source {
+				at = fstr_body_at(t, 2, src, i + 1)
+			}
+			h := fstr_hole(p, t, fstr_slice(src, i + 1, end), at.0, at.1, lead)
 			if lead != "" {
 				acc = fstr_join(acc, have, ast.Expr.EStr(lead))
 				have = true
@@ -5246,10 +5324,12 @@ fn cmd_argv(mut &p: Parser, t: token.Token, body: str) -> list[ast.Expr] {
 			end := fstr_hole_end(b, i)
 			src := fstr_slice(b, i + 1, end)
 			mut toks := lexer.tokenize(src)
-			fstr_place(toks, t)
+			at := fstr_body_at(t, 1, b, i + 1)
+			fstr_place(toks, at.0, at.1)
 			mut hp := p_scratch(p, toks, 0)
 			e := parse_expr(hp)
 			p.saw_this = p.saw_this or hp.saw_this
+			p_take_ty_uses(p, hp)
 			cmd_one_expr(p, t, src, hp)
 
 			out.append(e)
@@ -5312,7 +5392,7 @@ fn cmd_call(mut &p: Parser, t: token.Token, argv: list[ast.Expr]) -> ast.Expr {
 	# literal is what they wrote, so the literal is what the sentence is about.
 	raise p_diag_at(p, t.line, t.col, rule.Rule.CommandNeedsOs, "a command literal is `os.command(…)` — a child process and its three streams — and this file does not `import \"os\"`") if not cmd_imports_os(p)
 
-	return ast.Expr.EMethod(ast.Expr.EIdent("os"), "command", [ast.Expr.EListLit(argv)])
+	return ast.Expr.EMethod(ast.Expr.EIdent("os", 0, 0), "command", [ast.Expr.EListLit(argv)], 0, 0)
 }
 
 # cmd_imports_os reads the file's own token stream for an `import "os"`, in either spelling —
@@ -5441,7 +5521,9 @@ fn fstr_unbrace(raw: str) -> str {
 # fstr_hole turns one hole's source into an expression. It is RE-LEXED and parsed by the
 # ordinary machinery, so anything the compiler can parse in an expression position works
 # inside a hole; p.impl_ty rides along so `this` resolves as it does outside one.
-fn fstr_hole(mut &p: Parser, t: token.Token, hole: str, mut &lead: str) -> ast.Expr {
+#
+# `line` / `col` are where the hole's first byte stands in the file.
+fn fstr_hole(mut &p: Parser, t: token.Token, hole: str, line: int, col: int, mut &lead: str) -> ast.Expr {
 	# THE THREE TAILS ARE PEELED OFF FIRST, in the order GRAMMAR#interp derives them —
 	# `'{' expr '='? conversion? format-spec? '}'` — so what is re-lexed below is an
 	# expression and only that.
@@ -5481,18 +5563,9 @@ fn fstr_hole(mut &p: Parser, t: token.Token, hole: str, mut &lead: str) -> ast.E
 
 	mut toks := lexer.tokenize(src)
 
-	# THE HOLE IS LEXED ON ITS OWN, so its tokens count from line 1 column 1 of the hole and not
-	# of the file. Every refusal below already says `t.line, t.col` for that reason — but a
-	# diagnostic made LATER, off a node the hole produced, had nothing to correct it. An
-	# f-string holding `1 + 2.5` reported `L502 the literal 1 is a float here` at 1:1 — a place
-	# in no file, to an author who is holding a real line number. Stamping the enclosing
-	# token's place on the hole's tokens is what those refusals do by hand, done once and for
-	# every node the hole goes on to produce.
-	#
-	# It is the f-string's place and not the literal's, because the hole's own column counts
-	# characters of a string this compiler never re-joined to the source. A place a reader can
-	# find beats a column that is exact about the wrong text.
-	fstr_place(toks, t)
+	# the hole is lexed on its own, so its tokens are moved to where they stand in the file; the
+	# refusals below still name the literal (`t`), which is the whole of what they are about
+	fstr_place(toks, line, col)
 
 	# the hole parser INHERITS the enclosing depth: its recursion continues on the same
 	# native stack, so an f-string could not be a fresh budget even if it wanted one. It
@@ -5505,6 +5578,7 @@ fn fstr_hole(mut &p: Parser, t: token.Token, hole: str, mut &lead: str) -> ast.E
 	# what it read has to be carried back — `f"{this.n}"` is a body that uses `this`, and the
 	# rule that tells a method from an associated fn (GRAMMAR#impl-decl) reads exactly that.
 	p.saw_this = p.saw_this or hp.saw_this
+	p_take_ty_uses(p, hp)
 
 	# a hole is ONE expression; emitting just the prefix of something longer is exactly the
 	# silent wrong answer this path exists to avoid
@@ -5517,14 +5591,40 @@ fn fstr_hole(mut &p: Parser, t: token.Token, hole: str, mut &lead: str) -> ast.E
 	return ast.Expr.EConv(ast.Ty.TStr, e, "str")
 }
 
-# fstr_place puts the enclosing f-string's line and column on every token of a re-lexed hole.
-fn fstr_place(mut &toks: list[token.Token], t: token.Token) {
+# fstr_place moves every token of a re-lexed hole to its place in the file, given where the
+# hole's first byte stands: a token on the hole's first line is shifted along that line, and one
+# on a later line keeps its own column, since the line it is on starts where the file's does.
+fn fstr_place(mut &toks: list[token.Token], line: int, col: int) {
 	mut i := 0
 	for i < toks.len() {
 		k := toks[i]
-		toks[i] = token.Token(k.kind, k.lexeme, k.value, t.line, t.col)
+		mut c := k.col
+		if k.line == 1 {
+			c = col + k.col - 1
+		}
+		toks[i] = token.Token(k.kind, k.lexeme, k.value, line + k.line - 1, c)
 		i = i + 1
 	}
+}
+
+# fstr_body_at is where byte `off` of a literal's value stands in the file. The value is the
+# source text between the delimiters, verbatim, so it starts `lead` bytes after the token —
+# `f"` is two, a backtick one — and a newline inside it (a command literal may hold one) starts
+# the next line.
+fn fstr_body_at(t: token.Token, lead: int, body: list[byte], off: int) -> (int, int) {
+	mut line := t.line
+	mut col := t.col + lead
+	mut k := 0
+	for k < off {
+		if body[k] == byte(10) {
+			line = line + 1
+			col = 1
+		} else {
+			col = col + 1
+		}
+		k = k + 1
+	}
+	return (line, col)
 }
 
 # p_asm reads `asm(template, operand*)`. The operand heads `out` / `inout` / `clobber` are

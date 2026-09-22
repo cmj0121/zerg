@@ -248,19 +248,19 @@ pub fn gen_resolve_lens(f: ast.File) -> ast.File {
 
 	mut structs: list[ast.StructDecl] = []
 	for sd in f.structs {
-		structs.append(ast.StructDecl(sd.name, subst_fields(su, sd.fields), sd.is_pub, sd.path, sd.line, sd.col, sd.tparams))
+		structs.append(ast.StructDecl(sd.name, subst_fields(su, sd.fields), sd.is_pub, sd.path, sd.line, sd.col, sd.tparams, sd.name_line, sd.name_col))
 	}
 	mut enums: list[ast.EnumDecl] = []
 	for ed in f.enums {
-		enums.append(ast.EnumDecl(ed.name, subst_variants(su, ed.variants), ed.tparams, ed.is_pub, ed.path, ed.line, ed.col))
+		enums.append(ast.EnumDecl(ed.name, subst_variants(su, ed.variants), ed.tparams, ed.is_pub, ed.path, ed.line, ed.col, ed.name_line, ed.name_col))
 	}
 	mut types: list[ast.TypeDecl] = []
 	for td in f.types {
-		types.append(ast.TypeDecl(td.name, subst_ty(su, td.under), td.is_pub, td.path, td.line, td.col))
+		types.append(ast.TypeDecl(td.name, subst_ty(su, td.under), td.is_pub, td.path, td.line, td.col, td.name_line, td.name_col))
 	}
 	mut consts: list[ast.ConstDecl] = []
 	for cd in f.consts {
-		consts.append(ast.ConstDecl(cd.name, cd.recv, subst_ty(su, cd.ty), cd.has_ty, cd.is_mut, cd.is_const, cd.is_pub, cd.in_unsafe, subst_expr(su, cd.value), cd.path, cd.line, cd.col))
+		consts.append(ast.ConstDecl(cd.name, cd.recv, subst_ty(su, cd.ty), cd.has_ty, cd.is_mut, cd.is_const, cd.is_pub, cd.in_unsafe, subst_expr(su, cd.value), cd.path, cd.line, cd.col, cd.name_line, cd.name_col))
 	}
 	mut fns: list[ast.FnDecl] = []
 	for fd in f.fns {
@@ -268,9 +268,9 @@ pub fn gen_resolve_lens(f: ast.File) -> ast.File {
 	}
 	mut specs: list[ast.SpecDecl] = []
 	for sp in f.specs {
-		specs.append(ast.SpecDecl(sp.name, sp.params, sp.supers, sp.super_args, gen_len_fns(su, sp.reqs), sp.is_pub, sp.path, sp.line, sp.col))
+		specs.append(ast.SpecDecl(sp.name, sp.params, sp.supers, sp.super_args, gen_len_fns(su, sp.reqs), sp.is_pub, sp.path, sp.line, sp.col, sp.name_line, sp.name_col))
 	}
-	return ast.File(f.imports, structs, enums, specs, f.impls, fns, types, consts, f.derive_on, f.derive_spec, f.stmts, f.ty_quals, f.ty_apps)
+	return ast.File(f.imports, structs, enums, specs, f.impls, fns, types, consts, f.derive_on, f.derive_spec, f.stmts, f.ty_quals, f.ty_apps, f.ty_uses)
 }
 
 # gen_len_table folds every module-level constant an array length may name. A `mut` binding is
@@ -307,7 +307,7 @@ fn gen_len_known(keys: list[str], name: str) -> bool {
 fn gen_len_fold(keys: list[str], vals: list[str], e: ast.Expr) -> int {
 	return match e {
 		Expr.EInt(lex, _, _) => gen_len_int(lex)
-		Expr.EIdent(n) => gen_len_named(keys, vals, n)
+		Expr.EIdent(n, _, _) => gen_len_named(keys, vals, n)
 		Expr.EBinary(o, a, b) => gen_len_binary(keys, vals, o, a, b)
 		_ => 0 - 1
 	}
@@ -353,7 +353,7 @@ fn gen_len_binary(keys: list[str], vals: list[str], o: str, a: ast.Expr, b: ast.
 pub fn subst_fields(su: TySubst, fs: list[ast.FieldDef]) -> list[ast.FieldDef] {
 	mut out: list[ast.FieldDef] = []
 	for fd in fs {
-		out.append(ast.FieldDef(fd.name, subst_ty(su, fd.ty), fd.is_pub, fd.has_def, subst_expr(su, fd.def), fd.line, fd.col))
+		out.append(ast.FieldDef(fd.name, subst_ty(su, fd.ty), fd.is_pub, fd.has_def, subst_expr(su, fd.def), fd.line, fd.col, fd.name_line, fd.name_col))
 	}
 	return out
 }
@@ -380,7 +380,7 @@ fn gen_len_fns(su: TySubst, fs: list[ast.FnDecl]) -> list[ast.FnDecl] {
 # gen_len_fn is subst_fn without the mangling: the same walk over a declaration, for a
 # substitution that renames nothing.
 fn gen_len_fn(su: TySubst, fd: ast.FnDecl) -> ast.FnDecl {
-	return ast.FnDecl(fd.name, fd.recv, subst_params(su, fd.params), fd.has_ret, subst_ty(su, fd.ret), subst_block(su, fd.body), fd.is_pub, fd.path, fd.line, fd.col, fd.tparams, fd.tbounds, fd.in_unsafe, fd.is_test, fd.is_fixture, fd.has_body, fd.is_assoc, fd.spec_of)
+	return ast.FnDecl(fd.name, fd.recv, subst_params(su, fd.params), fd.has_ret, subst_ty(su, fd.ret), subst_block(su, fd.body), fd.is_pub, fd.path, fd.line, fd.col, fd.tparams, fd.tbounds, fd.in_unsafe, fd.is_test, fd.is_fixture, fd.has_body, fd.is_assoc, fd.spec_of, fd.name_line, fd.name_col)
 }
 
 # subst_method is subst_fn for a method of a template `impl`: the same walk, plus the RECEIVER
@@ -392,14 +392,14 @@ fn gen_len_fn(su: TySubst, fd: ast.FnDecl) -> ast.FnDecl {
 # signature and its `U` was reported to the caller as a type: _argument 1 of `Box[int].tag` is
 # U, and this gives str_.
 pub fn subst_method(su: TySubst, m: ast.FnDecl, recv: str) -> ast.FnDecl {
-	return ast.FnDecl(m.name, recv, subst_params(su, m.params), m.has_ret, subst_ty(su, m.ret), subst_block(su, m.body), m.is_pub, m.path, m.line, m.col, m.tparams, m.tbounds, m.in_unsafe, m.is_test, m.is_fixture, m.has_body, m.is_assoc, m.spec_of)
+	return ast.FnDecl(m.name, recv, subst_params(su, m.params), m.has_ret, subst_ty(su, m.ret), subst_block(su, m.body), m.is_pub, m.path, m.line, m.col, m.tparams, m.tbounds, m.in_unsafe, m.is_test, m.is_fixture, m.has_body, m.is_assoc, m.spec_of, m.name_line, m.name_col)
 }
 
 # subst_fn keeps `is_assoc`: a specialization of `impl P { fn make[U](…) }` is still an
 # associated fn, and the signature row it becomes is what tells `P.make(…)` from `p.make(…)`.
 pub fn subst_fn(tpl: ast.FnDecl, args: list[ast.Ty], at: str, apps: list[ast.TyApp]) -> ast.FnDecl {
 	su := TySubst(tpl.tparams, args, [], [], apps, at)
-	return ast.FnDecl(gen_mangle(tpl.name, args), tpl.recv, subst_params(su, tpl.params), tpl.has_ret, subst_ty(su, tpl.ret), subst_block(su, tpl.body), tpl.is_pub, tpl.path, tpl.line, tpl.col, [], [], tpl.in_unsafe, tpl.is_test, tpl.is_fixture, tpl.has_body, tpl.is_assoc, tpl.spec_of)
+	return ast.FnDecl(gen_mangle(tpl.name, args), tpl.recv, subst_params(su, tpl.params), tpl.has_ret, subst_ty(su, tpl.ret), subst_block(su, tpl.body), tpl.is_pub, tpl.path, tpl.line, tpl.col, [], [], tpl.in_unsafe, tpl.is_test, tpl.is_fixture, tpl.has_body, tpl.is_assoc, tpl.spec_of, tpl.name_line, tpl.name_col)
 }
 
 # subst_ty replaces a type parameter wherever a type is written, at any depth.
@@ -500,7 +500,7 @@ fn subst_block(su: TySubst, b: list[ast.Stmt]) -> list[ast.Stmt] {
 
 fn subst_stmt(su: TySubst, s: ast.Stmt) -> ast.Stmt {
 	return match s {
-		Stmt.SLet(nm, ty, ht, im, ic, v) => ast.Stmt.SLet(nm, subst_ty(su, ty), ht, im, ic, subst_expr(su, v))
+		Stmt.SLet(nm, ty, ht, im, ic, v, l, c) => ast.Stmt.SLet(nm, subst_ty(su, ty), ht, im, ic, subst_expr(su, v), l, c)
 		Stmt.SDestructure(t, v, ib, im, ic) => ast.Stmt.SDestructure(subst_target(su, t), subst_expr(su, v), ib, im, ic)
 		Stmt.SAssign(l, r) => ast.Stmt.SAssign(subst_expr(su, l), subst_expr(su, r))
 		Stmt.SPrint(v) => ast.Stmt.SPrint(subst_expr(su, v))
@@ -509,7 +509,7 @@ fn subst_stmt(su: TySubst, s: ast.Stmt) -> ast.Stmt {
 		Stmt.SExpr(v) => ast.Stmt.SExpr(subst_expr(su, v))
 		Stmt.SIf(c, tb, he, eb) => ast.Stmt.SIf(subst_expr(su, c), subst_block(su, tb), he, subst_block(su, eb))
 		Stmt.SFor(hc, c, b) => ast.Stmt.SFor(hc, subst_expr(su, c), subst_block(su, b))
-		Stmt.SForIn(nm, it, b) => ast.Stmt.SForIn(nm, subst_expr(su, it), subst_block(su, b))
+		Stmt.SForIn(nm, it, b, l, c) => ast.Stmt.SForIn(nm, subst_expr(su, it), subst_block(su, b), l, c)
 		Stmt.SForSelect(arms) => ast.Stmt.SForSelect(subst_sel_arms(su, arms))
 		Stmt.SRaise(e, hf, cause) => ast.Stmt.SRaise(subst_expr(su, e), hf, subst_expr(su, cause))
 		Stmt.SDefer(v) => ast.Stmt.SDefer(subst_expr(su, v))
@@ -517,7 +517,7 @@ fn subst_stmt(su: TySubst, s: ast.Stmt) -> ast.Stmt {
 		Stmt.SSend(ch, v) => ast.Stmt.SSend(subst_expr(su, ch), subst_expr(su, v))
 		Stmt.SSelect(arms) => ast.Stmt.SSelect(subst_sel_arms(su, arms))
 		Stmt.SClose(ch, tw) => ast.Stmt.SClose(subst_expr(su, ch), tw)
-		Stmt.SIfLet(nm, v, tb, he, eb) => ast.Stmt.SIfLet(nm, subst_expr(su, v), subst_block(su, tb), he, subst_block(su, eb))
+		Stmt.SIfLet(nm, v, tb, he, eb, l, c) => ast.Stmt.SIfLet(nm, subst_expr(su, v), subst_block(su, tb), he, subst_block(su, eb), l, c)
 
 		# an `assert` holds the author's own condition, desugared, so a `T` written in it — in a
 		# closure's parameter, say — is a `T` this pass owes an argument like any other. The
@@ -538,18 +538,18 @@ fn subst_stmt(su: TySubst, s: ast.Stmt) -> ast.Stmt {
 		#
 		# These five carry nothing a type argument could reach: two jumps, a nop, a `del` of
 		# a name, and a position marker.
-		Stmt.SBreak    => s
-		Stmt.SContinue => s
-		Stmt.SNop      => s
-		Stmt.SDel(_)   => s
-		Stmt.SAt(_, _) => s
+		Stmt.SBreak        => s
+		Stmt.SContinue     => s
+		Stmt.SNop          => s
+		Stmt.SDel(_, _, _) => s
+		Stmt.SAt(_, _)     => s
 	}
 }
 
 fn subst_sel_arms(su: TySubst, arms: list[ast.SelArm]) -> list[ast.SelArm] {
 	mut out: list[ast.SelArm] = []
 	for a in arms {
-		out.append(ast.SelArm(a.op, a.bind, subst_expr(su, a.ch), subst_expr(su, a.val), subst_block(su, a.body)))
+		out.append(ast.SelArm(a.op, a.bind, subst_expr(su, a.ch), subst_expr(su, a.val), subst_block(su, a.body), a.bind_line, a.bind_col))
 	}
 	return out
 }
@@ -558,14 +558,14 @@ fn subst_expr(su: TySubst, e: ast.Expr) -> ast.Expr {
 	return match e {
 		Expr.EUnary(o, x) => ast.Expr.EUnary(o, subst_expr(su, x))
 		Expr.EBinary(o, a, b) => ast.Expr.EBinary(o, subst_expr(su, a), subst_expr(su, b))
-		Expr.ECall(nm, xs, ts) => ast.Expr.ECall(nm, subst_exprs(su, xs), subst_tys(su, ts))
+		Expr.ECall(nm, xs, ts, l, c) => ast.Expr.ECall(nm, subst_exprs(su, xs), subst_tys(su, ts), l, c)
 		Expr.ECallVal(c, xs) => ast.Expr.ECallVal(subst_expr(su, c), subst_exprs(su, xs))
-		Expr.ENamedArg(nm, x) => ast.Expr.ENamedArg(nm, subst_expr(su, x))
-		Expr.EField(x, f) => ast.Expr.EField(subst_expr(su, x), f)
-		Expr.EOptChain(x, f) => ast.Expr.EOptChain(subst_expr(su, x), f)
+		Expr.ENamedArg(nm, x, l, c) => ast.Expr.ENamedArg(nm, subst_expr(su, x), l, c)
+		Expr.EField(x, f, l, c) => ast.Expr.EField(subst_expr(su, x), f, l, c)
+		Expr.EOptChain(x, f, l, c) => ast.Expr.EOptChain(subst_expr(su, x), f, l, c)
 		Expr.ETry(x) => ast.Expr.ETry(subst_expr(su, x))
 		Expr.EIndex(x, i) => ast.Expr.EIndex(subst_expr(su, x), subst_expr(su, i))
-		Expr.EMethod(x, m, xs) => ast.Expr.EMethod(subst_expr(su, x), m, subst_exprs(su, xs))
+		Expr.EMethod(x, m, xs, l, c) => ast.Expr.EMethod(subst_expr(su, x), m, subst_exprs(su, xs), l, c)
 		Expr.EListLit(xs) => ast.Expr.EListLit(subst_exprs(su, xs))
 		Expr.EConv(ty, x, as_) => ast.Expr.EConv(subst_ty(su, ty), subst_expr(su, x), as_)
 		Expr.EFmt(x, cv, sp) => ast.Expr.EFmt(subst_expr(su, x), cv, sp)
@@ -595,12 +595,12 @@ fn subst_expr(su: TySubst, e: ast.Expr) -> ast.Expr {
 
 		# and no catch-all, for subst_stmt's reason. What is left is the literals and a bare
 		# name, which hold no type for an argument to reach.
-		Expr.EInt(_, _, _) => e
-		Expr.EFloat(_)     => e
-		Expr.EStr(_)       => e
-		Expr.EBool(_)      => e
-		Expr.ENil          => e
-		Expr.EIdent(_)     => e
+		Expr.EInt(_, _, _)   => e
+		Expr.EFloat(_)       => e
+		Expr.EStr(_)         => e
+		Expr.EBool(_)        => e
+		Expr.ENil            => e
+		Expr.EIdent(_, _, _) => e
 	}
 }
 
@@ -652,7 +652,7 @@ fn subst_targets(su: TySubst, ts: list[ast.Target]) -> list[ast.Target] {
 fn subst_params(su: TySubst, ps: list[ast.Param]) -> list[ast.Param] {
 	mut out: list[ast.Param] = []
 	for pm in ps {
-		out.append(ast.Param(pm.name, subst_ty(su, pm.ty), pm.is_ref, pm.has_def, subst_expr(su, pm.def)))
+		out.append(ast.Param(pm.name, subst_ty(su, pm.ty), pm.is_ref, pm.has_def, subst_expr(su, pm.def), pm.line, pm.col))
 	}
 	return out
 }
@@ -672,12 +672,12 @@ fn subst_exprs(su: TySubst, xs: list[ast.Expr]) -> list[ast.Expr] {
 fn subst_pat(su: TySubst, pt: ast.Pat) -> ast.Pat {
 	return match pt {
 		Pat.PLit(e) => ast.Pat.PLit(subst_expr(su, e))
-		Pat.PVariant(q, c, ps) => ast.Pat.PVariant(q, c, subst_pats(su, ps))
+		Pat.PVariant(q, c, ps, pl, pc) => ast.Pat.PVariant(q, c, subst_pats(su, ps), pl, pc)
 		Pat.PStruct(n, fs, ps, open) => ast.Pat.PStruct(n, fs, subst_pats(su, ps), open)
-		Pat.PList(ps, rest, rname) => ast.Pat.PList(subst_pats(su, ps), rest, rname)
+		Pat.PList(ps, rest, rname, l, c) => ast.Pat.PList(subst_pats(su, ps), rest, rname, l, c)
 		Pat.PTuple(ps) => ast.Pat.PTuple(subst_pats(su, ps))
 		Pat.POr(ps) => ast.Pat.POr(subst_pats(su, ps))
-		Pat.PAs(inner, n) => ast.Pat.PAs(subst_pat(su, inner), n)
+		Pat.PAs(inner, n, l, c) => ast.Pat.PAs(subst_pat(su, inner), n, l, c)
 		_ => pt
 	}
 }

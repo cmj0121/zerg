@@ -1,0 +1,322 @@
+# The parser's suite — where a NAME was written (#24).
+#
+# Every name the parser reads carries the line and BYTE column of its token: an identifier, a
+# callee, a member after `.`, a binder, a parameter, a declaration's name, and each type name in
+# `File.ty_uses`. These tests parse small sources and ask each place back, because a place is
+# the one fact nothing downstream can check — a node built with 0, 0 compiles and runs exactly
+# as one built with the truth.
+#
+# WHITE-BOX, BESIDE THE FILE. `parser_test.zg` names `parser.zg`, so this package is that file
+# and what it imports; `parse_at` is reached unqualified and the tree is taken apart in `ast`'s
+# own terms.
+import (
+	"./ast"
+)
+
+# the body of the first function in `src`, without the SAt markers the parser puts before each
+# statement — what is left is the statements a reader wrote
+fn body_of(src: str) -> list[ast.Stmt] {
+	f := parse_at(src, "t.zg")
+	mut out: list[ast.Stmt] = []
+	for s in f.fns[0].body {
+		if not is_at(s) {
+			out.append(s)
+		}
+	}
+	return out
+}
+
+fn is_at(s: ast.Stmt) -> bool {
+	return match s {
+		Stmt.SAt(_, _) => true
+		_ => false
+	}
+}
+
+# the value a binding is initialized with
+fn let_value(s: ast.Stmt) -> ast.Expr {
+	return match s {
+		Stmt.SLet(_, _, _, _, _, v, _, _) => v
+		_ => ast.Expr.ENil
+	}
+}
+
+# `name@line:col` for the name-bearing node at the top of `e`, and its target or operands under
+# it, so one string says where every name in a chain was written
+fn where(e: ast.Expr) -> str {
+	return match e {
+		Expr.EIdent(n, l, c) => f"{n}@{l}:{c}"
+		Expr.ECall(n, _, _, l, c) => f"call {n}@{l}:{c}"
+		Expr.ENamedArg(n, _, l, c) => f"arg {n}@{l}:{c}"
+		Expr.EField(t, n, l, c) => f"{where(t)} .{n}@{l}:{c}"
+		Expr.EOptChain(t, n, l, c) => f"{where(t)} ?.{n}@{l}:{c}"
+		Expr.EMethod(t, n, _, l, c) => f"{where(t)} .{n}()@{l}:{c}"
+		Expr.EBinary(_, a, b) => f"{where(a)} {where(b)}"
+		_ => "?"
+	}
+}
+
+fn call_args(e: ast.Expr) -> list[ast.Expr] {
+	return match e {
+		Expr.ECall(_, xs, _, _, _) => xs
+		_ => []
+	}
+}
+
+fn pat_where(p: ast.Pat) -> str {
+	return match p {
+		Pat.PBind(n, l, c) => f"{n}@{l}:{c}"
+		Pat.PAs(inner, n, l, c) => f"{pat_where(inner)} as {n}@{l}:{c}"
+		Pat.PVariant(_, n, ps, l, c) => f"{n}@{l}:{c}({pats_where(ps)})"
+		Pat.PList(_, _, n, l, c) => f"..{n}@{l}:{c}"
+		_ => "?"
+	}
+}
+
+fn pats_where(ps: list[ast.Pat]) -> str {
+	mut out := ""
+	for p in ps {
+		if out != "" {
+			out = out + ", "
+		}
+		out = out + pat_where(p)
+	}
+	return out
+}
+
+fn match_arms(e: ast.Expr) -> list[ast.Arm] {
+	return match e {
+		Expr.EMatch(_, arms) => arms
+		_ => []
+	}
+}
+
+fn stmt_where(s: ast.Stmt) -> str {
+	return match s {
+		Stmt.SLet(n, _, _, _, _, _, l, c) => f"let {n}@{l}:{c}"
+		Stmt.SForIn(n, _, _, l, c) => f"for {n}@{l}:{c}"
+		Stmt.SIfLet(n, _, _, _, _, l, c) => f"if-let {n}@{l}:{c}"
+		Stmt.SDel(n, l, c) => f"del {n}@{l}:{c}"
+		_ => "?"
+	}
+}
+
+# every identifier in `e`, in written order, each with its place
+fn idents(e: ast.Expr) -> str {
+	mut out := match e {
+		Expr.EIdent(n, l, c) => f"{n}@{l}:{c}"
+		_ => ""
+	}
+	for k in ast.expr_parts(e) {
+		sub := idents(k)
+		if sub != "" and out != "" {
+			out = out + " "
+		}
+		out = out + sub
+	}
+	return out
+}
+
+fn tgt_where(s: ast.Stmt) -> str {
+	return match s {
+		Stmt.SDestructure(t, _, _, _, _) => idents(ast.Expr.ETuple(ast.tgt_places(t)))
+		_ => "?"
+	}
+}
+
+fn uses_of(src: str) -> str {
+	f := parse_at(src, "t.zg")
+	mut out := ""
+	for u in f.ty_uses {
+		if out != "" {
+			out = out + ", "
+		}
+		out = out + f"{u.name}@{u.line}:{u.col}+{u.len}"
+	}
+	return out
+}
+
+# --- expressions -------------------------------------------------------------------------
+
+# THE COLUMN IS A BYTE COLUMN. `日本` is six bytes and two characters, so a column counted in
+# characters puts `x` four to the left of where the byte count does — and the two agree on
+# every ASCII line, which is why the CJK line is the one that can tell them apart.
+#[test]
+fn test_ident_after_cjk_is_a_byte_column() {
+	ss := body_of("fn main() {\n\ts := \"日本\" + x\n}\n")
+	assert stmt_where(ss[0]) == "let s@2:2"
+	assert where(let_value(ss[0])) == "? x@2:18"
+}
+
+# A NAME WRITTEN TWICE IN ONE STATEMENT IS TWO PLACES, which is the whole reason the place is on
+# the node: the statement's SAt says where `y := a + a` starts, and cannot say which `a`.
+#[test]
+fn test_one_name_twice_in_a_statement() {
+	ss := body_of("fn main() {\n\ty := a + a\n}\n")
+	assert where(let_value(ss[0])) == "a@2:7 a@2:11"
+}
+
+# every link of a chain carries the place of its OWN name — the member after each `.` — and not
+# the place the chain starts
+#[test]
+fn test_method_call_chain() {
+	ss := body_of("fn main() {\n\tr := p.q.m(1).n(2)\n}\n")
+	assert where(let_value(ss[0])) == "p@2:7 .q@2:9 .m()@2:11 .n()@2:16"
+}
+
+#[test]
+fn test_optional_chain_member() {
+	ss := body_of("fn main() {\n\tr := p?.q\n}\n")
+	assert where(let_value(ss[0])) == "p@2:7 ?.q@2:10"
+}
+
+# a call's callee is a name like any other, and a named argument's name is one too — it
+# resolves to the parameter it fills
+#[test]
+fn test_callee_and_named_argument() {
+	ss := body_of("fn main() {\n\tv := go(1, loud: true)\n}\n")
+	e := let_value(ss[0])
+	assert where(e) == "call go@2:7"
+	assert where(call_args(e)[1]) == "arg loud@2:13"
+}
+
+# --- holes -----------------------------------------------------------------------------
+
+# A HOLE IS RE-LEXED ON ITS OWN, so its tokens count from the hole and have to be moved to the
+# file: the hole's first byte, plus the token's offset in it. Two holes on one line are two
+# places, and neither is the literal's.
+#[test]
+fn test_fstring_holes() {
+	ss := body_of("fn main() {\n\ts := f\"ab {x} {yy}\"\n}\n")
+	assert idents(let_value(ss[0])) == "x@2:13 yy@2:17"
+}
+
+# the offset is in BYTES, so text in front of a hole moves it by its byte length
+#[test]
+fn test_fstring_hole_after_cjk() {
+	ss := body_of("fn main() {\n\ts := f\"日本{x}\"\n}\n")
+	assert idents(let_value(ss[0])) == "x@2:16"
+}
+
+# the literal's text is its SOURCE text — a doubled brace and an escape are counted as written,
+# not as the one character each decodes to
+#[test]
+fn test_fstring_hole_after_escapes() {
+	ss := body_of("fn main() {\n\ts := f\"{{a}} \\\" {x}\"\n}\n")
+	assert idents(let_value(ss[0])) == "x@2:19"
+}
+
+# an f-string ends at its line (the lexer refuses one that does not), and a command literal may
+# span several: a hole after a newline in one is on the line it is on, at its own column
+#[test]
+fn test_holes_on_later_lines() {
+	ss := body_of("import \"os\"\n\nfn main() {\n\tn := 1\n\ts := f\"{n}\"\n\tc := `echo\n  {dir}`\n}\n")
+	assert idents(let_value(ss[1])) == "n@5:10"
+	assert idents(let_value(ss[2])) == "os@0:0 dir@7:4"
+}
+
+# --- binders ---------------------------------------------------------------------------
+
+#[test]
+fn test_pattern_binders() {
+	ss := body_of("fn main() {\n\tk := match v {\n\t\tOpt.Has(inner) => inner\n\t\t[..rest] => 0\n\t\tother as o => 0\n\t}\n}\n")
+	arms := match_arms(let_value(ss[0]))
+	assert pat_where(arms[0].pat) == "Has@3:7(inner@3:11)"
+	assert pat_where(arms[1].pat) == "..rest@4:6"
+	assert pat_where(arms[2].pat) == "other@5:3 as o@5:12"
+}
+
+#[test]
+fn test_statement_binders() {
+	ss := body_of("fn main() {\n\tconst c := 1\n\tfor it in xs {\n\t}\n\tif v := o {\n\t}\n\tdel c\n}\n")
+	assert stmt_where(ss[0]) == "let c@2:8"
+	assert stmt_where(ss[1]) == "for it@3:6"
+	assert stmt_where(ss[2]) == "if-let v@5:5"
+	assert stmt_where(ss[3]) == "del c@7:6"
+}
+
+# a destructuring target's leaves are binders, each at its own name
+#[test]
+fn test_destructure_binders() {
+	ss := body_of("fn main() {\n\t(a, bb) := t\n}\n")
+	assert tgt_where(ss[0]) == "a@2:3 bb@2:6"
+}
+
+# a parameter's place is its NAME, not the `mut &` in front of it
+#[test]
+fn test_params() {
+	f := parse_at("fn add(a: int, mut &bb: int) -> int {\n\treturn a\n}\n", "t.zg")
+	ps := f.fns[0].params
+	assert ps[0].name == "a" and ps[0].line == 1 and ps[0].col == 8
+	assert ps[1].name == "bb" and ps[1].line == 1 and ps[1].col == 21
+}
+
+# --- declarations ------------------------------------------------------------------------
+
+# THE NAME, NOT THE KEYWORD. `line` / `col` stay where the declaration starts, since a
+# diagnostic reports there; `name_line` / `name_col` are the token a reader means by "where is
+# this declared".
+#[test]
+fn test_declaration_names() {
+	f := parse_at("pub struct Point {\n\tpub x: int\n}\n\nenum E {\n\tA\n}\n\npub fn area() {\n}\n\ntype Meters = int\n\nconst K := 1\n", "t.zg")
+	sd := f.structs[0]
+	assert sd.col == 5 and sd.name_line == 1 and sd.name_col == 12
+	fd := sd.fields[0]
+	assert fd.col == 2 and fd.name_line == 2 and fd.name_col == 6
+	assert f.enums[0].name_line == 5 and f.enums[0].name_col == 6
+	assert f.fns[0].name_line == 9 and f.fns[0].name_col == 8
+	assert f.types[0].name_line == 12 and f.types[0].name_col == 6
+	assert f.consts[0].name_line == 14 and f.consts[0].name_col == 7
+}
+
+# an import binds its `as` alias, or the path's last segment — and that segment is text INSIDE
+# the string, which is where its place is
+#[test]
+fn test_import_names() {
+	f := parse_at("import (\n\t\"util/text\"\n\t\"a/b\" as bee\n)\n", "t.zg")
+	assert f.imports[0].name == "text" and f.imports[0].name_line == 2 and f.imports[0].name_col == 8
+	assert f.imports[1].name == "bee" and f.imports[1].name_line == 3 and f.imports[1].name_col == 11
+}
+
+#[test]
+fn test_spec_and_requirement_names() {
+	f := parse_at("spec Show {\n\tfn show() -> str\n}\n", "t.zg")
+	sp := f.specs[0]
+	assert sp.name_line == 1 and sp.name_col == 6
+	assert sp.reqs[0].name_line == 2 and sp.reqs[0].name_col == 5
+}
+
+# --- type uses ---------------------------------------------------------------------------
+
+# a declared type's name is recorded wherever a type is written, with its token's byte LENGTH;
+# a built-in (`int`, `list`) resolves to no declaration and is not recorded, and an applied
+# type is recorded at its base
+#[test]
+fn test_type_uses() {
+	assert uses_of("fn g(p: Point, q: list[Box[int]]) {\n}\n") == "Point@1:9+5, Box@1:24+3"
+}
+
+#[test]
+fn test_type_uses_outside_type_positions() {
+	assert uses_of("fn g() {\n\tb := e is Oops\n}\n") == "Oops@2:12+4"
+	assert uses_of("impl Show for P {\n}\n") == "Show@1:6+4, P@1:15+1"
+}
+
+# in the order written: an applied type before its arguments
+#[test]
+fn test_type_uses_in_source_order() {
+	assert uses_of("fn g(p: Box[Pair[int]]) {\n}\n") == "Box@1:9+3, Pair@1:13+4"
+}
+
+# an `assert` reads its condition once as written and again as the operands it is desugared
+# into — and the type it names was written once
+#[test]
+fn test_type_use_in_an_assert_is_recorded_once() {
+	assert uses_of("fn g() {\n\tassert e is Oops\n}\n") == "Oops@2:14+4"
+}
+
+# a hole is parsed by a parser of its own, and a type it names is still this file's
+#[test]
+fn test_type_use_in_a_hole() {
+	assert uses_of("fn g() {\n\tb := f\"{e is Err2}\"\n}\n") == "Err2@2:15+4"
+}

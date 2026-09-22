@@ -150,13 +150,20 @@ pub struct AsmOp {
 }
 
 # Expr is an expression node.
+#
+# A NODE THAT CARRIES A NAME CARRIES THE NAME'S PLACE — the trailing `int, int` of EIdent,
+# ECall, ENamedArg, EField, EOptChain and EMethod is the 1-based line and BYTE column of the
+# name token, the convention EInt already keeps. It is what lets a position be answered with
+# the declaration a name resolves to (#24), which a statement's SAt cannot: one statement
+# holds many names. A node the compiler SYNTHESIZES — a desugaring, an operator lowered to a
+# method — carries 0, 0, which means "written nowhere" and is never indexed.
 pub enum Expr {
 	EInt(str, int, int)
 	EFloat(str)
 	EStr(str)
 	EBool(bool)
 	ENil
-	EIdent(str)
+	EIdent(str, int, int)
 	EUnary(str, Expr)
 	EBinary(str, Expr, Expr)
 
@@ -168,7 +175,7 @@ pub enum Expr {
 	# It holds AT MOST ONE today. The parser recovers a written argument from an `EIndex`,
 	# whose subscript is a single expression, so `id[int, str](…)` has no path in — the list
 	# is the shape the field will need, not the shape it can currently be given.
-	ECall(str, list[Expr], list[Ty])
+	ECall(str, list[Expr], list[Ty], int, int)
 
 	# ECallVal is a call whose CALLEE IS AN EXPRESSION rather than a name — `fs[0](1)`, a
 	# lambda called where it is written, a field holding a function reached through anything
@@ -192,13 +199,13 @@ pub enum Expr {
 	# IT DOES NOT SURVIVE THE CALL. The call site reorders its arguments into parameter order
 	# and unwraps them, so nothing downstream of that ever sees one — which is why there is no
 	# type for it and no lowering.
-	ENamedArg(str, Expr)
-	EField(Expr, str)
+	ENamedArg(str, Expr, int, int)
+	EField(Expr, str, int, int)
 
 	# EOptChain is `a?.b` (GRAMMAR group 8): read `.b` when `a` is present, else nil IN
 	# PLACE — the result is itself an optional, which is what lets a chain keep going
 	# without a test at every link.
-	EOptChain(Expr, str)
+	EOptChain(Expr, str, int, int)
 
 	# ETry is `x?` (GRAMMAR group 8): unwrap the payload, or early-return the absent side
 	# from the ENCLOSING function. It is the one operator that is a control transfer wearing
@@ -206,7 +213,7 @@ pub enum Expr {
 	# it can be written at all.
 	ETry(Expr)
 	EIndex(Expr, Expr)
-	EMethod(Expr, str, list[Expr])
+	EMethod(Expr, str, list[Expr], int, int)
 	EListLit(list[Expr])
 
 	# EFill is the fill form `[v; N]` — N copies of v (GRAMMAR group 4's `list-lit`). It is a
@@ -357,15 +364,19 @@ pub enum Target {
 	TgtStruct(str, list[str], list[Target], bool)
 }
 
+#
+# A NAME A PATTERN MINTS CARRIES ITS PLACE — the trailing `int, int` of PBind, PAs and PList
+# (the `..rest` name), and of PVariant (the constructor's name) — for Expr's reason: the index
+# #24 builds answers a position with a declaration, and a binder IS one. 0, 0 is synthetic.
 pub enum Pat {
-	PWild      # `_`
-	PBind(str) # `x` — binds the whole scrutinee
+	PWild # `_`
+	PBind(str, int, int) # `x` — binds the whole scrutinee
 	PLit(Expr) # a literal, a negated literal, or a range
 
 	# `Colour.Red`, `E.Wrap(inner)`. `qual` is the enum the pattern NAMED, kept because
 	# GRAMMAR#variant-pat says the qualification must be TRUE and a name that is read and
 	# thrown away cannot be held to that.
-	PVariant(str, str, list[Pat]) # qual, ctor, payload
+	PVariant(str, str, list[Pat], int, int) # qual, ctor, payload
 
 	# `P{x, y: inner}` and `P{x, ..}`. Two parallel lists rather than a list of pairs, because
 	# a pair type here would be a struct nobody else needs; `rest` is the `..` that says the
@@ -374,11 +385,11 @@ pub enum Pat {
 
 	# `[a, b]`, `[a, ..rest]`, `[..]`. `rest` is the index the `..` sits at, or -1 for a list
 	# pattern that matches on length alone; `rest_name` is "" for a `..` that binds nothing.
-	PList(list[Pat], int, str)
+	PList(list[Pat], int, str, int, int)
 
-	PTuple(list[Pat]) # `(a, b)`
-	POr(list[Pat])    # `1 | 2`
-	PAs(Pat, str)     # `pattern as name`
+	PTuple(list[Pat])       # `(a, b)`
+	POr(list[Pat])          # `1 | 2`
+	PAs(Pat, str, int, int) # `pattern as name`
 }
 
 pub struct Arm {
@@ -406,7 +417,11 @@ pub enum Stmt {
 	# mut": GRAMMAR group 4 makes a `const` binding SHADOW-PROOF — a name collision with
 	# one, in either direction, is an error — and the emitter cannot enforce a property
 	# the tree no longer records.
-	SLet(str, Ty, bool, bool, bool, Expr)
+	#
+	# The trailing `int, int` is where the NAME was written — not where the statement starts,
+	# which is the SAt before it and lies to the left of a `mut` or a `const`. SForIn, SIfLet
+	# and SDel carry their name's place for the same reason; 0, 0 is a synthetic binding.
+	SLet(str, Ty, bool, bool, bool, Expr, int, int)
 	SAssign(Expr, Expr)
 
 	# SDestructure is `(a, b) := e`, `P{x, y} := e` and the two written with `=`
@@ -424,7 +439,7 @@ pub enum Stmt {
 	SExpr(Expr)
 	SIf(Expr, list[Stmt], bool, list[Stmt])
 	SFor(bool, Expr, list[Stmt])
-	SForIn(str, Expr, list[Stmt])
+	SForIn(str, Expr, list[Stmt], int, int)
 
 	# `for select { … }` — the multi-way wait as a LOOP: one ready arm per round, and the
 	# loop ends when every watched receive channel has. It is its own node rather than an
@@ -486,7 +501,7 @@ pub enum Stmt {
 	# something else for a channel, giving up a send end while leaving the name readable;
 	# that is `close(ch)` now, and a channel binding gives up what it holds when its scope
 	# ends, so `del` no longer has to be pressed into either job.
-	SDel(str)
+	SDel(str, int, int)
 
 	# SClose is `close(ch)` — end this stream before my scope does. It is a STATEMENT and
 	# not a call: `close` is a keyword, there is no symbol to take the address of, and it
@@ -502,7 +517,7 @@ pub enum Stmt {
 	# `v` bound to what it held. It is a statement of its own rather than an SIf over some
 	# condition expression because the binding only exists inside the then-branch, which no
 	# condition can express.
-	SIfLet(str, Expr, list[Stmt], bool, list[Stmt])
+	SIfLet(str, Expr, list[Stmt], bool, list[Stmt], int, int)
 
 	# SAt is a POSITION MARKER, not a statement anybody wrote: the parser puts one before
 	# each statement of a block, carrying that statement's line and column. It emits
@@ -529,6 +544,10 @@ pub struct SelArm {
 	pub ch: Expr
 	pub val: Expr
 	pub body: list[Stmt]
+
+	# where `bind` was written, and 0, 0 when there is none
+	pub bind_line: int
+	pub bind_col: int
 }
 
 # Param is one function parameter: its name, declared type, whether it is a mutable
@@ -545,6 +564,11 @@ pub struct Param {
 	pub is_ref: bool
 	pub has_def: bool
 	pub def: Expr
+
+	# line / col are where the parameter's NAME was written. The receiver an `impl` adds is
+	# written nowhere, and carries 0, 0.
+	pub line: int
+	pub col: int
 }
 
 # FnDecl is a function declaration: name, the type it is a METHOD of ("" for a free
@@ -654,6 +678,12 @@ pub struct FnDecl {
 	# EMPTY IS THE COMMON CASE and it changes nothing: an unparameterized spec can be
 	# implemented once per type by the coherence rule, so its name alone is already a key.
 	pub spec_of: str
+
+	# name_line / name_col are where the declaration's NAME was written — the token a reader
+	# means when they ask where something is declared (#24). `line` / `col` above stay where the
+	# declaration begins, because a diagnostic already reports there.
+	pub name_line: int
+	pub name_col: int
 }
 
 # Diag is one finding about an ill-formed program: what is wrong, and where. It is a
@@ -738,6 +768,10 @@ pub struct FieldDef {
 	# twenty fields owes the reader the one that is wrong.
 	pub line: int
 	pub col: int
+
+	# where the field's NAME was written — `line` / `col` are the `pub` in front of it, if any
+	pub name_line: int
+	pub name_col: int
 }
 
 # StructDecl is a struct type declaration: its name and fields in source order.
@@ -769,6 +803,10 @@ pub struct StructDecl {
 	# an APPLIED name (`Box[int]`, spelled by `spec_key`), so nothing downstream has to know
 	# a template existed.
 	pub tparams: list[str]
+
+	# where the struct's NAME was written — see FnDecl.name_line
+	pub name_line: int
+	pub name_col: int
 }
 
 # TypeDecl is `type X = Y` — a NEW, DISTINCT type, not a transparent alias
@@ -785,6 +823,10 @@ pub struct TypeDecl {
 	pub path: str
 	pub line: int
 	pub col: int
+
+	# where the type's NAME was written — see FnDecl.name_line
+	pub name_line: int
+	pub name_col: int
 }
 
 # VariantDef is one enum variant: its name, its payload field types (empty for a tag-only
@@ -832,6 +874,10 @@ pub struct EnumDecl {
 	# where the `enum` keyword is — see StructDecl.line
 	pub line: int
 	pub col: int
+
+	# where the enum's NAME was written — see FnDecl.name_line
+	pub name_line: int
+	pub name_col: int
 }
 
 # File is a whole parsed source file: its import paths, and its struct, enum, and
@@ -873,6 +919,10 @@ pub struct SpecDecl {
 	pub path: str
 	pub line: int
 	pub col: int
+
+	# where the spec's NAME was written — see FnDecl.name_line
+	pub name_line: int
+	pub name_col: int
 }
 
 # spec_key is how a spec-with-arguments is named in ONE string — `Into[Meters]`, or just `Eq`
@@ -955,6 +1005,11 @@ pub struct ConstDecl {
 	pub path: str
 	pub line: int
 	pub col: int
+
+	# where the constant's NAME was written — `line` / `col` are the first token, which may be
+	# a `pub`, a `const` or a `mut` in front of it
+	pub name_line: int
+	pub name_col: int
 }
 
 # ImportDecl is one import SPEC — `pub? "path" (as name)?` (GRAMMAR#import-spec). It is a
@@ -991,6 +1046,11 @@ pub struct ImportDecl {
 	pub at: str
 	pub line: int
 	pub col: int
+
+	# where the NAME this import binds was written: the `as` alias, or — for the plain form —
+	# the path's last segment INSIDE the string, which is the text that segment's name is
+	pub name_line: int
+	pub name_col: int
 }
 
 pub struct File {
@@ -1051,6 +1111,25 @@ pub struct File {
 	# downstream can recover — by the time the type is a `TNamed` the arguments are inside its
 	# name and only a rule that split the string back apart could find them.
 	pub ty_apps: list[TyApp]
+
+	# ty_uses are the TYPE NAMES this file wrote, one entry per occurrence and in the order
+	# written: a named type in any type position, a spec in a bound or a super list, an `impl`'s
+	# spec and target, the name after `is`, and the type a struct or variant pattern names.
+	#
+	# They are a list beside the declarations for `ty_quals`' reason: a `Ty` is compared for
+	# EQUALITY everywhere, so a place inside one would make two spellings of one type two
+	# types. Appended to, never read, here.
+	pub ty_uses: list[TyUse]
+}
+
+# TyUse is one type name as written: the name, the file, and the place and BYTE LENGTH of its
+# token — the last segment of a qualified name, the base of an applied one.
+pub struct TyUse {
+	pub name: str
+	pub path: str
+	pub line: int
+	pub col: int
+	pub len: int
 }
 
 # TyQual is one such occurrence: the qualifier as written, and where.
@@ -1386,7 +1465,7 @@ fn dump_block(body: list[Stmt], ind: str) -> str {
 
 fn dump_stmt(s: Stmt, ind: str) -> str {
 	return match s {
-		Stmt.SLet(name, ty, has_ty, is_mut, is_const, value) => f"{ind}let {name} = {expr_kind(value)}\n"
+		Stmt.SLet(name, ty, has_ty, is_mut, is_const, value, _, _) => f"{ind}let {name} = {expr_kind(value)}\n"
 		Stmt.SAssign(target, value) => f"{ind}assign {expr_kind(target)} = {expr_kind(value)}\n"
 		Stmt.SDestructure(_, value, is_bind, _, _) => f"{ind}destructure {expr_kind(value)}\n"
 		Stmt.SPrint(x) => f"{ind}print {expr_kind(x)}\n"
@@ -1394,10 +1473,10 @@ fn dump_stmt(s: Stmt, ind: str) -> str {
 		Stmt.SReturnIf(value, cond) => f"{ind}return-if {expr_kind(cond)}\n"
 		Stmt.SExpr(x) => f"{ind}expr {expr_kind(x)}\n"
 		Stmt.SIf(cond, then_b, has_else, else_b) => dump_if(cond, then_b, else_b, ind)
-		Stmt.SIfLet(name, value, then_b, has_else, else_b) => ind + "if-let " + name + "\n" + dump_block(then_b, ind + "\t") + dump_block(else_b, ind + "\t")
+		Stmt.SIfLet(name, value, then_b, has_else, else_b, _, _) => ind + "if-let " + name + "\n" + dump_block(then_b, ind + "\t") + dump_block(else_b, ind + "\t")
 		Stmt.SScope(body_b, is_unsafe) => ind + scope_kind(is_unsafe) + "\n" + dump_block(body_b, ind + "\t")
 		Stmt.SFor(is_cond, cond, body_b) => ind + "for " + expr_kind(cond) + "\n" + dump_block(body_b, ind + "\t")
-		Stmt.SForIn(name, iter, body_b) => ind + "for " + name + " in " + expr_kind(iter) + "\n" + dump_block(body_b, ind + "\t")
+		Stmt.SForIn(name, iter, body_b, _, _) => ind + "for " + name + " in " + expr_kind(iter) + "\n" + dump_block(body_b, ind + "\t")
 		Stmt.SForSelect(arms) => ind + "for-select\n"
 		Stmt.SRaise(x, _, _) => f"{ind}raise {expr_kind(x)}\n"
 		Stmt.SAssert(body_b) => ind + "assert\n" + dump_block(body_b, ind + "\t")
@@ -1423,17 +1502,17 @@ pub fn expr_kind(e: Expr) -> str {
 		Expr.EStr(v) => "str"
 		Expr.EBool(v) => "bool"
 		Expr.ENil => "nil"
-		Expr.EIdent(n) => "ident " + n
+		Expr.EIdent(n, _, _) => "ident " + n
 		Expr.EUnary(oper, x) => "unary " + oper
 		Expr.EBinary(oper, a, b) => "binary " + oper
-		Expr.ECall(name, args, _) => "call " + name
+		Expr.ECall(name, args, _, _, _) => "call " + name
 		Expr.ECallVal(callee, args) => "call through " + expr_kind(callee)
-		Expr.ENamedArg(nm, _) => f"named argument {nm}:"
-		Expr.EField(target, name) => "field ." + name
-		Expr.EOptChain(target, name) => "optional chain ?." + name
+		Expr.ENamedArg(nm, _, _, _) => f"named argument {nm}:"
+		Expr.EField(target, name, _, _) => "field ." + name
+		Expr.EOptChain(target, name, _, _) => "optional chain ?." + name
 		Expr.ETry(x) => "try `?`"
 		Expr.EIndex(target, idx) => "index"
-		Expr.EMethod(target, meth, args) => "method ." + meth
+		Expr.EMethod(target, meth, args, _, _) => "method ." + meth
 		Expr.EListLit(elems) => "list-literal"
 		Expr.EFill(v, n) => "fill"
 		Expr.EConv(ty, x, nm) => "convert " + nm
@@ -1455,6 +1534,15 @@ pub fn expr_kind(e: Expr) -> str {
 		Expr.EIs(x, name) => "is " + name
 		Expr.EIn(x, set) => "in"
 		_ => "?"
+	}
+}
+
+# ident_at is where an EIdent's name was written, and (0, 0) for anything else — the place a
+# node built from that name carries for it: a call whose callee it is, a binding it names.
+pub fn ident_at(e: Expr) -> (int, int) {
+	return match e {
+		Expr.EIdent(_, l, c) => (l, c)
+		_ => (0, 0)
 	}
 }
 
@@ -1481,17 +1569,17 @@ pub fn expr_parts(e: Expr) -> list[Expr] {
 		Expr.EStr(_) => expr_parts_none()
 		Expr.EBool(_) => expr_parts_none()
 		Expr.ENil => expr_parts_none()
-		Expr.EIdent(_) => expr_parts_none()
+		Expr.EIdent(_, _, _) => expr_parts_none()
 		Expr.EUnary(_, x) => [x]
 		Expr.EBinary(_, a, b) => [a, b]
-		Expr.ECall(_, args, _) => args
+		Expr.ECall(_, args, _, _, _) => args
 		Expr.ECallVal(c, args) => expr_parts_cons(c, args)
-		Expr.ENamedArg(_, x) => [x]
-		Expr.EField(x, _) => [x]
-		Expr.EOptChain(x, _) => [x]
+		Expr.ENamedArg(_, x, _, _) => [x]
+		Expr.EField(x, _, _, _) => [x]
+		Expr.EOptChain(x, _, _, _) => [x]
 		Expr.ETry(x) => [x]
 		Expr.EIndex(x, i) => [x, i]
-		Expr.EMethod(x, _, args) => expr_parts_cons(x, args)
+		Expr.EMethod(x, _, args, _, _) => expr_parts_cons(x, args)
 		Expr.EListLit(elems) => elems
 		Expr.EFill(v, n) => [v, n]
 		Expr.EConv(_, x, _) => [x]
@@ -1551,12 +1639,12 @@ fn expr_parts_cat(xs: list[Expr], ys: list[Expr]) -> list[Expr] {
 pub fn pat_exprs(p: Pat) -> list[Expr] {
 	return match p {
 		Pat.PLit(e) => [e]
-		Pat.PVariant(_, _, ps) => pat_exprs_all(ps)
+		Pat.PVariant(_, _, ps, _, _) => pat_exprs_all(ps)
 		Pat.PStruct(_, _, ps, _) => pat_exprs_all(ps)
-		Pat.PList(ps, _, _) => pat_exprs_all(ps)
+		Pat.PList(ps, _, _, _, _) => pat_exprs_all(ps)
 		Pat.PTuple(ps) => pat_exprs_all(ps)
 		Pat.POr(ps) => pat_exprs_all(ps)
-		Pat.PAs(inner, _) => pat_exprs(inner)
+		Pat.PAs(inner, _, _, _) => pat_exprs(inner)
 		_ => []
 	}
 }
@@ -1667,7 +1755,7 @@ fn tgt_places_each(ts: list[Target]) -> list[Expr] {
 
 pub fn stmt_exprs(s: Stmt) -> list[Expr] {
 	return match s {
-		Stmt.SLet(_, _, _, _, _, v) => [v]
+		Stmt.SLet(_, _, _, _, _, v, _, _) => [v]
 		Stmt.SDestructure(t, v, is_bind, _, _) => tgt_exprs(t, v, is_bind)
 		Stmt.SAssign(l, r) => [l, r]
 		Stmt.SPrint(v) => [v]
@@ -1676,7 +1764,7 @@ pub fn stmt_exprs(s: Stmt) -> list[Expr] {
 		Stmt.SExpr(v) => [v]
 		Stmt.SIf(c, _, _, _) => [c]
 		Stmt.SFor(_, c, _) => [c]
-		Stmt.SForIn(_, it, _) => [it]
+		Stmt.SForIn(_, it, _, _, _) => [it]
 		Stmt.SForSelect(arms) => stmt_sel_exprs(arms)
 		Stmt.SRaise(v, _, cz) => [v, cz]
 		Stmt.SAssert(_) => stmt_exprs_none()
@@ -1688,16 +1776,16 @@ pub fn stmt_exprs(s: Stmt) -> list[Expr] {
 		Stmt.SSpawn(v) => [v]
 		Stmt.SSend(ch, v) => [ch, v]
 		Stmt.SSelect(arms) => stmt_sel_exprs(arms)
-		Stmt.SDel(_) => stmt_exprs_none()
+		Stmt.SDel(_, _, _) => stmt_exprs_none()
 		Stmt.SClose(ch, _) => [ch]
-		Stmt.SIfLet(_, v, _, _, _) => [v]
+		Stmt.SIfLet(_, v, _, _, _, _, _) => [v]
 		Stmt.SAt(_, _) => stmt_exprs_none()
 	}
 }
 
 pub fn stmt_kids(s: Stmt) -> list[Stmt] {
 	return match s {
-		Stmt.SLet(_, _, _, _, _, _) => stmt_kids_none()
+		Stmt.SLet(_, _, _, _, _, _, _, _) => stmt_kids_none()
 		Stmt.SDestructure(_, _, _, _, _) => stmt_kids_none()
 		Stmt.SAssign(_, _) => stmt_kids_none()
 		Stmt.SPrint(_) => stmt_kids_none()
@@ -1706,7 +1794,7 @@ pub fn stmt_kids(s: Stmt) -> list[Stmt] {
 		Stmt.SExpr(_) => stmt_kids_none()
 		Stmt.SIf(_, tb, _, eb) => stmt_kids_cat(tb, eb)
 		Stmt.SFor(_, _, b) => b
-		Stmt.SForIn(_, _, b) => b
+		Stmt.SForIn(_, _, b, _, _) => b
 		Stmt.SForSelect(arms) => stmt_sel_kids(arms)
 		Stmt.SRaise(_, _, _) => stmt_kids_none()
 
@@ -1721,9 +1809,9 @@ pub fn stmt_kids(s: Stmt) -> list[Stmt] {
 		Stmt.SSpawn(_) => stmt_kids_none()
 		Stmt.SSend(_, _) => stmt_kids_none()
 		Stmt.SSelect(arms) => stmt_sel_kids(arms)
-		Stmt.SDel(_) => stmt_kids_none()
+		Stmt.SDel(_, _, _) => stmt_kids_none()
 		Stmt.SClose(_, _) => stmt_kids_none()
-		Stmt.SIfLet(_, _, tb, _, eb) => stmt_kids_cat(tb, eb)
+		Stmt.SIfLet(_, _, tb, _, eb, _, _) => stmt_kids_cat(tb, eb)
 		Stmt.SAt(_, _) => stmt_kids_none()
 	}
 }

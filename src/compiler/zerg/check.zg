@@ -829,8 +829,8 @@ fn chk_frozen_name(mut &em: emit.Emitter, name: str) -> bool {
 # a spelling rather than about a place — the one thing this file must not do quietly.
 pub fn chk_path_text(e: ast.Expr) -> str {
 	return match e {
-		Expr.EIdent(n) => n
-		Expr.EField(x, f) => chk_path_under(chk_path_text(x), "." + f)
+		Expr.EIdent(n, _, _) => n
+		Expr.EField(x, f, _, _) => chk_path_under(chk_path_text(x), "." + f)
 		Expr.EIndex(x, i) => chk_path_under(chk_path_text(x), chk_index_text(i))
 		_ => ""
 	}
@@ -1228,14 +1228,14 @@ fn chk_no_field_expr(mut &em: emit.Emitter, sp: ast.SpecDecl, req: ast.FnDecl, e
 # exactly the question the invariant is about, with the calls a default is made of left alone.
 fn chk_this_field(e: ast.Expr) -> str {
 	return match e {
-		Expr.EField(t, n) => chk_field_of_this(t, n)
+		Expr.EField(t, n, _, _) => chk_field_of_this(t, n)
 		_ => ""
 	}
 }
 
 fn chk_field_of_this(t: ast.Expr, n: str) -> str {
 	return match t {
-		Expr.EIdent(nm) if nm == "this" => n
+		Expr.EIdent(nm, _, _) if nm == "this" => n
 		_ => ""
 	}
 }
@@ -1433,14 +1433,14 @@ pub fn chk_str_not_indexable(mut &em: emit.Emitter) {
 pub fn chk_store_target(e: ast.Expr) -> ast.Expr {
 	return match e {
 		Expr.EIndex(t, _) => t
-		Expr.EField(t, _) => t
+		Expr.EField(t, _, _, _) => t
 		_ => e
 	}
 }
 
 fn c_is_fieldref(e: ast.Expr) -> bool {
 	return match e {
-		Expr.EField(_, _) => true
+		Expr.EField(_, _, _, _) => true
 		_ => false
 	}
 }
@@ -2114,7 +2114,7 @@ fn chk_fold_offender(e: ast.Expr, f: Folded) -> str {
 	v := strconv.to_string(f.value, 10)
 
 	return match e {
-		Expr.EIdent(n) => f"`{n}`, which is {v},"
+		Expr.EIdent(n, _, _) => f"`{n}`, which is {v},"
 		_ => f"this expression, whose value is {v},"
 	}
 }
@@ -2541,7 +2541,7 @@ fn chk_fold(mut &em: emit.Emitter, e: ast.Expr, names: bool) -> Folded {
 		# number that is not on the line. A leaf the compiler cannot hold is a fold that cannot
 		# happen, which is what `ok` is for.
 		Expr.EInt(lex, _, _) => Folded(lexer.int_fits(lex), lexer.int_value(lex))
-		Expr.EIdent(n) => chk_fold_name(em, n, names)
+		Expr.EIdent(n, _, _) => chk_fold_name(em, n, names)
 		Expr.EUnary(o, x) => chk_fold_pair(em, o, ast.Expr.EInt("0", 0, 0), x, names)
 		Expr.EBinary(o, a, b) => chk_fold_pair(em, o, a, b, names)
 		_ => Folded(false, 0)
@@ -3898,8 +3898,8 @@ fn chk_render_shape(mut &em: emit.Emitter, fd: ast.FnDecl) {
 # name answers "".
 pub fn chk_root_name(e: ast.Expr) -> str {
 	return match e {
-		Expr.EIdent(n) => n
-		Expr.EField(t, _) => chk_root_name(t)
+		Expr.EIdent(n, _, _) => n
+		Expr.EField(t, _, _, _) => chk_root_name(t)
 		Expr.EIndex(t, _) => chk_root_name(t)
 		_ => ""
 	}

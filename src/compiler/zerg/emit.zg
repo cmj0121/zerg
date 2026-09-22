@@ -15151,6 +15151,18 @@ fn c_at(mut &em: Emitter, l: int, c: int) -> str {
 fn c_expr_stmt(mut &em: Emitter, e: ast.Expr, ind: str) -> str {
 	rendered := c_expr(em, e, c_nosub())
 	return f"{ind}(void)({rendered});\n" if c_discards_a_value(e)
+
+	# A VALUE THIS STATEMENT OWNS AND NOBODY READS is given back where it is dropped on the
+	# floor, as any other consumer of an owned value gives it back. `r?` written for its early
+	# return alone leaked the Left it copied out of `r` (#23), and a call answering a `str`
+	# written as a statement had always leaked its answer.
+	return f"{ind}{rendered};\n" if not c_owns_value(e)
+
+	t := c_infer(em, e)
+	if c_needs_copy(em, t) {
+		tn := c_tmp(em, "zgt_sv")
+		return f"{ind}{{ {c_type(t)} {tn} = {rendered}; {c_drop_stmt(em, t, tn)} }}\n"
+	}
 	return f"{ind}{rendered};\n"
 }
 

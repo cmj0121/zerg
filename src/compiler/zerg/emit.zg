@@ -14923,7 +14923,7 @@ fn c_const_globals(mut &em: Emitter, f: ast.File, own: ast.File, whole: bool) ->
 		c_spelled_register(em, ty)
 		if whole {
 			out = out + f"static {c_type(ty)} {c_const_cname(c)};\n"
-		} else if c_const_in(own, c.name) {
+		} else if c_const_in(own, c) {
 			out = out + f"{c_type(ty)} {c_const_cname(c)};\n"
 		} else {
 			out = out + f"extern {c_type(ty)} {c_const_cname(c)};\n"
@@ -15002,9 +15002,15 @@ fn c_const_from_sibling(mut &em: Emitter, n: str) -> bool {
 	return false
 }
 
-fn c_const_in(f: ast.File, name: str) -> bool {
+# c_const_in is whether this unit declares the constant `k`, which is where its global is DEFINED —
+# every other unit declares it `extern`. Compared by the name it is REACHED by (c_const_scope_name),
+# not its bare name: an associated `P.LIMIT` and a module `LIMIT` are two constants, and a unit
+# holding the second used to define the first's global as well, which a linker without common
+# symbols — GCC's default on Linux — refused as a multiple definition.
+fn c_const_in(f: ast.File, k: ast.ConstDecl) -> bool {
+	want := c_const_scope_name(k)
 	for c in f.consts {
-		return true if c.name == name
+		return true if c_const_scope_name(c) == want
 	}
 	return false
 }

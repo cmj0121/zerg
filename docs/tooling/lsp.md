@@ -564,10 +564,31 @@ of ~1500 steps. `make check-equal` is what keeps the two paths honest, and it co
 diagnostics byte for byte because a check that finds LESS than the build finds is an editor showing a
 clean buffer for a file that will not compile.
 
-A residual remains and is worth writing down rather than rediscovering: the server still grows by
-roughly 25 MB per check — 0.32 GB after one, 2.0 GB after twenty, 2.9 GB after sixty — so a session
-of several hundred would reach the same ceiling by a slower road. That is retention per check and not
-the accumulation this closed; it is a different measurement and a different fix.
+**So is what a check left behind.** A long session still climbed after that — the figure written
+here was 0.32 GB after one check and 2.9 GB after sixty — and measured again once the second walk
+below was gone it was smaller and still a climb: a peak footprint of 0.12 GB after one check, 0.18
+after twenty, 0.21 after sixty. Nothing the SERVER held was growing; its heap between checks was a
+few megabytes. The leak was in the code the compiler generates, which the check is written in: about
+two megabytes a check of small cells, one per identifier the walk read. A field or an element read
+out of a value nobody held (`cur(p).lexeme`) was copied a second time; a `match` on a value it made
+never gave that value back; an owned `str` that was compared, and an owned argument handed to a
+runtime intrinsic, were never released. Each cell was tiny; what cost was where they sat, one to a
+page across the allocator's regions, so the pages they pinned were pages the next check could not
+reuse. Fixed, a check leaves a few kilobytes, and the footprint settles within the first twenty
+checks and stays: 0.12 GB after one, 0.15 after twenty, 0.16 after sixty. The fix is one rule —
+an expression that names no storage hands over a value of its own — and holding the compiler to it
+meant making it true where it was only assumed: an `if` whose branch names storage, a `?` on a
+carrier that does and an optional chain each hand over their own, and a value a statement discards
+is given back where it is dropped. A channel end is counted rather than copied, so it has a question
+of its own, and the consumers that count one ask it: an end is counted once when a binding, a
+return, an argument to a free function, a spawn or a `for … in` takes it. What does not hold
+yet, the same on `main`: an owned end — a call's result, `mk()` — handed to a method argument, a
+struct field, a list element or a `defer` argument keeps its count, and a `defer` of one can
+deadlock rather than only leak; and a statement that discards a channel end, `buffered()` on its
+own, keeps its count too, because the discard gives back values that are copied, and a channel is
+counted. `make lsp` holds a session of N checks to K times a session of one, which sees the leak in
+aggregate; `make mem-check` holds each leaking shape to zero, which is the per-shape guarantee; and
+the corpus runs every one of those consumers under the sanitizers.
 
 **The second walk is gone too.** Roughly half of a check's time was that `publishDiagnostics` walked
 the program TWICE — once for the errors, and once more inside `lint_program` for the `L5xx` conversion

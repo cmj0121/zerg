@@ -8,7 +8,7 @@
 # the same compiler one question, held to the same answer.
 #
 # It matters because the invariant is only structurally true while nobody adds a rule. The
-# server calls `lex_diags`, `check_and_lint` and `fmt_src_off` and owns none of them; the
+# server calls `lex_diags`, `check_lint_index` and `fmt_src_off` and owns none of them; the
 # day one handler grows a shortcut — a special case for an empty buffer, a filter that
 # drops a finding the author thought was noise — an editor starts reporting a language that
 # the compiler does not implement, and no other gate here can see it.
@@ -878,4 +878,646 @@ then
 	echo "lsp-check: a check of the compiler's own program is not one complete walk"
 	exit 1
 fi
-echo "lsp-check: $ran buffers agree with the compiler, $outlined outlines are the parser's own, $members module members are checked against their module, formatting is fmt's answer, every protocol case holds, the dump carries the type parameters the outline cannot show, and a check is one walk"
+# --- 7. a name answers with the declaration `zerg build` resolved it to ---------------------
+#
+# `definition` and `references` are two views of the name index the check builds (#24), and
+# the index is the compiler's resolution recorded as it happened. Three properties hold the
+# server to that, each of which a DIFFERENT wrong index fails:
+#
+#   positions   hand-written cases — a shadowed binding, a parameter beside a local of its
+#               name, a generic method called at two types, a call through a spec bound, a
+#               call in a spec's provided method and in the `impl` of a bounded generic type
+#               (asked again with the instantiations in the other order), a closure's capture,
+#               an `impl`'s type parameter, a named argument, a construction's field name, a
+#               `?.` field, a destructured binding, a variant, a field, a member of another
+#               file, a namespace, the standard library, an intrinsic (no declaration), and a
+#               name after a line of CJK — each with the one place it must answer. An index
+#               that resolved by SPELLING answers most of them somewhere plausible and wrong.
+#   symmetry    every identifier in the fixture that has a definition D is among D's
+#               references — and no declaration is left with none while a name spelled like
+#               it answers nothing, which is what a use the index DROPPED looks like. The
+#               SHARED places — a generic body's `x.n` at two types, answering with every
+#               declaration it resolved to — are derived from the answers and must be exactly
+#               the ones the fixture writes: one more is a place wrongly shared.
+#   rename      held to `zerg build --emit check` and to what the program PRINTS: renaming a
+#               declaration and every reference to a fresh name must leave both exactly as
+#               they were, and renaming every reference BUT the declaration must not build. A
+#               reference the index missed is a use left under the old name; one it gave the
+#               wrong declaration is a use renamed away from the binding it read, which often
+#               still builds and prints something else. A shared place and the declarations
+#               it may be are renamed together, as one group, which is a rename that is valid.
+#
+# The fixture builds clean, and that is asserted first: the rename property compares against
+# its diagnostics, and a fixture that stopped building would make every rename "identical".
+mkdir -p "$tmp/names"
+cat >"$tmp/names/lib.zg" <<'ZG'
+pub struct Point {
+	pub x: int
+	pub y: int
+}
+
+pub fn twice(m: int) -> int {
+	return m * 2
+}
+
+pub LIMIT := 3
+ZG
+cat >"$tmp/names/main.zg" <<'ZG'
+import (
+	"math"
+	"strings"
+
+	"./lib"
+)
+
+enum Colour {
+	Red
+	Green
+}
+
+spec Named {
+	fn name() -> str
+}
+
+spec Greet {
+	fn hi() -> str
+
+	fn twice() -> str {
+		return this.hi() + this.hi()
+	}
+}
+
+struct Dog {
+	pub age: int
+}
+
+struct Cat {
+	pub lives: int
+}
+
+impl Greet for Dog {
+	fn hi() -> str {
+		return "woof"
+	}
+}
+
+impl Greet for Cat {
+	fn hi() -> str {
+		return "meow"
+	}
+}
+
+struct Box[T: Named] {
+	pub v: T
+}
+
+impl Box[T] {
+	fn label() -> str {
+		return this.v.name()
+	}
+
+	fn value() -> T {
+		return this.v
+	}
+
+	fn count() -> int {
+		return this.v.n + 0
+	}
+}
+
+spec Scaled {
+	fn scale(by: int) -> int
+}
+
+fn getn[T](x: T) -> int {
+	return x.n
+}
+
+fn sc[T: Scaled](x: T) -> int {
+	return x.scale(by: 2)
+}
+
+struct Node {
+	pub val: int
+	pub nxt: Node?
+}
+
+enum Opt[X] {
+	Has(X)
+	Nope
+}
+
+struct Wrap[A] {
+	pub a: A
+}
+
+struct Two[X, Y] {
+	pub x: X
+	pub y: Y
+}
+
+impl Two[Wrap[int], U] {
+	fn gety() -> U {
+		return this.y
+	}
+}
+
+struct Tri[X, Y] {
+	pub x: X
+	pub y: Y
+}
+
+impl Tri[
+	int,
+	V] {
+	fn getv() -> V {
+		return this.y
+	}
+}
+
+fn opt_val(o: Opt[int]) -> int {
+	return match o {
+		Opt.Has(v) => v
+		Opt.Nope => 0
+	}
+}
+
+fn dflt(a: int, b: int = 2) -> int {
+	return a + b
+}
+
+fn pair() -> (int, int) {
+	return (1, 2)
+}
+
+struct P {
+	pub n: int
+}
+
+struct Q {
+	pub n: int
+}
+
+impl Named for P {
+	fn name() -> str {
+		return "p"
+	}
+}
+
+impl Named for Q {
+	fn name() -> str {
+		return "q"
+	}
+}
+
+impl P {
+	LIMIT := 40
+
+	fn pick[U](t: U) -> U {
+		print this.n
+		return t
+	}
+
+	fn make() -> P {
+		return P(1)
+	}
+}
+
+impl Scaled for P {
+	fn scale(by: int) -> int {
+		return this.n * by
+	}
+}
+
+impl Scaled for Q {
+	fn scale(by: int) -> int {
+		return this.n + by
+	}
+}
+
+# a BINDING of a type's spelling does not stop `T.x` naming the type: the compiler asks for the
+# enum or the struct first, and the index is recorded where it does
+fn shadowed() -> int {
+	Colour := 5
+	P := 3
+	return paint(Colour.Red) + P.LIMIT + P.make().n + Colour + P
+}
+
+fn show[T: Named](v: T) -> str {
+	return v.name()
+}
+
+fn f(x: int) -> int {
+	return x + 1
+}
+
+fn paint(c: Colour) -> int {
+	return match c {
+		Colour.Red => 1
+		Colour.Green => 2
+	}
+}
+
+fn main() {
+	sh := 1
+	if true {
+		sh := 2
+		print sh
+	}
+	p := P(f(sh))
+	print p.pick(1)
+	print p.pick("s")
+	print show(p)
+	print show(Q(2))
+	print paint(Colour.Red)
+	q := lib.Point(lib.twice(lib.LIMIT), p.n)
+	print q.x
+	print strings.has_prefix("ab", "a")
+	s := "日本語" + str(sh)
+	print s
+	print math.trunc(2.5)
+	k := 10
+	g := fn (z: int) -> int {
+		return z + k
+	}
+	print g(2)
+	print Dog(age: 1).twice()
+	print Cat(lives: 9).twice()
+	print Box(Q(1)).label()
+	print Box(P(1)).label()
+	print Box(P(3)).value().n
+	nd := Node(val: 1, nxt: Node(val: 2, nxt: nil))
+	print nd.nxt?.val ?? 0
+	print dflt(a: 1, b: 3)
+	(u, w) := pair()
+	print u + w
+	print getn(P(1)) + getn(Q(2))
+	print Box(Q(4)).count() + Box(P(5)).count()
+	print sc(P(1)) + sc(Q(2))
+	print shadowed()
+	a := Opt.Has(3)
+	b: Opt[int] = Opt.Nope
+	print opt_val(a) + opt_val(b)
+	print Two(Wrap(1), 5).gety() + Tri(1, 6).getv()
+	x := 5
+	print f(x) + x
+}
+ZG
+if ! "$ZERG" build --emit check "$tmp/names/main.zg" >/dev/null 2>"$tmp/names.cc"; then
+	echo "NAMES     the fixture program does not build, so there is nothing to hold the index to"
+	sed 's/^/  /' "$tmp/names.cc"
+	exit 1
+fi
+if ! "$PY" - "$ZERG" "$tmp/names" src/stdlib/strings.zg src/stdlib/math.zg <<'PYEOF'
+import json, os, re, shutil, subprocess, sys
+
+zerg, root, strings_zg, math_zg = sys.argv[1], sys.argv[2], sys.argv[3], sys.argv[4]
+MAIN, LIB = os.path.join(root, "main.zg"), os.path.join(root, "lib.zg")
+src = {MAIN: open(MAIN, encoding="utf-8").read(), LIB: open(LIB, encoding="utf-8").read()}
+
+def uri_of(p):
+    return "file://" + os.path.abspath(p)
+
+def u16(text, line, col):
+    head = text.split("\n")[line - 1].encode("utf-8")[:col - 1].decode("utf-8")
+    return len(head.encode("utf-16-le")) // 2
+
+def frame(m):
+    b = json.dumps(m).encode()
+    return b"Content-Length: %d\r\n\r\n%s" % (len(b), b)
+
+# ONE SESSION answers every question: the buffer is opened once and each request is a frame
+# after it, so the index asked is the one that check built.
+def ask(path, reqs):
+    msgs = [{"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {"capabilities": {}}},
+            {"jsonrpc": "2.0", "method": "textDocument/didOpen", "params": {"textDocument": {
+                "uri": uri_of(path), "languageId": "zerg", "version": 1, "text": src[path]}}}]
+    for k, (method, p, line, ch) in enumerate(reqs):
+        params = {"textDocument": {"uri": uri_of(p)}, "position": {"line": line, "character": ch}}
+        if method == "textDocument/references":
+            params["context"] = {"includeDeclaration": True}
+        msgs.append({"jsonrpc": "2.0", "id": 100 + k, "method": method, "params": params})
+    msgs += [{"jsonrpc": "2.0", "id": 2, "method": "shutdown"}, {"jsonrpc": "2.0", "method": "exit"}]
+    out = subprocess.run([zerg, "lsp"], input=b"".join(frame(m) for m in msgs),
+                         stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, timeout=300).stdout
+    got, i = {}, 0
+    while i < len(out):
+        j = out.find(b"\r\n\r\n", i)
+        if j < 0:
+            break
+        n = int(re.search(rb"Content-Length:\s*(\d+)", out[i:j], re.I).group(1))
+        f = json.loads(out[j + 4:j + 4 + n].decode("utf-8"))
+        if "id" in f and f["id"] >= 100:
+            got[f["id"] - 100] = f.get("result")
+        i = j + 4 + n
+    return [got.get(k, "no reply") for k in range(len(reqs))]
+
+def place(loc):
+    return (loc["uri"][len("file://"):], loc["range"]["start"]["line"], loc["range"]["start"]["character"])
+
+# at(path, snippet, name, nth) is the place of the nth `name` on the first line holding
+# `snippet`, as LSP spells it: a 0-based line and a UTF-16 character
+def at(path, snippet, name, nth=0):
+    lines = src[path].split("\n") if path in src else open(path, encoding="utf-8").read().split("\n")
+    for ln, text in enumerate(lines):
+        if snippet in text:
+            cols = [m.start() for m in re.finditer(r"(?<![A-Za-z0-9_])%s(?![A-Za-z0-9_])" % re.escape(name), text)]
+            b = len(text[:cols[nth]].encode("utf-8"))
+            head = text.encode("utf-8")[:b].decode("utf-8")
+            return (os.path.abspath(path), ln, len(head.encode("utf-16-le")) // 2)
+    raise SystemExit("NAMES     the fixture has no line holding %r" % snippet)
+
+# member(path, head, name) is the first `name` on a line after the first line holding `head` —
+# the field `n` of `struct Q {`, where the line alone is not unique
+def member(path, head, name):
+    lines = src[path].split("\n")
+    start = [i for i, t in enumerate(lines) if head in t][0]
+    for ln in range(start + 1, len(lines)):
+        m = re.search(r"(?<![A-Za-z0-9_])%s(?![A-Za-z0-9_])" % re.escape(name), lines[ln])
+        if m:
+            return (os.path.abspath(path), ln, len(lines[ln][:m.start()].encode("utf-16-le")) // 2)
+    raise SystemExit("NAMES     the fixture has no %r after %r" % (name, head))
+
+bad = 0
+def check(ok, what, got):
+    global bad
+    if not ok:
+        print("NAMES     %s — got %r" % (what, got))
+        bad += 1
+
+# --- positions ---
+spec_req = at(MAIN, "\tfn name() -> str", "name")
+CASES = [
+    ("a shadowing binding", at(MAIN, "\t\tprint sh", "sh"), at(MAIN, "\t\tsh := 2", "sh")),
+    ("the binding it shadows", at(MAIN, "p := P(f(sh))", "sh"), at(MAIN, "\tsh := 1", "sh")),
+    ("a parameter, beside a local of its name", at(MAIN, "return x + 1", "x"), at(MAIN, "fn f(x: int)", "x")),
+    ("the local beside it", at(MAIN, "print f(x) + x", "x", 1), at(MAIN, "\tx := 5", "x")),
+    ("a generic method at one type", at(MAIN, "p.pick(1)", "pick"), at(MAIN, "fn pick[U]", "pick")),
+    ("the same method at another", at(MAIN, "p.pick(\"s\")", "pick"), at(MAIN, "fn pick[U]", "pick")),
+    ("a type parameter", at(MAIN, "fn pick[U]", "U", 1), at(MAIN, "fn pick[U]", "U")),
+    ("a call through a spec bound", at(MAIN, "return v.name()", "name"), spec_req),
+    ("a qualified variant", at(MAIN, "print paint(Colour.Red)", "Red"), at(MAIN, "\tRed", "Red")),
+    ("a variant in a pattern", at(MAIN, "Colour.Green => 2", "Green"), at(MAIN, "\tGreen", "Green")),
+    ("the enum qualifying it", at(MAIN, "print paint(Colour.Red)", "Colour"), at(MAIN, "enum Colour", "Colour")),
+    ("a field of the struct the target is", at(MAIN, "lib.LIMIT), p.n)", "n"), at(MAIN, "\tpub n: int", "n")),
+    ("a field declared in another file", at(MAIN, "print q.x", "x"), at(LIB, "\tpub x: int", "x")),
+    ("a function another file declares", at(MAIN, "lib.twice(", "twice"), at(LIB, "pub fn twice", "twice")),
+    ("a constant another file declares", at(MAIN, "lib.LIMIT", "LIMIT"), at(LIB, "pub LIMIT", "LIMIT")),
+    ("a type another file declares", at(MAIN, "q := lib.Point", "Point"), at(LIB, "pub struct Point", "Point")),
+    ("a namespace", at(MAIN, "q := lib.Point", "lib"), at(MAIN, "\"./lib\"", "lib")),
+    ("a standard-library function", at(MAIN, "strings.has_prefix", "has_prefix"), at(strings_zg, "pub fn has_prefix(", "has_prefix")),
+    ("a name after a line of CJK", at(MAIN, "\"日本語\" + str(sh)", "sh"), at(MAIN, "\tsh := 1", "sh")),
+    ("a closure's capture", at(MAIN, "return z + k", "k"), at(MAIN, "\tk := 10", "k")),
+    ("a closure's parameter", at(MAIN, "return z + k", "z"), at(MAIN, "g := fn (z: int)", "z")),
+    ("a call in a spec's provided method", at(MAIN, "return this.hi() + this.hi()", "hi"), at(MAIN, "\tfn hi() -> str", "hi")),
+    ("a call in the impl of a bounded generic type", at(MAIN, "return this.v.name()", "name"), spec_req),
+    ("an impl's type parameter", at(MAIN, "fn value() -> T", "T"), at(MAIN, "impl Box[T]", "T")),
+    ("an impl's type parameter after a nested application", at(MAIN, "fn gety() -> U", "U"), at(MAIN, "impl Two[Wrap[int], U]", "U")),
+    ("an impl's type parameter on a line of its own", at(MAIN, "fn getv() -> V", "V"), at(MAIN, "\tV] {", "V")),
+    ("a named argument", at(MAIN, "print dflt(a: 1, b: 3)", "b"), at(MAIN, "fn dflt(a: int, b: int", "b")),
+    ("a construction's field name", at(MAIN, "print Dog(age: 1)", "age"), at(MAIN, "\tpub age: int", "age")),
+    ("a field read through `?.`", at(MAIN, "print nd.nxt?.val", "val"), at(MAIN, "\tpub val: int", "val")),
+    ("a destructured binding", at(MAIN, "print u + w", "w"), at(MAIN, "(u, w) := pair()", "w")),
+    ("a variant through an enum a binding shadows", at(MAIN, "return paint(Colour.Red)", "Red"), at(MAIN, "\tRed", "Red")),
+    ("the enum a binding shadows", at(MAIN, "return paint(Colour.Red)", "Colour"), at(MAIN, "enum Colour", "Colour")),
+    ("an associated value through a struct a binding shadows", at(MAIN, "+ P.LIMIT +", "LIMIT"), at(MAIN, "\tLIMIT := 40", "LIMIT")),
+    ("an associated fn through a struct a binding shadows", at(MAIN, "+ P.make().n", "make"), at(MAIN, "\tfn make() -> P", "make")),
+    ("the struct a binding shadows", at(MAIN, "+ P.LIMIT +", "P"), at(MAIN, "struct P {", "P")),
+    ("a field a generic body reads at two types", at(MAIN, "\treturn x.n", "n"), [member(MAIN, "struct P {", "n"), member(MAIN, "struct Q {", "n")]),
+    ("a field a generic impl reads at two types", at(MAIN, "return this.v.n + 0", "n"), [member(MAIN, "struct P {", "n"), member(MAIN, "struct Q {", "n")]),
+    ("a named argument a generic body passes at two types", at(MAIN, "return x.scale(by: 2)", "by"), [member(MAIN, "impl Scaled for P {", "by"), member(MAIN, "impl Scaled for Q {", "by")]),
+    ("a variant of a generic enum, qualified", at(MAIN, "a := Opt.Has(3)", "Has"), at(MAIN, "\tHas(X)", "Has")),
+    ("the generic enum qualifying it", at(MAIN, "a := Opt.Has(3)", "Opt"), at(MAIN, "enum Opt[X]", "Opt")),
+    ("a generic enum's variant read as a value", at(MAIN, "b: Opt[int] = Opt.Nope", "Nope", 0), at(MAIN, "\tNope", "Nope")),
+    ("an intrinsic, which no reader declared", at(math_zg, "return __zrt_trunc(x)", "__zrt_trunc"), None),
+    ("a built-in conversion", at(MAIN, "\"日本語\" + str(sh)", "str"), None),
+]
+defs = ask(MAIN, [("textDocument/definition", p, l, c) for _, (p, l, c), _ in CASES])
+# an answer as the test compares it: a place, the LIST of places a shared use answers with, or
+# None. The list is compared IN ORDER, and the order wanted is where each is declared: the first
+# entry is where a client jumps, and it may not be whichever instantiation was walked first.
+def answer(got):
+    if isinstance(got, dict):
+        return place(got)
+    if isinstance(got, list):
+        return [place(x) for x in got]
+    return got
+
+def wanted(want):
+    return sorted(want) if isinstance(want, list) else want
+
+for (what, use, want), got in zip(CASES, defs):
+    if want is None:
+        check(got is None, "%s answers null" % what, got)
+        continue
+    check(answer(got) == wanted(want), "%s resolves to %s" % (what, want), answer(got))
+positions = len(CASES)
+
+# the SHARED places the fixture writes: a place one body resolves two ways, answering with both
+EXPECT_SHARED = set(use for what, use, want in CASES if isinstance(want, list))
+check(len(EXPECT_SHARED) >= 3, "the fixture has the places one body resolves two ways", EXPECT_SHARED)
+
+# THE ANSWER MAY NOT DEPEND ON WHICH INSTANTIATION WAS WALKED FIRST: the same two calls with the
+# instantiations the other way round must answer the same
+swapped = src[MAIN].replace("\tprint Dog(age: 1).twice()\n\tprint Cat(lives: 9).twice()", "\tprint Cat(lives: 9).twice()\n\tprint Dog(age: 1).twice()")
+swapped = swapped.replace("\tprint Box(Q(1)).label()\n\tprint Box(P(1)).label()", "\tprint Box(P(1)).label()\n\tprint Box(Q(1)).label()")
+for a, b in (("getn(P(1)) + getn(Q(2))", "getn(Q(2)) + getn(P(1))"),
+             ("Box(Q(4)).count() + Box(P(5)).count()", "Box(P(5)).count() + Box(Q(4)).count()"),
+             ("sc(P(1)) + sc(Q(2))", "sc(Q(2)) + sc(P(1))")):
+    check(a in swapped, "the fixture has `%s` to swap" % a, None)
+    swapped = swapped.replace(a, b)
+check(swapped != src[MAIN], "the fixture has the pairs of calls to swap", None)
+keep = src[MAIN]
+src[MAIN] = swapped
+SWAPPED = ("a call in a spec's provided method", "a call in the impl of a bounded generic type",
+           "a field a generic body reads at two types", "a field a generic impl reads at two types",
+           "a named argument a generic body passes at two types")
+for what, use, want in [c for c in CASES if c[0] in SWAPPED]:
+    got = ask(MAIN, [("textDocument/definition", use[0], use[1], use[2])])[0]
+    check(answer(got) == wanted(want), "%s answers the same with the instantiations swapped" % what, answer(got))
+src[MAIN] = keep
+
+# --- symmetry ---
+# every identifier token of both files, strings and comments blanked so a word inside one
+# is not asked about
+def idents(path):
+    out = []
+    for ln, text in enumerate(src[path].split("\n")):
+        code = re.sub(r'"[^"]*"', lambda m: " " * len(m.group(0)), text.split("#")[0])
+        for m in re.finditer(r"[A-Za-z_][A-Za-z0-9_]*", code):
+            out.append((path, ln, len(text[:m.start()].encode("utf-16-le")) // 2))
+    return out
+toks = idents(MAIN) + idents(LIB)
+answers = ask(MAIN, [("textDocument/definition", p, l, c) for p, l, c in toks])
+pairs = [(t, place(a)) for t, a in zip(toks, answers) if isinstance(a, dict)]
+pairs += [(t, place(x)) for t, a in zip(toks, answers) if isinstance(a, list) for x in a]
+
+# SHARED IS DERIVED, from what the index answers, and held to the fixture in both directions: a
+# place the fixture writes that is not shared was resolved to one instantiation's declaration,
+# and a shared place it does not write is a use the index wrongly gave up on
+shared = {}
+for t, a in zip(toks, answers):
+    if isinstance(a, list):
+        shared[(os.path.abspath(t[0]), t[1], t[2])] = [place(x) for x in a]
+check(set(shared) == EXPECT_SHARED, "the shared places are exactly the fixture's",
+      sorted(set(shared) ^ EXPECT_SHARED))
+check(len(pairs) >= 60, "most of the fixture's names have a definition", len(pairs))
+refs = ask(MAIN, [("textDocument/references", d[0], d[1], d[2]) for _, d in pairs])
+decls = {}
+for (use, d), r in zip(pairs, refs):
+    ps = [place(x) for x in r] if isinstance(r, list) else []
+    check((os.path.abspath(use[0]), use[1], use[2]) in ps,
+          "%s:%d:%d is among the references of its definition %s:%d:%d"
+          % (os.path.basename(use[0]), use[1] + 1, use[2] + 1, os.path.basename(d[0]), d[1] + 1, d[2] + 1), ps)
+    decls[d] = r if isinstance(r, list) else []
+
+# A DROPPED USE leaves its declaration with no reference but itself and the use with no answer,
+# and symmetry cannot see that: a name with no definition is asked nothing. So every declaration
+# referenced by nothing else is held to the spelling — no identifier of the fixture spelled like
+# it may answer null.
+def spelled(p, line, ch):
+    t = src[p].split("\n")[line]
+    k, n = 0, 0
+    while n < ch:
+        n += len(t[k].encode("utf-16-le")) // 2
+        k += 1
+    return re.match(r"[A-Za-z_][A-Za-z0-9_]*", t[k:]).group(0)
+unanswered = {}
+for t, a in zip(toks, answers):
+    if a is None:
+        unanswered.setdefault(spelled(*t), []).append(t)
+lonely = 0
+for d, r in decls.items():
+    if d[0] in src and [place(x) for x in r] == [d]:
+        lonely += 1
+        nm = spelled(*d)
+        check(nm not in unanswered, "`%s` at %s:%d:%d has no reference, and %d name(s) spelled like it answer nothing (first %s:%d:%d)"
+              % (nm, os.path.basename(d[0]), d[1] + 1, d[2] + 1, len(unanswered.get(nm, [])), *(lambda u: (os.path.basename(u[0]), u[1] + 1, u[2] + 1))((unanswered.get(nm) or [d])[0])), None)
+
+# --- rename ---
+def check_out(files):
+    tmp = root + ".rename"
+    shutil.rmtree(tmp, ignore_errors=True)
+    os.mkdir(tmp)
+    for p, t in files.items():
+        open(os.path.join(tmp, os.path.basename(p)), "w", encoding="utf-8").write(t)
+    r = subprocess.run([zerg, "build", "--emit", "check", os.path.join(tmp, "main.zg")],
+                       stdout=subprocess.PIPE, stderr=subprocess.STDOUT, timeout=120)
+    return r.returncode, r.stdout.decode("utf-8").replace(tmp, root)
+
+# and what the program PRINTS: a use renamed with the wrong declaration still builds when another
+# binding of the old spelling is in scope, and then reads that binding instead
+def run_out(files):
+    tmp = root + ".run"
+    shutil.rmtree(tmp, ignore_errors=True)
+    os.mkdir(tmp)
+    for p, t in files.items():
+        open(os.path.join(tmp, os.path.basename(p)), "w", encoding="utf-8").write(t)
+    exe = os.path.join(tmp, "prog")
+    b = subprocess.run([zerg, "build", "--emit", "bin", "-o", exe, os.path.join(tmp, "main.zg")],
+                       stdout=subprocess.PIPE, stderr=subprocess.STDOUT, timeout=300)
+    if b.returncode != 0:
+        return "build failed: " + b.stdout.decode("utf-8")[:200]
+    return subprocess.run([exe], stdout=subprocess.PIPE, stderr=subprocess.STDOUT, timeout=60).stdout.decode("utf-8")
+
+def renamed(locs, fresh):
+    files = dict(src)
+    for p, line, ch in sorted(locs, key=lambda x: (x[0], x[1], -x[2])):
+        ls = files[p].split("\n")
+        t = ls[line]
+        # the UTF-16 character back to a str index: the fixture's one astral-free CJK line
+        # makes the two agree everywhere but after it, and the walk is exact either way
+        k, n = 0, 0
+        while n < ch:
+            n += len(t[k].encode("utf-16-le")) // 2
+            k += 1
+        m = re.match(r"[A-Za-z_][A-Za-z0-9_]*", t[k:])
+        ls[line] = t[:k] + fresh + t[k + len(m.group(0)):]
+        files[p] = "\n".join(ls)
+    return files
+
+# a member of a `spec` or of an `impl … for` is one side of a CONTRACT: the requirement and each
+# method keeping it are separate declarations, and renaming one of them alone breaks the program
+# by design. What a rename does with a contract is #194's to decide; it is not this property's.
+#
+# A MEMBER, not the spec's own name: the line the declaration sits on is indented, and the first
+# line above it that is not names the contract it is inside.
+def in_contract(d):
+    lines = src[d[0]].split("\n")
+    if not lines[d[1]][:1].isspace():
+        return False
+    for text in reversed(lines[:d[1]]):
+        if text and not text[0].isspace():
+            return re.match(r"^(spec |impl(\[[^]]*\])? \S+ for )", text) is not None
+    return False
+
+base = check_out(src)
+base_run = run_out(src)
+check(base_run != "" and not base_run.startswith("build failed"), "the fixture builds and prints", base_run[:200])
+renames = 0
+skipped = {"stdlib": 0, "import path": 0, "contract": 0, "unreferenced": 0}
+
+# A GROUP is what one rename takes: a declaration alone, or every declaration a shared place may
+# be, joined through that place — `P.n` and `Q.n` through a generic `x.n`
+group_of = {d: d for d in decls}
+def root_of(d):
+    while group_of[d] != d:
+        d = group_of[d]
+    return d
+for cands in shared.values():
+    for c in cands[1:]:
+        if c in group_of and cands[0] in group_of:
+            group_of[root_of(c)] = root_of(cands[0])
+groups = {}
+for d in decls:
+    groups.setdefault(root_of(d), []).append(d)
+grouped = sum(1 for g in groups.values() if len(g) > 1)
+
+for n, members in enumerate(sorted(sorted(g) for g in groups.values())):
+    locs = sorted(set(place(x) for d in members for x in decls[d]))
+    d = members[0]
+    # one outside the fixture (the standard library) is not the fixture's to edit; a declaration
+    # inside a string is an import's path segment, and renaming a path is not a rename
+    if any(p not in src for p, _, _ in locs):
+        skipped["stdlib"] += 1
+        continue
+    if any(src[m[0]].split("\n")[m[1]][m[2] - 1:m[2]] in ('"', "/") for m in members):
+        skipped["import path"] += 1
+        continue
+    if any(in_contract(m) for m in members):
+        skipped["contract"] += 1
+        continue
+    others = [l for l in locs if l not in members]
+    if not others:
+        # held above: no name spelled like it answers nothing
+        skipped["unreferenced"] += 1
+        continue
+    fresh = "zq_renamed_%d" % n
+    what = ", ".join("%s:%d:%d" % (os.path.basename(m[0]), m[1] + 1, m[2] + 1) for m in members)
+    files = renamed(locs, fresh)
+    all_of = check_out(files)
+    check(all_of == base, "renaming %s and its %d reference(s) leaves the diagnostics as they were"
+          % (what, len(others)), all_of[1][:300])
+    ran_out = run_out(files)
+    check(ran_out == base_run, "renaming %s and its %d reference(s) leaves what the program prints as it was"
+          % (what, len(others)), ran_out[:300])
+    but_decl = check_out(renamed(others, fresh))
+    check(but_decl != base, "renaming every reference of %s but the declarations is refused" % what,
+          but_decl[1][:200])
+    renames += 1
+# FLOORS, each asked of the fixture as written: a filter that grew to swallow everything would
+# otherwise leave this property green for having renamed nothing
+check(renames >= 30, "enough declarations were renamed to mean something", renames)
+check(grouped >= 2, "the fixture's shared places join declarations into groups", grouped)
+for why, floor in (("stdlib", 2), ("import path", 3), ("contract", 5)):
+    check(skipped[why] >= floor, "the fixture has at least %d declarations skipped as %s" % (floor, why), skipped[why])
+check(skipped["unreferenced"] <= lonely, "every unreferenced declaration skipped was held to its spelling", skipped)
+
+print("NAMES     %d positions, %d uses symmetric with their definition, %d shared, %d renames of which %d group several declarations (skipped: %s)" % (positions, len(pairs), len(shared), renames, grouped, ", ".join("%d %s" % (v, k) for k, v in sorted(skipped.items()))))
+sys.exit(1 if bad else 0)
+PYEOF
+then
+	echo "lsp-check: a name does not answer with the declaration the compiler resolved it to"
+	exit 1
+fi
+echo "lsp-check: $ran buffers agree with the compiler, $outlined outlines are the parser's own, $members module members are checked against their module, formatting is fmt's answer, every protocol case holds, the dump carries the type parameters the outline cannot show, a check is one walk, and a name answers with the declaration the compiler resolved it to"

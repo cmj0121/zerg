@@ -2311,15 +2311,20 @@ fn c_no_shadow_sub(mut &em: Emitter, name: str) {
 
 # c_fresh_cname is the C name a new binding takes: `zg_<name>`, or `zg_<name>__<n>` when
 # that is already taken by a binding still in scope.
+#
+# OR BY A TOP-LEVEL DECLARATION. A function, a type and a module constant are file-scope C
+# symbols spelled `zg_<name>` too, and a C local of that spelling hides the symbol for the rest
+# of its block: `g := g() + 1` called the local, and so did a default lowered into that block
+# that spells `g()` (#197) — the Zerg name was never in scope there, the C one was. Every
+# candidate is asked, not only the first: beside a `fn g__1`, `zg_g__1` hides that one.
 fn c_fresh_cname(mut &em: Emitter, name: str) -> str {
-	base := "zg_" + name
-	mut cand := base
+	mut stem := name
 	mut n := 0
-	for c_cname_taken(em, cand) {
+	for c_cname_taken(em, "zg_" + stem) or c_name_in(em.top_names, stem) {
 		n = n + 1
-		cand = f"{base}__{n}"
+		stem = f"{name}__{n}"
 	}
-	return cand
+	return "zg_" + stem
 }
 
 # c_in_scope is whether a binding's block is still open. A closed block's bindings stay in
@@ -12212,7 +12217,7 @@ fn c_ident_val(mut &em: Emitter, n: str, sb: Subst) -> str {
 
 	if c_is_ref_name(em, n) {
 		# a mutable-reference parameter is a pointer; dereference it on use
-		return f"(*zg_{n})"
+		return f"(*{c_var_cname(em, n)})"
 	}
 
 	# A bare function NAME used where a value is wanted is that function as a value. It is
@@ -19816,6 +19821,7 @@ fn c_fn(mut &em: Emitter, fn_d: ast.FnDecl) -> str {
 			}
 			pm := fn_d.params[i]
 			c_add_var(em, pm.name, pm.ty, pm.is_ref, false)
+			pc := c_var_cname(em, pm.name)
 
 			# A BY-VALUE PARAMETER IS THIS FUNCTION'S OWN. Every call site copies what it
 			# hands over (c_arg, through c_copied) — for a str that copy is a retain, for a
@@ -19828,13 +19834,13 @@ fn c_fn(mut &em: Emitter, fn_d: ast.FnDecl) -> str {
 			# reference — so the callee dropping it is what frees the capture, and the two
 			# together are why a captured list is not leaked by either.
 			if not pm.is_ref {
-				pdefer = pdefer + c_pend_drop(em, pm.ty, "zg_" + pm.name, "    ")
+				pdefer = pdefer + c_pend_drop(em, pm.ty, pc, "    ")
 			}
 			if pm.is_ref {
 				em.ref_names.append(pm.name)
-				sig = sig + c_type(pm.ty) + "* zg_" + pm.name
+				sig = sig + c_type(pm.ty) + "* " + pc
 			} else {
-				sig = sig + c_type(pm.ty) + " zg_" + pm.name
+				sig = sig + c_type(pm.ty) + " " + pc
 			}
 			i = i + 1
 		}

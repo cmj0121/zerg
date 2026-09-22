@@ -28,7 +28,7 @@ fn body_of(src: str) -> list[ast.Stmt] {
 
 fn is_at(s: ast.Stmt) -> bool {
 	return match s {
-		Stmt.SAt(_, _) => true
+		Stmt.SAt(_, _, _, _) => true
 		_ => false
 	}
 }
@@ -253,14 +253,14 @@ fn test_params() {
 
 # --- declarations ------------------------------------------------------------------------
 
-# THE NAME, NOT THE KEYWORD. `line` / `col` stay where the declaration starts, since a
-# diagnostic reports there; `name_line` / `name_col` are the token a reader means by "where is
-# this declared".
+# THE NAME, NOT THE KEYWORD. `line` / `col` stay where the declaration starts — its FIRST
+# token, `pub` included, which is where a diagnostic about it reports; `name_line` /
+# `name_col` are the token a reader means by "where is this declared".
 #[test]
 fn test_declaration_names() {
 	f := parse_at("pub struct Point {\n\tpub x: int\n}\n\nenum E {\n\tA\n}\n\npub fn area() {\n}\n\ntype Meters = int\n\nconst K := 1\n", "t.zg")
 	sd := f.structs[0]
-	assert sd.col == 5 and sd.name_line == 1 and sd.name_col == 12
+	assert sd.col == 1 and sd.name_line == 1 and sd.name_col == 12
 	fd := sd.fields[0]
 	assert fd.col == 2 and fd.name_line == 2 and fd.name_col == 6
 	assert f.enums[0].name_line == 5 and f.enums[0].name_col == 6
@@ -367,4 +367,82 @@ fn test_type_parameters_of_every_declaration() {
 	assert tparams_of("struct B[T] {\n\tv: T\n}\n") == "T@1:10 [1:1..3:2]"
 	assert tparams_of("enum E[X] {\n\tA(X)\n}\n") == "X@1:8 [1:1..3:2]"
 	assert tparams_of("spec S[K] {\n\tfn f[V](v: V) -> K\n}\n") == "K@1:8 V@2:7 [2:2..2:20][1:1..3:2]"
+}
+
+# --- where a declaration and a statement END (#25) ---------------------------------------
+#
+# A place a node was built with is the one fact nothing downstream can check, and an END is the
+# half of it that used to be missing everywhere: a declaration built with 0, 0 outlines, checks
+# and runs exactly as one built with the truth, and the only reader that can tell is an editor
+# drawing the wrong underline.
+#
+# The extents are read through `file_symbols`, because that is the shape a reader of the
+# outline meets: a declaration, then the children written inside it.
+
+# `name@line:col..end_line:end_col` for each top-level declaration, with its children beside it
+fn extents_of(src: str) -> str {
+	mut out := ""
+	for s in ast.file_symbols(parse_at(src, "t.zg")) {
+		out = out + f"{s.name}@{s.line}:{s.col}..{s.end_line}:{s.end_col}"
+		for k in s.kids {
+			out = out + f" ({k.name}@{k.line}:{k.col}..{k.end_line}:{k.end_col})"
+		}
+		out = out + " "
+	}
+	return out
+}
+
+# `line:col..end_line:end_col` for each SAt marker of the first function's body
+fn stmt_extents(src: str) -> str {
+	f := parse_at(src, "t.zg")
+	mut out := ""
+	for s in f.fns[0].body {
+		out = out + match s {
+			Stmt.SAt(l, c, el, ec) => f"{l}:{c}..{el}:{ec} "
+			_ => ""
+		}
+	}
+	return out
+}
+
+# THE END IS THE CLOSING TOKEN'S, one column past its last byte — not the next declaration's
+# start, which would swallow the blank line between them.
+#
+# A DECLARATION BEGINS AT ITS FIRST TOKEN, `pub` included: the marker is inside the production
+# GRAMMAR derives it from, so it is inside the extent. That is also the place a diagnostic
+# about the declaration reports at — one place, with nothing for the two to disagree about.
+#[test]
+fn test_a_declaration_ends_at_its_closing_token() {
+	assert extents_of("fn a() {\n}\n\nfn b() {\n}\n") == "a@1:1..2:2 b@4:1..5:2 "
+	assert extents_of("pub fn a() -> int {\n\treturn 1\n}\n") == "a@1:1..3:2 "
+	assert extents_of("pub struct S {\n\tpub n: int\n}\n") == "S@1:1..3:2 (n@2:2..2:12) "
+}
+
+# a struct's fields and an enum's variants are DECLARATIONS INSIDE one, each with an extent of
+# its own: a field runs to the end of its default, a variant to the end of its payload
+#[test]
+fn test_a_field_and_a_variant_are_children_with_extents() {
+	assert extents_of("struct P {\n\tpub x: int\n\ty: int = 7\n}\n") == "P@1:1..4:2 (x@2:2..2:12) (y@3:2..3:12) "
+	assert extents_of("enum E {\n\tA\n\tB(int, str)\n}\n") == "E@1:1..4:2 (A@2:2..2:3) (B@3:2..3:13) "
+}
+
+# the forms with no block: a binding, an alias and an import each end at their own last token,
+# and an import's is the SPEC and not the group's `)`
+#[test]
+fn test_a_declaration_with_no_block_ends_at_its_last_token() {
+	assert extents_of("K := 1 + 2\n") == "K@1:1..1:11 "
+	assert extents_of("type Meters = int\n") == "Meters@1:1..1:18 "
+	assert extents_of("import (\n\t\"a/text\"\n)\n") == "text@2:2..2:10 "
+
+	# an import SPEC takes `pub` — a re-export — and the marker is inside the spec, not beside
+	# it; the `import` keyword belongs to the statement and to no one spec of a group
+	assert extents_of("import (\n\tpub \"a/text\"\n)\n") == "text@2:2..2:14 "
+}
+
+# a statement's marker carries its extent, so a finding reported at the marker underlines the
+# statement; a nested block's statements carry their own
+#[test]
+fn test_a_statement_marker_carries_its_extent() {
+	assert stmt_extents("fn m() {\n\tx := 1\n\tx = 2 + 3\n}\n") == "2:2..2:8 3:2..3:11 "
+	assert stmt_extents("fn m() {\n\tif c {\n\t\tg()\n\t}\n}\n") == "2:2..4:3 "
 }

@@ -1672,6 +1672,17 @@ pub fn last_segment(path: str) -> str {
 # `kind` is a WORD and not an LSP number. The number is protocol, the server owns protocol,
 # and a compiler that spelled `12` here would be a compiler that had to be edited when the
 # protocol changed.
+#
+# THREE PLACES, not one, because an outline asks three questions of a declaration and they
+# have three different answers: `line` / `col` are where the construct BEGINS, `end_line` /
+# `end_col` where it finishes, and `name_line` / `name_col` the name token a reader means when
+# they say "go there". LSP asks for the first pair as a `range` and the last as a
+# `selectionRange`; a server handed one range twice cannot tell a client which declaration a
+# cursor is inside, which is the whole of what the outer range is for.
+#
+# `kids` are the declarations WRITTEN INSIDE this one — a struct's fields, an enum's variants.
+# They are a list of Symbols rather than a flat list with a parent column because that is what
+# they are: an outline is a tree, and a shape that says so cannot be read back wrong.
 pub struct Symbol {
 	pub name: str
 	pub kind: str
@@ -1679,6 +1690,11 @@ pub struct Symbol {
 	pub is_pub: bool
 	pub line: int
 	pub col: int
+	pub end_line: int
+	pub end_col: int
+	pub name_line: int
+	pub name_col: int
+	pub kids: list[Symbol]
 }
 
 # file_symbols is every top-level declaration of one parsed file, in SOURCE order.
@@ -1692,37 +1708,41 @@ pub struct Symbol {
 # anything, so it is not a symbol; an import IS one, because a reader looking for where a
 # borrowed name comes from is asking exactly the question an outline answers.
 pub fn file_symbols(f: File) -> list[Symbol] {
+	mut none: list[Symbol] = []
 	mut out: list[Symbol] = []
 	for im in f.imports {
 		# the BINDING is the symbol, since that is the name written in the code below it; the
 		# path it resolves to is the detail
-		out.append(Symbol(im.name, "import", im.path, false, im.line, im.col))
+		out.append(Symbol(im.name, "import", im.path, false, im.line, im.col, im.end_line, im.end_col, im.name_line, im.name_col, none))
 	}
 	for s in f.structs {
-		out.append(Symbol(s.name, "struct", "", false, s.line, s.col))
+		out.append(Symbol(s.name, "struct", "", s.is_pub, s.line, s.col, s.end_line, s.end_col, s.name_line, s.name_col, field_symbols(s.fields)))
 	}
 	for e in f.enums {
-		out.append(Symbol(e.name, "enum", "", false, e.line, e.col))
+		out.append(Symbol(e.name, "enum", "", e.is_pub, e.line, e.col, e.end_line, e.end_col, e.name_line, e.name_col, variant_symbols(e.variants)))
 	}
 	for sp in f.specs {
-		out.append(Symbol(sp.name, "spec", "", false, sp.line, sp.col))
+		out.append(Symbol(sp.name, "spec", "", sp.is_pub, sp.line, sp.col, sp.end_line, sp.end_col, sp.name_line, sp.name_col, none))
 	}
 	for ip in f.impls {
 		# an impl has no name of its own — it is a PAIRING, and the pairing is what a reader
 		# scans an outline for. An inherent `impl T { … }` is not here at all: the parser
 		# flattens it into ordinary functions carrying a receiver, and each of those is a
 		# symbol below.
-		out.append(Symbol(f"{ip.on} for {ip.target}", "impl", "", false, ip.line, ip.col))
+		#
+		# The pairing is also not a token anybody wrote, so the NAME is the whole head: there
+		# is nothing shorter for a reader to be taken to.
+		out.append(Symbol(f"{ip.on} for {ip.target}", "impl", "", false, ip.line, ip.col, ip.end_line, ip.end_col, ip.line, ip.col, none))
 	}
 	for t in f.types {
-		out.append(Symbol(t.name, "type", ty_name(t.under), t.is_pub, t.line, t.col))
+		out.append(Symbol(t.name, "type", ty_name(t.under), t.is_pub, t.line, t.col, t.end_line, t.end_col, t.name_line, t.name_col, none))
 	}
 	for c in f.consts {
 		mut detail := ""
 		if c.has_ty {
 			detail = ty_name(c.ty)
 		}
-		out.append(Symbol(c.name, "const", detail, c.is_pub, c.line, c.col))
+		out.append(Symbol(c.name, "const", detail, c.is_pub, c.line, c.col, c.end_line, c.end_col, c.name_line, c.name_col, none))
 	}
 	for fd in f.fns {
 		# a method and a free function are different things to a reader scanning a list of
@@ -1731,9 +1751,39 @@ pub fn file_symbols(f: File) -> list[Symbol] {
 		if fd.recv != "" {
 			kind = "method"
 		}
-		out.append(Symbol(fd.name, kind, fd.recv, fd.is_pub, fd.line, fd.col))
+		out.append(Symbol(fd.name, kind, fd.recv, fd.is_pub, fd.line, fd.col, fd.end_line, fd.end_col, fd.name_line, fd.name_col, none))
 	}
 	return sym_sorted(out)
+}
+
+# field_symbols and variant_symbols are the CHILDREN of a struct and of an enum — the two
+# declarations of this language that hold others.
+#
+# They are not sorted. A field list and a variant list are parsed in source order and stay in
+# it, and a variant's order is its tag, so re-deciding it here would be an outline disagreeing
+# with the program about which variant is first.
+fn field_symbols(fields: list[FieldDef]) -> list[Symbol] {
+	mut none: list[Symbol] = []
+	mut out: list[Symbol] = []
+	for fd in fields {
+		out.append(Symbol(fd.name, "field", ty_name(fd.ty), fd.is_pub, fd.line, fd.col, fd.end_line, fd.end_col, fd.name_line, fd.name_col, none))
+	}
+	return out
+}
+
+fn variant_symbols(variants: list[VariantDef]) -> list[Symbol] {
+	mut none: list[Symbol] = []
+	mut out: list[Symbol] = []
+	for v in variants {
+		# a variant's PAYLOAD is its detail, the way a field's type is: `Some(int)` is what a
+		# reader scanning the outline needs in order to know which arm binds anything
+		mut detail := ""
+		if v.fields.len() > 0 {
+			detail = f"({ty_names(v.fields)})"
+		}
+		out.append(Symbol(v.name, "variant", detail, false, v.line, v.col, v.end_line, v.end_col, v.line, v.col, none))
+	}
+	return out
 }
 
 # sym_sorted puts the symbols in source order.

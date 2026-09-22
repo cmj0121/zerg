@@ -805,8 +805,20 @@ fn ls_path_uri(path: str) -> str {
 # the word at the position — an identifier if there is one there, one character otherwise.
 
 fn ls_word_range(text: str, line: int, col: int) -> json.Val {
-	sp := ls_word_span(text, line, col)
+	return ls_span_range(ls_word_span(text, line, col))
+}
+
+fn ls_span_range(sp: Span) -> json.Val {
 	return ls_range_of(sp.sl, sp.sc, sp.el, sp.ec)
+}
+
+# ls_span_at is a span the COMPILER gave — two 1-based byte places — in LSP's units. Each end
+# is counted against ITS OWN line, because a column is bytes into one line and the two ends of
+# a declaration are rarely on the same one.
+fn ls_span_at(text: str, line: int, col: int, el: int, ec: int) -> Span {
+	sb := bytearray(ls_line_at(text, line - 1))
+	eb := bytearray(ls_line_at(text, el - 1))
+	return Span(line - 1, ls_utf16_col(sb, col - 1), el - 1, ls_utf16_col(eb, ec - 1))
 }
 
 # Span is a range as four numbers rather than as JSON. A code action needs to COMPARE one
@@ -1032,12 +1044,17 @@ fn ls_document_symbol_result(s: Server, uri: str) -> json.Val {
 
 # ls_document_symbol is one entry, as LSP's `DocumentSymbol`.
 #
-# `range` and `selectionRange` are the SAME range, and it is the identifier's. The protocol
-# wants the first to span the whole declaration and the second to span just the name it is
-# selected by, and the compiler has no end position for either — the same gap the diagnostics
-# have, for the same reason. Equal ranges satisfy the one rule that matters (the selection is
-# inside the range) and mean a jump lands on the name, which is where a reader of an outline
-# wants to be. What they do not do is let a client highlight the declaration a cursor is in.
+# `range` and `selectionRange` ARE TWO DIFFERENT RANGES, which is what the protocol asks for:
+# the first spans the whole declaration and the second the name it is selected by. They used
+# to be one range — the word at the declaration's first column — because the compiler had no
+# end to give and a point wearing two names was the honest answer to that. It has one now
+# (ast.zg, `decl-extent`), so the outer range is the construct and a client can say which
+# declaration a cursor is inside; the inner one is the name token, so a jump still lands where
+# a reader of an outline wants to be.
+#
+# `children` are the declarations written INSIDE this one — a struct's fields, an enum's
+# variants — nested rather than listed beside their parent, which is the difference between an
+# outline and a list of names.
 #
 # `detail` is what the outline shows beside the name: the receiver of a method, the underlying
 # type of a `type`, the module path of an import. `pub` rides in front of it, because the one
@@ -1052,16 +1069,40 @@ fn ls_document_symbol(text: str, sym: zerg.Symbol) -> json.Val {
 		}
 	}
 
-	r := ls_word_range(text, sym.line, sym.col)
 	mut fs: list[json.Field] = []
 	json.put_str(fs, "name", sym.name)
 	json.put_int(fs, "kind", ls_symbol_kind(sym.kind))
 	if detail != "" {
 		json.put_str(fs, "detail", detail)
 	}
-	json.put(fs, "range", r)
-	json.put(fs, "selectionRange", r)
+	json.put(fs, "range", ls_span_range(ls_decl_span(text, sym)))
+	json.put(fs, "selectionRange", ls_span_range(ls_name_span(text, sym)))
+	if sym.kids.len() > 0 {
+		mut kids: list[json.Val] = []
+		for k in sym.kids {
+			kids.append(ls_document_symbol(text, k))
+		}
+		json.put(fs, "children", json.of_list(kids))
+	}
 	return json.of_obj(fs)
+}
+
+# ls_decl_span is the whole construct, and ls_name_span the name token inside it.
+#
+# EACH FALLS BACK TO THE WORD at the place it has, and neither invents one. A declaration
+# whose end the parser did not record — and a name the parser never wrote down, which is the
+# `init` the language declares rather than the author — is a place and nothing more, so it
+# answers what a place alone can: the word standing there. A selection outside its range is
+# the one thing the protocol forbids, and a word at the declaration's own first column is
+# inside it either way.
+fn ls_decl_span(text: str, sym: zerg.Symbol) -> Span {
+	return ls_word_span(text, sym.line, sym.col) if sym.end_line < sym.line
+	return ls_span_at(text, sym.line, sym.col, sym.end_line, sym.end_col)
+}
+
+fn ls_name_span(text: str, sym: zerg.Symbol) -> Span {
+	return ls_word_span(text, sym.line, sym.col) if sym.name_line < 1
+	return ls_word_span(text, sym.name_line, sym.name_col)
 }
 
 # ls_symbol_kind maps the compiler's WORD onto LSP's number (SymbolKind, §Document Symbols).
@@ -1073,15 +1114,17 @@ fn ls_document_symbol(text: str, sym: zerg.Symbol) -> json.Val {
 # learned yet is a new declaration form, and an outline missing one entry's icon is a better
 # answer than an outline that is not sent.
 fn ls_symbol_kind(kind: str) -> int {
-	return 2 if kind == "import"  # Module
-	return 23 if kind == "struct" # Struct
-	return 10 if kind == "enum"   # Enum
-	return 11 if kind == "spec"   # Interface
-	return 5 if kind == "impl"    # Class
-	return 26 if kind == "type"   # TypeParameter
-	return 14 if kind == "const"  # Constant
-	return 12 if kind == "fn"     # Function
-	return 6 if kind == "method"  # Method
+	return 2 if kind == "import"   # Module
+	return 23 if kind == "struct"  # Struct
+	return 10 if kind == "enum"    # Enum
+	return 11 if kind == "spec"    # Interface
+	return 5 if kind == "impl"     # Class
+	return 26 if kind == "type"    # TypeParameter
+	return 14 if kind == "const"   # Constant
+	return 12 if kind == "fn"      # Function
+	return 6 if kind == "method"   # Method
+	return 8 if kind == "field"    # Field
+	return 22 if kind == "variant" # EnumMember
 	return 13
 }
 

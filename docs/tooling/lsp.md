@@ -129,6 +129,21 @@ That is the rule this page is about, applied to itself: a code spelled only insi
 one every reader has to parse back out, and the server reading it out would be a second copy of a
 language fact. A finding with no code omits the field rather than sending an empty one.
 
+**An abort carries one too, and it is the one exception to the paragraph above.** A `raise` has no
+structure to put a code in, so the channel that builds one writes it into the front of the sentence
+— which meant an abort reached the editor as a finding with **no** rule, sitting beside checked
+findings that had one. Splitting it back off is `rule_msg_code`, which lives beside the
+`rule_msg` that packed it: an `E`, digits, a space, and nothing looser — exactly what `rule_code`
+emits — because a message opening with anything else has no code, and a reader wider than its
+writer would go on accepting a spelling nothing produces.
+
+**A finding underlines the construct the compiler named.** A checked diagnostic is reported at the
+statement marker the parser leaves in front of every statement, and that marker carries where the
+statement **ends** as well as where it begins — so the underline is the statement. A rule that knows
+a place of its own knows a place and nothing more, and its `Diag` says so by carrying no end at all
+rather than the start repeated into it; the server then draws the word at the column, which is a
+guess and is marked as one. See [Positions](#positions).
+
 **An abort lands where its sentence says.** A parse error and a `NotImplemented` refusal are
 `raise`d sentences, not `Diag`s, and the place rides in the sentence as the last line `zerg build`
 prints under it: `--> file:line:col`. Where that line names this buffer's file, the finding is
@@ -149,9 +164,20 @@ of that conversion are the server's, and neither is optional:
 
 - the **unit**, because a byte column and a UTF-16 column agree only while a line is ASCII, and this
   tree's own sources are full of em-dashes;
-- the **range**, because `Diag` has no end position. Adding a field and filling it with the start
-  would be a span that is really a point wearing a second name, so the end is derived from the
-  **source**: the identifier at the position, or one character.
+- the **range**, because a place is not one.
+
+Where the compiler has an **end**, it is used and nothing is derived. Every declaration and every
+statement carries one: the parser is standing on the closing token when it builds them, so the end
+is the column one past that token's last byte, read rather than guessed. The alternative on offer —
+the next declaration's start — is wrong wherever a blank line, a comment or a closing brace stands
+between two, and wrong in the direction that swallows text belonging to nobody.
+
+Where it has **none** — a rule that knows a place of its own, a lint note about one literal, an
+abort whose place was read back out of its own sentence — the range is the word at the position: an
+identifier if there is one there, one character otherwise. That is a guess, it is made in the
+server where this page can say it is a guess, and it is never written into a `Diag` as though the
+compiler had said it. A reader of a `Diag` can tell the two apart, which a start copied into both
+ends would not allow.
 
 ## Neovim
 
@@ -320,9 +346,55 @@ the file imports, because a borrowed name is undefined without them. An outline 
 question — what is _in_ this file — and pulling the imports in would fill it with declarations the
 reader cannot see on screen.
 
-A buffer that does not parse answers with **nothing** rather than with an error. An outline is a view
-and not a verdict, and the diagnostic saying the buffer is broken has already been published by the
-check that runs on every keystroke.
+**A struct's fields and an enum's variants are children.** LSP's `DocumentSymbol` is a tree, an
+outline is a view of a program, and a flat list is a list of names. A field carries its type as the
+detail and a variant its payload, which is what tells a reader scanning the list which arm binds
+anything. Neither list is sorted: a variant's order is its tag, and re-deciding it here would be an
+outline disagreeing with the program about which variant is first.
+
+**`range` is the construct and `selectionRange` is the name.** The protocol asks for both and they
+are two different ranges: the outer one is what lets a client say which declaration a cursor is
+inside, and the inner one is where a jump lands. Each falls back to the word at the place it has
+rather than inventing an end — the `init` the language declares has no name token — and a word at
+the declaration's own first column is inside its range either way.
+
+**`pub` is part of the declaration, so it is inside the range.** The protocol says `range` covers
+the declaration "including e.g. comments and code", and GRAMMAR puts the marker inside every
+production that takes one — `'pub'? 'struct' …`. A module constant and a struct field already began
+at theirs; a `struct`, an `enum`, a `spec`, a `type`, a `fn` and an `import`'s re-export began one
+token later, so the same marker was inside the range for two forms and outside it for six. It is
+inside for every form that takes one now, and a declaration's place — the one a diagnostic about
+its signature reports at — is that first token. `selectionRange` still points at the name.
+
+**A decorator is not, and that is a limit rather than a rule.** GRAMMAR#decorated-decl puts the
+`#[…]` inside the production too, so by the paragraph above it belongs in the range; a decorated
+declaration's range starts at its `pub` or its `fn` instead. A decorator is read as its own
+top-level item, before the declaration under it exists, so the declaration is built without ever
+having seen it — and folding one in is a change to how the two are paired, not to where a range
+starts. It is written down here so the gap is stated rather than discovered.
+
+**An `impl`'s range contains its methods', and both are top level.** The parser flattens an `impl`
+body into ordinary functions carrying a receiver, so a method is a symbol beside its `impl` rather
+than a child of it — the outline's children are a struct's fields and an enum's variants, and
+nothing else yet. The consequence is visible: a cursor inside a method is inside two top-level
+symbols, and a client that resolves a position to "the symbol containing it" has two answers to
+choose between. That is the honest shape of what the compiler holds; making a method a child is
+what would remove the overlap, and it is not built.
+
+**A buffer that does not parse is not answered with an empty outline.** It used to be, and `[]` is
+the outline of a file that declares nothing — so an editor whose last keystroke broke the parse
+emptied its outline pane and said why nowhere, indistinguishable from a server that had crashed on
+the request. The request **fails** instead, as `RequestFailed` (-32803), carrying the compiler's own
+sentence: the protocol's way of saying a well-formed request cannot be answered right now, and the
+one answer that leaves a client free to keep showing the outline it already has. The check running
+on the same keystroke publishes that sentence as a diagnostic too; this is not a second finding, it
+is the outline declining rather than lying.
+
+The protocol allows a third answer, `null`, and it was turned down for the reason `[]` was: a client
+cannot tell "I could not read this buffer" from "this buffer declares nothing", so it is the same
+silence spelled differently. The cost of failing instead is that it is **visible** — a client whose
+default handler surfaces request errors shows one, and nvim's does — which is the point rather than
+a side effect: the outline going stale should say so.
 
 `make lsp` holds it to `--emit ast`: the outline must name exactly the declarations the parser read.
 That comparison runs only on files that import nothing, because the driver merges a whole program
@@ -330,11 +402,11 @@ into one `File` before emission — so the dump is the buffer's own declarations
 no imports, and where the two questions differ the dump is not an oracle and is not asked. The gate
 counts how many it compared, for the reason every floor here exists.
 
-**Two things it does not do.** A struct's fields and an enum's variants are not children — the
-protocol has a tree and this is a flat list, which is what an editor shows anyway. And `range` and
-`selectionRange` are the same range, the identifier's, because the compiler has no end position for
-either — the same gap the diagnostics have. A jump lands on the name; a client cannot highlight the
-whole declaration a cursor is inside.
+The gate's second half asks what each entry **says** about a declaration, and it asks it by
+**slicing the buffer** with the range that came back and comparing the text to what was written. A
+comparison against hand-written line and character numbers would pass on a server that had the
+UTF-16 conversion backwards for the end — the numbers would be the ones the gate was told to expect
+— so the fixture is full of CJK and the assertion is about text.
 
 ## A name answers from one index
 
@@ -531,7 +603,6 @@ Tracked as issue [#15](https://github.com/cmj0121/zerg/issues/15).
 | `completion`, `signatureHelp`, `workspace/symbol` | #194 — views of the same index                                |
 | `rename`                                          | #194 — and what a rename does with a spec contract            |
 | `semanticTokens`                                  | `Kind`'s variants cannot be matched outside the `zerg` module |
-| a diagnostic **end** position                     | the compiler tracks where a thing starts, not where it ends   |
 | incremental sync, debounce, cancellation          | a measurement; Phase 1 re-checks the program per keystroke    |
 
 The first three rows were one gap, and [the name index](#a-name-answers-from-one-index) is what

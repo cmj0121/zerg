@@ -1801,10 +1801,15 @@ fn variant_symbols(variants: list[VariantDef]) -> list[Symbol] {
 
 # sym_sorted puts the symbols in source order.
 #
-# Insertion sort by adjacent swaps: a file's top level is tens of declarations, not thousands,
-# and what matters about the algorithm is that it is STABLE — two declarations reported at
-# the same position keep the order they were collected in rather than trading places between
-# runs, which an outline would show as a list that reshuffles itself.
+# Insertion sort by adjacent swaps. What matters about it is that it is STABLE — two
+# declarations reported at the same position keep the order they were collected in rather than
+# trading places between runs, which an outline would show as a list that reshuffles itself.
+#
+# WHAT KEEPS IT CHEAP IS THE GROUPING, not the count: this compiler's own largest source has
+# over a thousand top-level declarations, so "a file's top level is small" is not a premise
+# this tree supports. They are collected one KIND at a time and each kind is already in source
+# order, so the only inversions are between groups — a file that alternated two kinds all the
+# way down would be the quadratic case, and nothing here would notice.
 fn sym_sorted(syms: list[Symbol]) -> list[Symbol] {
 	mut out: list[Symbol] = []
 	for s in syms {

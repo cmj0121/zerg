@@ -320,3 +320,51 @@ fn test_type_use_in_an_assert_is_recorded_once() {
 fn test_type_use_in_a_hole() {
 	assert uses_of("fn g() {\n\tb := f\"{e is Err2}\"\n}\n") == "Err2@2:15+4"
 }
+
+# the type parameters a source DECLARES, then the extents they are in scope over
+fn tparams_of(src: str) -> str {
+	f := parse_at(src, "t.zg")
+	mut out := ""
+	for u in f.ty_uses {
+		continue if u.tparam == ast.TP_USE
+		out = out + f"{u.name}@{u.line}:{u.col} "
+	}
+	for sc in f.tp_scopes {
+		out = out + f"[{sc.line}:{sc.col}..{sc.end_line}:{sc.end_col}]"
+	}
+	return out
+}
+
+# A TYPE PARAMETER IS A DECLARATION, recorded where its name was written and told apart from
+# the uses beside it; the declaration's extent runs from its first token to the token after it,
+# the newline behind its `}`
+#[test]
+fn test_type_parameter_declarations_and_scope() {
+	assert tparams_of("fn id[T](x: T) -> T {\n\treturn x\n}\nfn z() {\n}\n") == "T@1:7 [1:1..3:2]"
+	assert uses_of("fn id[T](x: T) -> T {\n\treturn x\n}\n") == "T@1:7+1, T@1:13+1, T@1:19+1"
+}
+
+# a declaration with none records no extent; an `impl`'s extent holds its members', which are
+# recorded first because they end first
+#[test]
+fn test_type_parameter_scopes_nest() {
+	assert tparams_of("fn a(x: int) {\n}\n") == ""
+	assert tparams_of("impl[T] Box[T] {\n\tfn get[U](u: U) -> T {\n\t}\n}\n") == "T@1:6 U@2:9 [2:2..3:3][1:1..4:2]"
+}
+
+# `impl Box[T]` declares its parameter by what the target's argument is, which the parser does
+# not know: each bare argument is recorded as one that MAY declare, and the impl has an extent
+#[test]
+fn test_impl_target_arguments_may_declare() {
+	assert tparams_of("impl Box[T] {\n\tfn get() -> T {\n\t}\n}\n") == "T@1:10 [1:1..4:2]"
+	assert tparams_of("impl Pair[K, list[V]] {\n}\n") == "K@1:11 [1:1..2:2]"
+	assert tparams_of("impl Show for Box[T] {\n}\n") == "T@1:19 [1:1..2:2]"
+}
+
+# a struct's, an enum's and a spec's parameters, and a spec requirement's own
+#[test]
+fn test_type_parameters_of_every_declaration() {
+	assert tparams_of("struct B[T] {\n\tv: T\n}\n") == "T@1:10 [1:1..3:2]"
+	assert tparams_of("enum E[X] {\n\tA(X)\n}\n") == "X@1:8 [1:1..3:2]"
+	assert tparams_of("spec S[K] {\n\tfn f[V](v: V) -> K\n}\n") == "K@1:8 V@2:7 [2:2..2:20][1:1..3:2]"
+}

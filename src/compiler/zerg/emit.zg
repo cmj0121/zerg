@@ -9086,6 +9086,27 @@ fn c_binexpr(mut &em: Emitter, oper: str, a: ast.Expr, b: ast.Expr, sb: Subst) -
 		#
 		# `strcmp` is a CALL, so its two arguments are an argument list like any other and
 		# get the same ordering the numeric path below gets.
+		#
+		# AN OPERAND THIS EXPRESSION OWNS IS GIVEN BACK once the answer is in hand, as a concat
+		# gives its operands back: `c_ident_name(e) != ""` compared the name the call handed over
+		# and walked away from it, once per call — and c_is_place asks that on every argument the
+		# emitter lowers, which a language server paid again on every check (#23). The two are
+		# bound in source order inside one statement expression, which is also the ordering.
+		oa := c_owns_value(a)
+		ob := c_owns_value(b)
+		if c_is_cmp_op(oper) and (oa or ob) {
+			la := c_tmp(em, "zgt_t")
+			lb := c_tmp(em, "zgt_t")
+			rn := c_tmp(em, "zgt_t")
+			mut frees := ""
+			if oa {
+				frees = frees + f"zrt_str_release({la}); "
+			}
+			if ob {
+				frees = frees + f"zrt_str_release({lb}); "
+			}
+			return f"({{ const char *{la} = {c_expr(em, a, sb)}; const char *{lb} = {c_expr(em, b, sb)}; int {rn} = strcmp({la}, {lb}); {frees}({rn} {oper} 0); }})"
+		}
 		if c_is_cmp_op(oper) {
 			seq := c_needs_order([a, b], 1)
 			la := c_ordered(em, seq, c_expr(em, a, sb))

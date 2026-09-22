@@ -6,6 +6,12 @@
 # answered; everything here is the plumbing that carries the answer to where a person is
 # looking.
 #
+# EVERY OPEN BUFFER IS THE PROGRAM. What the entry point is handed is the whole document
+# store — a path and a text per open buffer — and not the one file that was typed in, because
+# an unsaved change in `a.zg` is part of the program an open `b.zg` is checked against. One
+# check answers for every open buffer the program it loaded contains, and a buffer whose own
+# program contains the file that changed is checked in its turn.
+#
 # It is a MODULE of its own rather than more files in `src/compiler/zerg/`, because a
 # directory is the privacy unit: inside that module this would reach every private
 # declaration and grow entangled with the emitter the way everything else that could has.
@@ -15,9 +21,9 @@
 # What it does NOT do is resolve `import`. The driver already knows where a module lives —
 # an environment variable, then an installation root, then the checkout — and that logic is
 # 60 lines of `zergc.zg` this module has no business owning a second copy of. So the entry
-# point takes a FUNCTION: hand it a path and the text of the buffer, and it hands back the
-# whole program with that buffer's text standing in for what is on disk. The module owns
-# the protocol; the driver owns the filesystem.
+# point takes a FUNCTION: hand it a path and the buffers the editor holds, and it hands back
+# the whole program that path belongs to, with those texts standing in for what is on disk.
+# The module owns the protocol; the driver owns the filesystem.
 #
 # Scope is LSP.md's Phase 1 and half of Phase 2: diagnostics on open/change/save, and
 # formatting. What is missing and why is in docs/tooling/lsp.md.
@@ -82,6 +88,15 @@ struct Server {
 	pub has_nx: bool
 }
 
+# Report is what ONE check answers: the open buffers it speaks for, and each one's diagnostics
+# in the same row. It is a list and not a single buffer's because a walk of the program found
+# what it found about every file of it at once, and the buffers the editor has open are a
+# partition of that, not a filter down to one.
+struct Report {
+	pub uris: list[str]
+	pub diags: list[list[json.Val]]
+}
+
 # Change is what a `didChange` carried: the new text, and whether there WAS one. The flag is
 # not redundant with an empty string — a client that clears a file to nothing sends `""`,
 # and a client that sends no change at all must leave the buffer alone.
@@ -96,7 +111,7 @@ struct Change {
 # concurrency design. It is written down rather than assumed: the scheduler is cooperative
 # and non-preemptive, so a long check occupies its worker until it finishes, and pretending
 # otherwise would mean a queue that silently reorders replies.
-pub fn serve(load: fn (str, str) -> Program) -> int {
+pub fn serve(load: fn (str, list[str], list[str]) -> Program) -> int {
 	mut docs: list[Doc] = []
 	mut buf: list[byte] = []
 	mut s := Server(docs, buf, false, false, zerg.no_index(), false)
@@ -204,7 +219,7 @@ fn ls_log(msg: str) {
 
 # --- dispatch ---------------------------------------------------------------------------
 
-fn ls_handle(mut &s: Server, body: str, load: fn (str, str) -> Program) {
+fn ls_handle(mut &s: Server, body: str, load: fn (str, list[str], list[str]) -> Program) {
 	# A frame that is not JSON has no id to answer with, so there is nobody to tell. It is
 	# logged and the session goes on, which is the only thing that leaves the editor usable.
 	msg := match guard {
@@ -262,6 +277,11 @@ fn ls_handle(mut &s: Server, body: str, load: fn (str, str) -> Program) {
 		uri := json.as_str(json.walk3(msg, "params", "textDocument", "uri"))
 		ls_drop_doc(s, uri)
 		ls_send(ls_notification("textDocument/publishDiagnostics", ls_diagnostics_params(uri, [])))
+
+		# AND THE BUFFERS THAT WERE READING IT. A closed file is the disk again, so a buffer
+		# whose program contains it was answered against a text that no longer stands in for
+		# anything — which is the same staleness a change causes, arriving the other way round.
+		ls_publish_dependants(s, ls_uri_path(uri), [], load)
 	} else if method == "textDocument/formatting" {
 		ls_reply(id, ls_formatting_result(s, json.as_str(json.walk3(msg, "params", "textDocument", "uri"))))
 	} else if method == "textDocument/codeAction" {
@@ -413,12 +433,136 @@ fn ls_has_doc(s: Server, uri: str) -> bool {
 	return false
 }
 
+fn ls_doc_uris(s: Server) -> list[str] {
+	mut out: list[str] = []
+	for d in s.docs {
+		out.append(d.uri)
+	}
+	return out
+}
+
+# ls_doc_paths and ls_doc_texts are the document store as the LOADER takes it: every open
+# buffer's file, and the text the editor is holding for it. They are what stands in for the
+# disk, so they travel together and in the same order.
+fn ls_doc_paths(s: Server) -> list[str] {
+	mut out: list[str] = []
+	for d in s.docs {
+		out.append(ls_uri_path(d.uri))
+	}
+	return out
+}
+
+fn ls_doc_texts(s: Server) -> list[str] {
+	mut out: list[str] = []
+	for d in s.docs {
+		out.append(d.text)
+	}
+	return out
+}
+
+fn ls_has_str(xs: list[str], x: str) -> bool {
+	for v in xs {
+		return true if v == x
+	}
+	return false
+}
+
 # --- diagnostics ---------------------------------------------------------------------------
 
-fn ls_publish(mut &s: Server, uri: str, load: fn (str, str) -> Program) {
-	text := ls_doc_text(s, uri)
-	path := ls_uri_path(uri)
-	ls_send(ls_notification("textDocument/publishDiagnostics", ls_diagnostics_params(uri, ls_check(s, path, text, load))))
+# ls_publish answers a change to one buffer, for every buffer that change reaches.
+#
+# ONE CHECK PER PROGRAM, not one per buffer. The buffer that changed is checked, and that one
+# walk already carries a finding for every file of its program — so the open buffers that
+# program contains are published out of it by PARTITIONING what it said by path, which costs
+# nothing beyond the check that was happening anyway.
+#
+# WHAT THAT PROGRAM DOES NOT CONTAIN IS ASKED SEPARATELY, and that is not a patch over a
+# corner of the loader. `load_buffer` answers a question with ONE answer — what is THE program
+# of this buffer, the first candidate entry that reaches it — while "which open buffers are
+# stale now that this file changed" has as many answers as there are programs containing it.
+# Two entries importing one module is the general shape; `lib.zg` and the `main.zg` beside it
+# that imports it, where `lib.zg`'s own program is `lib.zg` alone, is the smallest one. Such a
+# buffer is stale exactly when ITS program contains the file that changed, which is what the
+# loader's import graph says and nothing about a name or a directory does.
+#
+# So a keystroke costs one check while the open buffers share a program, and one load and one
+# check per program that genuinely contains the file after that. It also means every check in
+# a round covers the buffer that changed, which is what keeps the name index (`s.nx`) an index
+# of a program this buffer is in however many of them ran.
+fn ls_publish(mut &s: Server, uri: str, load: fn (str, list[str], list[str]) -> Program) {
+	rep := ls_check(s, uri, load, [], true)
+	ls_publish_dependants(s, ls_uri_path(uri), ls_publish_report(rep), load)
+}
+
+# ls_publish_dependants publishes every open buffer whose program contains `path` and that
+# `done` does not already speak for, one check per program.
+#
+# THE PROGRAM THE QUESTION WAS ANSWERED WITH IS THE ONE CHECKED. Asking whether a buffer is
+# stale means loading its program, and loading is the import walk plus a parse of every file in
+# it — so the answer is carried into the check rather than thrown away and re-walked, which is
+# what asking a loader a yes-or-no question would otherwise cost twice.
+#
+# AND IT IS ASKED PER PROGRAM, NOT PER BUFFER. One load answers for every open buffer that
+# program contains: they are in it, so it is their program too, and asking each of them
+# separately is the same walk again per buffer. Four buffers of one other program used to cost
+# four full loads on every keystroke.
+fn ls_publish_dependants(mut &s: Server, path: str, done: list[str], load: fn (str, list[str], list[str]) -> Program) {
+	mut said := done
+
+	# `asked` is every buffer this round has an answer for — published, or found not to be in
+	# a program containing `path`. `said` is the published half alone, because that is what
+	# decides who a later check may speak for and this is what decides who is still to ask.
+	mut asked := done
+
+	# a SNAPSHOT, because the loop body hands `s` on by reference — iterating the store while
+	# something else may reach it is the aliasing this copy exists to prevent
+	uris := ls_doc_uris(s)
+	for u in uris {
+		continue if ls_has_str(asked, u)
+
+		prog := ls_load(s, ls_uri_path(u), load)
+		if not ls_has_str(prog.paths, path) {
+			for v in uris {
+				if ls_has_str(prog.paths, ls_uri_path(v)) {
+					asked.append(v)
+				}
+			}
+			asked.append(u)
+			continue
+		}
+
+		for p in ls_publish_report(ls_check_program(s, u, prog, said, false)) {
+			said.append(p)
+			asked.append(p)
+		}
+		asked.append(u)
+	}
+}
+
+# ls_publish_report sends one check's answer — a frame per open buffer it spoke for — and
+# answers with those buffers' uris, which is what says who is already spoken for.
+fn ls_publish_report(rep: Report) -> list[str] {
+	mut i := 0
+	for i < rep.uris.len() {
+		ls_send(ls_notification("textDocument/publishDiagnostics", ls_diagnostics_params(rep.uris[i], rep.diags[i])))
+		i = i + 1
+	}
+	return rep.uris
+}
+
+# ls_load is the program `path` belongs to as the EDITOR holds it, or an EMPTY one where the
+# loader raised. It is for the answers that are a view rather than a verdict — which files a
+# program contains, a hover, a quick fix: a refusal inside `load` is a finding `ls_check`
+# publishes with the sentence it raised, and a caller that repeated it would say the same thing
+# twice in two places. What they do instead is answer with less.
+fn ls_load(s: Server, path: str, load: fn (str, list[str], list[str]) -> Program) -> Program {
+	res := guard {
+		load(path, ls_doc_paths(s), ls_doc_texts(s))
+	}
+	return match res {
+		Either.Left(p)  => p
+		Either.Right(_) => program([], [], [], [], [], [])
+	}
 }
 
 fn ls_diagnostics_params(uri: str, ds: list[json.Val]) -> json.Val {
@@ -439,10 +583,30 @@ fn ls_diagnostics_params(uri: str, ds: list[json.Val]) -> json.Val {
 # EVERY CHECK REPLACES THE SESSION'S NAME INDEX: dropped first, and stored again only by a walk
 # that reached its end — so a buffer that stops lexing, loading or lowering answers `definition`
 # with null until one that does, rather than with the positions of a program it no longer is.
-fn ls_check(mut &s: Server, path: str, text: str, load: fn (str, str) -> Program) -> list[json.Val] {
+#
+# IT ANSWERS FOR EVERY OPEN BUFFER THE PROGRAM CONTAINS, not for `uri` alone — minus the ones
+# `said` names, which an earlier check of this round already published. The walk found what it
+# found about every file at once; publishing only this one and reading the rest from disk on
+# their own next keystroke is what left an open `b.zg` showing findings about an `a.zg` nobody
+# has any more.
+#
+# A failure BEFORE the walk speaks for ONE buffer: the one whose text failed. A buffer that
+# will not lex is its own finding, and so is the file an aborting load names — which is why
+# that is published in the buffer the place belongs to rather than in this one. The others are
+# left exactly as they were: a program with a file missing from it can only say things about
+# the rest that are not true.
+#
+# `subject` is whether this is the check the round is FOR. Only that one touches the session's
+# name index, so a dependant checked afterwards cannot answer `definition` from a program the
+# cursor is not in.
+fn ls_check(mut &s: Server, uri: str, load: fn (str, list[str], list[str]) -> Program, said: list[str], subject: bool) -> Report {
+	path := ls_uri_path(uri)
+	text := ls_doc_text(s, uri)
 	mut out: list[json.Val] = []
-	s.nx = zerg.no_index()
-	s.has_nx = false
+	if subject {
+		s.nx = zerg.no_index()
+		s.has_nx = false
+	}
 
 	# ONCE, for every finding this check will publish — see `the buffer, split once`
 	lines := ls_lines(text)
@@ -451,7 +615,7 @@ fn ls_check(mut &s: Server, path: str, text: str, load: fn (str, str) -> Program
 		for d in lex {
 			out.append(ls_diagnostic(lines, d, 1))
 		}
-		return out
+		return Report([uri], [out])
 	}
 
 	# LOADING can abort too, and that was this server's first real bug: a refusal the
@@ -459,21 +623,54 @@ fn ls_check(mut &s: Server, path: str, text: str, load: fn (str, str) -> Program
 	# back was read as "nothing to check", and the editor showed a clean buffer for a file
 	# the compiler will not build. An abort here is a finding, not an absence.
 	res := guard {
-		load(path, text)
+		load(path, ls_doc_paths(s), ls_doc_texts(s))
 	}
 	lerr := match res {
 		Either.Left(_)  => ""
 		Either.Right(e) => e.message()
 	}
-	if lerr != "" {
-		out.append(ls_abort_diag(path, lines, lerr))
-		return out
-	}
+	return ls_abort_report(s, uri, lerr) if lerr != ""
+
 	prog := match res {
 		Either.Left(p)  => p
 		Either.Right(_) => program([], [], [], [], [], [])
 	}
-	return out if prog.srcs.len() == 0
+	return ls_check_program(s, uri, prog, said, subject)
+}
+
+# ls_abort_report is an abort published in the buffer it is ABOUT. The sentence names a place,
+# and where that place is a file the editor has open, that buffer is the one the finding
+# belongs in — a lex error in `lib.zg` is `lib.zg`'s to show, whichever buffer was being typed
+# in when the load went looking for it. Where it names no open buffer it lands at the top of
+# the buffer that asked, with its `-->` line intact, which is then the only thing saying where
+# to look.
+#
+# Nothing else is published: the buffers of a program that would not load are left as they
+# were rather than re-checked against a program missing a file.
+fn ls_abort_report(s: Server, uri: str, msg: str) -> Report {
+	owner := ls_abort_owner(s, uri, msg)
+	one := [ls_abort_diag(ls_uri_path(owner), ls_lines(ls_doc_text(s, owner)), msg)]
+	return Report([owner], [one])
+}
+
+# ls_abort_owner is the open buffer the abort's place names, and `uri` when it names none.
+fn ls_abort_owner(s: Server, uri: str, msg: str) -> str {
+	at := ls_abort_place(msg)
+	return uri if not at.ok
+
+	for d in s.docs {
+		return d.uri if ls_uri_path(d.uri) == at.path
+	}
+	return uri
+}
+
+# ls_check_program is that check from the program onwards, and it is a function of its own
+# because the answer to "is this buffer stale" IS a loaded program: a dependant is found by
+# loading it, and walking it again to check it would be paying the loader twice for one
+# question.
+fn ls_check_program(mut &s: Server, uri: str, prog: Program, said: list[str], subject: bool) -> Report {
+	none: list[json.Val] = []
+	return Report([uri], [none]) if prog.srcs.len() == 0
 
 	# THE WHOLE PROGRAM, not the buffer alone. A file that imports another module is checked
 	# against that module or every name it borrowed reads as undefined — which is a server
@@ -506,23 +703,23 @@ fn ls_check(mut &s: Server, path: str, text: str, load: fn (str, str) -> Program
 		Either.Right(e) => e.message()
 	}
 
-	# An ABORT is a refusal or a parse error, raised as a sentence. Where that sentence names
-	# a place in this buffer the finding is published there, and where it names none it
-	# lands at the top of the file — ls_abort_diag says which.
-	if err != "" {
-		out.append(ls_abort_diag(path, lines, err))
-		return out
-	}
-	ls_nx_utf16(nx, prog.paths, prog.srcs)
-	s.nx = nx
-	s.has_nx = true
+	# An ABORT is a refusal or a parse error, raised as a sentence naming a place, and it is
+	# published in the buffer that place belongs to — ls_abort_report says which.
+	return ls_abort_report(s, uri, err) if err != ""
 
-	for d in ds {
-		if d.path == path {
-			out.append(ls_diagnostic(lines, d, 1))
-		}
+	if subject {
+		ls_nx_utf16(nx, prog.paths, prog.srcs)
+		s.nx = nx
+		s.has_nx = true
 	}
 
+	# AND THE FINDINGS PARTITIONED BY FILE. Each open buffer of this program gets the findings
+	# that name it: the errors this walk raised about that file, and after them its lint
+	# findings. The file a finding names is read through `derive_origin`, because a tree a
+	# decorator expanded is walked at `<derive:FILE>` and its findings are FILE's to show —
+	# compared against the buffer's own path they matched nothing and were dropped, which is an
+	# editor silent about a finding `zerg build` prints.
+	#
 	# EVERY LINT FINDING, AS `zerg lint` REPORTS IT. It used to be `lint_conversions` — the
 	# L5xx family alone — which meant the server had a private answer to "what does the
 	# linter say about this file": every rule `lint_merged` runs over the tree was missing,
@@ -530,9 +727,65 @@ fn ls_check(mut &s: Server, path: str, text: str, load: fn (str, str) -> Program
 	# applied a second time here. `check_and_lint` answers with the rules `lint_program` runs,
 	# and guards the tree rules itself, so a raise among them costs the lint half and not the
 	# check.
-	for f in lints {
-		if f.path == path {
-			out.append(ls_diagnostic_at(lines, f.line, f.col, f.code, f.msg, ls_severity(f.sev)))
+	#
+	# The pass is per BUFFER over the findings rather than per finding into buckets, because
+	# the buffers are the few — an editor holds a handful open — and a list read twice is
+	# cheaper than a table of lists written once.
+	mut uris: list[str] = []
+	mut each: list[list[json.Val]] = []
+	for u in ls_answered_for(s, prog.paths, uri, said) {
+		p := ls_uri_path(u)
+		lines := ls_lines(ls_doc_text(s, u))
+		mut one: list[json.Val] = []
+		for d in ds {
+			if zerg.derive_origin(d.path) == p {
+				one.append(ls_finding(d.path, ls_extent_span(lines, d.line, d.col, d.end_line, d.end_col), d.code, d.msg, 1))
+			}
+		}
+		for f in lints {
+			if zerg.derive_origin(f.path) == p {
+				one.append(ls_finding(f.path, ls_word_span(lines, f.line, f.col), f.code, f.msg, ls_severity(f.sev)))
+			}
+		}
+		uris.append(u)
+		each.append(one)
+	}
+	return Report(uris, each)
+}
+
+# ls_finding is one finding as a diagnostic, and the one thing it decides is WHERE.
+#
+# A finding the walk raised in a file carries that file's line and column, and it is drawn
+# there. A finding raised in a tree the compiler WROTE — `<derive:FILE>` — carries a place in
+# that tree, which is a line of text nobody has: drawn in FILE's buffer it would underline
+# whatever happens to sit at that line. So it lands at the top of the file instead, with its
+# whole sentence, for the reason an abort with no place in this buffer does: the one thing
+# known about where it belongs is that it is not a place in what the reader is looking at.
+fn ls_finding(path: str, at: Span, code: str, msg: str, severity: int) -> json.Val {
+	return ls_diagnostic_over(at, code, msg, severity) if zerg.derive_origin(path) == path
+
+	return ls_diagnostic_over(Span(0, 0, 0, 0), code, msg, severity)
+}
+
+# ls_answered_for is the open buffers one check speaks for: the one that was checked, first,
+# and then every other the program CONTAINS and this round has not already published. Which
+# those are is the loader's answer — the paths it walked to — and not a guess from a name or a
+# directory.
+#
+# A BUFFER IS PUBLISHED ONCE PER ROUND, and which check speaks for it is decided by the round's
+# subject: a buffer in the subject's program is answered from that program, and any other from
+# its own. Both programs are a real answer for a file that belongs to both, and the difference
+# is visible — one holds the buffer being typed in and the other does not — so letting the last
+# check of the round overwrite the first made a file's diagnostics depend on which sibling the
+# cursor happened to be in.
+fn ls_answered_for(s: Server, paths: list[str], uri: str, said: list[str]) -> list[str] {
+	mut out: list[str] = [uri]
+	for d in s.docs {
+		continue if d.uri == uri
+		continue if ls_has_str(said, d.uri)
+
+		if ls_has_str(paths, ls_uri_path(d.uri)) {
+			out.append(d.uri)
 		}
 	}
 	return out
@@ -564,22 +817,43 @@ fn ls_severity(sev: str) -> int {
 # stays at the top with its trailer intact: the sentence is then the only thing that says
 # where to look. In this buffer the trailer is dropped, because the range now says it.
 fn ls_abort_diag(path: str, lines: list[list[byte]], msg: str) -> json.Val {
+	at := ls_abort_place(msg)
+	return ls_whole_file_diag(msg) if not at.ok or at.path != path
+
+	sentence := ls_slice_str(bytearray(msg), 0, at.cut)
+	return ls_diagnostic_at(lines, at.line, at.col, zerg.rule_msg_code(sentence), zerg.rule_msg_says(sentence), 1)
+}
+
+# Place is the trailer read back out of an abort: the file, the line and the column it names,
+# and where the sentence ends — `ok` false when the last line is not exactly that layout.
+struct Place {
+	pub ok: bool
+	pub path: str
+	pub line: int
+	pub col: int
+	pub cut: int
+}
+
+# ls_abort_place is the ONE reader of that layout. Two questions are asked of it — which buffer
+# the finding belongs in, and where in that buffer to draw it — and a second copy of the parse
+# is how the two would come to disagree about the same sentence.
+fn ls_abort_place(msg: str) -> Place {
+	none := Place(false, "", 0, 0, 0)
 	b := bytearray(msg)
 	nl := ls_last_byte(b, b'\n', b.len() - 1)
-	return ls_whole_file_diag(msg) if nl < 0 or not ls_starts_with(ls_slice_str(b, nl + 1, b.len()), "  --> ")
+	return none if nl < 0 or not ls_starts_with(ls_slice_str(b, nl + 1, b.len()), "  --> ")
 
 	# the path starts past `\n  --> `, and runs to the second-last colon: a path may hold one
 	at := nl + 7
 	c2 := ls_last_byte(b, b':', b.len() - 1)
 	c1 := ls_last_byte(b, b':', c2 - 1)
-	return ls_whole_file_diag(msg) if c1 <= at
+	return none if c1 <= at
 
 	line := ls_digits(ls_slice_str(b, c1 + 1, c2))
 	col := ls_digits(ls_slice_str(b, c2 + 1, b.len()))
-	return ls_whole_file_diag(msg) if line < 1 or col < 1 or ls_slice_str(b, at, c1) != path
+	return none if line < 1 or col < 1
 
-	sentence := ls_slice_str(b, 0, nl)
-	return ls_diagnostic_at(lines, line, col, zerg.rule_msg_code(sentence), zerg.rule_msg_says(sentence), 1)
+	return Place(true, ls_slice_str(b, at, c1), line, col, nl)
 }
 
 # ls_last_byte is the index of the last `c` at or before `upto`, and -1 when there is none.
@@ -803,7 +1077,7 @@ fn ls_references_result(s: Server, params: json.Val) -> json.Val {
 # It answers only for a buffer the client has OPEN, because that buffer is the text the
 # document is read from. A position in a file this session never saw is a question about a
 # program it cannot see.
-fn ls_hover_result(s: Server, params: json.Val, load: fn (str, str) -> Program) -> json.Val {
+fn ls_hover_result(s: Server, params: json.Val, load: fn (str, list[str], list[str]) -> Program) -> json.Val {
 	u := ls_use_under(s, params)
 	return json.null() if u < 0
 
@@ -829,7 +1103,7 @@ fn ls_hover_result(s: Server, params: json.Val, load: fn (str, str) -> Program) 
 	}
 	mut prog := program([], [], [], [], [], [])
 	if fetch {
-		prog = ls_loaded(load, path, text)
+		prog = ls_load(s, path, load)
 	}
 
 	# A SHARED use — a generic body's `x.n` at two types — may be any of several declarations,
@@ -904,20 +1178,6 @@ fn ls_hover_src(nx: zerg.NameIndex, d: int, path: str, text: str, prog: Program)
 
 fn ls_hover_fence(sig: str) -> str {
 	return f"```zerg\n{sig}\n```"
-}
-
-# ls_loaded is the program a buffer belongs to, or an EMPTY one where the loader raised. It is
-# for the answers that are a view rather than a verdict: a refusal inside `load` is a finding
-# `ls_check` publishes with the sentence it raised, and a hover or a code action that repeated
-# it would say the same thing twice in two places. What they do instead is answer with less.
-fn ls_loaded(load: fn (str, str) -> Program, path: str, text: str) -> Program {
-	res := guard {
-		load(path, text)
-	}
-	return match res {
-		Either.Left(p)  => p
-		Either.Right(_) => program([], [], [], [], [], [])
-	}
 }
 
 fn ls_location(path: str, line: int, col: int, len: int) -> json.Val {
@@ -1120,14 +1380,14 @@ fn ls_is_word(c: byte) -> bool {
 # It re-lints rather than remembering what was published. Phase 1 re-checks the whole program per
 # keystroke anyway, so a cache would be a second answer to a question already being asked — and
 # a stale one exactly when the buffer has just changed, which is when a fix is asked for.
-fn ls_code_action_result(s: Server, uri: str, req: Span, load: fn (str, str) -> Program) -> json.Val {
+fn ls_code_action_result(s: Server, uri: str, req: Span, load: fn (str, list[str], list[str]) -> Program) -> json.Val {
 	mut out: list[json.Val] = []
 	return json.of_list(out) if not ls_has_doc(s, uri)
 
 	text := ls_doc_text(s, uri)
 	path := ls_uri_path(uri)
 	lines := ls_lines(text)
-	for d in ls_fixable(path, text, load) {
+	for d in ls_fixable(s, path, load) {
 		sp := ls_word_span(lines, d.line, d.col)
 		if ls_span_touches(sp, req) {
 			out.append(ls_quick_fix(uri, sp, d))
@@ -1139,9 +1399,9 @@ fn ls_code_action_result(s: Server, uri: str, req: Span, load: fn (str, str) -> 
 # ls_fixable is every finding on THIS file that carries a fix. A finding without one is not an
 # action: an editor that offers "quick fix" and then does nothing is worse than an editor that
 # offers nothing, because the user learns the menu lies.
-fn ls_fixable(path: str, text: str, load: fn (str, str) -> Program) -> list[zerg.Diag] {
+fn ls_fixable(s: Server, path: str, load: fn (str, list[str], list[str]) -> Program) -> list[zerg.Diag] {
 	mut out: list[zerg.Diag] = []
-	prog := ls_loaded(load, path, text)
+	prog := ls_load(s, path, load)
 	return out if prog.srcs.len() == 0
 
 	lints := match guard {

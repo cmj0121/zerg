@@ -845,14 +845,18 @@ pub fn path_tail(path: str) -> str {
 
 fn load_into(file: str, root_dir: str, mut &seen: list[str], mut &srcs: list[str], mut &paths: list[str], mut &mods: list[str], mut &res: Res) {
 	mut root: list[str] = []
-	load_with(file, file, [file], root_dir, seen, root, srcs, paths, mods, res, Buffer("", ""))
+	load_with(file, file, [file], root_dir, seen, root, srcs, paths, mods, res, Buffer([], []))
 }
 
-# Buffer is the one source the loader must NOT read from disk: the file a language server
-# holds unsaved. An empty path means there is none, which is every build.
+# Buffer is the sources the loader must NOT read from disk: the files a language server holds
+# unsaved, each path beside its text. An empty table means there are none, which is every build.
+#
+# EVERY open buffer and not just the one that was typed in, because the program is the one the
+# EDITOR holds: an unsaved change in `a.zg` is part of the program `b.zg` is checked against,
+# and a loader that read `a.zg` from disk would check `b.zg` against a program nobody has.
 struct Buffer {
-	pub path: str
-	pub text: str
+	pub paths: list[str]
+	pub texts: list[str]
 }
 
 # load_with is load_into with that substitution, and it is the same function because the
@@ -879,10 +883,29 @@ fn load_with(file: str, mod: str, own: list[str], root_dir: str, mut &seen: list
 	}
 	seen.append(file)
 	src := buffer_src(file, buf)
-	if buf.path == "" {
+	if buf.paths.len() == 0 {
 		diag.lex_check(src, file)
-	} else if zerg.lex_diags(src, file).len() > 0 {
-		return
+	} else {
+		# A SOURCE THAT DOES NOT LEX IS NOT A PROGRAM, and this loader has to say so rather
+		# than walk on without it. It used to SKIP such a file, which was invisible while only
+		# the buffer being typed in was substituted — that one is lexed before the load and
+		# never reaches here. With every open buffer standing in for its file it became a
+		# fabrication: an unterminated string in `lib.zg` dropped `lib.zg` out of the program,
+		# and the open `main.zg` that imports it was told `E3084 module `lib` has no `greet``
+		# — a sentence about correct code, which is the one failure that makes a person turn
+		# the server off.
+		#
+		# So it RAISES, as a source that does not PARSE already did: one behaviour for a file
+		# the front end cannot read, carrying the first lexical finding and its place. The
+		# command line does not come through here — it reports and exits (`lex_check`) — and
+		# the server turns the raise into that file's diagnostic, published in that file's
+		# buffer, leaving the buffers that import it as they were instead of re-checking them
+		# against a program with a hole in it.
+		lex := zerg.lex_diags(src, file)
+		if lex.len() > 0 {
+			d := lex[0]
+			raise f"{d.code} {d.msg}\n{zerg.place_line(file, d.line, d.col)}"
+		}
 	}
 
 	# the pathed scan, so a refusal this parse raises names `file` rather than a line of
@@ -944,6 +967,11 @@ fn load_with(file: str, mod: str, own: list[str], root_dir: str, mut &seen: list
 # load_buffer loads the whole program an unsaved buffer belongs to. It is what `zerg lsp`
 # hands the server, and the question it answers is NOT the one a command line asks.
 #
+# `path` is the buffer whose program is wanted, and `bpaths`/`btexts` are EVERY buffer the
+# editor is holding — `path` among them. The program is the one the editor holds, so each of
+# those texts stands in for its file wherever this walk reaches it, and only a file nobody has
+# open is read from disk.
+#
 # `zerg build f.zg` is told what the program is: `f.zg` is the entry, its directory is the
 # second source root, and everything else follows. An editor says only WHICH FILE IS OPEN,
 # and that file is usually not an entry at all — it is one member of a directory module,
@@ -993,8 +1021,8 @@ fn load_with(file: str, mod: str, own: list[str], root_dir: str, mut &seen: list
 # deliberately the one path here that is NOT guarded: a buffer that does not parse must
 # raise, because `ls_check` turns that raise into the diagnostic that says so, and a
 # swallowed one is a server showing a clean file the compiler will not build.
-pub fn load_buffer(path: str, text: str, mut &srcs: list[str], mut &paths: list[str], mut &mods: list[str], mut &res: Res) {
-	buf := Buffer(path, text)
+pub fn load_buffer(path: str, bpaths: list[str], btexts: list[str], mut &srcs: list[str], mut &paths: list[str], mut &mods: list[str], mut &res: Res) {
+	buf := Buffer(bpaths, btexts)
 	mut dir := layout.dir_of(layout.dir_of(path))
 	for dir != "" and dir != "." {
 		here := entry_files(dir)
@@ -1103,6 +1131,10 @@ pub fn read_source(path: str) -> str {
 
 # buffer_src is the text of `file`: what the server is holding for it, or what the disk has.
 fn buffer_src(file: str, buf: Buffer) -> str {
-	return buf.text if file == buf.path
+	mut i := 0
+	for i < buf.paths.len() {
+		return buf.texts[i] if buf.paths[i] == file
+		i = i + 1
+	}
 	return read_source(file)
 }

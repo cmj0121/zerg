@@ -19811,12 +19811,20 @@ pub fn emit_unit_at(prog: ast.File, own: ast.File, ms: Mods, mut &diags: list[as
 # to say — and building it first cost the caller a gigabyte for a string nobody read.
 pub fn lint_conversions(srcs: list[str], paths: list[str], ms: Mods) -> list[ast.Diag] {
 	mut diags: list[ast.Diag] = []
+	return lint_conversions_of(merge_files_at(srcs, paths), ms, diags)
+}
+
+# lint_conversions_of is lint_conversions over a program the caller has already merged, and
+# it hands back the walk's FINDINGS too, in `diags` — so one walk answers both the check and
+# the L5xx family (lint.check_and_lint says why that matters). Asking for the notes changes no
+# finding: `want_lints` is read by `chk_note_at` alone, so `diags` is what check_files_diag
+# reports, and `make check-equal` holds that walk to the build's.
+pub fn lint_conversions_of(f: ast.File, ms: Mods, mut &diags: list[ast.Diag]) -> list[ast.Diag] {
 	mut lints: list[ast.Diag] = []
 
 	# MERGED ONCE and handed over twice. emit_unit's own comment records that re-parsing the
 	# whole program per unit "is where its time went", and two calls in one argument list is
 	# that mistake at its smallest.
-	f := merge_files_at(srcs, paths)
 	c_emit_unit(f, f, ms, true, true, true, diags, lints)
 
 	return [] if diags.len() > 0

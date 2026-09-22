@@ -58,7 +58,7 @@ on disk. The module owns the protocol; the driver owns the filesystem.
 | ------------------------------------------------------------- | -------------------------------------------------- |
 | `initialize` / `shutdown` / `exit`                            | the session                                        |
 | `textDocument/didOpen` · `didChange` · `didSave` · `didClose` | full-text sync                                     |
-| `textDocument/publishDiagnostics`                             | `lex_diags`, `check_files_diag`, `lint_program`    |
+| `textDocument/publishDiagnostics`                             | `lex_diags`, `check_and_lint`                      |
 | `textDocument/formatting`                                     | `fmt_src_off` — the same function `zerg fmt` calls |
 | `textDocument/codeAction`                                     | the `fix` a finding carries, as one quick fix      |
 | `textDocument/documentSymbol`                                 | `file_symbols` — the parsed file's declarations    |
@@ -102,9 +102,9 @@ local to a directory says whether it is one: `src/stdlib/` is a directory of `.z
 file is a module of its own, and `examples/` is a directory of twenty separate programs. A directory
 is a module when something imports it, and only a walk from an entry knows that.
 
-**Four severities, from two places.** An **error** — LSP severity 1 — is what `check_files_diag`
+**Four severities, from two places.** An **error** — LSP severity 1 — is what the check walk
 reports and `zerg build` refuses over, and it is the only severity the compiler's own diagnostics
-use. Everything else on the wire came from `lint_program`, and every one of those is a **legal**
+use. Everything else on the wire came from the linter's rules, and every one of those is a **legal**
 program that builds, so none of them is ever an error: a server that paints a working program red
 teaches its user to ignore red. The linter's own three levels are ordered — a **finding** fails
 `zerg lint`, a **warning** prints and exits 0, an **info** never gates anything
@@ -386,7 +386,7 @@ further than any string rule and swallowed the closing quote. Neither a token pr
 ## Keeping the editor honest
 
 Everything else in this tree is held to the compiler by **calling** it — `zerg fmt` is the formatter,
-and the server asks `check_files_diag` rather than checking anything itself, so there is no second copy
+and the server asks `check_and_lint` rather than checking anything itself, so there is no second copy
 to drift. The editor files are the one exception and cannot be anything else: vim highlights from a
 keyword list written in vimscript, and nvim has to know how to indent before any Zerg tool has run.
 
@@ -467,7 +467,12 @@ roughly 25 MB per check — 0.32 GB after one, 2.0 GB after twenty, 2.9 GB after
 of several hundred would reach the same ceiling by a slower road. That is retention per check and not
 the accumulation this closed; it is a different measurement and a different fix.
 
-**The time half is not.** Five seconds is still a check per keystroke-batch, and roughly half of it
-is that `publishDiagnostics` walks the program TWICE — once for the errors and once for the `L5xx`
-conversion lints, which `lint_program` asks for with its own merge and its own walk. One walk
-answering both is the next thing to measure. A debounce would hide what is left.
+**The second walk is gone too.** Roughly half of a check's time was that `publishDiagnostics` walked
+the program TWICE — once for the errors, and once more inside `lint_program` for the `L5xx` conversion
+lints, with its own merge and its own walk. `check_and_lint` answers both from one walk: the notes are
+kept on the way past, which changes no error, so the errors are still the ones `check-equal` holds to
+the build's. `make lsp` measures what one check of a file under `src/compiler/` costs against
+`zerg build --emit check` on the same program — one walk by definition — in instructions retired,
+from outside the process: 2.07 walks before, 1.09 after, and it fails at one and a half. Instructions
+rather than seconds, because the seconds depend on the machine and which core the process lands on,
+and the instructions are the work. A debounce would hide what is left.

@@ -44,14 +44,14 @@ module 擁有協定;driver 擁有檔案系統。
 
 ## 已經做好的
 
-| 請求                                                          | 由誰回答                                        |
-| ------------------------------------------------------------- | ----------------------------------------------- |
-| `initialize` / `shutdown` / `exit`                            | session 本身                                    |
-| `textDocument/didOpen` · `didChange` · `didSave` · `didClose` | 全文同步                                        |
-| `textDocument/publishDiagnostics`                             | `lex_diags`、`check_files_diag`、`lint_program` |
-| `textDocument/formatting`                                     | `fmt_src_off`——`zerg fmt` 呼叫的同一個函式      |
-| `textDocument/codeAction`                                     | 一則 finding 帶著的 `fix`,包成一個 quick fix    |
-| `textDocument/documentSymbol`                                 | `file_symbols`——被剖析的檔案裡的宣告            |
+| 請求                                                          | 由誰回答                                     |
+| ------------------------------------------------------------- | -------------------------------------------- |
+| `initialize` / `shutdown` / `exit`                            | session 本身                                 |
+| `textDocument/didOpen` · `didChange` · `didSave` · `didClose` | 全文同步                                     |
+| `textDocument/publishDiagnostics`                             | `lex_diags`、`check_and_lint`                |
+| `textDocument/formatting`                                     | `fmt_src_off`——`zerg fmt` 呼叫的同一個函式   |
+| `textDocument/codeAction`                                     | 一則 finding 帶著的 `fix`,包成一個 quick fix |
+| `textDocument/documentSymbol`                                 | `file_symbols`——被剖析的檔案裡的宣告         |
 
 `initialize` 宣告**三項 capability**——`documentFormattingProvider`、`codeActionProvider`、
 `documentSymbolProvider`——外加 `textDocumentSync: 1`。其他每一個請求都會收到 **method-not-found
@@ -81,8 +81,8 @@ module 與測試檔正好都是這一類。
 `src/stdlib/` 是一個目錄,裡面每個 `.zg` 檔各自是一個 module;`examples/` 是一個目錄,裡面是二十個各自獨立的程式。一
 個目錄是在有東西 import 它的時候才成為 module,而只有從 entry 走一遍才知道這件事。
 
-**四種嚴重度,來自兩個地方。** **error**——LSP 嚴重度 1——是 `check_files_diag` 回報、`zerg build` 會為此拒絕的東西,
-也是編譯器自己的診斷唯一會用的嚴重度。線上其餘的一切都來自 `lint_program`,而那些每一個都是能 build 的**合法**程式,
+**四種嚴重度,來自兩個地方。** **error**——LSP 嚴重度 1——是檢查走訪回報、`zerg build` 會為此拒絕的東西,
+也是編譯器自己的診斷唯一會用的嚴重度。線上其餘的一切都來自 linter 的規則,而那些每一個都是能 build 的**合法**程式,
 所以沒有一個會是 error:把一個能動的程式塗成紅色的 server,是在教它的使用者忽略紅色。linter 自己的三個層級是有序的
 ——**finding** 會讓 `zerg lint` 失敗,**warning** 印出來但 exit 0,**info** 永遠不 gate 任何東西
 ([linter 的嚴重度](lint.zh-TW.md))——所以它們就照這個順序落在 LSP 剩下的三個上:
@@ -310,7 +310,7 @@ gate 都弱,而且弱的方式跟 `fmt-corpus` 一模一樣:它只看得見某�
 ## 讓編輯器保持誠實
 
 這棵樹裡其他每一樣東西都是靠**呼叫**編譯器來held 住的——`zerg fmt` 就是 formatter,而 server 是去問
-`check_files_diag`,不是自己檢查任何東西,所以沒有第二份會漂移的副本。編輯器檔案是唯一的例外,而且沒辦法不是:vim 是
+`check_and_lint`,不是自己檢查任何東西,所以沒有第二份會漂移的副本。編輯器檔案是唯一的例外,而且沒辦法不是:vim 是
 從一份寫在 vimscript 裡的關鍵字清單上色的,而 nvim 必須在任何 Zerg 工具跑起來之前就知道怎麼縮排。
 
 所以那些事實有自己的 gate——`make editor-align`:
@@ -375,6 +375,9 @@ session 裡:改之前在第三次檢查就被 SIGKILL,改之後六十次都發�
 次 2.9 GB——所以幾百次的 session 還是會用比較慢的路走到同一個上限。那是每次檢查的殘留,不是這次關掉的那種累積;它是另
 一個量測,也是另一個修法。
 
-**時間那一半還沒。** 五秒對一次按鍵批次的檢查來說仍然是慢的,而其中大約一半是因為 `publishDiagnostics` 把程式走了
-**兩趟**——一趟拿錯誤,一趟拿 `L5xx` conversion lint,而 `lint_program` 是用自己的 merge、自己的走訪去問的。用一趟走
-訪同時回答兩者,是下一件該量的事。debounce 只會把剩下的藏起來。
+**第二趟走訪也沒了。** 一次檢查的時間大約有一半,是因為 `publishDiagnostics` 把程式走了**兩趟**——一趟拿錯誤,
+再在 `lint_program` 裡用自己的 merge、自己的走訪拿 `L5xx` conversion lint。`check_and_lint` 用一趟走訪同時回答兩者:
+notes 在走過時順手留下,這不改變任何錯誤,所以錯誤仍然是 `check-equal` 拿去對 build 的那些。`make lsp` 從行程
+外面量 `src/compiler/` 底下一個檔案的一次檢查成本,對照同一個程式的 `zerg build --emit check`——定義上就是一趟——
+單位是 instructions retired:之前 2.07 趟,之後 1.09 趟,到一趟半就失敗。用 instructions 而不是秒數,因為秒數取決
+於機器和行程落在哪一顆核心上,instructions 才是工作量。debounce 只會把剩下的藏起來。

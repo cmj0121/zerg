@@ -13638,12 +13638,28 @@ fn c_match(mut &em: Emitter, scrut: ast.Expr, arms: list[ast.Arm], sb: Subst) ->
 	c_check_arm_pats(em, arms, st)
 	c_check_exhaustive(em, arms, st)
 	s := c_expr(em, scrut, sb)
-	return c_arms(em, arms, 0, s, st, sb) if c_is_lvalue(scrut) or c_is_unknown(st)
+	return c_arms(em, arms, 0, s, st, sb) if c_is_borrow(scrut) or c_is_unknown(st)
 
 	tag := strconv.to_string(em.op_n, 10)
 	em.op_n = em.op_n + 1
 	tmp := "zgt_ms" + tag
-	return f"({{ {c_type(st)} {tmp} = {s}; {c_arms(em, arms, 0, tmp, st, sb)}; }})"
+	body := c_arms(em, arms, 0, tmp, st, sb)
+
+	# THE TEMP IS THIS EXPRESSION'S, SO IT IS GIVEN BACK. Nothing else names it, and every arm
+	# answers with a value of its own — a payload it binds is copied out on the way — so once
+	# the answer is in hand the scrutinee has nobody left. `match c_unmark(t) { … }` in
+	# c_is_fn leaked the Ty it matched on every call, which the language server paid on every
+	# check (#23). A match whose answer is void has nothing to hold across the drop, and one
+	# whose answer is untyped has no declaration to hold it in; both are left as they were.
+	mut rt := ast.Ty.TUnknown
+	if c_needs_copy(em, st) and arms.len() > 0 {
+		rt = c_infer_arm_body(em, arms[0], st)
+	}
+	if not c_is_nil_ty(rt) and not c_is_unknown(rt) {
+		rv := c_tmp(em, "zgt_mr")
+		return f"({{ {c_type(st)} {tmp} = {s}; __auto_type {rv} = {body}; {c_drop_stmt(em, st, tmp)} {rv}; }})"
+	}
+	return f"({{ {c_type(st)} {tmp} = {s}; {body}; }})"
 }
 
 # c_check_arm_pats refuses a constructor pattern that names a variant the subject cannot be.

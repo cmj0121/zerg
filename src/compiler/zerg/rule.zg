@@ -600,3 +600,47 @@ pub fn rule_code(r: Rule) -> str {
 pub fn rule_msg(r: Rule, msg: str) -> str {
 	return f"{rule_code(r)} {msg}"
 }
+
+# rule_msg_code and rule_msg_says READ ONE BACK APART: the code a message opens with, and the
+# sentence after it. They live beside the packer because they are its inverse, and a format
+# spelled in two modules is a format that drifts — the reader would go on accepting what the
+# writer had stopped emitting, and nothing would say so.
+#
+# The one caller is the language server, which has to undo this packing because a `raise`
+# carries a string and LSP wants the code in a field of its own. A message that does NOT open
+# with a code answers "" and is left whole: `internal:` is one, and so is every sentence a
+# rule never named. Nothing looser is read — an `E` and then digits and then a space is
+# exactly what rule_code and rule_msg emit, so guessing past it would invent a rule the
+# catalogue does not carry.
+pub fn rule_msg_code(msg: str) -> str {
+	b := bytearray(msg)
+	return "" if b.len() < 3 or b[0] != b'E'
+
+	mut i := 1
+	for i < b.len() and b[i] >= b'0' and b[i] <= b'9' {
+		i = i + 1
+	}
+	return "" if i < 2 or i >= b.len() or b[i] != b' '
+
+	mut out: list[byte] = []
+	mut j := 0
+	for j < i {
+		out.append(b[j])
+		j = j + 1
+	}
+	return str(out)
+}
+
+pub fn rule_msg_says(msg: str) -> str {
+	n := bytearray(rule_msg_code(msg)).len()
+	return msg if n == 0
+
+	b := bytearray(msg)
+	mut out: list[byte] = []
+	mut i := n + 1
+	for i < b.len() {
+		out.append(b[i])
+		i = i + 1
+	}
+	return str(out)
+}

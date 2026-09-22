@@ -91,7 +91,7 @@ stdlib-test:                    # the standard library's own suites, and a floor
 #
 # The floor is `stdlib-test`'s, for its reason: `zerg test` over a tree with no test in it exits
 # with a status of its own, but a suite deleted beside one that stays still passes.
-COMPILER_TEST_MIN ?= 24
+COMPILER_TEST_MIN ?= 32
 
 compiler-test:                  # the compiler library's own suites, and a floor under them
 	$(MAKE) build

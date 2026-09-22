@@ -608,7 +608,7 @@ struct LWhere {
 # every step and the place is exact without any rule tracking it.
 fn lint_step(w: LWhere, s: ast.Stmt) -> LWhere {
 	return match s {
-		Stmt.SAt(l, c) => LWhere(w.path, l, c, w.fname)
+		Stmt.SAt(l, c, _, _) => LWhere(w.path, l, c, w.fname)
 		_ => w
 	}
 }
@@ -1313,10 +1313,10 @@ pub fn walk_body(body: list[ast.Stmt], mut &ids: list[str], mut &calls: list[str
 			# arm above and the block arm above that were each added after that happened.
 			# Naming every variant makes the next Stmt a type error rather than a third
 			# false finding.
-			Stmt.SBreak    => skip()
-			Stmt.SContinue => skip()
-			Stmt.SNop      => skip()
-			Stmt.SAt(_, _) => skip()
+			Stmt.SBreak          => skip()
+			Stmt.SContinue       => skip()
+			Stmt.SNop            => skip()
+			Stmt.SAt(_, _, _, _) => skip()
 		}
 	}
 }

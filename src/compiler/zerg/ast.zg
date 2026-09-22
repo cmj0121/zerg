@@ -520,8 +520,14 @@ pub enum Stmt {
 	SIfLet(str, Expr, list[Stmt], bool, list[Stmt], int, int)
 
 	# SAt is a POSITION MARKER, not a statement anybody wrote: the parser puts one before
-	# each statement of a block, carrying that statement's line and column. It emits
-	# nothing.
+	# each statement of a block, carrying that statement's EXTENT — where it begins, and
+	# where it ends. It emits nothing.
+	#
+	# The end is the parser's own: the column one past the last byte of the last token the
+	# statement consumed. It is carried because a start alone is a point, and an editor asked
+	# to show a finding at a point underlines whatever it guesses stands there — which for
+	# this compiler was the word at the column, a second reading of the source by a layer that
+	# has none (docs/tooling/lsp.md).
 	#
 	# It exists because a diagnostic without a line number is half a diagnostic, and the
 	# alternative — a span field on all 21 Stmt variants and all 28 Expr ones — is 239
@@ -532,7 +538,7 @@ pub enum Stmt {
 	#
 	# It goes BEFORE its statement, never after, so the last element of a block is still
 	# the statement whose value the block answers.
-	SAt(int, int)
+	SAt(int, int, int, int)
 }
 
 # SelArm is one select arm. `op` is 0 recv, 1 send, 3 default — the same order
@@ -684,7 +690,30 @@ pub struct FnDecl {
 	# declaration begins, because a diagnostic already reports there.
 	pub name_line: int
 	pub name_col: int
+
+	# end_line / end_col are where the declaration FINISHES — the column one past the last
+	# byte of its closing token, which for a function is the `}` of its body and for a spec's
+	# requirement is the end of its signature. See `decl-extent` below for why every
+	# declaration carries one.
+	pub end_line: int
+	pub end_col: int
 }
+
+# --- decl-extent --------------------------------------------------------------------------
+#
+# EVERY DECLARATION CARRIES WHERE IT ENDS, beside where it begins and where its name is
+# written. The three answer three different questions and no two of them are the same span: a
+# diagnostic points at the start, a reader jumping to a name wants the name token, and an
+# outline wants the whole construct — LSP asks for the last two by name (`range` and
+# `selectionRange`) and a client that is given one range twice cannot say which declaration a
+# cursor is inside.
+#
+# IT COMES FROM THE PARSER and from nowhere else. The alternative on offer was the NEXT
+# declaration's start, which is a guess that is wrong wherever a blank line, a comment or a
+# closing brace stands between two declarations — and wrong in the direction that matters,
+# since it swallows text belonging to nobody. The parser is standing on the closing token when
+# it builds the declaration, so the real end costs reading the token it has just consumed
+# (`p_ended`).
 
 # Diag is one finding about an ill-formed program: what is wrong, and where. It is a
 # VALUE rather than an abort because a compiler that dies on the first mistake makes a
@@ -697,6 +726,19 @@ pub struct Diag {
 	pub path: str
 	pub line: int
 	pub col: int
+
+	# `end_line` / `end_col` are where the CONSTRUCT this finding is about finishes — the
+	# statement the SAt marker carried, read off the emitter's marker with the start. They are
+	# 0 where the reporting channel carried no extent (chk_at_place, a lint note, a driver's
+	# own finding), which is honest in the one way that matters: a reader of this struct can
+	# tell a span from a point, where a start copied into both ends could not.
+	#
+	# It is here because a place with no width is a place somebody downstream has to guess a
+	# width for, and the one downstream reader — the language server — was guessing it by
+	# re-reading the source for the word standing at the column. That is a second reading of
+	# the program by a layer that has none (docs/tooling/lsp.md).
+	pub end_line: int
+	pub end_col: int
 
 	# `code` is the rule's IDENTITY — `E3006`, `L502` — and it is a field rather than the first
 	# word of `msg` because everything that reads a diagnostic wants it separately: the
@@ -722,7 +764,7 @@ pub struct Diag {
 # so the constructor lives here, beside the struct, as an ordinary function a caller in
 # another module can reach.
 pub fn diag_at(path: str, line: int, col: int, code: rule.Rule, msg: str) -> Diag {
-	return Diag(path, line, col, rule.rule_code(code), msg, "")
+	return Diag(path, line, col, 0, 0, rule.rule_code(code), msg, "")
 }
 
 # place_line is the `  --> file:line:col` trailer every diagnostic of this compiler carries
@@ -772,6 +814,11 @@ pub struct FieldDef {
 	# where the field's NAME was written — `line` / `col` are the `pub` in front of it, if any
 	pub name_line: int
 	pub name_col: int
+
+	# where the field ends — see `decl-extent`. A field is a CHILD in an outline, and a child
+	# owes the same range its parent does.
+	pub end_line: int
+	pub end_col: int
 }
 
 # StructDecl is a struct type declaration: its name and fields in source order.
@@ -807,6 +854,10 @@ pub struct StructDecl {
 	# where the struct's NAME was written — see FnDecl.name_line
 	pub name_line: int
 	pub name_col: int
+
+	# where the declaration ends — see `decl-extent`
+	pub end_line: int
+	pub end_col: int
 }
 
 # TypeDecl is `type X = Y` — a NEW, DISTINCT type, not a transparent alias
@@ -827,6 +878,10 @@ pub struct TypeDecl {
 	# where the type's NAME was written — see FnDecl.name_line
 	pub name_line: int
 	pub name_col: int
+
+	# where the declaration ends — see `decl-extent`
+	pub end_line: int
+	pub end_col: int
 }
 
 # VariantDef is one enum variant: its name, its payload field types (empty for a tag-only
@@ -851,6 +906,11 @@ pub struct VariantDef {
 	pub discr: Expr
 	pub line: int
 	pub col: int
+
+	# where the variant ends — see `decl-extent`. A variant is a CHILD in an outline, for the
+	# reason a field is.
+	pub end_line: int
+	pub end_col: int
 }
 
 # EnumDecl is an enum type declaration: its name and variants in source (tag) order.
@@ -878,6 +938,10 @@ pub struct EnumDecl {
 	# where the enum's NAME was written — see FnDecl.name_line
 	pub name_line: int
 	pub name_col: int
+
+	# where the declaration ends — see `decl-extent`
+	pub end_line: int
+	pub end_col: int
 }
 
 # File is a whole parsed source file: its import paths, and its struct, enum, and
@@ -923,6 +987,10 @@ pub struct SpecDecl {
 	# where the spec's NAME was written — see FnDecl.name_line
 	pub name_line: int
 	pub name_col: int
+
+	# where the declaration ends — see `decl-extent`
+	pub end_line: int
+	pub end_col: int
 }
 
 # spec_key is how a spec-with-arguments is named in ONE string — `Into[Meters]`, or just `Eq`
@@ -965,6 +1033,10 @@ pub struct ImplDecl {
 	pub path: str
 	pub line: int
 	pub col: int
+
+	# where the `impl` block ends — see `decl-extent`
+	pub end_line: int
+	pub end_col: int
 }
 
 # ConstDecl is one module-level binding — `const K := 1`, `pub COUNT := 3`, or a plain
@@ -1010,6 +1082,10 @@ pub struct ConstDecl {
 	# a `pub`, a `const` or a `mut` in front of it
 	pub name_line: int
 	pub name_col: int
+
+	# where the binding ends — see `decl-extent`
+	pub end_line: int
+	pub end_col: int
 }
 
 # ImportDecl is one import SPEC — `pub? "path" (as name)?` (GRAMMAR#import-spec). It is a
@@ -1051,6 +1127,11 @@ pub struct ImportDecl {
 	# the path's last segment INSIDE the string, which is the text that segment's name is
 	pub name_line: int
 	pub name_col: int
+
+	# where this one import SPEC ends — see `decl-extent`. Not where the `import ( … )` group
+	# ends: the group is a list of declarations and each of them is its own.
+	pub end_line: int
+	pub end_col: int
 }
 
 pub struct File {
@@ -1604,6 +1685,17 @@ pub fn last_segment(path: str) -> str {
 # `kind` is a WORD and not an LSP number. The number is protocol, the server owns protocol,
 # and a compiler that spelled `12` here would be a compiler that had to be edited when the
 # protocol changed.
+#
+# THREE PLACES, not one, because an outline asks three questions of a declaration and they
+# have three different answers: `line` / `col` are where the construct BEGINS, `end_line` /
+# `end_col` where it finishes, and `name_line` / `name_col` the name token a reader means when
+# they say "go there". LSP asks for the first pair as a `range` and the last as a
+# `selectionRange`; a server handed one range twice cannot tell a client which declaration a
+# cursor is inside, which is the whole of what the outer range is for.
+#
+# `kids` are the declarations WRITTEN INSIDE this one — a struct's fields, an enum's variants.
+# They are a list of Symbols rather than a flat list with a parent column because that is what
+# they are: an outline is a tree, and a shape that says so cannot be read back wrong.
 pub struct Symbol {
 	pub name: str
 	pub kind: str
@@ -1611,6 +1703,11 @@ pub struct Symbol {
 	pub is_pub: bool
 	pub line: int
 	pub col: int
+	pub end_line: int
+	pub end_col: int
+	pub name_line: int
+	pub name_col: int
+	pub kids: list[Symbol]
 }
 
 # file_symbols is every top-level declaration of one parsed file, in SOURCE order.
@@ -1624,37 +1721,41 @@ pub struct Symbol {
 # anything, so it is not a symbol; an import IS one, because a reader looking for where a
 # borrowed name comes from is asking exactly the question an outline answers.
 pub fn file_symbols(f: File) -> list[Symbol] {
+	mut none: list[Symbol] = []
 	mut out: list[Symbol] = []
 	for im in f.imports {
 		# the BINDING is the symbol, since that is the name written in the code below it; the
 		# path it resolves to is the detail
-		out.append(Symbol(im.name, "import", im.path, false, im.line, im.col))
+		out.append(Symbol(im.name, "import", im.path, false, im.line, im.col, im.end_line, im.end_col, im.name_line, im.name_col, none))
 	}
 	for s in f.structs {
-		out.append(Symbol(s.name, "struct", "", false, s.line, s.col))
+		out.append(Symbol(s.name, "struct", "", s.is_pub, s.line, s.col, s.end_line, s.end_col, s.name_line, s.name_col, field_symbols(s.fields)))
 	}
 	for e in f.enums {
-		out.append(Symbol(e.name, "enum", "", false, e.line, e.col))
+		out.append(Symbol(e.name, "enum", "", e.is_pub, e.line, e.col, e.end_line, e.end_col, e.name_line, e.name_col, variant_symbols(e.variants)))
 	}
 	for sp in f.specs {
-		out.append(Symbol(sp.name, "spec", "", false, sp.line, sp.col))
+		out.append(Symbol(sp.name, "spec", "", sp.is_pub, sp.line, sp.col, sp.end_line, sp.end_col, sp.name_line, sp.name_col, none))
 	}
 	for ip in f.impls {
 		# an impl has no name of its own — it is a PAIRING, and the pairing is what a reader
 		# scans an outline for. An inherent `impl T { … }` is not here at all: the parser
 		# flattens it into ordinary functions carrying a receiver, and each of those is a
 		# symbol below.
-		out.append(Symbol(f"{ip.on} for {ip.target}", "impl", "", false, ip.line, ip.col))
+		#
+		# The pairing is also not a token anybody wrote, so the NAME is the whole head: there
+		# is nothing shorter for a reader to be taken to.
+		out.append(Symbol(f"{ip.on} for {ip.target}", "impl", "", false, ip.line, ip.col, ip.end_line, ip.end_col, ip.line, ip.col, none))
 	}
 	for t in f.types {
-		out.append(Symbol(t.name, "type", ty_name(t.under), t.is_pub, t.line, t.col))
+		out.append(Symbol(t.name, "type", ty_name(t.under), t.is_pub, t.line, t.col, t.end_line, t.end_col, t.name_line, t.name_col, none))
 	}
 	for c in f.consts {
 		mut detail := ""
 		if c.has_ty {
 			detail = ty_name(c.ty)
 		}
-		out.append(Symbol(c.name, "const", detail, c.is_pub, c.line, c.col))
+		out.append(Symbol(c.name, "const", detail, c.is_pub, c.line, c.col, c.end_line, c.end_col, c.name_line, c.name_col, none))
 	}
 	for fd in f.fns {
 		# a method and a free function are different things to a reader scanning a list of
@@ -1663,17 +1764,52 @@ pub fn file_symbols(f: File) -> list[Symbol] {
 		if fd.recv != "" {
 			kind = "method"
 		}
-		out.append(Symbol(fd.name, kind, fd.recv, fd.is_pub, fd.line, fd.col))
+		out.append(Symbol(fd.name, kind, fd.recv, fd.is_pub, fd.line, fd.col, fd.end_line, fd.end_col, fd.name_line, fd.name_col, none))
 	}
 	return sym_sorted(out)
 }
 
+# field_symbols and variant_symbols are the CHILDREN of a struct and of an enum — the two
+# declarations of this language that hold others.
+#
+# They are not sorted. A field list and a variant list are parsed in source order and stay in
+# it, and a variant's order is its tag, so re-deciding it here would be an outline disagreeing
+# with the program about which variant is first.
+fn field_symbols(fields: list[FieldDef]) -> list[Symbol] {
+	mut none: list[Symbol] = []
+	mut out: list[Symbol] = []
+	for fd in fields {
+		out.append(Symbol(fd.name, "field", ty_name(fd.ty), fd.is_pub, fd.line, fd.col, fd.end_line, fd.end_col, fd.name_line, fd.name_col, none))
+	}
+	return out
+}
+
+fn variant_symbols(variants: list[VariantDef]) -> list[Symbol] {
+	mut none: list[Symbol] = []
+	mut out: list[Symbol] = []
+	for v in variants {
+		# a variant's PAYLOAD is its detail, the way a field's type is: `Some(int)` is what a
+		# reader scanning the outline needs in order to know which arm binds anything
+		mut detail := ""
+		if v.fields.len() > 0 {
+			detail = f"({ty_names(v.fields)})"
+		}
+		out.append(Symbol(v.name, "variant", detail, false, v.line, v.col, v.end_line, v.end_col, v.line, v.col, none))
+	}
+	return out
+}
+
 # sym_sorted puts the symbols in source order.
 #
-# Insertion sort by adjacent swaps: a file's top level is tens of declarations, not thousands,
-# and what matters about the algorithm is that it is STABLE — two declarations reported at
-# the same position keep the order they were collected in rather than trading places between
-# runs, which an outline would show as a list that reshuffles itself.
+# Insertion sort by adjacent swaps. What matters about it is that it is STABLE — two
+# declarations reported at the same position keep the order they were collected in rather than
+# trading places between runs, which an outline would show as a list that reshuffles itself.
+#
+# WHAT KEEPS IT CHEAP IS THE GROUPING, not the count: this compiler's own largest source has
+# over a thousand top-level declarations, so "a file's top level is small" is not a premise
+# this tree supports. They are collected one KIND at a time and each kind is already in source
+# order, so the only inversions are between groups — a file that alternated two kinds all the
+# way down would be the quadratic case, and nothing here would notice.
 fn sym_sorted(syms: list[Symbol]) -> list[Symbol] {
 	mut out: list[Symbol] = []
 	for s in syms {
@@ -2146,7 +2282,7 @@ pub fn stmt_exprs(s: Stmt) -> list[Expr] {
 		Stmt.SDel(_, _, _) => stmt_exprs_none()
 		Stmt.SClose(ch, _) => [ch]
 		Stmt.SIfLet(_, v, _, _, _, _, _) => [v]
-		Stmt.SAt(_, _) => stmt_exprs_none()
+		Stmt.SAt(_, _, _, _) => stmt_exprs_none()
 	}
 }
 
@@ -2179,7 +2315,7 @@ pub fn stmt_kids(s: Stmt) -> list[Stmt] {
 		Stmt.SDel(_, _, _) => stmt_kids_none()
 		Stmt.SClose(_, _) => stmt_kids_none()
 		Stmt.SIfLet(_, _, tb, _, eb, _, _) => stmt_kids_cat(tb, eb)
-		Stmt.SAt(_, _) => stmt_kids_none()
+		Stmt.SAt(_, _, _, _) => stmt_kids_none()
 	}
 }
 

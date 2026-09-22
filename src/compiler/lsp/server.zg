@@ -269,7 +269,7 @@ fn ls_handle(mut &s: Server, body: str, load: fn (str, str) -> Program) {
 		uri := json.as_str(json.walk3(msg, "params", "textDocument", "uri"))
 		ls_reply(id, ls_code_action_result(s, uri, ls_req_span(params), load))
 	} else if method == "textDocument/documentSymbol" {
-		ls_reply(id, ls_document_symbol_result(s, json.as_str(json.walk3(msg, "params", "textDocument", "uri"))))
+		ls_document_symbol_reply(s, id, json.as_str(json.walk3(msg, "params", "textDocument", "uri")))
 	} else if method == "textDocument/definition" {
 		ls_reply(id, ls_definition_result(s, json.get(msg, "params")))
 	} else if method == "textDocument/references" {
@@ -437,10 +437,13 @@ fn ls_check(mut &s: Server, path: str, text: str, load: fn (str, str) -> Program
 	mut out: list[json.Val] = []
 	s.nx = zerg.no_index()
 	s.has_nx = false
+
+	# ONCE, for every finding this check will publish — see `the buffer, split once`
+	lines := ls_lines(text)
 	lex := zerg.lex_diags(text, path)
 	if lex.len() > 0 {
 		for d in lex {
-			out.append(ls_diagnostic(text, d, 1))
+			out.append(ls_diagnostic(lines, d, 1))
 		}
 		return out
 	}
@@ -457,7 +460,7 @@ fn ls_check(mut &s: Server, path: str, text: str, load: fn (str, str) -> Program
 		Either.Right(e) => e.message()
 	}
 	if lerr != "" {
-		out.append(ls_abort_diag(path, text, lerr))
+		out.append(ls_abort_diag(path, lines, lerr))
 		return out
 	}
 	prog := match res {
@@ -501,7 +504,7 @@ fn ls_check(mut &s: Server, path: str, text: str, load: fn (str, str) -> Program
 	# a place in this buffer the finding is published there, and where it names none it
 	# lands at the top of the file — ls_abort_diag says which.
 	if err != "" {
-		out.append(ls_abort_diag(path, text, err))
+		out.append(ls_abort_diag(path, lines, err))
 		return out
 	}
 	ls_nx_utf16(nx, prog.paths, prog.srcs)
@@ -510,7 +513,7 @@ fn ls_check(mut &s: Server, path: str, text: str, load: fn (str, str) -> Program
 
 	for d in ds {
 		if d.path == path {
-			out.append(ls_diagnostic(text, d, 1))
+			out.append(ls_diagnostic(lines, d, 1))
 		}
 	}
 
@@ -523,7 +526,7 @@ fn ls_check(mut &s: Server, path: str, text: str, load: fn (str, str) -> Program
 	# check.
 	for f in lints {
 		if f.path == path {
-			out.append(ls_diagnostic_at(text, f.line, f.col, f.code, f.msg, ls_severity(f.sev)))
+			out.append(ls_diagnostic_at(lines, f.line, f.col, f.code, f.msg, ls_severity(f.sev)))
 		}
 	}
 	return out
@@ -554,7 +557,7 @@ fn ls_severity(sev: str) -> int {
 # A place in ANOTHER file of the program is not this buffer's to underline, so that finding
 # stays at the top with its trailer intact: the sentence is then the only thing that says
 # where to look. In this buffer the trailer is dropped, because the range now says it.
-fn ls_abort_diag(path: str, text: str, msg: str) -> json.Val {
+fn ls_abort_diag(path: str, lines: list[list[byte]], msg: str) -> json.Val {
 	b := bytearray(msg)
 	nl := ls_last_byte(b, b'\n', b.len() - 1)
 	return ls_whole_file_diag(msg) if nl < 0 or not ls_starts_with(ls_slice_str(b, nl + 1, b.len()), "  --> ")
@@ -569,7 +572,8 @@ fn ls_abort_diag(path: str, text: str, msg: str) -> json.Val {
 	col := ls_digits(ls_slice_str(b, c2 + 1, b.len()))
 	return ls_whole_file_diag(msg) if line < 1 or col < 1 or ls_slice_str(b, at, c1) != path
 
-	return ls_diagnostic_at(text, line, col, "", ls_slice_str(b, 0, nl), 1)
+	sentence := ls_slice_str(b, 0, nl)
+	return ls_diagnostic_at(lines, line, col, zerg.rule_msg_code(sentence), zerg.rule_msg_says(sentence), 1)
 }
 
 # ls_last_byte is the index of the last `c` at or before `upto`, and -1 when there is none.
@@ -596,24 +600,37 @@ fn ls_digits(s: str) -> int {
 # file. A zero-width range and not the word there: an underline drawn under `fn` says the
 # `fn` is wrong, and the one thing known about this finding is that it has no place in this buffer.
 fn ls_whole_file_diag(msg: str) -> json.Val {
-	mut fs: list[json.Field] = []
-	json.put(fs, "range", ls_range_of(0, 0, 0, 0))
-	json.put_int(fs, "severity", 1)
-	json.put_str(fs, "source", "zerg")
-	json.put_str(fs, "message", msg)
-	return json.of_obj(fs)
+	return ls_diagnostic_over(Span(0, 0, 0, 0), zerg.rule_msg_code(msg), zerg.rule_msg_says(msg), 1)
 }
 
-fn ls_diagnostic(text: str, d: zerg.Diag, severity: int) -> json.Val {
-	return ls_diagnostic_at(text, d.line, d.col, d.code, d.msg, severity)
+# A finding that carries an EXTENT is published over it — the statement the compiler named —
+# and one that carries only a place still gets the word standing there. The two are told apart
+# and not blended: a `Diag` whose end is 0 came through a channel with no extent (ast.zg,
+# `Diag.end_line`), and publishing the start twice would be a point wearing the name of a span.
+fn ls_diagnostic(lines: list[list[byte]], d: zerg.Diag, severity: int) -> json.Val {
+	return ls_diagnostic_over(ls_extent_span(lines, d.line, d.col, d.end_line, d.end_col), d.code, d.msg, severity)
 }
 
 # `code` is LSP's `Diagnostic.code`, and it is sent because the compiler has it as data
 # (`Diag.code`). A finding without one omits the field rather than sending an empty string,
 # which an editor would show as a rule named "".
-fn ls_diagnostic_at(text: str, line: int, col: int, code: str, msg: str, severity: int) -> json.Val {
+fn ls_diagnostic_at(lines: list[list[byte]], line: int, col: int, code: str, msg: str, severity: int) -> json.Val {
+	return ls_diagnostic_over(ls_word_span(lines, line, col), code, msg, severity)
+}
+
+# ls_extent_span is THE rule about an end, in one place: where the compiler gave one it is the
+# range, and where it did not the range is the word at the place. It was written twice — once
+# for a finding and once for an outline entry — which is one rule with two homes and a change
+# to it that lands in one of them.
+fn ls_extent_span(lines: list[list[byte]], line: int, col: int, el: int, ec: int) -> Span {
+	return ls_word_span(lines, line, col) if el < line
+
+	return ls_span_at(lines, line, col, el, ec)
+}
+
+fn ls_diagnostic_over(sp: Span, code: str, msg: str, severity: int) -> json.Val {
 	mut fs: list[json.Field] = []
-	json.put(fs, "range", ls_word_range(text, line, col))
+	json.put(fs, "range", ls_span_range(sp))
 	json.put_int(fs, "severity", severity)
 	json.put_str(fs, "source", "zerg")
 	if code != "" {
@@ -799,14 +816,58 @@ fn ls_path_uri(path: str) -> str {
 # this tree's own sources are full of em-dashes. Every diagnostic after one on the same line
 # would land one column early per byte of it.
 #
-# The range, because the compiler has no END positions to give. Inventing a field on `Diag`
-# and filling it with the start would be a span that is really a point wearing a second
-# name; deriving the end from the SOURCE is honest about which one knows. So the range is
-# the word at the position — an identifier if there is one there, one character otherwise.
+# The range, because a place is not one. WHERE THE COMPILER HAS AN END it is used and nothing
+# is derived: a checked finding reports at the SAt marker, the marker carries the statement's
+# extent, and the underline is that statement. Where it has none — a rule that knows a place
+# of its own, a lint note about one literal, an abort whose place was read back out of its own
+# sentence — the range is the word at the position, an identifier if there is one there and
+# one character otherwise. That is a guess, it is made HERE rather than written into `Diag` as
+# though the compiler had said it, and it is the reason the two are told apart at all.
 
-fn ls_word_range(text: str, line: int, col: int) -> json.Val {
-	sp := ls_word_span(text, line, col)
+fn ls_span_range(sp: Span) -> json.Val {
 	return ls_range_of(sp.sl, sp.sc, sp.el, sp.ec)
+}
+
+# --- the buffer, split once -----------------------------------------------------------------
+#
+# EVERY POSITION QUESTION HERE IS ASKED OF A LINE, so the buffer is split into its lines ONCE
+# per request and the lines are what travel. What stood here instead was `ls_line_at`, which
+# walked the WHOLE buffer to find one line and allocated every line on the way past — and the
+# answers ask for a lot of lines: three per outline entry, three per child, one per finding.
+#
+# That made an outline quadratic in the file. `documentSymbol` on this compiler's largest
+# source took 103 SECONDS, against 8.7 for the check of the same buffer, and a client polling
+# the outline on change would have wedged the session for minutes. Splitting once is the whole
+# fix; nothing below it changed.
+fn ls_lines(text: str) -> list[list[byte]] {
+	mut out: list[list[byte]] = []
+	mut cur: list[byte] = []
+	for c in bytearray(text) {
+		if c == b'\n' {
+			out.append(cur)
+			cur = []
+		} else if c != b'\r' {
+			cur.append(c)
+		}
+	}
+	out.append(cur)
+	return out
+}
+
+# ls_line is one of them, and the empty line for an index the buffer does not have — which a
+# place past the end of a buffer mid-edit is.
+fn ls_line(lines: list[list[byte]], idx: int) -> list[byte] {
+	return lines[idx] if idx >= 0 and idx < lines.len()
+
+	mut none: list[byte] = []
+	return none
+}
+
+# ls_span_at is a span the COMPILER gave — two 1-based byte places — in LSP's units. Each end
+# is counted against ITS OWN line, because a column is bytes into one line and the two ends of
+# a declaration are rarely on the same one.
+fn ls_span_at(lines: list[list[byte]], line: int, col: int, el: int, ec: int) -> Span {
+	return Span(line - 1, ls_utf16_col(ls_line(lines, line - 1), col - 1), el - 1, ls_utf16_col(ls_line(lines, el - 1), ec - 1))
 }
 
 # Span is a range as four numbers rather than as JSON. A code action needs to COMPARE one
@@ -820,9 +881,8 @@ struct Span {
 	pub ec: int
 }
 
-fn ls_word_span(text: str, line: int, col: int) -> Span {
-	ln := ls_line_at(text, line - 1)
-	b := bytearray(ln)
+fn ls_word_span(lines: list[list[byte]], line: int, col: int) -> Span {
+	b := ls_line(lines, line - 1)
 	mut lo := col - 1
 	if lo < 0 {
 		lo = 0
@@ -900,15 +960,6 @@ fn ls_is_word(c: byte) -> bool {
 	return c == b'_' or (c >= b'a' and c <= b'z') or (c >= b'A' and c <= b'Z') or (c >= b'0' and c <= b'9')
 }
 
-fn ls_line_at(text: str, idx: int) -> str {
-	mut i := 0
-	for line in ls_split_lines(text) {
-		return line if i == idx
-		i = i + 1
-	}
-	return ""
-}
-
 # --- formatting ------------------------------------------------------------------------
 
 # ls_code_action_result answers `textDocument/codeAction`: the quick fixes for the findings the
@@ -930,8 +981,9 @@ fn ls_code_action_result(s: Server, uri: str, req: Span, load: fn (str, str) -> 
 
 	text := ls_doc_text(s, uri)
 	path := ls_uri_path(uri)
+	lines := ls_lines(text)
 	for d in ls_fixable(path, text, load) {
-		sp := ls_word_span(text, d.line, d.col)
+		sp := ls_word_span(lines, d.line, d.col)
 		if ls_span_touches(sp, req) {
 			out.append(ls_quick_fix(uri, sp, d))
 		}
@@ -971,7 +1023,7 @@ fn ls_fixable(path: str, text: str, load: fn (str, str) -> Program) -> list[zerg
 # the underline the user is looking at rather than to the line in general.
 fn ls_quick_fix(uri: str, sp: Span, d: zerg.Diag) -> json.Val {
 	mut ed: list[json.Field] = []
-	json.put(ed, "range", ls_range_of(sp.sl, sp.sc, sp.el, sp.ec))
+	json.put(ed, "range", ls_span_range(sp))
 	json.put_str(ed, "newText", d.fix)
 
 	mut changes: list[json.Field] = []
@@ -980,24 +1032,19 @@ fn ls_quick_fix(uri: str, sp: Span, d: zerg.Diag) -> json.Val {
 	mut wsp: list[json.Field] = []
 	json.put(wsp, "changes", json.of_obj(changes))
 
-	mut diag: list[json.Field] = []
-	json.put(diag, "range", ls_range_of(sp.sl, sp.sc, sp.el, sp.ec))
-	json.put_int(diag, "severity", 3)
-	json.put_str(diag, "source", "zerg")
-	if d.code != "" {
-		json.put_str(diag, "code", d.code)
-	}
-	json.put_str(diag, "message", d.msg)
-
 	mut fs: list[json.Field] = []
 	json.put_str(fs, "title", f"Write `{d.fix}`")
 	json.put_str(fs, "kind", "quickfix")
-	json.put(fs, "diagnostics", json.of_list([json.of_obj(diag)]))
+	json.put(fs, "diagnostics", json.of_list([ls_diagnostic_over(sp, d.code, d.msg, 3)]))
 	json.put(fs, "edit", json.of_obj(wsp))
 	return json.of_obj(fs)
 }
 
-# ls_document_symbol_result answers `textDocument/documentSymbol`: the outline of one buffer.
+# ls_document_symbol_reply answers `textDocument/documentSymbol`: the outline of one buffer.
+#
+# It SENDS the answer rather than returning one, which every other handler here does, because
+# the two answers it has are of different kinds: an outline, and the request failing. Only the
+# caller of ls_error_reply can say the second.
 #
 # The compiler decides WHAT a symbol is — `zerg.file_symbols` walks the parsed file and answers
 # with a name, a kind and a place — and this decides how it travels. That split is the same one
@@ -1009,40 +1056,63 @@ fn ls_quick_fix(uri: str, sp: Span, d: zerg.Diag) -> json.Val {
 # An outline is the opposite question — what is IN this file — and pulling in the imports would
 # fill it with declarations the reader cannot see on screen.
 #
-# A parse that ABORTS answers with nothing rather than with an error. A buffer mid-edit does not
-# parse, an outline is a view and not a verdict, and the diagnostic that says the buffer is
-# broken has already been published by the check that runs on every keystroke.
-fn ls_document_symbol_result(s: Server, uri: str) -> json.Val {
+# A PARSE THAT ABORTS IS SAID, not answered around. It used to come back as an empty list,
+# which is the outline of a file that declares nothing — so an editor showing a buffer whose
+# last keystroke broke the parse emptied its outline pane and said why nowhere, and a server
+# that had crashed on the request looked exactly the same.
+#
+# What it answers instead is the request FAILING, with the compiler's own sentence as the
+# message: RequestFailed (-32803) is the protocol's way of saying a well-formed request cannot
+# be answered right now, and it is the one answer that leaves a client free to keep showing the
+# outline it already has. The check that runs on the same keystroke publishes the sentence as a
+# diagnostic too — this is not a second finding, it is the outline declining rather than lying.
+fn ls_document_symbol_reply(s: Server, id: json.Val, uri: str) {
 	mut out: list[json.Val] = []
-	return json.of_list(out) if not ls_has_doc(s, uri)
+	if not ls_has_doc(s, uri) {
+		ls_reply(id, json.of_list(out))
+		return
+	}
 
 	text := ls_doc_text(s, uri)
 	path := ls_uri_path(uri)
-	syms := match guard {
-		zerg.file_symbols(zerg.parse_at(text, path))
+	mut syms: list[zerg.Symbol] = []
+	err := match guard {
+		syms = zerg.file_symbols(zerg.parse_at(text, path))
+		syms.len()
 	} {
-		Either.Left(ss) => ss
-		Either.Right(_) => []
+		Either.Left(_)  => ""
+		Either.Right(e) => e.message()
 	}
+	if err != "" {
+		ls_error_reply(id, -32803, err)
+		return
+	}
+
+	lines := ls_lines(text)
 	for sym in syms {
-		out.append(ls_document_symbol(text, sym))
+		out.append(ls_document_symbol(lines, sym))
 	}
-	return json.of_list(out)
+	ls_reply(id, json.of_list(out))
 }
 
 # ls_document_symbol is one entry, as LSP's `DocumentSymbol`.
 #
-# `range` and `selectionRange` are the SAME range, and it is the identifier's. The protocol
-# wants the first to span the whole declaration and the second to span just the name it is
-# selected by, and the compiler has no end position for either — the same gap the diagnostics
-# have, for the same reason. Equal ranges satisfy the one rule that matters (the selection is
-# inside the range) and mean a jump lands on the name, which is where a reader of an outline
-# wants to be. What they do not do is let a client highlight the declaration a cursor is in.
+# `range` and `selectionRange` ARE TWO DIFFERENT RANGES, which is what the protocol asks for:
+# the first spans the whole declaration and the second the name it is selected by. They used
+# to be one range — the word at the declaration's first column — because the compiler had no
+# end to give and a point wearing two names was the honest answer to that. It has one now
+# (ast.zg, `decl-extent`), so the outer range is the construct and a client can say which
+# declaration a cursor is inside; the inner one is the name token, so a jump still lands where
+# a reader of an outline wants to be.
+#
+# `children` are the declarations written INSIDE this one — a struct's fields, an enum's
+# variants — nested rather than listed beside their parent, which is the difference between an
+# outline and a list of names.
 #
 # `detail` is what the outline shows beside the name: the receiver of a method, the underlying
 # type of a `type`, the module path of an import. `pub` rides in front of it, because the one
 # thing a reader scanning a module's outline is looking for is what other modules can reach.
-fn ls_document_symbol(text: str, sym: zerg.Symbol) -> json.Val {
+fn ls_document_symbol(lines: list[list[byte]], sym: zerg.Symbol) -> json.Val {
 	mut detail := sym.detail
 	if sym.is_pub {
 		if detail == "" {
@@ -1052,16 +1122,39 @@ fn ls_document_symbol(text: str, sym: zerg.Symbol) -> json.Val {
 		}
 	}
 
-	r := ls_word_range(text, sym.line, sym.col)
 	mut fs: list[json.Field] = []
 	json.put_str(fs, "name", sym.name)
 	json.put_int(fs, "kind", ls_symbol_kind(sym.kind))
 	if detail != "" {
 		json.put_str(fs, "detail", detail)
 	}
-	json.put(fs, "range", r)
-	json.put(fs, "selectionRange", r)
+	json.put(fs, "range", ls_span_range(ls_decl_span(lines, sym)))
+	json.put(fs, "selectionRange", ls_span_range(ls_name_span(lines, sym)))
+	if sym.kids.len() > 0 {
+		mut kids: list[json.Val] = []
+		for k in sym.kids {
+			kids.append(ls_document_symbol(lines, k))
+		}
+		json.put(fs, "children", json.of_list(kids))
+	}
 	return json.of_obj(fs)
+}
+
+# ls_decl_span is the whole construct, and ls_name_span the name token inside it.
+#
+# EACH FALLS BACK TO THE WORD at the place it has, and neither invents one. A declaration
+# whose end the parser did not record — and a name the parser never wrote down, which is the
+# `init` the language declares rather than the author — is a place and nothing more, so it
+# answers what a place alone can: the word standing there. A selection outside its range is
+# the one thing the protocol forbids, and a word at the declaration's own first column is
+# inside it either way.
+fn ls_decl_span(lines: list[list[byte]], sym: zerg.Symbol) -> Span {
+	return ls_extent_span(lines, sym.line, sym.col, sym.end_line, sym.end_col)
+}
+
+fn ls_name_span(lines: list[list[byte]], sym: zerg.Symbol) -> Span {
+	return ls_word_span(lines, sym.line, sym.col) if sym.name_line < 1
+	return ls_word_span(lines, sym.name_line, sym.name_col)
 }
 
 # ls_symbol_kind maps the compiler's WORD onto LSP's number (SymbolKind, §Document Symbols).
@@ -1073,15 +1166,17 @@ fn ls_document_symbol(text: str, sym: zerg.Symbol) -> json.Val {
 # learned yet is a new declaration form, and an outline missing one entry's icon is a better
 # answer than an outline that is not sent.
 fn ls_symbol_kind(kind: str) -> int {
-	return 2 if kind == "import"  # Module
-	return 23 if kind == "struct" # Struct
-	return 10 if kind == "enum"   # Enum
-	return 11 if kind == "spec"   # Interface
-	return 5 if kind == "impl"    # Class
-	return 26 if kind == "type"   # TypeParameter
-	return 14 if kind == "const"  # Constant
-	return 12 if kind == "fn"     # Function
-	return 6 if kind == "method"  # Method
+	return 2 if kind == "import"   # Module
+	return 23 if kind == "struct"  # Struct
+	return 10 if kind == "enum"    # Enum
+	return 11 if kind == "spec"    # Interface
+	return 5 if kind == "impl"     # Class
+	return 26 if kind == "type"    # TypeParameter
+	return 14 if kind == "const"   # Constant
+	return 12 if kind == "fn"      # Function
+	return 6 if kind == "method"   # Method
+	return 8 if kind == "field"    # Field
+	return 22 if kind == "variant" # EnumMember
 	return 13
 }
 
@@ -1113,7 +1208,7 @@ fn ls_formatting_result(s: Server, uri: str) -> json.Val {
 	return json.of_list(edits) if out == text
 
 	mut fs: list[json.Field] = []
-	json.put(fs, "range", ls_whole_range(text))
+	json.put(fs, "range", ls_whole_range(ls_lines(text)))
 	json.put_str(fs, "newText", out)
 	edits.append(json.of_obj(fs))
 	return json.of_list(edits)
@@ -1122,12 +1217,12 @@ fn ls_formatting_result(s: Server, uri: str) -> json.Val {
 # ls_whole_range covers the document. The end is the real last position rather than a large
 # number a client is expected to clamp: a client that does not clamp appends instead of
 # replacing, and the file doubles.
-fn ls_whole_range(text: str) -> json.Val {
-	lines := ls_split_lines(text)
+fn ls_whole_range(lines: list[list[byte]]) -> json.Val {
 	n := lines.len()
 	return ls_range_of(0, 0, 0, 0) if n == 0
-	last := lines[n - 1]
-	return ls_range_of(0, 0, n - 1, ls_utf16_col(bytearray(last), bytearray(last).len()))
+
+	last := ls_line(lines, n - 1)
+	return ls_range_of(0, 0, n - 1, ls_utf16_col(last, last.len()))
 }
 
 # --- URIs ---------------------------------------------------------------------------------
@@ -1171,18 +1266,14 @@ fn ls_hex_of(c: byte) -> int {
 
 # --- text helpers ---------------------------------------------------------------------
 
+# ls_split_lines is ls_lines as TEXT, for the one reader that wants strings: the frame header,
+# which is a handful of short lines. It is a wrapper and not a second loop, because the two
+# rules in it — where a line ends, and that a `\r` is not part of one — are one rule.
 fn ls_split_lines(s: str) -> list[str] {
 	mut out: list[str] = []
-	mut cur: list[byte] = []
-	for c in bytearray(s) {
-		if c == b'\n' {
-			out.append(str(cur))
-			cur = []
-		} else if c != b'\r' {
-			cur.append(c)
-		}
+	for ln in ls_lines(s) {
+		out.append(str(ln))
 	}
-	out.append(str(cur))
 	return out
 }
 

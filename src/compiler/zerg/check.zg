@@ -74,7 +74,7 @@ import (
 	"./rule"
 )
 pub fn chk_at(mut &em: emit.Emitter, code: rule.Rule, msg: str) {
-	chk_at_place(em, em.at_path, em.at_line, em.at_col, code, msg)
+	chk_span(em, em.at_path, em.at_line, em.at_col, em.at_end_line, em.at_end_col, code, msg)
 }
 
 # chk_at_place is the same, for a rule that KNOWS its place rather than reading the marker
@@ -93,9 +93,21 @@ pub fn chk_at(mut &em: emit.Emitter, code: rule.Rule, msg: str) {
 # ONE statement, and a single statement-level place is the SAt marker's already-documented
 # grain (see the header above).
 pub fn chk_at_place(mut &em: emit.Emitter, path: str, line: int, col: int, code: rule.Rule, msg: str) {
+	chk_span(em, path, line, col, 0, 0, code, msg)
+}
+
+# chk_span is what both of them record through, and the one difference between them is the
+# EXTENT. A rule reporting at the marker gets the statement's, because the marker carries it;
+# a rule reporting through chk_at_place gets 0, which says THIS CHANNEL carries no extent —
+# not that the rule has none. Many of its callers hold a declaration node that now has one
+# (`ip.end_line`, `req.end_line`, …) and pass three values because that is what the signature
+# takes; widening those is a rule-by-rule change and each one moves an underline. What 0 must
+# not become is the start repeated into the end, which would be a point wearing a span's name
+# and would leave no way to tell the two apart.
+fn chk_span(mut &em: emit.Emitter, path: str, line: int, col: int, el: int, ec: int, code: rule.Rule, msg: str) {
 	return if chk_seen(em.diags, path, line, col, msg)
 
-	em.diags.append(ast.Diag(path, line, col, rule.rule_code(code), msg, ""))
+	em.diags.append(ast.Diag(path, line, col, el, ec, rule.rule_code(code), msg, ""))
 }
 
 # chk_seen is WHAT COUNTS AS THE SAME FINDING, and it is one function because it is one
@@ -493,9 +505,11 @@ pub fn chk_assoc_projections(mut &em: emit.Emitter, f: ast.File) {
 
 pub fn chk_ty_quals(mut &em: emit.Emitter, f: ast.File) {
 	for q in f.ty_quals {
+		# a qualifier is a place and not an extent, so the marker is posed with c_mark, which
+		# CLEARS the end — see emit.zg's `c_mark_to`, and the paragraph above it for why no
+		# writer here sets the fields itself
 		em.at_path = q.path
-		em.at_line = q.line
-		em.at_col = q.col
+		emit.c_mark(em, q.line, q.col)
 
 		# AN EMPTY `ns` IS A TYPE WRITTEN BARE, which the parser records for this rule alone:
 		# #57 makes the file the unit of naming, so a type position naming a SIBLING's type
@@ -658,7 +672,7 @@ fn chk_note_at(mut &em: emit.Emitter, line: int, col: int, code: str, msg: str, 
 
 	return if chk_seen(em.lints, em.at_path, line, col, msg)
 
-	em.lints.append(ast.Diag(em.at_path, line, col, code, msg, fix))
+	em.lints.append(ast.Diag(em.at_path, line, col, 0, 0, code, msg, fix))
 }
 
 # --- mutability ------------------------------------------------------------------
@@ -1327,7 +1341,7 @@ fn chk_super_impl(sp: ast.SpecDecl, ip: ast.ImplDecl, args: list[ast.Ty]) -> ast
 	for a in args {
 		out.append(emit.c_spec_subst(a, sp, ip))
 	}
-	return ast.ImplDecl(ip.on, out, ip.target, ip.tparams, ip.path, ip.line, ip.col)
+	return ast.ImplDecl(ip.on, out, ip.target, ip.tparams, ip.path, ip.line, ip.col, ip.end_line, ip.end_col)
 }
 
 # chk_impl_member finds what the impl supplies for one required member, and compares it.
@@ -3067,8 +3081,7 @@ pub fn chk_typedef(mut &em: emit.Emitter, td: ast.TypeDecl, f: ast.File) -> ast.
 		# name the last unit's. The finding below already carries `td`'s place explicitly; a
 		# refusal raised inside the funnel can only read it from here.
 		em.at_path = td.path
-		em.at_line = td.line
-		em.at_col = td.col
+		emit.c_mark(em, td.line, td.col)
 		emit.c_builtin_check(em, nm)
 
 		chk_at_place(em, td.path, td.line, td.col, rule.Rule.TypedefNamesNoType, f"`type {td.name} = {nm}` names no type — `{nm}` is not declared in this program")

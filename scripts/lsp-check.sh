@@ -1653,4 +1653,339 @@ then
 	echo "lsp-check: a long session climbs out of the band of one check"
 	exit 1
 fi
-echo "lsp-check: $ran buffers agree with the compiler, $outlined outlines are the parser's own, $members module members are checked against their module, formatting is fmt's answer, every protocol case holds, the dump carries the type parameters the outline cannot show, a check is one walk, a name answers with the declaration the compiler resolved it to, and a long session stays in the band of one check"
+
+# --- 10. the outline is a view of the program ----------------------------------------------
+#
+# Section 1 asks WHICH declarations the outline names, against the parser's own dump. This asks
+# what each entry SAYS about one: its children, and the two ranges LSP wants — `range` for the
+# whole construct and `selectionRange` for the name it is selected by. They used to be the same
+# range, the word at the declaration's first column, because the compiler had no end to give.
+#
+# The assertions are made by SLICING THE BUFFER with the range that came back and comparing the
+# text to what was written. A comparison against hand-written line and character numbers would
+# pass on a server that had the UTF-16 conversion backwards for the end — the numbers would be
+# the ones this script was told to expect — and the fixture is deliberately full of CJK for
+# exactly that reason.
+#
+# The same end is what a diagnostic underlines, so both halves are asked here of one buffer.
+if ! "$PY" - "$ZERG" "$tmp" <<'PYEOF'
+import json, os, re, subprocess, sys
+
+zerg, tmp = sys.argv[1], sys.argv[2]
+
+def frame(m):
+    b = json.dumps(m).encode()
+    return b"Content-Length: %d\r\n\r\n%s" % (len(b), b)
+
+def session(name, text):
+    path = os.path.join(tmp, name)
+    open(path, "w", encoding="utf-8").write(text)
+    uri = "file://" + os.path.abspath(path)
+    wire = b"".join(frame(m) for m in [
+        {"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {"capabilities": {}}},
+        {"jsonrpc": "2.0", "method": "textDocument/didOpen", "params": {
+            "textDocument": {"uri": uri, "languageId": "zerg", "version": 1, "text": text}}},
+        {"jsonrpc": "2.0", "id": 4, "method": "textDocument/documentSymbol",
+         "params": {"textDocument": {"uri": uri}}},
+        {"jsonrpc": "2.0", "method": "exit"},
+    ])
+    out = subprocess.run([zerg, "lsp"], input=wire, stdout=subprocess.PIPE,
+                         stderr=subprocess.DEVNULL, timeout=120).stdout
+    frames, i = [], 0
+    while i < len(out):
+        j = out.find(b"\r\n\r\n", i)
+        if j < 0:
+            break
+        n = None
+        for line in out[i:j].decode("ascii", "replace").split("\r\n"):
+            k, _, v = line.partition(":")
+            if k.strip().lower() == "content-length":
+                n = int(v.strip())
+        if n is None:
+            break
+        frames.append(json.loads(out[j + 4:j + 4 + n].decode("utf-8")))
+        i = j + 4 + n
+    reply = [f for f in frames if f.get("id") == 4]
+    diags = [f["params"]["diagnostics"] for f in frames
+             if f.get("method") == "textDocument/publishDiagnostics"]
+    return (reply[0] if reply else {}), (diags[0] if diags else [])
+
+# The buffer a range names, read the way a CLIENT reads one: line by line, and a character is a
+# UTF-16 code unit. This is the assertion's whole point — a server that counted bytes into a
+# line of CJK would answer a range that slices to the wrong text rather than to nothing.
+def slice_of(text, r):
+    lines = text.split("\n")
+    def cut(ln, ch, tail):
+        u = lines[ln].encode("utf-16-le")
+        return u[ch * 2:].decode("utf-16-le") if tail else u[:ch * 2].decode("utf-16-le")
+    s, e = r["start"], r["end"]
+    if s["line"] == e["line"]:
+        return cut(s["line"], e["character"], False)[s["character"]:]
+    out = [cut(s["line"], s["character"], True)]
+    out += lines[s["line"] + 1:e["line"]]
+    out.append(cut(e["line"], e["character"], False))
+    return "\n".join(out)
+
+bad = 0
+def check(ok, what, got):
+    global bad
+    if not ok:
+        print("OUTLINE   %s — got %r" % (what, got))
+        bad += 1
+
+def inside(outer, inner):
+    def le(a, b):
+        return (a["line"], a["character"]) <= (b["line"], b["character"])
+    return le(outer["start"], inner["start"]) and le(inner["end"], outer["end"])
+
+# ONE FIXTURE, and every line of it carries text the byte and the UTF-16 readings disagree
+# about: a name is reached past a CJK string, a field's default is one, and the statement the
+# diagnostic is about sits under two of them.
+SRC = (
+    'K := "日本語"\n'
+    "\n"
+    "pub struct Point {\n"
+    '\tpub label: str = "點"\n'
+    "\tpub x: int\n"
+    "}\n"
+    "\n"
+    "enum Shape {\n"
+    "\tDot\n"
+    "\tLine(int, int)\n"
+    "}\n"
+    "\n"
+    "pub fn tag() -> str {\n"
+    '\treturn "t"\n'
+    "}\n"
+    "\n"
+    "fn main() {\n"
+    "\tp := Point(\"一\", 1)\n"
+    "\tp = Point(\"二\", 2)\n"
+    "\tprint K\n"
+    "\tprint p.x\n"
+    "\tprint Shape.Dot\n"
+    "\tprint tag()\n"
+    "}\n"
+)
+reply, diags = session("outline-precision.zg", SRC)
+syms = reply.get("result")
+check(isinstance(syms, list) and syms, "a buffer that parses answers with an outline", reply)
+syms = syms or []
+by_name = {s["name"]: s for s in syms}
+
+# A DECLARATION'S RANGE IS THE DECLARATION, and its selectionRange is the name inside it.
+for name, whole, sel in [
+    ("K", 'K := "日本語"', "K"),
+    ("Point", 'pub struct Point {\n\tpub label: str = "點"\n\tpub x: int\n}', "Point"),
+    ("Shape", "enum Shape {\n\tDot\n\tLine(int, int)\n}", "Shape"),
+]:
+    s = by_name.get(name)
+    if s is None:
+        check(False, "the outline names `%s`" % name, sorted(by_name))
+        continue
+    check(slice_of(SRC, s["range"]) == whole, "`%s`'s range is the whole declaration" % name,
+          slice_of(SRC, s["range"]))
+    check(slice_of(SRC, s["selectionRange"]) == sel, "`%s`'s selectionRange is its name" % name,
+          slice_of(SRC, s["selectionRange"]))
+    check(s["range"] != s["selectionRange"], "`%s`'s two ranges are not one range" % name, s["range"])
+
+# CHILDREN, nested and in source order — and NOT beside their parent, which is the difference
+# between an outline and a list of names. The kinds are LSP's: 8 Field, 22 EnumMember.
+p = by_name.get("Point", {})
+check([(k["name"], k["kind"]) for k in p.get("children", [])] == [("label", 8), ("x", 8)],
+      "a struct's fields are its children, in source order", p.get("children"))
+e = by_name.get("Shape", {})
+check([(k["name"], k["kind"]) for k in e.get("children", [])] == [("Dot", 22), ("Line", 22)],
+      "an enum's variants are its children, in source order", e.get("children"))
+check(not ({"label", "x", "Dot", "Line"} & set(by_name)),
+      "a child is not also a top-level symbol", sorted(by_name))
+check(slice_of(SRC, p.get("children", [{}])[0].get("range", {"start": {"line": 0, "character": 0},
+                                                            "end": {"line": 0, "character": 0}}))
+      == 'pub label: str = "點"',
+      "a field's range is the field, to the end of its default",
+      p.get("children", [{}])[0].get("range"))
+
+# `pub` IS PART OF THE DECLARATION, so it is inside the range — for a `struct` and a `fn` as
+# much as for the module binding and the struct field that always included theirs. A range that
+# began one token later put the same marker inside the range for two forms and outside it for
+# five, and a client highlighting "the declaration" drew a box starting after its marker.
+# `Point` above already proves it by exact equality, and its `label` field with it, so what is
+# left to say is the form that has no case of its own: a `pub fn`.
+tag = by_name.get("tag")
+check(tag is not None and slice_of(SRC, tag["range"]) == 'pub fn tag() -> str {\n\treturn "t"\n}',
+      "a `pub fn`'s range starts at the `pub` and ends at its `}`",
+      tag and slice_of(SRC, tag["range"]))
+
+# THE PROTOCOL'S ONE RULE about the pair, asked of every entry and every child rather than of
+# the three above: a selection outside its range is a range a client cannot use.
+for s in syms:
+    for x in [s] + s.get("children", []):
+        check(inside(x["range"], x["selectionRange"]),
+              "`%s`'s selectionRange is inside its range" % x["name"], x)
+
+# THE SAME END IS THE DIAGNOSTIC'S. `p = Point(…)` is refused at the statement, so the underline
+# is the statement — not the word `p`, which is what a server deriving an end from the source
+# could give. The place is taken from the one the compiler names, so this does not repeat it.
+check(len(diags) == 1, "the buffer reports one error", diags)
+if len(diags) == 1:
+    d = diags[0]
+    check(slice_of(SRC, d["range"]) == 'p = Point("二", 2)',
+          "a checked diagnostic underlines the statement the compiler named", slice_of(SRC, d["range"]))
+    check(d.get("code", "") != "", "a checked diagnostic carries its rule as a code", d)
+
+# A BUFFER THAT WILL NOT PARSE IS NOT ANSWERED WITH AN EMPTY OUTLINE. It used to be, which is
+# the outline of a file that declares nothing — indistinguishable from a server that crashed on
+# the request. The request fails instead, and the failure carries the compiler's sentence.
+reply, diags = session("outline-broken.zg", "fn main() {\n\tx := (1 +)\n\tprint x\n}\n")
+check("result" not in reply and reply.get("error", {}).get("code") == -32803,
+      "a buffer that will not parse answers RequestFailed, not an empty outline", reply)
+check(reply.get("error", {}).get("message", "").strip() != "",
+      "the failure says what the compiler said", reply.get("error"))
+
+# AND THE ABORT ITSELF CARRIES ITS RULE. A raise packs the code into the front of its sentence;
+# published as it arrived, every abort reached the editor as a finding with no rule while every
+# checked finding beside it had one.
+# `E` and digits, which is exactly what `rule_code` emits and `rule_msg_code` reads back. A
+# looser pattern here would pass a server that had widened its reader past the writer, which
+# is the drift the splitter was moved beside its packer to prevent.
+check(len(diags) == 1 and re.match(r"^E[0-9]+$", diags[0].get("code", "")),
+      "an abort carries its code as a code", diags and diags[0])
+check(len(diags) == 1 and not re.match(r"^E[0-9]+ ", diags[0].get("message", "")),
+      "and not also as the first word of its message", diags and diags[0].get("message"))
+
+print("OUTLINE   %d symbols, %d children, ranges sliced out of the buffer they name"
+      % (len(syms), sum(len(s.get("children", [])) for s in syms)))
+sys.exit(1 if bad else 0)
+PYEOF
+then
+	echo "lsp-check: the outline is not a view of the program"
+	exit 1
+fi
+
+# --- 11. an outline is not a walk -----------------------------------------------------------
+#
+# Section 10 asks what the outline SAYS. This asks what it COSTS, because an outline that is
+# right and takes a hundred seconds is an outline no keystroke waits for — and the failure is
+# invisible to every other case here, which runs on files of a few hundred lines.
+#
+# It measures against the CHECK OF THE SAME BUFFER, the way section 6 measures a check against
+# `zerg build --emit check`: one session that only opens the file, one that opens it and asks
+# for the outline three times, and the difference over three is one outline. The check is the
+# expensive thing a keystroke already pays for, so a fraction of it is the honest unit — and it
+# moves with the machine exactly as the measurement does.
+#
+# THE FILE IS THE LARGEST ONE, derived rather than named, because a gate anchored to a filename
+# stops measuring the day the file is renamed or another overtakes it. It is the worst case by
+# construction: the cost that was here grew as the file times the declarations in it.
+#
+# Measured: 102.59 s per outline against an 8.38 s check — 12.2 — when `ls_line_at` re-split the
+# whole buffer for every line it was asked for. 0.25 is far above where splitting once lands and
+# far below anything that re-reads the buffer per symbol.
+if ! "$PY" - "$ZERG" <<'PYEOF'
+import json, os, re, resource, subprocess, sys, time
+
+zerg = sys.argv[1]
+
+biggest, size = None, -1
+for root, _, names in os.walk("src/compiler"):
+    for n in names:
+        if not n.endswith(".zg"):
+            continue
+        p = os.path.join(root, n)
+        if os.path.getsize(p) > size:
+            biggest, size = p, os.path.getsize(p)
+if biggest is None:
+    print("OUTLINE   no source under src/compiler to measure an outline over")
+    sys.exit(1)
+
+TIMER = ["/usr/bin/time", "-l"]
+try:
+    probe = subprocess.run(TIMER + ["true"], stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
+    counts = probe.returncode == 0 and b"instructions retired" in probe.stderr
+except OSError:
+    counts = False
+unit = "instructions" if counts else "CPU seconds"
+
+# The deadline for the asking session is DERIVED from the one that has already run, so a
+# regression reports rather than sitting there: the measured quadratic was twelve checks per
+# outline, so three of them is minutes. Twice the baseline plus a generous minute per ask is
+# past anything healthy and far short of waiting for the bad case to finish — and a session
+# that hits it is the finding, not a traceback.
+def cost(stdin, limit):
+    run = lambda c: subprocess.run(c, input=stdin, stdout=subprocess.PIPE,
+                                   stderr=subprocess.PIPE, timeout=limit)
+    if counts:
+        p = run(TIMER + [zerg, "lsp"])
+        m = re.search(rb"(\d+)\s+instructions retired", p.stderr)
+        if not m:
+            print("OUTLINE   `time -l` counted no instructions for a session")
+            sys.exit(1)
+        return p, int(m.group(1))
+    before = resource.getrusage(resource.RUSAGE_CHILDREN)
+    p = run([zerg, "lsp"])
+    after = resource.getrusage(resource.RUSAGE_CHILDREN)
+    return p, (after.ru_utime + after.ru_stime) - (before.ru_utime + before.ru_stime)
+
+text = open(biggest, encoding="utf-8").read()
+uri = "file://" + os.path.abspath(biggest)
+ASKS = 3
+
+def wire(n):
+    msgs = [
+        {"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {"capabilities": {}}},
+        {"jsonrpc": "2.0", "method": "textDocument/didOpen", "params": {
+            "textDocument": {"uri": uri, "languageId": "zerg", "version": 1, "text": text}}},
+    ]
+    for i in range(n):
+        msgs.append({"jsonrpc": "2.0", "id": 10 + i, "method": "textDocument/documentSymbol",
+                     "params": {"textDocument": {"uri": uri}}})
+    msgs += [{"jsonrpc": "2.0", "id": 2, "method": "shutdown"},
+             {"jsonrpc": "2.0", "method": "exit"}]
+    return b"".join(b"Content-Length: %d\r\n\r\n%s" % (len(b), b)
+                    for b in (json.dumps(m).encode() for m in msgs))
+
+began = time.time()
+_, check = cost(wire(0), 600)
+baseline = time.time() - began
+try:
+    asked, both = cost(wire(ASKS), int(2 * baseline) + 60 * ASKS)
+except subprocess.TimeoutExpired:
+    print("OUTLINE   %d outlines of %s did not finish in %ds, against a %.1fs check of it"
+          % (ASKS, biggest, int(2 * baseline) + 60 * ASKS, baseline))
+    sys.exit(1)
+
+# A SESSION THAT ANSWERED NOTHING costs nothing and would pass this for that reason. The reply
+# is read back and counted: three outlines, each naming declarations.
+outlines, out, i = [], asked.stdout, 0
+while i < len(out):
+    j = out.find(b"\r\n\r\n", i)
+    if j < 0:
+        break
+    n = int(re.search(rb"Content-Length:\s*(\d+)", out[i:j], re.I).group(1))
+    f = json.loads(out[j + 4:j + 4 + n].decode("utf-8"))
+    if f.get("id") in (10, 11, 12):
+        outlines.append(f.get("result"))
+    i = j + 4 + n
+empty = [o for o in outlines if not (isinstance(o, list) and o)]
+if len(outlines) != ASKS or empty:
+    print("OUTLINE   %s answered %d of %d outlines, %d of them empty or an error — nothing was measured"
+          % (biggest, len(outlines), ASKS, len(empty)))
+    sys.exit(1)
+
+one = (both - check) / float(ASKS)
+ratio = one / float(check)
+# an instruction count is a whole number and a CPU second is not, so the report says each in
+# the unit it was measured in rather than truncating one to look like the other
+shown = (lambda v: "%d" % v) if counts else (lambda v: "%.2f" % v)
+print("OUTLINE   one outline of %s (%d symbols) costs %.3f of its check (%s: check %s, outline %s)"
+      % (biggest, len(outlines[0]), ratio, unit, shown(check), shown(one)))
+if ratio >= 0.25:
+    print("OUTLINE   an outline costs a quarter of a check of the same buffer — it is re-reading it")
+    sys.exit(1)
+PYEOF
+then
+	echo "lsp-check: an outline of the largest source is not keystroke-fast"
+	exit 1
+fi
+
+echo "lsp-check: $ran buffers agree with the compiler, $outlined outlines are the parser's own, $members module members are checked against their module, formatting is fmt's answer, every protocol case holds, the dump carries the type parameters the outline cannot show, a check is one walk, a name answers with the declaration the compiler resolved it to, a long session stays in the band of one check, the outline is a view of the program, and an outline of the largest source is not a walk of it"

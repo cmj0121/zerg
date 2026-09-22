@@ -1408,14 +1408,24 @@ fn c_optchain(mut &em: Emitter, target: ast.Expr, fld: str, l: int, c: int, sb: 
 	# self-recursive struct reads the field out of a counted cell rather than out of the
 	# carrier. The write side is c_res_put for the same reason: the answer is a carrier too,
 	# and it may be a boxed one.
-	acc := f"{c_res_val(em, t, tv)}.zg_{fld}"
+	#
+	# AND THE FIELD IS TAKEN, as a field of an owned rvalue is (c_taken): the chain names no
+	# storage, so every consumer gives its answer back — `so?.name ?? "d"` dropped the carrier
+	# it was handed, and a name read out of `so` without a count of its own was freed under `so`
+	# (#23). An operand the chain made is given back once the field is out of it.
+	acc := c_taken(em, ft, f"{c_res_val(em, t, tv)}.zg_{fld}")
 	mut take := f"{c_res_mark_left(rv)} {c_res_put(em, ast.Ty.TOpt(oft), rv, acc)}"
 	if ast.ty_is_opt(ft) {
 		# the field carries its own tag, so the answer IS the field
 		take = f"{rv} = {acc};"
 	}
 	out = out + " if (" + c_res_is_left(tv) + ") { " + take + " }"
-	return out + " else { " + c_res_mark_right(rv) + " } " + rv + "; })"
+	out = out + " else { " + c_res_mark_right(rv) + " }"
+	df := c_carrier_temp_drop(em, t, target)
+	if df != "" {
+		out = out + f" {df}(&{tv});"
+	}
+	return out + " " + rv + "; })"
 }
 
 # c_try lowers `x?` (GRAMMAR group 8): the payload, or an early return of the absent side
@@ -1458,7 +1468,16 @@ fn c_try(mut &em: Emitter, x: ast.Expr, sb: Subst) -> str {
 	if not ast.ty_is_opt(em.fn_ret) {
 		right = f"({rcn}){{ .tag = 1, .err = {c_res_err(tv)} }}"
 	}
-	return out + " return " + right + "; } " + c_res_val(em, t, tv) + "; })"
+
+	# THE LEFT IS HANDED OVER AS THIS EXPRESSION'S OWN. A carrier this expression made gives up
+	# its payload by being left behind undropped; one that NAMES storage — `r?` on a parameter —
+	# still holds it, so the payload is copied out, or every consumer that gives an owned value
+	# back freed it under `r` (#23).
+	mut left := c_res_val(em, t, tv)
+	if c_is_borrow(x) {
+		left = c_taken(em, c_carrier_elem(t), left)
+	}
+	return out + " return " + right + "; } " + left + "; })"
 }
 
 # c_right_matches reports whether two carriers propagate the same thing: an optional's
@@ -20389,7 +20408,24 @@ fn c_cond(mut &em: Emitter, x: ast.Expr, site: str) -> str {
 fn c_ternary(mut &em: Emitter, cond: ast.Expr, then_e: ast.Expr, else_e: ast.Expr, sb: Subst) -> str {
 	check.chk_condition(em, cond, "an `if` expression")
 	check.chk_branch_types(em, then_e, else_e)
-	return f"({c_expr(em, cond, sb)} ? {c_expr(em, then_e, sb)} : {c_expr(em, else_e, sb)})"
+
+	# AN `if` HANDS OVER A VALUE OF ITS OWN, whichever branch ran. It names no storage, so every
+	# consumer — a binding, a print, a concat, a match — takes it as owned and gives it back;
+	# a branch that NAMED storage handed over somebody else's value instead, and the give-back
+	# freed it under its owner: `x := if c { s } else { "x" }` then `print s` read freed memory,
+	# and so did a `match` arm answering the same way. So a borrowed branch is copied, which is
+	# what makes the `if` owned in fact and not just in shape (#23).
+	t := c_infer(em, then_e)
+	return f"({c_expr(em, cond, sb)} ? {c_owned_branch(em, t, then_e, sb)} : {c_owned_branch(em, t, else_e, sb)})"
+}
+
+# c_owned_branch is one branch of a value-producing `if`, made the reader's own: c_taken's
+# answer for a branch that names storage — a copy, or a count for a channel end — and the
+# rendering itself for one that already hands over its own.
+fn c_owned_branch(mut &em: Emitter, t: ast.Ty, e: ast.Expr, sb: Subst) -> str {
+	rendered := c_expr(em, e, sb)
+	return rendered if not c_is_borrow(e)
+	return c_taken(em, t, rendered)
 }
 
 # c_is_stmt_expr reports whether rendered C opens as a GNU statement expression `({ … }`.

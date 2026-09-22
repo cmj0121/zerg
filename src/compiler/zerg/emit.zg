@@ -6613,10 +6613,11 @@ fn c_needs_copy(mut &em: Emitter, t: ast.Ty) -> bool {
 # c_copied renders an expression as an INDEPENDENT copy of itself, when its type needs one.
 #
 # A freshly built value — a call's result, a constructor, a literal — is already nobody
-# else's, so copying it would only cost. Only an lvalue can be a second name for something.
+# else's, so copying it would only cost. Only a name, or a field or an element read out of one
+# (c_is_borrow), can be a second name for something.
 fn c_copied(mut &em: Emitter, t: ast.Ty, e: ast.Expr, sb: Subst) -> str {
 	rendered := c_expr(em, e, sb)
-	return rendered if not c_is_lvalue(e) or not c_needs_copy(em, t)
+	return rendered if not c_is_borrow(e) or not c_needs_copy(em, t)
 	return c_copy_of(em, t, rendered)
 }
 
@@ -8880,7 +8881,7 @@ fn c_str_concat(mut &em: Emitter, a: ast.Expr, b: ast.Expr, sb: Subst) -> str {
 # `print "hi"` bound a temporary and released an immortal cell.
 fn c_owns_value(e: ast.Expr) -> bool {
 	return false if c_is_strlit(e)
-	return not c_is_lvalue(e)
+	return not c_is_borrow(e)
 }
 
 fn c_is_strlit(e: ast.Expr) -> bool {
@@ -10538,10 +10539,6 @@ fn c_index(mut &em: Emitter, target: ast.Expr, idx: ast.Expr, sb: Subst) -> str 
 	vn := c_tmp(em, "zgt_t")
 	et := c_list_elem(tty)
 	slot := f"(*({ct}*){at}(&{ln}, {ix}))"
-	mut val := slot
-	if c_needs_copy(em, et) {
-		val = c_copy_of(em, et, slot)
-	}
 
 	# A MAP INDEX IS A BORROW, and this is the exception to the sentence above. `m[k]` lowers
 	# to a bit copy of a value the map still owns — c_is_place says so in its own words, by
@@ -10549,9 +10546,17 @@ fn c_index(mut &em: Emitter, target: ast.Expr, idx: ast.Expr, sb: Subst) -> str 
 	# target that something else will name again. Releasing it frees a buffer the map's entry
 	# still points at, which goes unobserved only because that vtable's drops are NULL.
 	#
-	# The element above is already read out and copied where it owns anything, so the borrow
-	# is finished with by the time this returns and there is nothing to give back.
+	# AND THE ELEMENT OF A BORROW IS A BORROW. Where the map is a name, c_is_borrow calls the
+	# whole `m["k"][0]` borrowed, so every consumer takes its own copy or count of it; taking
+	# one here as well was a second, which nobody gave back — a `str` leaked, and a channel
+	# end kept a count that held its stream open forever (#23). Only an element this
+	# expression is the owner of is taken, and then the map's list is not given back, because
+	# the map still holds it.
 	borrowed := c_is_map_index(em, target)
+	mut val := slot
+	if not (borrowed and c_is_borrow(target)) {
+		val = c_taken(em, et, slot)
+	}
 	return f"({{ zrt_list {ln} = {tgt}; {ct} {vn} = {val}; {vn}; }})" if borrowed
 
 	return f"({{ zrt_list {ln} = {tgt}; {ct} {vn} = {val}; zrt_list_drop(&{ln}); {vn}; }})"
@@ -10673,6 +10678,27 @@ fn c_is_lvalue(e: ast.Expr) -> bool {
 		Expr.EOptChain(_, _, _, _) => false
 		Expr.ETry(_) => false
 		Expr.EIndex(t, i) => not c_is_range(i)
+		_ => false
+	}
+}
+
+# c_is_borrow asks the OWNERSHIP question c_is_lvalue's shape cannot: does this expression name
+# a value somebody else will release? A field or an element read out of an OWNED rvalue does
+# not. c_field_of_temp and c_index take it out of a temporary they then drop — copied where it
+# owns anything — so what comes back is the reader's own, exactly like a call's result.
+#
+# The shape answer stays where it is asked about STORAGE (c_is_place, c_place_why): `f().x = 1`
+# is still refused, and still named for the step that is not storage.
+#
+# Asking the shape here made every consumer copy the value a SECOND time, and the copy the read
+# had already made was never released: `cur(p).lexeme` leaked one str for every identifier the
+# parser named, and a language server that re-parses the whole program on every check paid it
+# again on every one (#23).
+fn c_is_borrow(e: ast.Expr) -> bool {
+	return match e {
+		Expr.EIdent(_, _, _) => true
+		Expr.EField(t, _, _, _) => c_is_borrow(t)
+		Expr.EIndex(t, i) => not c_is_range(i) and c_is_borrow(t)
 		_ => false
 	}
 }
@@ -12678,7 +12704,15 @@ fn c_call_releasing(mut &em: Emitter, cfn: str, key: str, args: list[ast.Expr], 
 				v = on
 			}
 		} else {
+			# the release below is by the PARAMETER's direction, so the owned end is narrowed to
+			# it first — before the call, because a `chan[int]` handed to a `<-chan[int]`
+			# parameter is still a sender while the callee drains it, and the stream it is
+			# draining could not end until the call returned (c_chan_narrowed)
 			tn := c_tmp(em, "zgt_t")
+			row := c_param_row(em, key, i)
+			if row >= 0 {
+				v = c_chan_narrowed(em, v, c_infer(em, args[i]), em.pr_ty[row])
+			}
 			decls = decls + f"zrt_chan *{tn} = {v}; "
 			frees = frees + f"{rels[i]}({tn}); "
 			v = tn
@@ -16346,6 +16380,23 @@ fn c_chan_copy_fn(dir: int) -> str {
 	return "zrt_chan_sender_copy"
 }
 
+# c_chan_narrowed hands an OWNED channel end to a slot of another direction. The value holds
+# the count its own direction took — a bidirectional end is a sender and a holder — and the
+# slot's owner will give back only the count ITS direction names, so a `chan[int]` returned
+# as a `<-chan[int]` kept a sender count nobody released and the receiver waited on a stream
+# that could never end. The slot's count is taken and the value's is given back, in that
+# order, so the channel is never at zero in between. A borrowed end needs none of this: it is
+# copied by the slot's direction to begin with.
+fn c_chan_narrowed(mut &em: Emitter, v: str, have: ast.Ty, want: ast.Ty) -> str {
+	a := c_chan_dir(have)
+	b := c_chan_dir(want)
+	return v if a == b or not ast.ty_is_chan(have)
+
+	em.used_conc = true
+	tn := c_tmp(em, "zgt_ch")
+	return f"({{ zrt_chan *{tn} = {v}; {c_chan_copy_fn(b)}({tn}); {c_chan_release_fn(a)}({tn}); {tn}; }})"
+}
+
 fn c_chan_release_fn(dir: int) -> str {
 	return "zrt_chan_release" if dir == 2
 	return "zrt_chan_sender_release"
@@ -19149,7 +19200,13 @@ fn c_fieldref(mut &em: Emitter, target: ast.Expr, fld: str, l: int, c: int, sb: 
 		return f"{tgt}.f{fld}"
 	}
 
-	# an Err's fields are the runtime's own, so they carry no `zg_` mangling
+	# an Err's fields are the runtime's own, so they carry no `zg_` mangling.
+	#
+	# AND ITS MESSAGE IS STILL THE ERR'S. A field of an owned rvalue is the reader's own
+	# (c_is_borrow), which the other fields earn by being copied out of a temporary this read
+	# drops; an Err is never dropped, and the copy another holder of it shares its message with,
+	# so the message read out of one is counted once more here rather than handed over.
+	return f"zrt_str_retain({tgt}.{fld})" if c_is_err_ty(tt) and fld == "msg" and c_owns_value(target)
 	return f"{tgt}.{fld}" if c_is_err_ty(tt)
 
 	# A FIELD THE TYPE DOES NOT HAVE was spelled `zg_<fld>` and handed to cc, which reported
@@ -19182,7 +19239,12 @@ fn c_fieldref(mut &em: Emitter, target: ast.Expr, fld: str, l: int, c: int, sb: 
 	# comes back outlives the drop below — and the temporary is dropped. An lvalue is untouched:
 	# `s.n` reads storage somebody else registered, and dropping that would be the opposite
 	# defect.
-	return c_field_of_temp(em, target, tgt, tt, fld) if c_owns_value(target) and c_needs_copy(em, tt)
+	#
+	# A CHANNEL FIELD IS TAKEN THE SAME WAY even out of a struct that owns nothing else. A
+	# struct holds no count on a channel it carries, so the read is what has to take one —
+	# `mkh(3).ch` is an owned rvalue, handed to a binding that gives a count back at its scope's
+	# end, and without the take that count was the producer's (#23).
+	return c_field_of_temp(em, target, tgt, tt, fld) if c_owns_value(target) and (c_needs_copy(em, tt) or ast.ty_is_chan(c_field_ty(em, nm, fld)))
 
 	return f"{tgt}.zg_{fld}"
 }
@@ -19195,11 +19257,24 @@ fn c_field_of_temp(mut &em: Emitter, target: ast.Expr, tgt: str, tt: ast.Ty, fld
 	tv := c_tmp(em, "zgt_ft")
 	rv := c_tmp(em, "zgt_fv")
 
-	mut take := f"{c_type(ft)} {rv} = {tv}.zg_{fld};"
-	if c_needs_copy(em, ft) {
-		take = f"{c_type(ft)} {rv} = {c_copy_of(em, ft, f"{tv}.zg_{fld}")};"
-	}
+	take := f"{c_type(ft)} {rv} = {c_taken(em, ft, f"{tv}.zg_{fld}")};"
 	return f"({{ {c_type(tt)} {tv} = {tgt}; {take} {c_drop_stmt(em, tt, tv)} {rv}; }})"
+}
+
+# c_taken is a value read out of storage that is about to be given back, made the reader's
+# own: copied when it owns anything, and COUNTED when it is a channel end. A channel is not a
+# copy type — c_needs_copy says no, because copying one is a count and not a duplicate — so
+# asking c_needs_copy alone bit-took the handle and then dropped the struct or list holding
+# it, which released the count the reader was now using: `c3 := mkh(3).ch` received from a
+# freed channel (#23). The count is taken by the SLOT's direction, because that is the one
+# the holder's drop gives back.
+fn c_taken(mut &em: Emitter, t: ast.Ty, x: str) -> str {
+	if ast.ty_is_chan(t) {
+		em.used_conc = true
+		return f"{c_chan_copy_fn(c_chan_dir(t))}({x})"
+	}
+	return x if not c_needs_copy(em, t)
+	return c_copy_of(em, t, x)
 }
 
 # c_tuple_index_ok is the two halves of `t.N`: the target is a tuple, and N is one of its
@@ -19779,8 +19854,10 @@ fn c_let_chan(mut &em: Emitter, name: str, eff: ast.Ty, is_mut: bool, is_const: 
 	em.used_conc = true
 	dir := c_chan_dir(eff)
 	mut val := c_expr(em, ival, c_nosub())
-	if c_is_lvalue(ival) {
+	if c_is_borrow(ival) {
 		val = f"{c_chan_copy_fn(dir)}({val})"
+	} else {
+		val = c_chan_narrowed(em, val, c_infer(em, ival), eff)
 	}
 	c_add_var(em, name, eff, is_mut, is_const)
 	cn := c_var_cname(em, name)
@@ -20082,9 +20159,11 @@ fn c_return(mut &em: Emitter, has_val: bool, e: ast.Expr, ind: str) -> str {
 		# the caller gets a receive-only holder, `ch`'s own send end goes with this scope, and
 		# the producer is left as the last sender. Without the copy the release below would
 		# take the count the caller is about to rely on.
-		if ret_chan and c_is_lvalue(e) {
+		if ret_chan and c_is_borrow(e) {
 			em.used_conc = true
 			v = f"{c_chan_copy_fn(c_chan_dir(em.fn_ret))}({v})"
+		} else if ret_chan {
+			v = c_chan_narrowed(em, v, et, em.fn_ret)
 		}
 		return f"{ind}return {v};\n" if pre == ""
 

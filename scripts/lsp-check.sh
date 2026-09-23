@@ -2457,29 +2457,114 @@ ZG
 
 # AND A DECORATOR'S TREE, whose findings name a file the editor cannot have open: `#[derive]`
 # expands at `<derive:FILE>`, and a partition that compares a finding's path against a buffer's
-# drops every one of them. The fixture is the smallest program where the expansion is the only
-# thing that refuses — `Inner` has no `Eq`, so the `==` the derived member writes does not
+# drops every one of them. The fixture is #203's program, the smallest where the expansion is
+# the only thing that refuses — `Q` has no `Eq`, so the `==` the derived member writes does not
 # compile, while both structs and `main` are correct as written.
+#
+# AND A PROGRAM OF TWO FILES WITH THREE DECORATORS, each expansion refusing over a different
+# type, because every expansion of one file is walked at the one path `<derive:FILE>` from its
+# own line 1: the place a finding carries cannot say which decorator wrote it. `main.zg` holds
+# two, so a server that drew every finding of a file at one decorator puts one of them at the
+# wrong line; `R`'s decorator has a doc comment above it and a blank line and a `pub` under it,
+# the three things that may stand between a decorator and its declaration or around it.
 cat >"$tmp/drv/main.zg" <<'ZG'
-struct Inner {
-	pub v: int
+struct Q {
+	pub n: int
 }
 
 #[derive(Eq)]
-struct Outer {
-	pub a: Inner
+struct P {
+	pub q: Q
 }
 
 fn main() {
-	x := Outer(Inner(1))
-	y := Outer(Inner(1))
-	print x == y
+	print P(Q(1)) == P(Q(1))
 }
 ZG
-if ! "$PY" - "$ZERG" "$tmp/dep" "$tmp/many" "$tmp/drv" <<'PYEOF'
+mkdir -p "$tmp/drv2"
+cat >"$tmp/drv2/lib.zg" <<'ZG'
+struct Raw {
+	pub n: int
+}
+
+#[derive(Eq)]
+struct Wrap {
+	pub r: Raw
+}
+
+pub fn same() -> bool {
+	return Wrap(Raw(1)) == Wrap(Raw(1))
+}
+ZG
+cat >"$tmp/drv2/main.zg" <<'ZG'
+import "./lib"
+
+struct Q {
+	pub n: int
+}
+
+pub struct S {
+	pub s: str
+}
+
+#[derive(Eq)]
+struct P {
+	pub q: Q
+}
+
+## R is compared by its S.
+#[derive(Eq)]
+
+pub struct R {
+	pub s: S
+}
+
+fn main() {
+	print P(Q(1)) == P(Q(1))
+	print R(S("a")) == R(S("a"))
+	print lib.same()
+}
+ZG
+# AND AN EXPANSION THAT ABORTS rather than reports: a spec derived onto an enum by delegation
+# calls the spec's method on each payload, and a payload that does not implement it stops the
+# walk. The abort is a string whose place is `<derive:FILE>`, so it names neither the file's
+# buffer nor the decorator by itself; `Plain` is decorated first, so the decorator the abort
+# belongs to is not the first one in the file.
+mkdir -p "$tmp/drv3"
+cat >"$tmp/drv3/lib.zg" <<'ZG'
+pub spec Size {
+	fn size() -> int
+}
+
+struct Raw {
+	pub n: int
+}
+
+#[derive(Eq)]
+struct Plain {
+	pub n: int
+}
+
+#[derive(Size)]
+enum Shape {
+	Box(Raw)
+}
+
+pub fn measure() -> int {
+	return Shape.Box(Raw(1)).size()
+}
+ZG
+cat >"$tmp/drv3/main.zg" <<'ZG'
+import "./lib"
+
+fn main() {
+	print lib.measure()
+}
+ZG
+if ! "$PY" - "$ZERG" "$tmp/dep" "$tmp/many" "$tmp/drv" "$tmp/drv2" "$tmp/drv3" <<'PYEOF'
 import json, os, re, subprocess, sys
 
-zerg, root, many, drv = sys.argv[1], sys.argv[2], sys.argv[3], sys.argv[4]
+zerg, root, many, drv, drv2, drv3 = sys.argv[1:7]
 main_p, lib_p = os.path.join(root, "main.zg"), os.path.join(root, "lib.zg")
 main_uri = "file://" + os.path.abspath(main_p)
 lib_uri = "file://" + os.path.abspath(lib_p)
@@ -2717,20 +2802,101 @@ if not asks[9] or "uri" not in json.dumps(asks[9]):
 # I. A FINDING THE COMPILER RAISED IN A TREE IT WROTE ITSELF. `#[derive(Eq)]` expands at
 # `<derive:FILE>`, so its findings name no file the editor has open and were dropped by the
 # partition — an editor silent about an error `zerg build` prints and refuses over.
+#
+# AND IT IS DRAWN AT THE DECORATOR THAT WROTE THE TREE (#203): its own line and column are a
+# place in text nobody has, and the decorator is the line a reader goes and changes. What each
+# buffer is told is held to `zerg build --emit check`, sentence for sentence, over the findings
+# whose path is an expansion OF THAT FILE — so a finding published on the other buffer, or not
+# at all, fails — and each is placed at the decorator above the type its sentence is about.
+def derive_oracle(entry):
+    p = subprocess.run([zerg, "build", "--emit", "check", entry],
+                       stdout=subprocess.PIPE, stderr=subprocess.STDOUT, timeout=600)
+    out = {}
+    for m in re.finditer(r"^error: (\S+) (.*)\n\s*--> <derive:(.*)>:\d+:\d+$",
+                         p.stdout.decode("utf-8", "replace"), re.M):
+        out.setdefault(os.path.abspath(m.group(3)), []).append(m.group(1) + " " + m.group(2))
+    return out
+
+
+# decorator_line is the 0-based line of the `#[derive` above the type NAME declares, read off
+# the fixture so the expectation moves with the text rather than being a number copied from it.
+def decorator_line(text, name):
+    lines = text.split("\n")
+    at = [k for k, l in enumerate(lines) if re.match(r"(pub )?(struct|enum|spec) %s\b" % name, l)][0]
+    return max(k for k in range(at) if lines[k].startswith("#[derive"))
+
+
+def derive_case(label, entry, files, owner):
+    texts = {f: open(f, encoding="utf-8").read() for f in files}
+    step = session([[opened(uri_of(f), texts[f]) for f in files]])
+    oracle = derive_oracle(entry)
+    n = 0
+    for f in files:
+        ds = [d for d in as_map(step[0]).get(uri_of(f), []) if d.get("severity") == 1]
+        want = sorted(oracle.get(os.path.abspath(f), []))
+        n += len(want)
+        if sorted(said(ds)) != want:
+            print("BUFFERS   %s %s: the server says %s and `zerg build --emit check` says %s"
+                  % (label, os.path.basename(f), sorted(said(ds)), want))
+            return -1
+        for d in ds:
+            m = re.match(r"\S+ `==` on a (\w+):", said([d])[0])
+            if not m or m.group(1) not in owner:
+                print("BUFFERS   %s %s: `%s` is about no type this fixture derives over"
+                      % (label, os.path.basename(f), said([d])[0][:40]))
+                return -1
+            ty = m.group(1)
+            line = decorator_line(texts[f], owner[ty])
+            got = (d["range"]["start"]["line"], d["range"]["start"]["character"])
+            if got != (line, 0):
+                print("BUFFERS   %s %s: `%s` is drawn at %s, and the decorator above `%s` is at %s"
+                      % (label, os.path.basename(f), said([d])[0][:40], got, owner[ty], (line, 0)))
+                return -1
+    return n
+
+
 drv_p = os.path.join(drv, "main.zg")
-drv_uri = uri_of(drv_p)
-i_step = session([[opened(drv_uri, open(drv_p, encoding="utf-8").read())]])
-p = subprocess.run([zerg, "build", "--emit", "check", drv_p],
+n = derive_case("#203's program", drv_p, [drv_p], {"Q": "P"})
+if n != 1:
+    if n >= 0:
+        print("BUFFERS   #203's program: %d derived findings, where `zerg build` prints one" % n)
+    bad += 1
+
+drv2_main, drv2_lib = os.path.join(drv2, "main.zg"), os.path.join(drv2, "lib.zg")
+n = derive_case("two files", drv2_main, [drv2_main, drv2_lib], {"Q": "P", "S": "R", "Raw": "Wrap"})
+if n != 3:
+    if n >= 0:
+        print("BUFFERS   two files: %d derived findings, where the fixture writes three" % n)
+    bad += 1
+
+# J. AN ABORT RAISED INSIDE AN EXPANSION is published the same way: on the buffer of the file
+# the decorator is in, at that decorator, with the sentence `zerg build` prints — and not on
+# the buffer whose check raised it. `lib.zg` is opened first and then `main.zg`, whose program
+# holds `lib.zg`: the second check's abort is `lib.zg`'s, and `main.zg` is told nothing.
+drv3_main, drv3_lib = os.path.join(drv3, "main.zg"), os.path.join(drv3, "lib.zg")
+lib3 = open(drv3_lib, encoding="utf-8").read()
+p = subprocess.run([zerg, "build", "--emit", "check", drv3_main],
                    stdout=subprocess.PIPE, stderr=subprocess.STDOUT, timeout=600)
-want = re.findall(r"^error: (\S+)", p.stdout.decode("utf-8", "replace"), re.M)
-got = [d.get("code", "") or d["message"].split(" ")[0] for d in as_map(i_step[0]).get(drv_uri, [])
-       if d.get("severity") == 1]
-if not want:
-    print("BUFFERS   the derive fixture builds, so there is no dropped finding to look for")
+cli = p.stdout.decode("utf-8", "replace")
+m = re.match(r"(E\d+ .*)\n\s*--> <derive:(.*)>:\d+:\d+\n?$", cli)
+if not m or os.path.abspath(m.group(2)) != os.path.abspath(drv3_lib):
+    print("BUFFERS   the aborting fixture does not abort inside lib.zg's expansion:")
+    print("  " + cli.replace("\n", "\n  "))
     bad += 1
-elif got != want:
-    print("BUFFERS   a derived tree's finding: the server says %s and the compiler says %s" % (got, want))
-    bad += 1
+else:
+    j = session([[opened(uri_of(drv3_lib), lib3)],
+                 [opened(uri_of(drv3_main), open(drv3_main, encoding="utf-8").read())]])
+    want = (m.group(1), decorator_line(lib3, "Shape"))
+    for k, step in enumerate(j):
+        got = [(said([d])[0], d["range"]["start"]["line"]) for d in as_map(step).get(uri_of(drv3_lib), [])]
+        if got != [want]:
+            print("BUFFERS   an abort in an expansion, step %d: lib.zg is told %s, and the decorator "
+                  "above `Shape` is owed %s" % (k, got, [want]))
+            bad += 1
+    if sent(j[1], uri_of(drv3_main)) != 0:
+        print("BUFFERS   an abort in lib.zg's expansion was published on main.zg: %s"
+              % as_map(j[1]).get(uri_of(drv3_main)))
+        bad += 1
 
 # D. AND WHAT THE SESSION SAYS IS WHAT THE COMPILER SAYS about those same two texts on disk.
 # The oracle is `zerg build --emit check` over the program, whose findings are partitioned by

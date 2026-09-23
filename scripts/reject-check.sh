@@ -4570,6 +4570,56 @@ pub struct P {
 }
 EOF
 
+# EVERY FINDING NAMES THE TYPE AS ITS FILE WROTE IT. Two files each declaring a private `P`
+# are two types, which the compiler keeps apart under names of its own — and a sentence
+# about either one says `P`, whichever file it is in.
+reject a-private-type-of-two-files-is-named-as-written E3033 'cannot bind int to a P binding' <<'EOF'
+import "./sink"
+
+struct P {
+	pub name: str
+}
+
+fn main() {
+	print(P("a").name)
+	print(sink.get())
+}
+--- sink/mod.zg
+struct P {
+	pub x: int
+}
+
+pub fn get() -> int {
+	p: P = 5
+	return p.x
+}
+EOF
+
+reject a-private-type-declared-twice-in-one-file-beside-another-files E4073 '`P` is declared twice in this file' seed-gap <<'EOF'
+import "./sink"
+
+struct P {
+	pub name: str
+}
+
+fn main() {
+	print(P("a").name)
+	print(sink.get())
+}
+--- sink/mod.zg
+struct P {
+	pub x: int
+}
+
+struct P {
+	pub y: int
+}
+
+pub fn get() -> int {
+	return 1
+}
+EOF
+
 reject a-struct-declared-twice E4073 'the first is at line 1' <<'EOF'
 struct A {
 	pub v: int

@@ -1032,6 +1032,25 @@ fn main() {
 }
 EOF
 
+# ON A GENERIC RECEIVER the type is written BARE: a postfix `[…]` is an index, so the spelling
+# the refusal hands back is `Box.make(…)` and never `Box[int].make(…)`, which is no form at all.
+reject an-associated-fn-of-a-generic-type-reached-through-an-instance E3152 'reached through the type (`Box.make(…)`)' <<'EOF'
+struct Box[T] {
+	pub v: T
+}
+
+impl[T] Box[T] {
+	fn make(v: T) -> Box[T] {
+		return Box(v)
+	}
+}
+
+fn main() {
+	b := Box(1)
+	print b.make(2).v
+}
+EOF
+
 reject a-generic-method-reached-through-its-type E3151 'is a METHOD of `P`' <<'EOF'
 struct P {
 	pub x: int
@@ -8857,6 +8876,113 @@ enum E {
 
 fn main() {
 	print 1
+}
+EOF
+
+# THE SAME RULE, ASKED OF A TEMPLATE. A generic declaration is removed from the program before
+# its declarations are sited, so an unknown name in one was never asked about: `Self` (the self
+# type is `This`) in `impl[T] Bag[T]` was judged as a type by the first body that met a
+# specialization — _E3032 this function's answer is Self_ — and in a template nothing
+# instantiated it was not seen at all. One case per kind of template, each with its site.
+reject a-generic-impl-result-typed-by-a-name-no-declaration-carries E4056 '(the result of `same`)' <<'EOF'
+struct Bag[T] {
+	pub v: T
+}
+
+impl[T] Bag[T] {
+	fn same() -> Self {
+		return this
+	}
+}
+
+fn main() {
+	b := Bag(1)
+	print b.same().v
+}
+EOF
+
+reject a-generic-impl-parameter-typed-by-a-name-no-declaration-carries E4056 '(parameter `x` of `bad`)' <<'EOF'
+struct Bag[T] {
+	pub v: T
+}
+
+impl[T] Bag[T] {
+	fn bad(x: Self) -> int {
+		return 1
+	}
+}
+
+fn main() {
+	print 1
+}
+EOF
+
+reject a-generic-fn-parameter-typed-by-a-name-no-declaration-carries E4056 '(parameter `y` of `f`)' <<'EOF'
+fn f[T](x: T, y: Zork) -> T {
+	return x
+}
+
+fn main() {
+	print 1
+}
+EOF
+
+reject a-generic-struct-field-typed-by-a-name-no-declaration-carries E4056 '(field `Box.w`)' <<'EOF'
+struct Box[T] {
+	pub v: T
+	pub w: Zork
+}
+
+fn main() {
+	print 1
+}
+EOF
+
+reject a-generic-enum-payload-typed-by-a-name-no-declaration-carries E4056 '(payload 1 of `E.A`)' <<'EOF'
+enum E[T] {
+	A(T, Zork)
+	B
+}
+
+fn main() {
+	print 1
+}
+EOF
+
+# AN ASSOCIATED FN OF A GENERIC TYPE solves the impl's parameters from the call, and one the fn
+# WRITES that no argument decides is the unanswered call a generic `fn` is refused for. Written
+# in the signature, and written only in the body — `Box.count()` has no parameter at all, and
+# still a different body per `T`.
+reject a-generic-assoc-fn-leaves-a-written-parameter-unsolved E4009 '`Box.empty` writes it' <<'EOF'
+struct Box[T] {
+	pub v: T
+}
+
+impl[T] Box[T] {
+	fn empty() -> list[T] {
+		return []
+	}
+}
+
+fn main() {
+	print Box.empty().len()
+}
+EOF
+
+reject a-generic-assoc-fn-writes-a-parameter-only-in-its-body E4009 '`Box.count` writes it' <<'EOF'
+struct Box[T] {
+	pub v: T
+}
+
+impl[T] Box[T] {
+	fn count() -> int {
+		xs: list[T] = []
+		return xs.len()
+	}
+}
+
+fn main() {
+	print Box.count()
 }
 EOF
 

@@ -32,6 +32,7 @@
 # documentation that module has.
 
 import "./diag"
+import "./doc_html"
 import "./doc_render"
 import "./doc_run"
 import "./layout"
@@ -55,12 +56,15 @@ pub fn doc_cmd() -> cli.Command {
 		.flag("c", "check", "name the exposed declarations that carry no `##` comment, run every example, and exit 1 if anything is missing or wrong")
 		.opt("t", "timeout", "under --check, seconds one module's examples may take to build, and then to run", f"{test.TEST_TIMEOUT}")
 		.opt("s", "search", "list the exposed declarations whose name begins with this, across every module `zerg doc` lists or within the one named")
+		.opt("", "html", "write the reader's pages as static HTML into this directory — a page for every module `zerg doc` lists, or for the one named, an index, and a search over the names `--search` finds")
 		.add(cli.positional("name", "a module, one of its declarations, or a path to a source"))
 		.run(do_doc)
 	)
 }
 
 fn do_doc(c: cli.Ctx) -> int {
+	raise "`--html` writes the reader's whole pages, and takes none of `--all`, `--brief`, `--check` or `--search`" if c.has("html") and (c.has("all") or c.has("brief") or c.has("check") or c.has("search"))
+	return run_doc_html(c.get("html"), c.args()) if c.has("html")
 	raise doc_all_alone(c) if c.has("all") and (c.has("brief") or c.has("check") or c.has("search") or c.args().len() == 0)
 	raise "`--search` is a list of names of its own, and takes neither `--brief` nor `--check`" if c.has("search") and (c.has("brief") or c.has("check"))
 	return run_doc_search(c.get("search"), c.args(), doc_render.doc_colour()) if c.has("search")
@@ -253,6 +257,44 @@ fn run_doc_search(term: str, args: list[str], col: bool) -> int {
 	raise f"no exposed declaration in {scope} has a name beginning `{term}` — a search reads the name from any of its segments, case sensitive" if hits.len() == 0
 
 	io.write(doc_render.render_doc_hits(mods, hits, col))
+	return 0
+}
+
+# run_doc_html is `--html` (#20): the reader's page of every module in scope, written as static
+# HTML into `dir`, with the index of those modules and the search over their names beside them.
+#
+# THE SCOPE IS `--search`'s: the index, or the one module or path named, resolved by the same
+# two doors. A declaration is not a scope — its page is its module's, and a site of one entry
+# would be a page with no module around it — so `strings.split` is refused as `--check` refuses
+# it.
+#
+# THE DIRECTORY IS MADE when it is not there, and the pages in it are REWRITTEN: what is written
+# is named after the modules, so a second run over the same tree replaces every file the first
+# one wrote, byte for byte. A file of any other name is left alone, since nothing here wrote it.
+fn run_doc_html(dir: str, args: list[str]) -> int {
+	raise "`zerg doc --html` writes the modules `zerg doc` lists, or the one module or path named — one at most" if args.len() > 1
+	raise "`zerg doc --html` needs the directory to write the pages into" if dir == ""
+
+	mut mods: list[zerg.DocModule] = []
+	if args.len() == 0 {
+		mods = doc_index()
+	} else {
+		name := args[0]
+		at := doc_first_of(name, b'.')
+		raise f"`zerg doc --html` writes a module's page, and `{name}` is a declaration's name — name its module, and the declaration is on that page" if at > 0 and not doc_is_path(name) and source.module_sources(name, ".", ".").len() == 0
+
+		mods.append(doc_resolve(name))
+	}
+	raise f"`{dir}` is not a directory `zerg doc --html` can write into" if not __zrt_mkdir(dir)
+
+	for m in mods {
+		io.write_file(layout.join_path(dir, doc_html.html_page_of(m.name)), bytearray(doc_html.render_html_module(m)))
+	}
+	io.write_file(layout.join_path(dir, doc_html.HTML_INDEX), bytearray(doc_html.render_html_index(mods)))
+	io.write_file(layout.join_path(dir, doc_html.HTML_SEARCH), bytearray(doc_html.render_html_search(mods)))
+	io.write_file(layout.join_path(dir, doc_html.HTML_STYLE), bytearray(doc_html.render_html_style()))
+
+	io.write(f"{mods.len()} module page(s), the index, the search and the style sheet written to {dir}\n")
 	return 0
 }
 

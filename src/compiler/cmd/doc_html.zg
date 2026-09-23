@@ -1,0 +1,661 @@
+# The document a browser reads (#20): the same extraction `doc_render.zg` lays out for a
+# terminal, written as static HTML — a page per module, an index of the modules, and a search
+# over the names `zerg doc -s` searches.
+#
+# IT IS A SECOND RENDERING AND NOT A SECOND READING. Nothing here looks at a source: every page
+# is a function of the `DocModule` `zerg/doc.zg` extracted, the page is walked by
+# `doc_render.doc_groups` in the terminal's order, a comment is cut into paragraphs and examples
+# by `doc_render.doc_blocks` — the terminal's reader of a comment's shape — and the names the
+# search offers are `zerg.doc_names`, the list `-s` filters. So the text on a module's page is
+# the text of its terminal page, block for block, and `make doc-check` holds the two to that:
+# with the markup and the whitespace taken off, the one is the other.
+#
+# WHAT THE PAGE ADDS IS WHAT A TERMINAL CANNOT HAVE, and nothing that changes what is said: a
+# link from every declaration to itself and from a table of contents to each, a paragraph that
+# the browser fills to the window rather than a page filled to 80 columns, an inline `code`
+# span where the comment wrote one, and a search box. The maintainer's view is not rendered:
+# a page someone publishes is the reader's.
+#
+# ZERO DEPENDENCY, like everything this compiler writes: the markup, the style sheet and the
+# search script are all spelled in this file, no page names anything off the machine — no font,
+# no framework, no CDN — and the search runs from a static file opened straight off the disk,
+# because it is a script holding the names rather than a query to anything.
+#
+# EVERY PIECE OF SOURCE TEXT IS ESCAPED, by `html_text` or `html_attr` on its way into the page
+# and by `html_js_str` into the search's names. A signature holds `<` and `>` as often as not
+# (`list[str] -> Option[int]` does not, `a < b` in an example does), and a comment holds `&` and
+# quotes; a page that let one through would render the source as markup.
+#
+# THE OUTPUT IS DETERMINED BY THE SOURCE ALONE. No date, no path of the machine it ran on, no
+# order but the index's: two runs over the same tree write the same bytes, which is what makes a
+# page something a gate can compare and a directory something a diff can review.
+
+import "./diag"
+import "./doc_render"
+import "./test"
+import "./test_fixture"
+import (
+	"/zerg"
+)
+
+# The page every module page links back to, the style sheet and the search script, as they are
+# named in the directory `zerg doc --html` writes.
+pub const HTML_INDEX := "index.html"
+pub const HTML_STYLE := "style.css"
+pub const HTML_SEARCH := "search.js"
+
+# html_page_of is the file a module's page is written to: its name and `.html`. A module called
+# `index` would be the index's own file, so it alone takes `index.mod.html` — a name no other
+# module can have, since a module's name holds no `.`.
+pub fn html_page_of(name: str) -> str {
+	return "index.mod.html" if name == "index"
+
+	return name + ".html"
+}
+
+# html_ids is the anchor of every declaration of a module, row for row with `m.decls`: its key
+# in the module (`split`, `Logger.level`), which is what `zerg doc strings.split` is asked with.
+#
+# ONE NAME MAY BE TWO DECLARATIONS — `pub struct Pair` and `pub fn Pair` — and an anchor is one
+# place, so the second takes `Pair-2`. A key is identifiers and dots, so no key is spelled so.
+pub fn html_ids(m: zerg.DocModule) -> list[str] {
+	mut out: list[str] = []
+	for d in m.decls {
+		key := zerg.doc_key(d)
+		mut id := key
+		mut n := 1
+		for test_fixture.str_in(out, id) {
+			n = n + 1
+			id = f"{key}-{n}"
+		}
+		out.append(id)
+	}
+	return out
+}
+
+# --- a module's page ------------------------------------------------------------------------
+
+# render_html_module is one module's page. Its `<main>` is the terminal page's walk: one
+# section per file, each the file's header, the note for a file that did not parse, and then
+# the constants, the types with their methods, and the functions — and `(nothing exposed)` where
+# the terminal says it. The table of contents is gathered on the same walk, so it lists the
+# declarations in the order the page shows them.
+pub fn render_html_module(m: zerg.DocModule) -> str {
+	ids := html_ids(m)
+	mut body: list[str] = []
+	mut toc: list[str] = []
+	for f in m.files {
+		if m.files.len() > 1 {
+			body.append(f"<h2 class=\"file\">{html_text(doc_render.doc_short_path(f.path))}</h2>")
+		}
+		html_file(body, toc, m, ids, f)
+	}
+
+	mut out: list[str] = []
+	html_open(out, m.name, m.name)
+	out.append("<nav class=\"toc\" aria-label=\"Declarations\">")
+	out.append(f"<h2><a href=\"#top\">{html_text(m.name)}</a></h2>")
+	if toc.len() > 0 {
+		out.append("<ul>")
+		for t in toc {
+			out.append(t)
+		}
+		out.append("</ul>")
+	}
+	out.append("</nav>")
+	out.append("<main id=\"top\">")
+	for ln in body {
+		out.append(ln)
+	}
+	out.append("</main>")
+	html_close(out)
+	return html_join(out)
+}
+
+# html_file is one file's section of the page, in `doc_render.doc_file`'s order.
+fn html_file(mut &out: list[str], mut &toc: list[str], m: zerg.DocModule, ids: list[str], f: zerg.DocFile) {
+	if f.header.len() > 0 {
+		out.append("<div class=\"header\">")
+		html_body(out, f.header)
+		out.append("</div>")
+	} else if m.files.len() == 1 {
+		out.append(f"<p class=\"title\">{html_text(m.name)}</p>")
+	}
+	if not f.ok {
+		out.append(f"<p class=\"note\">{html_text(doc_render.doc_note_text(f))}</p>")
+	}
+
+	g := doc_render.doc_groups(m, f.path)
+	if g.consts.len() > 0 {
+		out.append(f"<h3>{doc_render.DOC_CONSTANTS}</h3>")
+		for k in g.consts {
+			html_entry(out, toc, m, ids, k, false)
+		}
+	}
+	if g.types.len() > 0 or g.orphans.len() > 0 {
+		out.append(f"<h3>{doc_render.DOC_TYPES}</h3>")
+		for k in g.types {
+			html_entry(out, toc, m, ids, k, true)
+		}
+		html_orphans(out, toc, m, ids, g.orphans)
+	}
+	if g.fns.len() > 0 {
+		out.append(f"<h3>{doc_render.DOC_FUNCTIONS}</h3>")
+		for k in g.fns {
+			html_entry(out, toc, m, ids, k, false)
+		}
+	}
+	if doc_render.doc_says_nothing(f, g, f.header) {
+		out.append(f"<p class=\"nothing\">{html_text(doc_render.DOC_NOTHING)}</p>")
+	}
+}
+
+# html_orphans is `doc_render.doc_orphans` on a page: the methods whose type this module does
+# not declare, under a bare `impl T` for each receiver, in the order the receivers first appear.
+fn html_orphans(mut &out: list[str], mut &toc: list[str], m: zerg.DocModule, ids: list[str], orphans: list[int]) {
+	mut done: list[str] = []
+	for k in orphans {
+		recv := m.decls[k].recv
+		continue if test_fixture.str_in(done, recv)
+
+		done.append(recv)
+		out.append(f"<h4 class=\"impl\">impl {html_text(recv)}</h4>")
+		for j in orphans {
+			if m.decls[j].recv == recv {
+				html_entry(out, toc, m, ids, j, false)
+			}
+		}
+	}
+}
+
+# html_entry is one declaration: an element carrying its anchor and the name a reader types
+# back, its signature — the words in front of the name and the name emphasised, as the terminal
+# emphasises them — then the mark or its comment, its members, and, for a type, its methods
+# inside it. `data-name` is `zerg.doc_qualified`'s spelling, the one every list of names uses.
+fn html_entry(mut &out: list[str], mut &toc: list[str], m: zerg.DocModule, ids: list[str], i: int, methods: bool) {
+	d := m.decls[i]
+	id := ids[i]
+	key := zerg.doc_key(d)
+	mut cls := "decl"
+	if d.recv != "" {
+		cls = "decl method"
+	}
+	toc.append(f"<li><a href=\"#{html_attr(html_url(id))}\">{html_text(key)}</a></li>")
+
+	out.append(f"<section class=\"{cls}\" id=\"{html_attr(id)}\" data-name=\"{html_attr(zerg.doc_qualified(m, d))}\">")
+	out.append(f"<pre class=\"sig\"><a class=\"anchor\" href=\"#{html_attr(html_url(id))}\" aria-label=\"{html_attr(key)}\"></a>{html_sig(d)}</pre>")
+	if zerg.doc_marks_absence(false, d.doc) {
+		out.append(f"<p class=\"undoc\">{html_text(zerg.doc_undocumented())}</p>")
+	}
+	html_body(out, d.doc)
+	html_members(out, d)
+	if methods {
+		for j in doc_render.doc_methods_of(m, d.name) {
+			html_entry(out, toc, m, ids, j, false)
+		}
+	}
+	out.append("</section>")
+}
+
+# html_sig is a signature with its lead emphasised — `doc_render.doc_sig_lead`'s span, which is
+# the span the terminal makes bold — and the whole of it escaped.
+fn html_sig(d: zerg.DocDecl) -> str {
+	n := doc_render.doc_sig_lead(d)
+	return html_text(d.sig) if n == 0
+
+	b := bytearray(d.sig)
+	return f"<b>{html_text(diag.line_slice(b, 0, n))}</b>{html_text(diag.line_slice(b, n, b.len()))}"
+}
+
+# html_members is a struct's public fields, an enum's variants or a spec's requirements, each
+# with its own comment, and the count of the fields left out — `doc_render.doc_members` on a page.
+fn html_members(mut &out: list[str], d: zerg.DocDecl) {
+	return if d.members.len() == 0 and d.hidden == 0
+
+	out.append("<div class=\"members\">")
+	for mb in d.members {
+		out.append("<div class=\"member\">")
+		out.append(f"<pre class=\"sig\">{html_text(mb.sig)}</pre>")
+		if zerg.doc_marks_absence(true, mb.doc) {
+			out.append(f"<p class=\"undoc\">{html_text(zerg.doc_undocumented())}</p>")
+		}
+		html_body(out, mb.doc)
+		out.append("</div>")
+	}
+	if d.hidden > 0 {
+		out.append("<p class=\"hidden\">(private fields not shown)</p>")
+	}
+	out.append("</div>")
+}
+
+# html_body is one comment, read into blocks by `doc_render.doc_blocks` — the terminal's reader
+# of the same comment — and written as a page writes them: a paragraph is a `<p>` the browser
+# fills, a fence is a `<pre>` of the lines between its two fence lines, labelled with the word
+# after the opening one (`zerg`, `output`), and a run of indented or prompt lines is a `<pre>`
+# as written. A fence nobody closed is every line after the opening one, as on the terminal.
+#
+# A `<pre>` is written on ONE LINE OF THIS LIST with its lines joined inside it, because a
+# newline straight after `<pre>` is one the HTML parser drops, and the first line of an example
+# that began with a blank line would move.
+fn html_body(mut &out: list[str], doc: list[str]) {
+	for bl in doc_render.doc_blocks(doc) {
+		if bl.kind == doc_render.DOC_PARA {
+			out.append(f"<p>{html_prose(doc_render.doc_joined(bl.lines))}</p>")
+		} else if bl.kind == doc_render.DOC_FENCE {
+			out.append(html_fence(bl.lines))
+		} else if bl.kind == doc_render.DOC_VERBATIM {
+			out.append(f"<pre class=\"verbatim\">{html_lines(bl.lines, 0, bl.lines.len())}</pre>")
+		}
+	}
+}
+
+# html_fence is one fenced example: the lines between the fence lines, and the fence's word.
+fn html_fence(lines: list[str]) -> str {
+	open := bytearray(lines[0])
+	lang := diag.line_slice(open, 3, open.len())
+	mut hi := lines.len()
+	if hi > 1 and test.has_prefix(lines[hi - 1], "```") {
+		hi = hi - 1
+	}
+	return f"<pre class=\"fence\" data-lang=\"{html_attr(lang)}\"><code>{html_lines(lines, 1, hi)}</code></pre>"
+}
+
+# html_lines is `lines[lo:hi]` escaped and joined by newlines, for inside a `<pre>`.
+fn html_lines(lines: list[str], lo: int, hi: int) -> str {
+	mut out := ""
+	mut i := lo
+	for i < hi {
+		if i > lo {
+			out = out + "\n"
+		}
+		out = out + html_text(lines[i])
+		i = i + 1
+	}
+	return out
+}
+
+# --- the index ----------------------------------------------------------------------------
+
+# render_html_index is the index page: every module handed over, linked to its page, with the
+# tagline the terminal's index prints beside it (`doc_render.doc_tagline`) — the same rows, under
+# the same heading.
+pub fn render_html_index(mods: list[zerg.DocModule]) -> str {
+	mut out: list[str] = []
+	html_open(out, "zerg doc", "")
+	out.append("<main id=\"top\" class=\"index\">")
+	out.append("<h2>MODULES</h2>")
+	out.append("<table class=\"modules\">")
+	for m in mods {
+		out.append(f"<tr><td><a href=\"{html_attr(html_url(html_page_of(m.name)))}\">{html_text(m.name)}</a></td><td>{html_prose(doc_render.doc_tagline(m))}</td></tr>")
+	}
+	out.append("</table>")
+	out.append("</main>")
+	html_close(out)
+	return html_join(out)
+}
+
+# --- the frame every page shares ---------------------------------------------------------------
+
+# html_open is everything above a page's content: the head, and the bar every page carries — the
+# way back to the index, where the reader is, and the search.
+fn html_open(mut &out: list[str], title: str, where: str) {
+	out.append("<!DOCTYPE html>")
+	out.append("<html lang=\"en\">")
+	out.append("<head>")
+	out.append("<meta charset=\"utf-8\">")
+	out.append("<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">")
+	out.append("<meta name=\"generator\" content=\"zerg doc\">")
+	mut t := title
+	if where != "" {
+		t = where + " — zerg doc"
+	}
+	out.append(f"<title>{html_text(t)}</title>")
+	out.append(f"<link rel=\"stylesheet\" href=\"{HTML_STYLE}\">")
+	out.append(f"<script src=\"{HTML_SEARCH}\" defer></script>")
+	out.append("</head>")
+	out.append("<body>")
+	out.append("<header class=\"bar\">")
+	out.append(f"<a class=\"home\" href=\"{HTML_INDEX}\">zerg doc</a>")
+	if where != "" {
+		out.append(f"<h1>{html_text(where)}</h1>")
+	}
+	out.append("<div class=\"find\">")
+	out.append("<input id=\"search\" type=\"search\" placeholder=\"Find a name by how it begins  ( / )\" autocomplete=\"off\" spellcheck=\"false\" aria-label=\"Find an exposed declaration by the beginning of its name\">")
+	out.append("<ul id=\"hits\" hidden></ul>")
+	out.append("</div>")
+	out.append("</header>")
+	out.append("<div class=\"page\">")
+}
+
+fn html_close(mut &out: list[str]) {
+	out.append("</div>")
+	out.append("</body>")
+	out.append("</html>")
+}
+
+# --- the search -------------------------------------------------------------------------------
+
+# render_html_search is the search script: every name `zerg.doc_names` lists for these modules,
+# each with the page and anchor it is found at, the first sentence of its `##` text and whether
+# it is undocumented — the row `zerg doc -s` prints — and then the matching rule and the few
+# lines that show the hits under the box.
+#
+# THE RULE IS `zerg.doc_name_matches`, WRITTEN AGAIN IN JAVASCRIPT, because the browser has no
+# other way to run it. That is the one place this tool states a rule twice, so the two are held
+# to each other: `make doc-check` runs this function over a list of terms and compares every
+# answer with `zerg doc -s`'s. The names themselves are not written twice — they are the list.
+pub fn render_html_search(mods: list[zerg.DocModule]) -> str {
+	mut ids: list[list[str]] = []
+	for m in mods {
+		ids.append(html_ids(m))
+	}
+
+	mut out: list[str] = []
+	out.append("// zerg doc --html: the names `zerg doc -s` searches, and the rule it matches them by.")
+	out.append("var ZERG_DOC_NAMES = [")
+	for n in zerg.doc_names(mods) {
+		m := mods[n.in_module]
+		doc := m.decls[n.decl].doc
+		href := f"{html_url(html_page_of(m.name))}#{html_url(ids[n.in_module][n.decl])}"
+		mut mark := "false"
+		if zerg.doc_marks_absence(false, doc) {
+			mark = "true"
+		}
+		out.append(f"[{html_js_str(n.name)}, {html_js_str(href)}, {html_js_str(zerg.doc_first_sentence(doc))}, {mark}],")
+	}
+	out.append("];")
+	out.append(HTML_JS)
+	return html_join(out)
+}
+
+# The matching rule and the box. `zergDocMatches` is `zerg.doc_name_matches` line for line: an
+# empty term finds nothing; a term carrying a `.` may begin the whole name; otherwise it must
+# begin a segment after the first. A hit is written with `textContent`, never as markup, so a
+# summary is text whatever it holds.
+const HTML_JS := """function zergDocMatches(name, term) {
+  if (term.length === 0) return false;
+  if (term.indexOf(".") >= 0 && name.startsWith(term)) return true;
+  for (var i = 1; i < name.length; i++) {
+    if (name.charAt(i - 1) === "." && name.startsWith(term, i)) return true;
+  }
+  return false;
+}
+
+function zergDocSearch(term) {
+  var out = [];
+  for (var i = 0; i < ZERG_DOC_NAMES.length; i++) {
+    if (zergDocMatches(ZERG_DOC_NAMES[i][0], term)) out.push(ZERG_DOC_NAMES[i]);
+  }
+  return out;
+}
+
+if (typeof document !== "undefined") {
+  document.addEventListener("DOMContentLoaded", function () {
+    var box = document.getElementById("search");
+    var list = document.getElementById("hits");
+    if (!box || !list) return;
+    function show() {
+      var term = box.value;
+      list.textContent = "";
+      if (term === "") { list.hidden = true; return; }
+      var hits = zergDocSearch(term);
+      for (var i = 0; i < hits.length; i++) {
+        var li = document.createElement("li");
+        var a = document.createElement("a");
+        a.href = hits[i][1];
+        a.textContent = hits[i][0];
+        var say = document.createElement("span");
+        say.textContent = hits[i][3] ? "(undocumented)" : hits[i][2];
+        if (hits[i][3]) say.className = "undoc";
+        li.appendChild(a);
+        li.appendChild(say);
+        list.appendChild(li);
+      }
+      if (hits.length === 0) {
+        var none = document.createElement("li");
+        none.className = "none";
+        none.textContent = "no exposed declaration has a name beginning " + term;
+        list.appendChild(none);
+      }
+      list.hidden = false;
+    }
+    box.addEventListener("input", show);
+    box.addEventListener("keydown", function (ev) {
+      if (ev.key === "Enter") {
+        var first = list.querySelector("a");
+        if (first) window.location.href = first.href;
+      } else if (ev.key === "Escape") {
+        box.value = "";
+        show();
+      }
+    });
+    document.addEventListener("keydown", function (ev) {
+      if (ev.key === "/" && document.activeElement !== box) {
+        ev.preventDefault();
+        box.focus();
+      }
+    });
+  });
+}"""
+
+# --- the style ----------------------------------------------------------------------------------
+
+# render_html_style is the one style sheet every page links: the system's own fonts, a light
+# page and a dark one chosen by `prefers-color-scheme`, and nothing fetched from anywhere.
+pub fn render_html_style() -> str {
+	return HTML_CSS + "\n"
+}
+
+const HTML_CSS := """:root {
+  --bg: #ffffff; --fg: #1f2328; --muted: #59636e; --line: #d1d9e0;
+  --code-bg: #f6f8fa; --link: #0550ae; --mark: #9a6700; --note: #cf222e;
+  color-scheme: light dark;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #0d1117; --fg: #e6edf3; --muted: #9198a1; --line: #3d444d;
+    --code-bg: #161b22; --link: #4493f8; --mark: #d29922; --note: #f85149;
+  }
+}
+* { box-sizing: border-box; }
+body {
+  margin: 0; background: var(--bg); color: var(--fg);
+  font: 16px/1.55 system-ui, -apple-system, "Segoe UI", sans-serif;
+}
+a { color: var(--link); text-decoration: none; }
+a:hover { text-decoration: underline; }
+pre, code { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 0.9em; }
+code { background: var(--code-bg); padding: 0.1em 0.3em; border-radius: 4px; }
+pre { background: var(--code-bg); padding: 0.7em 0.9em; border-radius: 6px; overflow-x: auto; }
+pre code { background: none; padding: 0; }
+.bar {
+  position: sticky; top: 0; z-index: 1; display: flex; align-items: center; gap: 1em;
+  padding: 0.6em 1.2em; background: var(--bg); border-bottom: 1px solid var(--line);
+}
+.bar .home { font-weight: 600; color: var(--fg); }
+.bar h1 { font-size: 1.1em; margin: 0; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+.find { position: relative; margin-left: auto; width: min(28em, 50vw); }
+#search {
+  width: 100%; padding: 0.4em 0.6em; font: inherit; color: var(--fg);
+  background: var(--code-bg); border: 1px solid var(--line); border-radius: 6px;
+}
+#hits {
+  position: absolute; right: 0; left: 0; margin: 0.3em 0 0; padding: 0.3em 0; list-style: none;
+  max-height: 70vh; overflow-y: auto; background: var(--bg);
+  border: 1px solid var(--line); border-radius: 6px;
+}
+#hits li { padding: 0.3em 0.8em; }
+#hits li a { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; margin-right: 0.8em; }
+#hits li span, #hits li.none { color: var(--muted); font-size: 0.9em; }
+.page { display: flex; gap: 2em; max-width: 72em; margin: 0 auto; padding: 1em 1.2em 4em; }
+.toc { flex: 0 0 14em; position: sticky; top: 4em; align-self: flex-start; max-height: 85vh; overflow-y: auto; font-size: 0.9em; }
+.toc h2 { font-size: 1em; margin: 0 0 0.5em; }
+.toc ul { list-style: none; margin: 0; padding: 0; }
+.toc li { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; padding: 0.1em 0; overflow-wrap: anywhere; }
+main { flex: 1 1 auto; min-width: 0; }
+main.index { max-width: 60em; }
+h2, h3 { letter-spacing: 0.06em; font-size: 0.95em; color: var(--muted); border-bottom: 1px solid var(--line); padding-bottom: 0.3em; margin-top: 2.2em; }
+h2.file { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; letter-spacing: 0; color: var(--fg); font-size: 1.1em; }
+h4.impl { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; margin: 1.5em 0 0.5em; }
+.decl { margin: 1.4em 0; scroll-margin-top: 4em; }
+.decl .decl { margin-left: 1.5em; }
+pre.sig { position: relative; margin: 0 0 0.5em; white-space: pre-wrap; }
+pre.sig b { font-weight: 700; }
+.anchor { position: absolute; left: -1.2em; opacity: 0; }
+.anchor::before { content: "#"; }
+.decl:hover > pre.sig > .anchor, .anchor:focus { opacity: 1; }
+.decl > p, .decl > pre, .decl > .members { margin-left: 1.5em; }
+.members .member { margin: 0.4em 0; }
+.members .member > p, .members .member > pre:not(.sig) { margin-left: 1.5em; }
+.members pre.sig { background: none; padding: 0.1em 0; }
+pre.fence[data-lang]::before { content: attr(data-lang); display: block; color: var(--muted); font-size: 0.8em; margin-bottom: 0.3em; }
+.undoc { color: var(--mark); font-style: italic; }
+.note { color: var(--note); }
+.hidden, .nothing, .title { color: var(--muted); }
+table.modules { border-collapse: collapse; width: 100%; }
+table.modules td { padding: 0.45em 0.8em 0.45em 0; vertical-align: top; border-bottom: 1px solid var(--line); }
+table.modules td:first-child { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; white-space: nowrap; }
+@media (max-width: 50em) {
+  .page { display: block; }
+  .toc { position: static; max-height: none; margin-bottom: 1em; }
+  .find { width: 50vw; }
+}"""
+
+# --- escaping ------------------------------------------------------------------------------------
+
+# html_text is source text made safe to stand between two tags: `&`, `<` and `>`, and both
+# quotes too, so that the one function is also safe inside an attribute and no caller has to
+# know which of the two it is writing into.
+pub fn html_text(s: str) -> str {
+	mut out: list[byte] = []
+	for c in bytearray(s) {
+		if c == b'&' {
+			html_put(out, "&amp;")
+		} else if c == b'<' {
+			html_put(out, "&lt;")
+		} else if c == b'>' {
+			html_put(out, "&gt;")
+		} else if c == b'"' {
+			html_put(out, "&quot;")
+		} else if c == b'\'' {
+			html_put(out, "&#39;")
+		} else {
+			out.append(c)
+		}
+	}
+	return str(out)
+}
+
+# html_attr is a value for inside a quoted attribute, which `html_text` already makes safe. It
+# is its own name so that a call site says which of the two places it is writing into.
+fn html_attr(s: str) -> str {
+	return html_text(s)
+}
+
+# html_prose is one paragraph of comment text, escaped, with every span the comment wrote in
+# backticks made a `<code>` span — a run of backticks opens one and the next run of the SAME
+# length closes it, the rule Markdown uses, so a span can hold a shorter run of backticks. A run
+# nothing closes is text, backticks and all.
+fn html_prose(s: str) -> str {
+	b := bytearray(s)
+	mut out := ""
+	mut i := 0
+	mut lo := 0
+	for i < b.len() {
+		if b[i] != b'`' {
+			i = i + 1
+			continue
+		}
+		n := html_ticks(b, i)
+		end := html_closer(b, i + n, n)
+		if end < 0 {
+			i = i + n
+			continue
+		}
+		out = out + html_text(diag.line_slice(b, lo, i)) + "<code>" + html_text(diag.line_slice(b, i + n, end)) + "</code>"
+		i = end + n
+		lo = i
+	}
+	return out + html_text(diag.line_slice(b, lo, b.len()))
+}
+
+# html_ticks is the length of the run of backticks starting at `at`.
+fn html_ticks(b: list[byte], at: int) -> int {
+	mut n := 0
+	for at + n < b.len() and b[at + n] == b'`' {
+		n = n + 1
+	}
+	return n
+}
+
+# html_closer is where the next run of exactly `n` backticks after `at` starts, or -1.
+fn html_closer(b: list[byte], at: int, n: int) -> int {
+	mut i := at
+	for i < b.len() {
+		if b[i] != b'`' {
+			i = i + 1
+			continue
+		}
+		k := html_ticks(b, i)
+		return i if k == n
+		i = i + k
+	}
+	return -1
+}
+
+# html_url is a name made safe inside a link: every byte but a letter, a digit and `-._~` is
+# written `%XX`. A module named by a path can be called anything its directory is, a space
+# included, and an anchor is a key with a `.` in it; both have to arrive as themselves.
+fn html_url(s: str) -> str {
+	hex := bytearray("0123456789ABCDEF")
+	mut out: list[byte] = []
+	for c in bytearray(s) {
+		if (c >= b'a' and c <= b'z') or (c >= b'A' and c <= b'Z') or (c >= b'0' and c <= b'9') or c == b'-' or c == b'.' or c == b'_' or c == b'~' {
+			out.append(c)
+		} else {
+			out.append(b'%')
+			out.append(hex[int(c) / 16])
+			out.append(hex[int(c) % 16])
+		}
+	}
+	return str(out)
+}
+
+# html_js_str is a JavaScript string literal holding `s` exactly: a quote and a backslash are
+# escaped, every control character is written `\u00XX`, and `<` is too, so that no text of the
+# source can close a script it is ever pasted into.
+fn html_js_str(s: str) -> str {
+	hex := bytearray("0123456789abcdef")
+	mut out: list[byte] = [b'"']
+	for c in bytearray(s) {
+		if c == b'"' or c == b'\\' {
+			out.append(b'\\')
+			out.append(c)
+		} else if c < byte(0x20) or c == b'<' {
+			html_put(out, "\\u00")
+			out.append(hex[int(c) / 16])
+			out.append(hex[int(c) % 16])
+		} else {
+			out.append(c)
+		}
+	}
+	out.append(b'"')
+	return str(out)
+}
+
+fn html_put(mut &out: list[byte], s: str) {
+	for c in bytearray(s) {
+		out.append(c)
+	}
+}
+
+# html_join is the page as one string, one element of the list per line — built through a byte
+# buffer for the reason `doc_render.doc_join` gives.
+fn html_join(lines: list[str]) -> str {
+	mut bs: list[byte] = []
+	for ln in lines {
+		html_put(bs, ln)
+		bs.append(b'\n')
+	}
+	return str(bs)
+}

@@ -1,7 +1,7 @@
 # The extractor answers two questions about a module and nothing else: WHAT DOES IT EXPOSE,
 # and WHICH COMMENT DOCUMENTS EACH OF THOSE DECLARATIONS. It renders nothing. There is no
 # indent here, no column budget, no colour, no terminal — `zerg doc`'s typography is
-# cmd/doc_render.zg's, and issue #20's HTML will be a SECOND rendering of exactly what comes
+# cmd/doc_render.zg's, and the HTML pages (cmd/doc_html.zg) are a SECOND rendering of what comes
 # out of here. A fact about the source that only one of those two could read would be a fact
 # the other one has to re-derive, which is how a project ends up with two extractors that
 # disagree about what a module contains.
@@ -411,7 +411,7 @@ pub fn doc_find(m: DocModule, name: str) -> list[int] {
 
 # doc_key is what a declaration is called inside its module: `split`, or `Logger.level` for a
 # method — the key `doc_find` reaches and the renderer groups a method under.
-fn doc_key(d: DocDecl) -> str {
+pub fn doc_key(d: DocDecl) -> str {
 	return d.name if d.recv == ""
 
 	return f"{d.recv}.{d.name}"
@@ -438,7 +438,7 @@ pub struct DocName {
 # `log.Logger.level`; a field or a variant is none, because `doc_find` does not reach one and a
 # name that cannot be typed back is not an answer to a search.
 #
-# IT IS THE ONE NAME LIST. `zerg doc -s` filters it, and #20's HTML search is to be built from
+# IT IS THE ONE NAME LIST. `zerg doc -s` filters it, and the HTML pages' search (#20) is built from
 # the same list rather than from a walk of its own, so that a name one of them finds is a name
 # the other finds too.
 pub fn doc_names(mods: list[DocModule]) -> list[DocName] {
@@ -609,7 +609,7 @@ pub fn doc_undocumented() -> str {
 # show: the first paragraph flattened onto one line, cut at the first `.` that ends a word.
 #
 # It lives beside the extraction rather than in either renderer because both of them ask it,
-# and issue #20's HTML will be the third — two copies of "what is a sentence" would drift into
+# and the HTML pages' search (#20) is the third — two copies of "what is a sentence" would drift into
 # two different summaries of the same comment. A fence ends the paragraph: an example is not
 # a description, and the first line of one reads as a fragment.
 pub fn doc_first_sentence(doc: list[str]) -> str {

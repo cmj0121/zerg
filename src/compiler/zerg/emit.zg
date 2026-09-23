@@ -3684,18 +3684,7 @@ fn c_tpl_methods_late(mut &em: Emitter, applied: str) {
 # by now they are filled and the File is not in hand. The two answer the same question — which
 # of an application's arguments name no type — and this is the later of the two moments.
 fn c_tpl_method_at(mut &em: Emitter, m: ast.FnDecl, applied: str) -> ast.FnDecl {
-	mut tps: list[str] = []
-	for a in em.ty_apps {
-		if a.name == m.recv {
-			for arg in a.args {
-				nm := c_named_of(arg)
-				if nm != "" and not c_is_applied(nm) and c_ty_kind(em, nm) == TK_NONE and not parser.is_conv(nm) and nm != "Err" {
-					tps.append(nm)
-				}
-			}
-		}
-	}
-
+	tps := c_tpl_params_at(em, m.recv)
 	mut decls: list[ast.Ty] = [ast.Ty.TNamed(m.recv)]
 	mut actuals: list[ast.Ty] = [ast.Ty.TNamed(applied)]
 	sol := generic.gen_solve(tps, decls, actuals, em.ty_apps)
@@ -3703,6 +3692,27 @@ fn c_tpl_method_at(mut &em: Emitter, m: ast.FnDecl, applied: str) -> ast.FnDecl 
 	mut novals: list[str] = []
 	su := generic.TySubst(tps, sol, nokeys, novals, em.ty_apps, c_place(em))
 	return generic.subst_method(su, m, applied)
+}
+
+# c_tpl_params_at is c_tpl_params asked of the TABLES: the arguments of a template receiver
+# that name no type, once the types are known and the File is not in hand.
+fn c_tpl_params_at(mut &em: Emitter, recv: str) -> list[str] {
+	mut tps: list[str] = []
+	for a in em.ty_apps {
+		if a.name == recv {
+			for arg in a.args {
+				nm := c_named_of(arg)
+				if nm != "" and not c_is_applied(nm) and c_ty_kind(em, nm) == TK_NONE and not parser.is_conv(nm) and nm != "Err" {
+					tps.append(nm)
+				}
+			}
+
+			# ONE ROW, as c_tpl_params reads it: `Box[T]` written in two places is two rows of
+			# one name, and reading both answered `[T, T]` — a second `T` no call can decide.
+			return tps
+		}
+	}
+	return tps
 }
 
 # c_is_tpl_method asks the RECEIVER and not the impl it was written in: a method whose receiver
@@ -4505,9 +4515,17 @@ fn c_check_solved(mut &em: Emitter, tpl: ast.FnDecl, sol: list[ast.Ty]) {
 		# template's line: the template is fine, a second call to the same generic may well
 		# decide every parameter. The sentence says "this call", and without a place there was
 		# no way to tell which one.
-		raise c_diag(em, rule.Rule.TypeParamUndecided, f"the type parameter `{tpl.tparams[i]}` of `{tpl.name}` is not decided by this call — no argument's type mentions it, so there is nothing to solve it from") if c_is_unknown(sol[i])
+		if c_is_unknown(sol[i]) {
+			c_refuse_undecided(em, tpl.tparams[i], tpl.name, "no argument's type mentions it")
+		}
 		i = i + 1
 	}
+}
+
+# c_refuse_undecided is ONE RULE with two ways in — a generic `fn`'s call, and an associated fn
+# of a generic type (c_gen_assoc_recv) — so its sentence is spelled once and `why` says which.
+fn c_refuse_undecided(mut &em: Emitter, tp: str, owner: str, why: str) {
+	raise c_diag(em, rule.Rule.TypeParamUndecided, f"the type parameter `{tp}` of `{owner}` is not decided by this call — {why}, so there is nothing to solve it from")
 }
 
 # c_check_bounds is `[T: Eq]` — the specialization's type argument must implement the spec
@@ -5651,12 +5669,56 @@ fn c_decl_sites(f: ast.File) -> list[Site] {
 			line = f.impls[by].line
 			col = f.impls[by].col
 		}
-		out.append(Site(fn_i.ret, f"the result of `{fn_i.name}`", fn_i.tparams, path, line, col, fn_i.is_pub))
-		for pm in fn_i.params {
-			out.append(Site(pm.ty, c_param_says(fn_i, pm), fn_i.tparams, path, line, col, fn_i.is_pub))
-		}
+		c_fn_sites(fn_i, fn_i.tparams, path, line, col, out)
 	}
 	return out
+}
+
+# c_tpl_sites are the same sites, spelled by the TEMPLATES — which were removed from the program
+# before c_decl_sites reads it, so an unknown name in one was never asked about. `fn same() ->
+# Self` in `impl[T] Bag[T]` was judged as a type by the first body that met a specialization,
+# and a template nothing instantiated let it through altogether; the sentence a plain `fn` gets,
+# _no type named `Self`_, is owed to the declaration either way.
+#
+# They are checked and nothing else: a template's types still name its parameters, so no
+# typedef is written for them — its specializations are ordinary declarations and are sited
+# as such.
+fn c_tpl_sites(mut &em: Emitter) -> list[Site] {
+	mut out: list[Site] = []
+	for sd in em.gen_structs {
+		for fd in sd.fields {
+			out.append(Site(fd.ty, f"field `{sd.name}.{fd.name}`", sd.tparams, sd.path, fd.line, fd.col, sd.is_pub and fd.is_pub))
+		}
+	}
+	for ed in em.gen_enums {
+		for v in ed.variants {
+			mut i := 0
+			for i < v.fields.len() {
+				out.append(Site(v.fields[i], f"payload {strconv.to_string(i, 10)} of `{ed.name}.{v.name}`", ed.tparams, ed.path, v.line, v.col, ed.is_pub))
+				i = i + 1
+			}
+		}
+	}
+	for fn_i in em.gen_tpls {
+		c_fn_sites(fn_i, fn_i.tparams, fn_i.path, fn_i.line, fn_i.col, out)
+	}
+
+	# A METHOD OF A TEMPLATE IMPL is bound by the impl's parameters as well as its own
+	for m in em.impl_tpl_fns {
+		mut tps := c_tpl_params_at(em, m.recv)
+		for t in m.tparams {
+			tps.append(t)
+		}
+		c_fn_sites(m, tps, m.path, m.line, m.col, out)
+	}
+	return out
+}
+
+fn c_fn_sites(fn_i: ast.FnDecl, tps: list[str], path: str, line: int, col: int, mut &out: list[Site]) {
+	out.append(Site(fn_i.ret, f"the result of `{fn_i.name}`", tps, path, line, col, fn_i.is_pub))
+	for pm in fn_i.params {
+		out.append(Site(pm.ty, c_param_says(fn_i, pm), tps, path, line, col, fn_i.is_pub))
+	}
 }
 
 # c_param_says names a parameter in a sentence, and the RECEIVER is the one it must not name
@@ -5852,15 +5914,24 @@ fn c_check_named_types(mut &em: Emitter, f: ast.File, sites: list[Site]) {
 	}
 
 	for s in sites {
-		# the declaration's own place. This pass runs before any statement is emitted, so the
-		# SAt markers have said nothing and `em.at_*` still holds the last unit's — which is
-		# why every site carries one rather than some of them doing so. The guard that used
-		# to stand here, skipping a site whose path was empty, was the half of the defect
-		# that made a missing position look deliberate.
-		em.at_path = s.path
-		c_mark(em, s.line, s.col)
-		c_check_named_ty(em, s.ty, s)
+		c_check_site(em, s)
 	}
+
+	# AND THE TEMPLATES', which are declarations too (c_tpl_sites)
+	for s in c_tpl_sites(em) {
+		c_check_site(em, s)
+	}
+}
+
+fn c_check_site(mut &em: Emitter, s: Site) {
+	# the declaration's own place. This pass runs before any statement is emitted, so the
+	# SAt markers have said nothing and `em.at_*` still holds the last unit's — which is
+	# why every site carries one rather than some of them doing so. The guard that used
+	# to stand here, skipping a site whose path was empty, was the half of the defect
+	# that made a missing position look deliberate.
+	em.at_path = s.path
+	c_mark(em, s.line, s.col)
+	c_check_named_ty(em, s.ty, s)
 }
 
 # c_check_named_ty walks a type to its named leaves. A container is transparent here: the
@@ -5941,6 +6012,11 @@ fn c_check_type_name(mut &em: Emitter, nm: str, s: Site) {
 	# is emitted, because a specialization has a real type in its place.
 	return if c_name_in(s.tparams, nm)
 
+	# AN APPLICATION A TEMPLATE WRITES — `Box[T]`, the receiver of `impl[T] Box[T]` — is no type
+	# until it is instantiated, and what can be asked of it here is its parts: a generic type,
+	# and arguments that each resolve or are the template's own parameters.
+	return if c_open_app_checked(em, nm, s)
+
 	# `This` is the SELF TYPE (GRAMMAR#param), so it names something only where there is a
 	# self — inside an `impl`, where c_impl_ty has already substituted it. Reaching here
 	# means there was none, and saying "no type named `This`" invites the reader to go and
@@ -5962,6 +6038,23 @@ fn c_check_type_name(mut &em: Emitter, nm: str, s: Site) {
 	raise c_diag(em, rule.Rule.TypeArgsMissing, f"`{nm}` is a generic type and this names it without arguments — a type is `{nm}[…]`, one argument per parameter ({site})") if c_gen_struct_row(em, nm) >= 0
 
 	raise c_diag(em, rule.Rule.NoSuchType, f"no type named `{nm}` ({site})")
+}
+
+# c_open_app_checked checks an application's arguments when its base is a generic type, and
+# answers whether it did. Only a template's site reaches it with one open: every closed
+# application was instantiated before this pass and resolves as a type.
+fn c_open_app_checked(mut &em: Emitter, nm: str, s: Site) -> bool {
+	return false if not c_is_applied(nm) or s.tparams.len() == 0
+
+	for a in em.ty_apps {
+		if a.name == nm {
+			return false if c_gen_struct_row(em, a.base) < 0 and c_gen_enum_row(em, a.base) < 0
+
+			c_check_named_ty_list(em, a.args, s)
+			return true
+		}
+	}
+	return false
 }
 
 # c_typedef_of answers what a `type X = Y` name is underneath, or TUnknown for a name that
@@ -11436,6 +11529,104 @@ fn c_assoc_key(mut &em: Emitter, tn: str, meth: str, args: list[ast.Expr]) -> st
 	return c_instantiate(em, key, args)
 }
 
+# c_assoc_type is the TYPE a `Type.f` names, or "" when what stands left of the dot is not one.
+# It is THE resolution of the form, asked by the lowering and by the inference alike, so the
+# type a call is emitted against and the type its answer is read from cannot be two answers.
+#
+# A GENERIC TYPE IS NAMED BARE — `Box.make(3)` — because a postfix `[…]` is an index and never
+# type arguments (GRAMMAR#postfix). Its impl's parameters are solved from the call, the way a
+# generic `fn`'s are (docs/core/specs.md), and the answer is the instantiation the associated fn
+# is seated on (c_gen_assoc_recv).
+fn c_assoc_type(mut &em: Emitter, target: ast.Expr, meth: str, args: list[ast.Expr]) -> str {
+	tn := c_ident_name(target)
+
+	return "" if tn == ""
+	return tn if c_is_struct_name(em, tn)
+	return c_gen_assoc_recv(em, tn, meth, args) if c_gen_struct_row(em, tn) >= 0
+
+	return ""
+}
+
+# c_gen_assoc_recv is the receiver `Base.meth(…)` is seated on, when `Base` is a generic struct
+# and `meth` a fn of one of its template impls. ONE implementation stands for every
+# instantiation (docs/core/specs.md), materialized per instantiation — so the impl's parameters
+# are solved against the written arguments and the method is seated where they say.
+#
+# A PARAMETER THE FN NEVER WRITES IS LEFT OPEN rather than guessed: `fn one() -> int` is the same
+# body under every `T`, so it is seated once, on the template's own receiver (`Box[T]`). One it
+# DOES write and no argument decides is the unanswered call c_check_solved refuses for a generic
+# `fn`, and it is refused with that rule.
+#
+# A name no template impl declares comes back as the base, so c_assoc_call reports the missing
+# member in its own words.
+fn c_gen_assoc_recv(mut &em: Emitter, base: str, meth: str, args: list[ast.Expr]) -> str {
+	r := c_impl_tpl_fn_row(em, base, meth)
+	return base if r < 0
+
+	m := em.impl_tpl_fns[r]
+	if not m.is_assoc {
+		c_refuse_method_through_type(em, base, meth)
+	}
+
+	tps := c_tpl_params_at(em, m.recv)
+	mut decls: list[ast.Ty] = []
+	for pm in m.params {
+		decls.append(pm.ty)
+	}
+	mut actuals: list[ast.Ty] = []
+	for a in args {
+		actuals.append(c_infer(em, a))
+	}
+
+	sol := generic.gen_solve(tps, decls, actuals, em.ty_apps)
+
+	mut names: list[str] = []
+	mut tys: list[ast.Ty] = []
+	mut i := 0
+	for i < tps.len() {
+		if not c_is_unknown(sol[i]) {
+			names.append(tps[i])
+			tys.append(sol[i])
+		} else if generic.gen_mentions(tps[i], em.ty_apps, m) {
+			c_refuse_undecided(em, tps[i], base, f"`{base}.{meth}` writes it and no argument's type mentions it")
+		}
+		i = i + 1
+	}
+
+	mut nokeys: list[str] = []
+	mut novals: list[str] = []
+	su := generic.TySubst(names, tys, nokeys, novals, em.ty_apps, c_place(em))
+	recv := c_named_of(generic.subst_tys(su, [ast.Ty.TNamed(m.recv)])[0])
+
+	# EVERY PARAMETER DECIDED: the instantiation is an ordinary type, and minting it seats its
+	# template methods with it (c_tpl_methods_late) — the path `Box(3).get()` already takes.
+	if names.len() == tps.len() {
+		c_record_apps(em, su)
+		return recv
+	}
+
+	# SOME LEFT OPEN, none of them written: the fn is seated on the receiver as it stands.
+	key := c_sig_key(recv, meth)
+	if c_sig_row(em, key) < 0 and not c_is_generic(em, key) {
+		inst := generic.subst_method(su, m, recv)
+		if not c_seat_tpl_method(em, inst) {
+			c_add_sig(em, inst)
+			em.inst_fns.append(inst)
+		}
+	}
+	return recv
+}
+
+# c_impl_tpl_fn_row is the template-impl fn `meth` of the generic type `base`, or -1.
+fn c_impl_tpl_fn_row(mut &em: Emitter, base: str, meth: str) -> int {
+	mut i := 0
+	for i < em.impl_tpl_fns.len() {
+		return i if em.impl_tpl_fns[i].name == meth and c_app_base(em.impl_tpl_fns[i].recv) == base
+		i = i + 1
+	}
+	return -1
+}
+
 # c_gen_is_assoc is `is_assoc` for a TEMPLATE, which has no signature row to carry `sig_assoc`.
 fn c_gen_is_assoc(mut &em: Emitter, key: str) -> bool {
 	return em.gen_tpls[c_generic_row(em, key)].is_assoc
@@ -11472,8 +11663,10 @@ fn c_spec_member_of(mut &em: Emitter, tn: str, meth: str) -> str {
 	return ""
 }
 
+# c_refuse_assoc_through_instance is the other side. The spelling it hands back names the type BARE: a generic receiver's `[…]` would be an index
+# (GRAMMAR#postfix), and `Box.make(…)` solves its arguments from the call (c_assoc_type).
 fn c_refuse_assoc_through_instance(mut &em: Emitter, recv: str, meth: str) {
-	raise c_diag(em, rule.Rule.AssocFnThroughAnInstance, f"`{meth}` is an ASSOCIATED FN of `{recv}` — its body does not use `this`, so it takes no receiver and is reached through the type (`{recv}.{meth}(…)`) (GRAMMAR#impl-decl)")
+	raise c_diag(em, rule.Rule.AssocFnThroughAnInstance, f"`{meth}` is an ASSOCIATED FN of `{recv}` — its body does not use `this`, so it takes no receiver and is reached through the type (`{c_app_base(recv)}.{meth}(…)`) (GRAMMAR#impl-decl)")
 }
 
 #
@@ -11484,11 +11677,12 @@ fn c_free_method(mut &em: Emitter, target: ast.Expr, meth: str, args: list[ast.E
 	# used to be "the method `make` on a ?": the target is a type rather than a value, so
 	# inference had nothing to name and the message pointed at the hole rather than at the form.
 	tn := c_ident_name(target)
-	if tn != "" and c_is_struct_name(em, tn) {
+	at := c_assoc_type(em, target, meth, args)
+	if at != "" {
 		if em.want_index {
 			c_nx_type_name(em, target, tn)
 		}
-		return c_assoc_call(em, tn, meth, args, l, c, sb)
+		return c_assoc_call(em, at, meth, args, l, c, sb)
 	}
 
 	# WHAT THE PREFIX NAMES, asked once (c_ns_kind) and answered here for both halves of a
@@ -14937,8 +15131,8 @@ fn c_infer_methcall(mut &em: Emitter, target: ast.Expr, meth: str, args: list[as
 	# below has nothing to infer from: `c_infer` of a type name answers `?`, and every arm past
 	# it reads that. The row is what carries the answer, and it is keyed the way a method's is —
 	# an associated fn shares its type's namespace.
-	sn := c_ident_name(target)
-	return c_lookup_sig_ret(em, c_assoc_key(em, sn, meth, args)) if sn != "" and c_is_struct_name(em, sn)
+	sn := c_assoc_type(em, target, meth, args)
+	return c_lookup_sig_ret(em, c_assoc_key(em, sn, meth, args)) if sn != ""
 
 	tty := c_infer(em, target)
 	recv := c_recv_name(em, tty)

@@ -147,6 +147,12 @@ is materialized per instantiation the way a generic `fn` is per call. An inheren
 same shape without a spec. A concrete `impl Box[int]` beside it implements what only that instantiation has,
 and the two do not collide: they are implementations of two different types.
 
+An **associated fn** of such an impl is reached through the bare type — `Box.make(3)` — since a postfix `[…]`
+is an index and never type arguments. The impl's parameters are solved from the call as a generic `fn`'s
+are, so `Box.make(3)` is `Box[int]`'s `make`. A parameter the fn never writes, in its signature or its body,
+has nothing to decide — `fn one() -> int` is one body under every `T` — and one it writes that no argument
+decides is refused (_E4009_).
+
 A target reached **through a module** — `impl Show for shape.P` — is the ordinary way to make a foreign
 type satisfy an interface you own, and the orphan rule above is what allows it: the impl is in the spec's
 module. The name it resolves to is the **bare** one, because a type another module can reach is a `pub`

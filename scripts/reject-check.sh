@@ -918,7 +918,7 @@ EOF
 # refusals below are one rule from its two sides: each names what the declaration IS and how the
 # other spelling would read.
 
-reject a-method-reached-through-its-type E3151 'is a METHOD of `P`' <<'EOF'
+reject a-method-reached-through-its-type E3151 '`twice` is a METHOD of `P` — its body uses `this`' <<'EOF'
 struct P {
 	pub x: int
 }
@@ -931,6 +931,48 @@ impl P {
 
 fn main() {
 	print P.twice()
+}
+EOF
+
+# A SPEC impl's member is a method whatever its body reads (docs/core/specs.md: every member
+# carries an implicit receiver), so its reason is the spec's and never a `this` it did not write.
+
+reject a-spec-member-reached-through-its-type E3151 'member of the spec `Shape`' <<'EOF'
+spec Shape {
+	fn helper(v: int) -> int
+}
+
+struct Sq {
+	pub n: int
+}
+
+impl Shape for Sq {
+	fn helper(v: int) -> int {
+		return v + 1
+	}
+}
+
+fn main() {
+	print Sq.helper(1)
+}
+EOF
+
+# A RENDERING override is the language's own requirement written in an inherent `impl`
+# (docs/runtime/format.md), a method for the same reason, so its body is not the reason either.
+
+reject a-rendering-override-reached-through-its-type E3151 'is a rendering override' <<'EOF'
+struct P {
+	pub x: int
+}
+
+impl P {
+	fn display() -> str {
+		return "p"
+	}
+}
+
+fn main() {
+	print P.display()
 }
 EOF
 

@@ -3062,7 +3062,7 @@ fn parse_fn_at(mut &p: Parser, start: token.Token, is_pub: bool, recv: str, recv
 # body reads, because the spec declared the member a method; these two are a spec the language
 # supplies without writing, and `fn display() -> str { return "P" }` — an override that needs
 # nothing from the value — is exactly the shape the body-derived rule would take away.
-fn p_is_rendering(name: str) -> bool {
+pub fn p_is_rendering(name: str) -> bool {
 	return name == "display" or name == "debug"
 }
 

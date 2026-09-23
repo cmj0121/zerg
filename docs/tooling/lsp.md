@@ -154,8 +154,12 @@ rather than wrong, and the next keystroke after the quote is closed brings them 
 has open** is not published anywhere — the protocol addresses diagnostics to a document, and there
 is no document; `zerg build` prints it and the editor does not. And a finding the compiler raised in
 a tree it **wrote itself** — a `#[derive]` expansion is walked at `<derive:FILE>` — is published in
-FILE's buffer at the top of the file rather than at its own line and column, because those name a
-line in a tree nobody has on screen.
+FILE's buffer at the **decorator** that wrote the tree rather than at its own line and column,
+because those name a line in a tree nobody has on screen. Every expansion of one file shares that
+path, so the finding names the declaration it was expanded for, and that declaration's decorator
+is the place. An abort raised in an expansion is placed the same way, on FILE's buffer and not the
+one whose check raised it. A finding that names none — one in the wrapper `#[obj]` writes — lands
+at the top of the file.
 
 Every check in a round is therefore a check of a program the changed buffer is in, which is what
 keeps [the name index](#a-name-answers-from-one-index) an index that still answers for it.

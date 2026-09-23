@@ -892,7 +892,7 @@ pub fn lex_diags(src: str, path: str) -> list[ast.Diag] {
 		if t.kind == token.Kind.Illegal {
 			b := bytearray(t.value)
 			at := lex_code_end(b)
-			out.append(ast.Diag(path, t.line, t.col, 0, 0, parser.fstr_slice(b, 0, at), parser.fstr_slice(b, at + 1, b.len()), ""))
+			out.append(ast.Diag(path, t.line, t.col, 0, 0, parser.fstr_slice(b, 0, at), parser.fstr_slice(b, at + 1, b.len()), "", ""))
 		}
 	}
 	return out

@@ -371,6 +371,12 @@ pub struct Emitter {
 	pub at_end_line: int
 	pub at_end_col: int
 
+	# at_for is the declaration the function being emitted was EXPANDED for — the type a
+	# `#[derive(…)]` sat above — and empty in a function somebody wrote. It rides beside the
+	# place because the place cannot say it: every expansion of one file is walked at the one
+	# path `<derive:FILE>`, each from its own line 1 (ast.Diag.derived_for says who reads it).
+	pub at_for: str
+
 	# diags is every ILL-FORMED-PROGRAM finding this emission has made, rendered, in the
 	# order they were found. They are COLLECTED rather than raised because an error was a
 	# process death: a file with three mistakes in it reported one, and the programmer
@@ -21270,6 +21276,8 @@ fn c_fn(mut &em: Emitter, fn_d: ast.FnDecl) -> str {
 	c_mark(em, fn_d.line, fn_d.col)
 	outer_fn := em.cur_fn
 	em.cur_fn = fn_d.name
+	outer_for := em.at_for
+	em.at_for = c_expanded_for(fn_d.path, fn_d.recv, outer_for)
 
 	# THE ENCLOSING FUNCTION'S BOOKS, saved BEFORE the reset wipes them. A lambda re-enters
 	# c_fn in the middle of the function being emitted — after its `return` has already
@@ -21402,7 +21410,47 @@ fn c_fn(mut &em: Emitter, fn_d: ast.FnDecl) -> str {
 	em.fn_ret = saved_ret
 	em.in_unsafe_fn = saved_unsafe
 	em.cur_fn = outer_fn
+	em.at_for = outer_for
 	return out
+}
+
+# c_fn_told is c_fn for one function of the unit, and what it adds is the declaration an ABORT
+# was expanded for. A raise is a string, and one raised in an expansion names a place in
+# `<derive:FILE>`, which every expansion of that file shares — so which decorator it came from
+# is lost on the way out. It is left on `diags` as well: a finding with no code whose sentence
+# is the abort's whole text and whose `derived_for` says the rest, for a caller that holds the
+# list to find the raise by (the language server). The raise goes on unchanged, so a caller
+# that reads only the raise (`zerg build`) is told nothing new.
+fn c_fn_told(mut &em: Emitter, fn_d: ast.FnDecl, mut &diags: list[ast.Diag]) -> str {
+	got := guard {
+		c_fn(em, fn_d)
+	}
+	return match got {
+		Either.Left(code) => code
+		Either.Right(e)   => c_abort_told(em, e.message(), diags)
+	}
+}
+
+# c_abort_told leaves an abort raised inside an expansion on `diags` (c_fn_told) and raises it on.
+fn c_abort_told(mut &em: Emitter, why: str, mut &diags: list[ast.Diag]) -> str {
+	if em.at_for != "" {
+		diags.append(ast.Diag(em.at_path, em.at_line, em.at_col, 0, 0, "", why, "", em.at_for))
+	}
+	raise why
+}
+
+# c_expanded_for is the declaration a function was expanded for, read off the function: a
+# derived impl's method has the type it was derived for as its receiver, and on a generic type
+# the copy for `Box[int]` was still derived for `Box`, the name declared. A function in a tree
+# somebody wrote was expanded for nothing. A lambda inside an expansion has no receiver of its
+# own and is the enclosing function's, so it keeps what that one said — and so does a function
+# an expansion writes with no receiver at all (`#[obj]`'s wrapper), which then says nothing
+# rather than something taken from another decorator.
+fn c_expanded_for(path: str, recv: str, outer: str) -> str {
+	return "" if ast.derive_origin(path) == path
+	return c_app_base(recv) if recv != ""
+
+	return outer
 }
 
 # c_body_diverges reports whether a body's last statement leaves the function — a `return`
@@ -23677,6 +23725,7 @@ fn c_ft_unsay(ft: FileTypes, mut &ds: list[ast.Diag], start: int) {
 		if i >= start {
 			d.msg = c_ft_says(ft, d.msg)
 			d.fix = c_ft_says(ft, d.fix)
+			d.derived_for = c_ft_says(ft, d.derived_for)
 		}
 		if not c_ft_seen(out, d) {
 			out.append(d)
@@ -23764,7 +23813,7 @@ fn c_emit_unit_as(prog0: ast.File, own0: ast.File, ft: FileTypes, ms: Mods, whol
 	# is what makes that invariant hold for a multi-unit program, at the place it already lives,
 	# and it is what lets the declaration passes below go back to reading the WHOLE program.
 	seen := diags.len()
-	mut em := Emitter([], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], false, false, false, false, [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], 0, [], 0, [], [], false, "", "", [], [], ast.Ty.TVoid, 0, "", 0, 0, 0, 0, diags, 0, 0, [], [], [], [], [], false, 0, false, "", 0, false, false, [], [], [], [], [], [], [], [], [], [], [], "", want_lints, [], [], [], [], [], [], [], [], [], [], [], [], false, 0, [], [], "", c_nosub(), [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], false, ast.no_index(), [], [], [], [], [], [], [], [], [], [], [], [])
+	mut em := Emitter([], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], false, false, false, false, [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], 0, [], 0, [], [], false, "", "", [], [], ast.Ty.TVoid, 0, "", 0, 0, 0, 0, "", diags, 0, 0, [], [], [], [], [], false, 0, false, "", 0, false, false, [], [], [], [], [], [], [], [], [], [], [], "", want_lints, [], [], [], [], [], [], [], [], [], [], [], [], false, 0, [], [], "", c_nosub(), [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], false, ast.no_index(), [], [], [], [], [], [], [], [], [], [], [], [])
 
 	# ASSIGNED, NOT PASSED. Every argument above is a zero value, and `layering` asserts that
 	# — it lines the call up with the fields by KIND, which only works while nothing in it
@@ -23930,7 +23979,7 @@ fn c_emit_unit_as(prog0: ast.File, own0: ast.File, ft: FileTypes, ms: Mods, whol
 	mut def_parts: list[str] = []
 	i = 0
 	for i < own.fns.len() {
-		def_parts.append(c_lowered(checking, c_fn(em, own.fns[i])))
+		def_parts.append(c_lowered(checking, c_fn_told(em, own.fns[i], diags)))
 		i = i + 1
 	}
 
@@ -23955,7 +24004,7 @@ fn c_emit_unit_as(prog0: ast.File, own0: ast.File, ft: FileTypes, ms: Mods, whol
 		# costs, and it is paid only by the units that actually use one.
 		inst := em.inst_fns[done]
 		proto_parts.append(c_lowered(checking, "static " + c_proto(em, inst)))
-		def_parts.append(c_lowered(checking, "static " + c_fn(em, inst)))
+		def_parts.append(c_lowered(checking, "static " + c_fn_told(em, inst, diags)))
 		done = done + 1
 	}
 

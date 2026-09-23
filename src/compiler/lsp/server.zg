@@ -629,7 +629,7 @@ fn ls_check(mut &s: Server, uri: str, load: fn (str, list[str], list[str]) -> Pr
 		Either.Left(_)  => ""
 		Either.Right(e) => e.message()
 	}
-	return ls_abort_report(s, uri, lerr) if lerr != ""
+	return ls_abort_report(s, uri, lerr, "") if lerr != ""
 
 	prog := match res {
 		Either.Left(p)  => p
@@ -647,21 +647,37 @@ fn ls_check(mut &s: Server, uri: str, load: fn (str, list[str], list[str]) -> Pr
 #
 # Nothing else is published: the buffers of a program that would not load are left as they
 # were rather than re-checked against a program missing a file.
-fn ls_abort_report(s: Server, uri: str, msg: str) -> Report {
+#
+# `of` is the declaration an abort raised inside an expansion was expanded for (ls_abort_for),
+# and empty for every other abort.
+fn ls_abort_report(s: Server, uri: str, msg: str, of: str) -> Report {
 	owner := ls_abort_owner(s, uri, msg)
-	one := [ls_abort_diag(ls_uri_path(owner), ls_lines(ls_doc_text(s, owner)), msg)]
+	one := [ls_abort_diag(ls_uri_path(owner), ls_doc_text(s, owner), msg, of)]
 	return Report([owner], [one])
 }
 
-# ls_abort_owner is the open buffer the abort's place names, and `uri` when it names none.
+# ls_abort_owner is the open buffer the abort's place names, and `uri` when it names none. A
+# place in an expansion names the file the decorator is written in, for the reason a finding's
+# does (ls_check_program).
 fn ls_abort_owner(s: Server, uri: str, msg: str) -> str {
 	at := ls_abort_place(msg)
 	return uri if not at.ok
 
+	file := zerg.derive_origin(at.path)
 	for d in s.docs {
-		return d.uri if ls_uri_path(d.uri) == at.path
+		return d.uri if ls_uri_path(d.uri) == file
 	}
 	return uri
+}
+
+# ls_abort_for is the declaration the walk's abort was expanded for, read off the findings it
+# left: the compiler leaves an abort raised inside an expansion on that list too, with no code
+# and the abort's whole text as its sentence (emit.c_fn_told), because the text cannot say it.
+fn ls_abort_for(ds: list[zerg.Diag], msg: str) -> str {
+	for d in ds {
+		return d.derived_for if d.code == "" and d.msg == msg
+	}
+	return ""
 }
 
 # ls_check_program is that check from the program onwards, and it is a function of its own
@@ -705,7 +721,7 @@ fn ls_check_program(mut &s: Server, uri: str, prog: Program, said: list[str], su
 
 	# An ABORT is a refusal or a parse error, raised as a sentence naming a place, and it is
 	# published in the buffer that place belongs to — ls_abort_report says which.
-	return ls_abort_report(s, uri, err) if err != ""
+	return ls_abort_report(s, uri, err, ls_abort_for(ds, err)) if err != ""
 
 	if subject {
 		ls_nx_utf16(nx, prog.paths, prog.srcs)
@@ -735,16 +751,17 @@ fn ls_check_program(mut &s: Server, uri: str, prog: Program, said: list[str], su
 	mut each: list[list[json.Val]] = []
 	for u in ls_answered_for(s, prog.paths, uri, said) {
 		p := ls_uri_path(u)
-		lines := ls_lines(ls_doc_text(s, u))
+		text := ls_doc_text(s, u)
+		lines := ls_lines(text)
 		mut one: list[json.Val] = []
 		for d in ds {
 			if zerg.derive_origin(d.path) == p {
-				one.append(ls_finding(d.path, ls_extent_span(lines, d.line, d.col, d.end_line, d.end_col), d.code, d.msg, 1))
+				one.append(ls_finding(d.path, ls_extent_span(lines, d.line, d.col, d.end_line, d.end_col), text, d.derived_for, d.code, d.msg, 1))
 			}
 		}
 		for f in lints {
 			if zerg.derive_origin(f.path) == p {
-				one.append(ls_finding(f.path, ls_word_span(lines, f.line, f.col), f.code, f.msg, ls_severity(f.sev)))
+				one.append(ls_finding(f.path, ls_word_span(lines, f.line, f.col), text, "", f.code, f.msg, ls_severity(f.sev)))
 			}
 		}
 		uris.append(u)
@@ -758,13 +775,27 @@ fn ls_check_program(mut &s: Server, uri: str, prog: Program, said: list[str], su
 # A finding the walk raised in a file carries that file's line and column, and it is drawn
 # there. A finding raised in a tree the compiler WROTE — `<derive:FILE>` — carries a place in
 # that tree, which is a line of text nobody has: drawn in FILE's buffer it would underline
-# whatever happens to sit at that line. So it lands at the top of the file instead, with its
-# whole sentence, for the reason an abort with no place in this buffer does: the one thing
-# known about where it belongs is that it is not a place in what the reader is looking at.
-fn ls_finding(path: str, at: Span, code: str, msg: str, severity: int) -> json.Val {
+# whatever happens to sit at that line. So it is drawn at the DECORATOR that wrote the tree,
+# the line in `text` a reader has to go and change. Which decorator is the declaration the
+# finding was expanded for (ast.Diag.derived_for), because every expansion of one file shares
+# the one path. A finding that names none lands at the top of the file with its whole
+# sentence, for the reason an abort with no place in this buffer does.
+fn ls_finding(path: str, at: Span, text: str, of: str, code: str, msg: str, severity: int) -> json.Val {
 	return ls_diagnostic_over(at, code, msg, severity) if zerg.derive_origin(path) == path
 
-	return ls_diagnostic_over(Span(0, 0, 0, 0), code, msg, severity)
+	return ls_diagnostic_over(ls_decorator_span(text, of), code, msg, severity)
+}
+
+# ls_decorator_span is where the decorator on the declaration `of` is written in `text`, and
+# the top of the file where there is none to find. The buffer is re-read for it here and only
+# here, because a finding in an expansion is the rare one and every other costs nothing more.
+fn ls_decorator_span(text: str, of: str) -> Span {
+	return Span(0, 0, 0, 0) if of == ""
+
+	at := zerg.decorator_at(text, of)
+	return Span(0, 0, 0, 0) if at.line == 0
+
+	return ls_span_at(ls_lines(text), at.line, at.col, at.end_line, at.end_col)
 }
 
 # ls_answered_for is the open buffers one check speaks for: the one that was checked, first,
@@ -816,12 +847,22 @@ fn ls_severity(sev: str) -> int {
 # A place in ANOTHER file of the program is not this buffer's to underline, so that finding
 # stays at the top with its trailer intact: the sentence is then the only thing that says
 # where to look. In this buffer the trailer is dropped, because the range now says it.
-fn ls_abort_diag(path: str, lines: list[list[byte]], msg: str) -> json.Val {
+#
+# A place in an EXPANSION of this buffer's file is drawn where a finding there is — at the
+# decorator on `of` (ls_decorator_span) — and, with no `of` to find one by, it stays at the top
+# with its trailer, the one thing then saying which tree it is in.
+fn ls_abort_diag(path: str, text: str, msg: str, of: str) -> json.Val {
 	at := ls_abort_place(msg)
-	return ls_whole_file_diag(msg) if not at.ok or at.path != path
+
+	return ls_whole_file_diag(msg) if not at.ok or zerg.derive_origin(at.path) != path
+	return ls_whole_file_diag(msg) if at.path != path and of == ""
 
 	sentence := ls_slice_str(bytearray(msg), 0, at.cut)
-	return ls_diagnostic_at(lines, at.line, at.col, zerg.rule_msg_code(sentence), zerg.rule_msg_says(sentence), 1)
+	code := zerg.rule_msg_code(sentence)
+	says := zerg.rule_msg_says(sentence)
+	return ls_diagnostic_over(ls_decorator_span(text, of), code, says, 1) if at.path != path
+
+	return ls_diagnostic_at(ls_lines(text), at.line, at.col, code, says, 1)
 }
 
 # Place is the trailer read back out of an abort: the file, the line and the column it names,

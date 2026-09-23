@@ -107,7 +107,7 @@ pub fn chk_at_place(mut &em: emit.Emitter, path: str, line: int, col: int, code:
 fn chk_span(mut &em: emit.Emitter, path: str, line: int, col: int, el: int, ec: int, code: rule.Rule, msg: str) {
 	return if chk_seen(em.diags, path, line, col, msg)
 
-	em.diags.append(ast.Diag(path, line, col, el, ec, rule.rule_code(code), msg, ""))
+	em.diags.append(ast.Diag(path, line, col, el, ec, rule.rule_code(code), msg, "", chk_derived_for(path, em.at_path, em.at_for)))
 }
 
 # chk_seen is WHAT COUNTS AS THE SAME FINDING, and it is one function because it is one
@@ -120,6 +120,16 @@ fn chk_seen(ds: list[ast.Diag], path: str, line: int, col: int, msg: str) -> boo
 		return true if d.line == line and d.col == col and d.path == path and d.msg == msg
 	}
 	return false
+}
+
+# chk_derived_for is the declaration a finding at `path` was expanded for: the one the function
+# being walked was written for, when the finding is about that function's own file, and nothing
+# otherwise. A rule that reports at a place it KNOWS (chk_at_place) may name another file than
+# the walk is in, and that finding is not the expansion's, whatever function was being emitted
+# when it was made.
+fn chk_derived_for(path: str, at_path: str, at_for: str) -> str {
+	return at_for if path == at_path
+	return ""
 }
 
 # --- visibility -------------------------------------------------------------------
@@ -657,7 +667,7 @@ fn chk_note_at(mut &em: emit.Emitter, line: int, col: int, code: str, msg: str, 
 
 	return if chk_seen(em.lints, em.at_path, line, col, msg)
 
-	em.lints.append(ast.Diag(em.at_path, line, col, 0, 0, code, msg, fix))
+	em.lints.append(ast.Diag(em.at_path, line, col, 0, 0, code, msg, fix, em.at_for))
 }
 
 # --- mutability ------------------------------------------------------------------

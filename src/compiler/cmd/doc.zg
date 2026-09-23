@@ -10,6 +10,9 @@
 #     zerg doc strings.split    one declaration — `log.Logger.level` for a method
 #     zerg doc path/to/file.zg  a file or a directory, documented where it stands
 #
+# `--search` (`-s`) is beside them rather than among them: it names no document, it lists the
+# declarations whose name begins with a term, within the index or within the one name given.
+#
 # Each of them is the READER'S document — the `##` lines of every comment — unless `--all` asks
 # for the maintainer's, which is every comment as written (#18). A listing is the reader's
 # alone, so `--all` beside `--brief`, `--check` or no name at all is refused rather than
@@ -51,23 +54,29 @@ pub fn doc_cmd() -> cli.Command {
 		.flag("b", "brief", "one line for each declaration instead of the whole comment")
 		.flag("c", "check", "name the exposed declarations that carry no `##` comment, run every example, and exit 1 if anything is missing or wrong")
 		.opt("t", "timeout", "under --check, seconds one module's examples may take to build, and then to run", f"{test.TEST_TIMEOUT}")
+		.opt("s", "search", "list the exposed declarations whose name begins with this, across every module `zerg doc` lists or within the one named")
 		.add(cli.positional("name", "a module, one of its declarations, or a path to a source"))
 		.run(do_doc)
 	)
 }
 
 fn do_doc(c: cli.Ctx) -> int {
-	raise doc_all_alone(c) if c.has("all") and (c.has("brief") or c.has("check") or c.args().len() == 0)
+	raise doc_all_alone(c) if c.has("all") and (c.has("brief") or c.has("check") or c.has("search") or c.args().len() == 0)
+	raise "`--search` is a list of names of its own, and takes neither `--brief` nor `--check`" if c.has("search") and (c.has("brief") or c.has("check"))
+	return run_doc_search(c.get("search"), c.args(), doc_render.doc_colour()) if c.has("search")
 	return run_doc_check(c.args(), doc_timeout(c.get("timeout"))) if c.has("check")
 
 	return run_doc(c.args(), doc_render.DocView(c.has("brief"), c.has("all")))
 }
 
 # doc_all_alone is the refusal for `--all` where it would change nothing: every listing — the
-# index, `--brief`, and what `--check` counts — is the reader's `##` text and nothing else.
+# index, `--brief`, a search, and what `--check` counts — is the reader's `##` text and nothing
+# else.
 fn doc_all_alone(c: cli.Ctx) -> str {
 	mut what := "the index of modules"
-	if c.has("brief") {
+	if c.has("search") {
+		what = "a search's list of names"
+	} else if c.has("brief") {
 		what = "`--brief`'s summary"
 	} else if c.has("check") {
 		what = "what `--check` counts"
@@ -145,7 +154,7 @@ fn run_doc_check(args: list[str], secs: int) -> int {
 	if args.len() == 0 {
 		mods = doc_index()
 	} else {
-		mods.append(doc_check_one(args[0]))
+		mods.append(doc_resolve(args[0]))
 	}
 
 	mut out := ""
@@ -166,7 +175,7 @@ fn run_doc_check(args: list[str], secs: int) -> int {
 		for d in m.decls {
 			total = total + 1
 			if d.doc.len() == 0 {
-				out = out + f"{d.path}:{d.line}: `{doc_check_name(m, d)}` is exposed and carries no `##` comment\n"
+				out = out + f"{d.path}:{d.line}: `{zerg.doc_qualified(m, d)}` is exposed and carries no `##` comment\n"
 				undoc = undoc + 1
 			}
 		}
@@ -214,10 +223,43 @@ fn doc_timeout(v: str) -> int {
 	return n
 }
 
-# doc_check_one resolves the one name `--check` was given, by the same two doors `run_doc`
-# opens and in the same order — a path that is really there, then a module — so that a name
-# which reads one way for `zerg doc` cannot read another way for `zerg doc --check`.
-fn doc_check_one(name: str) -> zerg.DocModule {
+# run_doc_search is `--search` (#19): the name list, filtered by the term, one row per hit.
+#
+# THE SCOPE IS THE INDEX, or the one module or path named beside the term — resolved by the same
+# two doors `--check` opens. With no name it is every module `zerg doc` on its own lists, so a
+# declaration a search cannot find is one no page of the index leads to either.
+#
+# NOTHING FOUND IS A REFUSAL, exit 1, as `grep` answers: an empty list that exited 0 would be
+# a script's "no such name" and an extraction that stopped matching, told apart by nobody.
+fn run_doc_search(term: str, args: list[str], col: bool) -> int {
+	raise "`zerg doc --search` searches the modules `zerg doc` lists, or the one module or path named beside the term — one at most" if args.len() > 1
+	raise "`zerg doc --search` needs the beginning of a name to look for" if term == ""
+
+	mut mods: list[zerg.DocModule] = []
+	mut scope := "any module `zerg doc` lists"
+	if args.len() == 0 {
+		mods = doc_index()
+	} else {
+		mods.append(doc_resolve(args[0]))
+		scope = f"`{args[0]}`"
+	}
+
+	mut hits: list[zerg.DocName] = []
+	for n in zerg.doc_names(mods) {
+		if zerg.doc_name_matches(n.name, term) {
+			hits.append(n)
+		}
+	}
+	raise f"no exposed declaration in {scope} has a name beginning `{term}` — a search reads the name from any of its segments, case sensitive" if hits.len() == 0
+
+	io.write(doc_render.render_doc_hits(mods, hits, col))
+	return 0
+}
+
+# doc_resolve resolves the one name `--check` or `--search` was given, by the same two doors
+# `run_doc` opens and in the same order — a path that is really there, then a module — so that a
+# name which reads one way for `zerg doc` cannot read another way beside a flag.
+fn doc_resolve(name: str) -> zerg.DocModule {
 	if doc_is_path(name) {
 		files := doc_path_files(name)
 		raise doc_no_source(name) if files.len() == 0
@@ -229,14 +271,6 @@ fn doc_check_one(name: str) -> zerg.DocModule {
 	raise doc_no_such(name) if whole.len() == 0
 
 	return doc_read(source.path_tail(name), whole)
-}
-
-# doc_check_name spells a declaration the way a reader would type it back into `zerg doc`,
-# which is the same spelling `doc_no_decl` lists and the same key `doc_find` reaches.
-fn doc_check_name(m: zerg.DocModule, d: zerg.DocDecl) -> str {
-	return f"{m.name}.{d.name}" if d.recv == ""
-
-	return f"{m.name}.{d.recv}.{d.name}"
 }
 
 # run_doc_decl reads `module.declaration`, which is the form left once the name has resolved to
@@ -435,11 +469,7 @@ fn doc_no_decl(m: zerg.DocModule, key: str) -> str {
 
 	out = out + "\n\nwhat it does declare:"
 	for d in m.decls {
-		if d.recv == "" {
-			out = out + f"\n  {m.name}.{d.name}"
-		} else {
-			out = out + f"\n  {m.name}.{d.recv}.{d.name}"
-		}
+		out = out + "\n  " + zerg.doc_qualified(m, d)
 	}
 	return out
 }

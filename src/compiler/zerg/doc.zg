@@ -401,17 +401,104 @@ pub fn doc_find(m: DocModule, name: str) -> list[int] {
 	mut out: list[int] = []
 	mut i := 0
 	for i < m.decls.len() {
-		d := m.decls[i]
-		mut key := d.name
-		if d.recv != "" {
-			key = f"{d.recv}.{d.name}"
-		}
-		if key == name {
+		if doc_key(m.decls[i]) == name {
 			out.append(i)
 		}
 		i = i + 1
 	}
 	return out
+}
+
+# doc_key is what a declaration is called inside its module: `split`, or `Logger.level` for a
+# method — the key `doc_find` reaches and the renderer groups a method under.
+fn doc_key(d: DocDecl) -> str {
+	return d.name if d.recv == ""
+
+	return f"{d.recv}.{d.name}"
+}
+
+# doc_qualified spells a declaration the way a reader types it back into `zerg doc`:
+# `strings.split`, `log.Logger.level`. Every list of names this tool prints — a search, what
+# `--check` names, what a refusal says a module does declare — is spelled by this one function,
+# so a name read off any of them is a name the command answers.
+pub fn doc_qualified(m: DocModule, d: DocDecl) -> str {
+	return f"{m.name}.{doc_key(d)}"
+}
+
+# DocName is one entry of the NAME LIST: a declaration's qualified name, and where its row is —
+# `mods[in_module].decls[decl]` of the list the names were taken from.
+pub struct DocName {
+	pub name: str
+	pub in_module: int
+	pub decl: int
+}
+
+# doc_names is every exposed declaration of these modules by name (#19), in the order the
+# modules are handed over and source order within each. A method is one entry, as
+# `log.Logger.level`; a field or a variant is none, because `doc_find` does not reach one and a
+# name that cannot be typed back is not an answer to a search.
+#
+# IT IS THE ONE NAME LIST. `zerg doc -s` filters it, and #20's HTML search is to be built from
+# the same list rather than from a walk of its own, so that a name one of them finds is a name
+# the other finds too.
+pub fn doc_names(mods: list[DocModule]) -> list[DocName] {
+	mut out: list[DocName] = []
+	mut i := 0
+	for i < mods.len() {
+		mut j := 0
+		for j < mods[i].decls.len() {
+			out.append(DocName(doc_qualified(mods[i], mods[i].decls[j]), i, j))
+			j = j + 1
+		}
+		i = i + 1
+	}
+	return out
+}
+
+# doc_name_matches is whether a search term finds a qualified name: the term is a PREFIX of the
+# name read from any of its segments after the module's — `spl` finds `strings.split`, and
+# `Logger.l` and `lev` both find `log.Logger.level` — or of the whole name when the term itself
+# carries a `.`, so `strings.sp` finds `strings.split` too.
+#
+# THE MODULE'S OWN SEGMENT IS NOT MATCHED BY A BARE TERM. `lo` would otherwise find every
+# declaration in `log`, which is a listing of a module rather than a search for a name; that
+# listing is `zerg doc --brief log`, and `log.` asks for it here in as many characters.
+#
+# CASE SENSITIVE, as `doc_find` is: an identifier is, and a name found here that the command
+# then refused for its spelling would be two answers to one question. An empty term finds
+# nothing.
+pub fn doc_name_matches(name: str, term: str) -> bool {
+	b := bytearray(name)
+	t := bytearray(term)
+
+	return false if t.len() == 0
+	return true if doc_has_dot(t) and doc_prefix_at(b, 0, t)
+
+	mut i := 1
+	for i < b.len() {
+		return true if b[i - 1] == b'.' and doc_prefix_at(b, i, t)
+		i = i + 1
+	}
+	return false
+}
+
+# doc_prefix_at is whether `t` is written in `b` starting at `at`.
+fn doc_prefix_at(b: list[byte], at: int, t: list[byte]) -> bool {
+	return false if at + t.len() > b.len()
+
+	mut k := 0
+	for k < t.len() {
+		return false if b[at + k] != t[k]
+		k = k + 1
+	}
+	return true
+}
+
+fn doc_has_dot(b: list[byte]) -> bool {
+	for x in b {
+		return true if x == b'.'
+	}
+	return false
 }
 
 # DocAt is one declaration as a document holds it — its signature and the comment above it —

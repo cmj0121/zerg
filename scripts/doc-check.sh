@@ -69,6 +69,11 @@
 # a process running, a run interrupted — plus the two shapes of module a program is written
 # beside, and the undocumented `pub` the standard library no longer has an instance of.
 #
+# §11 is the search (#19). §1 holds every module's name list to its page, qualified, so a
+# declaration no search reaches is caught the way a declaration no page prints is; its own
+# fixture asks the matching rule's edges, and a private name that matches is the case that has to
+# stay out.
+#
 # It needs no corpus: the standard library ships in this repository and the fixture is
 # written by the script, so it runs the same everywhere.
 set -uo pipefail
@@ -99,7 +104,7 @@ ZERG="${ZERG:-./bin/zerg}"
 MIN_DECLS="${MIN_DECLS:-183}"
 MIN_MODULES="${MIN_MODULES:-15}"
 UNDOC_LIST="${UNDOC_LIST:-scripts/doc-undocumented}"
-MIN_CHECKS="${MIN_CHECKS:-81}"
+MIN_CHECKS="${MIN_CHECKS:-92}"
 MIN_RULES="${MIN_RULES:-26}"
 
 # The column budget the document is filled to — `DOC_WIDTH` in cmd/doc_render.zg, written
@@ -175,6 +180,40 @@ named_in_document() {
 	' | LC_ALL=C sort -u
 }
 
+# qualified_on_page <module> — the names a reader could type back into `zerg doc`, read off the
+# page: every declaration at indent 2 as `module.name`, and a method at indent 6 as
+# `module.Type.name` under the type above it. A spec's requirement is at indent 6 too and is
+# no declaration of its own — `zerg doc log.Sink.write` answers nothing — so it is not one.
+qualified_on_page() {
+	awk -v m="$1" '
+		function after(s, lead) {
+			sub(lead, "", s)
+			sub(/[^A-Za-z0-9_].*$/, "", s)
+			return s
+		}
+		/^  (unsafe )?(mut )?fn [A-Za-z_][A-Za-z0-9_]*[[(]/ {
+			print m "." after($0, "^  (unsafe )?(mut )?fn ")
+			kind = ""
+			next
+		}
+		/^  (struct|enum|spec|type|impl) [A-Za-z_]/ {
+			split($0, w, " ")
+			kind = w[1]
+			owner = after($0, "^  [a-z]+ ")
+			if (kind != "impl") print m "." owner
+			next
+		}
+		/^  (const|mut) [A-Za-z_]/ {
+			print m "." after($0, "^  [a-z]+ ")
+			kind = ""
+			next
+		}
+		/^      (unsafe )?(mut )?fn [A-Za-z_][A-Za-z0-9_]*[[(]/ && kind != "" && kind != "spec" {
+			print m "." owner "." after($0, "^      (unsafe )?(mut )?fn ")
+		}
+	' | LC_ALL=C sort -u
+}
+
 # --- 1. every exposed declaration is in the document ---------------------------------
 #
 # The module list is derived from the tree rather than written here, so a new standard
@@ -211,6 +250,18 @@ for m in $modules; do
 	"$ZERG" doc --brief "$m" 2>/dev/null | named_in_document >"$tmp/brief.names"
 	if ! diff -u "$tmp/doc.names" "$tmp/brief.names" >"$tmp/diff"; then
 		note "\`zerg doc --brief $m\` names a different set of declarations than the whole document"
+		sed '1,2d;s/^/          /' "$tmp/diff" >&2
+		continue
+	fi
+	# THE NAME LIST (#19) is held to the page, qualified. `-s "$m."` is every name a search can
+	# find in the module, and a declaration missing from it is one no search reaches — the same
+	# silence as a page that dropped it, in the one place a reader goes when they do not know
+	# the page.
+	qualified_on_page "$m" <"$tmp/full.out" >"$tmp/page.names"
+	"$ZERG" doc -s "$m." "$m" 2>/dev/null | sed -nE 's/^  ([^ ]+).*/\1/p' |
+		LC_ALL=C sort -u >"$tmp/search.names"
+	if ! diff -u "$tmp/page.names" "$tmp/search.names" >"$tmp/diff"; then
+		note "\`zerg doc -s $m.\` finds a different set of declarations than the whole document (- document, + search)"
 		sed '1,2d;s/^/          /' "$tmp/diff" >&2
 		continue
 	fi
@@ -1278,6 +1329,106 @@ for args in '--all --brief' '--all --check' '--all'; do
 		note "\`zerg doc $args\` was refused with \"$(head -1 "$tmp/allref.out")\""
 	fi
 done
+
+# --- 11. `-s` finds a declaration by the beginning of its name ------------------------------
+#
+# #19: `zerg doc -s <term>` lists the exposed declarations whose name begins with the term, read
+# from any segment after the module's. §1 holds the name list to every stdlib module's document;
+# this fixture asks the rule's edges one at a time — a method found by its own name and by its
+# type's, a private declaration and a private method never listed although their names match,
+# the mark on an undocumented hit, the module's own segment and a term in the wrong case finding
+# nothing, and nothing found being a refusal rather than an empty list.
+cat >"$tmp/proj/finder.zg" <<'ZG'
+## finder — a module to be searched.
+
+## find_one is found by its prefix.
+pub fn find_one() -> int {
+	return 1
+}
+
+pub fn find_bare() -> int {
+	return 2
+}
+
+## find_hidden matches every term below and is private, so no search lists it.
+fn find_hidden() -> int {
+	return 3
+}
+
+## Finder holds the methods.
+pub struct Finder {
+	pub n: int
+}
+
+impl Finder {
+	## find_more is a method, found as `finder.Finder.find_more`.
+	pub fn find_more() -> int {
+		return this.n
+	}
+
+	## find_private is a private method, and on no page.
+	fn find_private() -> int {
+		return this.n
+	}
+}
+ZG
+
+# search <term> <scope> — `zerg doc -s` run from the fixture's directory, stdout to
+# `$tmp/search.out` and stderr to `$tmp/search.err`; an empty scope is the index
+search() {
+	# shellcheck disable=SC2086
+	(cd "$tmp/proj" && "$ZERG_ABS" doc -s "$1" $2) >"$tmp/search.out" 2>"$tmp/search.err"
+}
+
+# finds <what> <term> <scope> <the names it lists, one per line, in order>
+finds() {
+	local what=$1 term=$2 scope=$3 want=$4 got
+	search "$term" "$scope"
+	got="$(sed -nE 's/^  ([^ ]+).*/\1/p' "$tmp/search.out")"
+	if [ "$got" = "$want" ]; then
+		checks=$((checks + 1))
+	else
+		note "$what — \`zerg doc -s $term $scope\` listed [$(printf '%s' "$got" | tr '\n' ' ')], wanted [$(printf '%s' "$want" | tr '\n' ' ')] $(head -1 "$tmp/search.err")"
+	fi
+}
+
+# finds_none <what> <term> <scope> — nothing found is a refusal, exit 1, that says so
+finds_none() {
+	local what=$1 term=$2 scope=$3 rc
+	search "$term" "$scope"
+	rc=$?
+	if [ "$rc" -eq 0 ]; then
+		note "$what — \`zerg doc -s $term $scope\` exited 0: $(head -3 "$tmp/search.out" | tr '\n' ' ')"
+	elif grep -qF "has a name beginning \`$term\`" "$tmp/search.err"; then
+		checks=$((checks + 1))
+	else
+		note "$what — \`zerg doc -s $term $scope\` was refused with \"$(head -1 "$tmp/search.err")\""
+	fi
+}
+
+finds 'a prefix lists the exposed declarations it begins, and no private one' find_ finder.zg \
+	"$(printf 'finder.find_one\nfinder.find_bare\nfinder.Finder.find_more')"
+finds 'a method is found by its own name' find_m finder.zg 'finder.Finder.find_more'
+finds "a method is found by its type's name" Finder.f finder.zg 'finder.Finder.find_more'
+finds 'a term carrying a `.` is read from the module on' finder.Fi finder.zg \
+	"$(printf 'finder.Finder\nfinder.Finder.find_more')"
+finds_none 'a private declaration is never listed' find_h finder.zg
+finds_none 'a private method is never listed' find_p finder.zg
+finds_none "a bare term does not match the module's own segment" finder finder.zg
+finds_none 'a search is case sensitive' FIND_ finder.zg
+finds_none 'a term nothing begins is a refusal' zzz_nothing ''
+
+# the hit's second column is the page's: the first sentence, or the mark
+search find_ finder.zg
+if grep -qE '^  finder\.find_one +find_one is found by its prefix\.$' "$tmp/search.out" &&
+	grep -qE '^  finder\.find_bare +\(undocumented\)$' "$tmp/search.out"; then
+	checks=$((checks + 1))
+else
+	note "a hit is not its name beside its first sentence, or beside the mark: $(cat "$tmp/search.out")"
+fi
+
+# the scope left out is the index, standard library included
+finds 'with no name beside it, a search reads the standard library too' strings.spl '' 'strings.split'
 
 # --- the module list, and the floors ----------------------------------------------------
 #

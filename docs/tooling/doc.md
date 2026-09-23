@@ -12,6 +12,7 @@ zerg doc strings.split        # one declaration; log.Logger.level for a method
 zerg doc src/stdlib/log.zg    # a file, or a directory, documented where it stands
 zerg doc --check strings      # name what carries no `##` text, run every example; exit 1 on either
 zerg doc -s spl               # every declaration whose name begins `spl`; `-s spl strings` within one
+zerg doc --html site          # the reader's pages as static HTML in site/, with an index and a search
 ```
 
 ## The claim
@@ -106,8 +107,52 @@ resolved as `--check` resolves one. A private declaration is on no page, so no s
 
 Each row is the name and the first sentence of its `##` text — the index's layout, and `--brief`'s summary — or
 `(undocumented)`. A search is a listing, so `--all`, `--brief` and `--check` beside it are refused. The list of
-names is one function in the extraction, `doc_names`, so that the HTML pages' search
-([#20](https://github.com/cmj0121/zerg/issues/20)) will find what this finds.
+names is one function in the extraction, `doc_names`, so that the [HTML pages' search](#static-html-pages) finds what
+this finds.
+
+## Static HTML pages
+
+`zerg doc --html <dir>` writes the reader's pages into a directory, made if it is not there: a page for every module
+`zerg doc` lists — or for the one module or path named after the directory — an `index.html` that lists them, a
+`search.js` and a `style.css`. Open `index.html` straight off the disk; nothing is served and nothing is fetched.
+
+```sh
+zerg doc --html site                  # every module `zerg doc` lists, and the index of them
+zerg doc --html site src/compiler/cmd # one directory module, and an index of that one
+```
+
+**A page is a second rendering of the one extraction, never a second reading of the source.** The page walks the
+module in the terminal's order — each file's header, then the constants, the types with their methods under them, and
+the functions — and a comment is cut into paragraphs and examples by the same reader the terminal fills it with: a
+paragraph becomes a paragraph the browser fills to the window, and a fence, an indented line and a doctest prompt line
+are printed exactly as written. The fence the example runner reads is the fence the page shows. What the page adds is
+what a terminal cannot have: an anchor on every declaration and a list of them beside the page, `code` spans where the
+comment wrote backticks, and a search box. It says nothing the terminal page does not.
+
+**The search is over the names `-s` searches**, with the same rule. The names are `doc_names`, written into
+`search.js` with each one's page, anchor and first sentence; the rule is `doc_name_matches` written again in
+JavaScript, since the browser can run nothing else — the one rule this tool states twice, so a gate holds the two to
+the same answers. `/` puts the cursor in the box and Enter follows the first hit.
+
+**Every piece of source text is escaped** — a header, a comment, a signature, a summary — so a `<` written in the
+source is a `<` on the page, never a tag. Light and dark follow the reader's `prefers-color-scheme`; the fonts are the
+system's own. The same tree writes the same bytes on every run: no date, no path of the machine, no order but the
+index's.
+
+A page is named after its module, `strings.html`; a module called `index` takes `index.mod.html`, since the index has
+that name. An anchor is the name `zerg doc` takes after the module — `strings.html#split`, `log.html#Logger.level` —
+and the second of two declarations sharing a name takes `-2`. A file of any other name in the directory is left
+alone, so a page for a module that is gone stays until it is removed.
+
+The pages are the **reader's**: `--all`, `--brief`, `--check` and `--search` beside `--html` are refused, and so are a
+declaration and two names — a page is a module's.
+
+`make doc-check` holds each page to its terminal page. With the markup, the backticks and the whitespace taken off,
+every module's page is its terminal page with the fence lines taken off; each exposed declaration is one element of
+its page, named as `-s` names it; the index is the index; the search's names are `-s`'s, and where `node` can run the
+script, every term derived from the names is answered by the page as `zerg doc -s` answers it (`REQUIRE_NODE=1`, set in
+CI, makes a missing `node` a failure). A fixture puts `<`, `&` and both quotes in a header, a comment, a signature and a
+summary, two runs are compared byte for byte, and no page may name anything off the machine.
 
 ## What is exposed is what is documented
 
@@ -526,12 +571,9 @@ into the standard library's chapter is added only when the file is in the standa
 Named here rather than left to be discovered, because a documentation tool that overstates
 itself is the one failure it cannot recover from:
 
-| Not built         | Issue                                            |
-| ----------------- | ------------------------------------------------ |
-| static HTML pages | [#20](https://github.com/cmj0121/zerg/issues/20) |
-| `--serve`         | [#21](https://github.com/cmj0121/zerg/issues/21) |
+| Not built | Issue                                            |
+| --------- | ------------------------------------------------ |
+| `--serve` | [#21](https://github.com/cmj0121/zerg/issues/21) |
 
-HTML will be a **second rendering of the same extraction**, never a second extractor. That is
-why what a module contains and how it is laid out are already two separate pieces of code, with
-neither owning the other. `--serve` is blocked on something larger: the language has no
-networking at all.
+`--serve` is blocked on something larger than this tool: the language has no networking at all. The static pages
+above are what it would serve.

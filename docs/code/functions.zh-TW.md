@@ -8,6 +8,14 @@
 一個 **generic** 函式
 **在實例化之前不是一等值**:未實例化的 generic 名字本身不是值——唯有它的型別引數在使用點被固定後才成為值。
 
+**associated fn** 也以同樣方式是一個值,透過它的**型別**指名:`f := Bag.wrap` 綁定 `impl Bag` 宣告的那個 fn,
+`f(3)` 呼叫它。impl 宣告 `name := …` 時,`Type.name` 是一個[型別常數](../core/specs.zh-TW.md#型別常數type-constants);
+宣告 `fn name` 時,它是這個 fn。它的型別就是宣告的型別,與任何函式一樣不含預設值。**方法**——本體用到 `this`
+的 `fn`——沒有 receiver 可綁,所以不呼叫的 `Bag.m` 是 _E3151_,與 `Bag.m()` 一樣。generic 的要等它的呼叫:
+自己帶型別參數的 associated fn,或 generic 型別上本體或簽章寫到該型別參數的那種,不呼叫地指名是 _E4009_,
+宣告型別的綁定也不能替代呼叫的引數。generic 型別上一個都沒寫到的(`Box.one`)在每個 `Box[…]` 下都是同一個
+fn,也就是一個值。
+
 > 只把引數寫出來、不呼叫,也一樣不會實例化,而且它不是一個等著被建的形式:後綴 `[ … ]` **永遠**是索引
 > ([`GRAMMAR`](../../GRAMMAR)),所以沒有任何導得出的東西會到這裡。`m := map[str, int]` 是 _E2072 `map[…]`
 > with no call after it — this compiler instantiates a generic at the call, so its type arguments have to

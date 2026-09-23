@@ -469,6 +469,10 @@ Reading one a type does not have is _E4089 `P` has no associated value `NOPE`_, 
 an escape: before it, a type name lowered as a **value**, so `P.NOPE` became a member access on a type and
 `cc` reported it against generated code.
 
+The spelling is shared with an **associated fn**, and the impl's declaration tells the two apart:
+`Type.name` is this constant when the impl declares `name := …`, and the fn as a value when it declares
+`fn name` ([Functions](../code/functions.md)). _E4089_ is a type that declares neither.
+
 ## Built-in specs
 
 Every built-in behavior is a spec, **gained by implementing (or deriving) it** — there is no

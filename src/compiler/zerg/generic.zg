@@ -697,3 +697,197 @@ fn subst_arms(su: TySubst, arms: list[ast.Arm]) -> list[ast.Arm] {
 	}
 	return out
 }
+
+# --- mentions ------------------------------------------------------------------------------
+#
+# gen_mentions is whether a declaration WRITES a type parameter anywhere the substitution above
+# would replace it — a parameter, the result, or a type its body spells. It is the reading twin
+# of `subst_method` and walks the same nodes: a parameter this cannot see is one that walk
+# would leave in place.
+#
+# An associated fn of a generic type is what asks. `impl[T] Box[T] { fn one() -> int }` is ONE
+# body whatever `T` is, so `Box.one()` has nothing to solve and nothing to guess; a body that
+# does write `T` is a different body per instantiation, and a call that leaves it open has not
+# said which. A bare name, a callee and an `is` test count as well: reading one as a mention
+# where it is not refuses a call, and missing one would lower a body with `T` still in it.
+pub fn gen_mentions(nm: str, apps: list[ast.TyApp], fd: ast.FnDecl) -> bool {
+	return ment_params(nm, apps, fd.params) or ment_ty(nm, apps, fd.ret) or ment_block(nm, apps, fd.body)
+}
+
+# a type mentions a parameter at any depth, and `gen_parts` is how a type is taken apart — the
+# solver's own reader, so an applied name's arguments are found through its row
+fn ment_ty(nm: str, apps: list[ast.TyApp], t: ast.Ty) -> bool {
+	return true if emit.c_named_of(t) == nm or ment_arr_len(nm, t)
+
+	for p in gen_parts(apps, t) {
+		return true if ment_ty(nm, apps, p)
+	}
+	return false
+}
+
+# an array's LENGTH is not a part (gen_parts says why), and it is where a value parameter is
+# written — `[T; N]`
+fn ment_arr_len(nm: str, t: ast.Ty) -> bool {
+	return match t {
+		Ty.TArr(_, n) => n == nm
+		_             => false
+	}
+}
+
+fn ment_tys(nm: str, apps: list[ast.TyApp], ts: list[ast.Ty]) -> bool {
+	for t in ts {
+		return true if ment_ty(nm, apps, t)
+	}
+	return false
+}
+
+fn ment_params(nm: str, apps: list[ast.TyApp], ps: list[ast.Param]) -> bool {
+	for pm in ps {
+		return true if ment_ty(nm, apps, pm.ty) or ment_expr(nm, apps, pm.def)
+	}
+	return false
+}
+
+fn ment_block(nm: str, apps: list[ast.TyApp], b: list[ast.Stmt]) -> bool {
+	for s in b {
+		return true if ment_stmt(nm, apps, s)
+	}
+	return false
+}
+
+fn ment_exprs(nm: str, apps: list[ast.TyApp], xs: list[ast.Expr]) -> bool {
+	for x in xs {
+		return true if ment_expr(nm, apps, x)
+	}
+	return false
+}
+
+# every arm `subst_stmt` names, and no catch-all, for the reason it gives
+fn ment_stmt(nm: str, apps: list[ast.TyApp], s: ast.Stmt) -> bool {
+	return match s {
+		Stmt.SLet(_, ty, _, _, _, v, _, _) => ment_ty(nm, apps, ty) or ment_expr(nm, apps, v)
+		Stmt.SDestructure(t, v, _, _, _) => ment_target(nm, apps, t) or ment_expr(nm, apps, v)
+		Stmt.SAssign(l, r) => ment_expr(nm, apps, l) or ment_expr(nm, apps, r)
+		Stmt.SPrint(v) => ment_expr(nm, apps, v)
+		Stmt.SReturn(_, v) => ment_expr(nm, apps, v)
+		Stmt.SReturnIf(v, c) => ment_expr(nm, apps, v) or ment_expr(nm, apps, c)
+		Stmt.SExpr(v) => ment_expr(nm, apps, v)
+		Stmt.SIf(c, tb, _, eb) => ment_expr(nm, apps, c) or ment_block(nm, apps, tb) or ment_block(nm, apps, eb)
+		Stmt.SFor(_, c, b) => ment_expr(nm, apps, c) or ment_block(nm, apps, b)
+		Stmt.SForIn(_, it, b, _, _) => ment_expr(nm, apps, it) or ment_block(nm, apps, b)
+		Stmt.SForSelect(arms) => ment_sel_arms(nm, apps, arms)
+		Stmt.SRaise(e, _, cause) => ment_expr(nm, apps, e) or ment_expr(nm, apps, cause)
+		Stmt.SDefer(v) => ment_expr(nm, apps, v)
+		Stmt.SSpawn(v) => ment_expr(nm, apps, v)
+		Stmt.SSend(ch, v) => ment_expr(nm, apps, ch) or ment_expr(nm, apps, v)
+		Stmt.SSelect(arms) => ment_sel_arms(nm, apps, arms)
+		Stmt.SClose(ch, _) => ment_expr(nm, apps, ch)
+		Stmt.SIfLet(_, v, tb, _, eb, _, _) => ment_expr(nm, apps, v) or ment_block(nm, apps, tb) or ment_block(nm, apps, eb)
+		Stmt.SAssert(b) => ment_block(nm, apps, b)
+		Stmt.SScope(b, _) => ment_block(nm, apps, b)
+		Stmt.SBreak => false
+		Stmt.SContinue => false
+		Stmt.SNop => false
+		Stmt.SDel(_, _, _) => false
+		Stmt.SAt(_, _, _, _) => false
+	}
+}
+
+fn ment_sel_arms(nm: str, apps: list[ast.TyApp], arms: list[ast.SelArm]) -> bool {
+	for a in arms {
+		return true if ment_expr(nm, apps, a.ch) or ment_expr(nm, apps, a.val) or ment_block(nm, apps, a.body)
+	}
+	return false
+}
+
+# every arm `subst_expr` names, and no catch-all
+fn ment_expr(nm: str, apps: list[ast.TyApp], e: ast.Expr) -> bool {
+	return match e {
+		Expr.EUnary(_, x) => ment_expr(nm, apps, x)
+		Expr.EBinary(_, a, b) => ment_expr(nm, apps, a) or ment_expr(nm, apps, b)
+		Expr.ECall(n, xs, ts, _, _) => n == nm or ment_exprs(nm, apps, xs) or ment_tys(nm, apps, ts)
+		Expr.ECallVal(c, xs) => ment_expr(nm, apps, c) or ment_exprs(nm, apps, xs)
+		Expr.ENamedArg(_, x, _, _) => ment_expr(nm, apps, x)
+		Expr.EField(x, _, _, _) => ment_expr(nm, apps, x)
+		Expr.EOptChain(x, _, _, _) => ment_expr(nm, apps, x)
+		Expr.ETry(x) => ment_expr(nm, apps, x)
+		Expr.EIndex(x, i) => ment_expr(nm, apps, x) or ment_expr(nm, apps, i)
+		Expr.EMethod(x, _, xs, _, _) => ment_expr(nm, apps, x) or ment_exprs(nm, apps, xs)
+		Expr.EListLit(xs) => ment_exprs(nm, apps, xs)
+		Expr.EConv(ty, x, _) => ment_ty(nm, apps, ty) or ment_expr(nm, apps, x)
+		Expr.EFmt(x, _, _) => ment_expr(nm, apps, x)
+		Expr.EIf(c, a, b) => ment_expr(nm, apps, c) or ment_expr(nm, apps, a) or ment_expr(nm, apps, b)
+		Expr.EMatch(x, arms) => ment_expr(nm, apps, x) or ment_arms(nm, apps, arms)
+		Expr.ERange(a, b, _) => ment_expr(nm, apps, a) or ment_expr(nm, apps, b)
+		Expr.ETuple(xs) => ment_exprs(nm, apps, xs)
+		Expr.EMapLit(ks, vs) => ment_exprs(nm, apps, ks) or ment_exprs(nm, apps, vs)
+		Expr.EFn(ps, _, r, b) => ment_params(nm, apps, ps) or ment_ty(nm, apps, r) or ment_block(nm, apps, b)
+		Expr.EChanNew(ty, cap) => ment_ty(nm, apps, ty) or ment_expr(nm, apps, cap)
+		Expr.ERecv(x) => ment_expr(nm, apps, x)
+		Expr.EForce(x) => ment_expr(nm, apps, x)
+		Expr.ECoalesce(a, b, jump) => ment_expr(nm, apps, a) or ment_expr(nm, apps, b) or ment_block(nm, apps, jump)
+		Expr.EGuard(b) => ment_block(nm, apps, b)
+		Expr.EBlock(b) => ment_block(nm, apps, b)
+		Expr.EUnsafe(b) => ment_block(nm, apps, b)
+		Expr.EAsm(_, ops) => ment_asm_ops(nm, apps, ops)
+		Expr.EIs(x, n) => n == nm or ment_expr(nm, apps, x)
+		Expr.EIn(x, s) => ment_expr(nm, apps, x) or ment_expr(nm, apps, s)
+		Expr.EFill(v, n) => ment_expr(nm, apps, v) or ment_expr(nm, apps, n)
+		Expr.EInt(_, _, _) => false
+		Expr.EFloat(_) => false
+		Expr.EStr(_) => false
+		Expr.EBool(_) => false
+		Expr.ENil => false
+		Expr.EIdent(n, _, _) => n == nm
+	}
+}
+
+fn ment_asm_ops(nm: str, apps: list[ast.TyApp], ops: list[ast.AsmOp]) -> bool {
+	for o in ops {
+		return true if ment_expr(nm, apps, o.expr)
+	}
+	return false
+}
+
+fn ment_target(nm: str, apps: list[ast.TyApp], t: ast.Target) -> bool {
+	return match t {
+		Target.TgtWild => false
+		Target.TgtPlace(e) => ment_expr(nm, apps, e)
+		Target.TgtTuple(ts) => ment_targets(nm, apps, ts)
+		Target.TgtStruct(_, _, ts, _) => ment_targets(nm, apps, ts)
+	}
+}
+
+fn ment_targets(nm: str, apps: list[ast.TyApp], ts: list[ast.Target]) -> bool {
+	for t in ts {
+		return true if ment_target(nm, apps, t)
+	}
+	return false
+}
+
+fn ment_pat(nm: str, apps: list[ast.TyApp], pt: ast.Pat) -> bool {
+	return match pt {
+		Pat.PLit(e) => ment_expr(nm, apps, e)
+		Pat.PVariant(_, _, ps, _, _) => ment_pats(nm, apps, ps)
+		Pat.PStruct(_, _, ps, _) => ment_pats(nm, apps, ps)
+		Pat.PList(ps, _, _, _, _) => ment_pats(nm, apps, ps)
+		Pat.PTuple(ps) => ment_pats(nm, apps, ps)
+		Pat.POr(ps) => ment_pats(nm, apps, ps)
+		Pat.PAs(inner, _, _, _) => ment_pat(nm, apps, inner)
+		_ => false
+	}
+}
+
+fn ment_pats(nm: str, apps: list[ast.TyApp], ps: list[ast.Pat]) -> bool {
+	for pt in ps {
+		return true if ment_pat(nm, apps, pt)
+	}
+	return false
+}
+
+fn ment_arms(nm: str, apps: list[ast.TyApp], arms: list[ast.Arm]) -> bool {
+	for a in arms {
+		return true if ment_pat(nm, apps, a.pat) or ment_expr(nm, apps, a.guard_expr) or ment_expr(nm, apps, a.body)
+	}
+	return false
+}

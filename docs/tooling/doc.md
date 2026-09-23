@@ -11,6 +11,7 @@ zerg doc --brief strings      # its exposed surface, one line each
 zerg doc strings.split        # one declaration; log.Logger.level for a method
 zerg doc src/stdlib/log.zg    # a file, or a directory, documented where it stands
 zerg doc --check strings      # name what carries no `##` text, run every example; exit 1 on either
+zerg doc -s spl               # every declaration whose name begins `spl`; `-s spl strings` within one
 ```
 
 ## The claim
@@ -70,6 +71,43 @@ way to _ask_: `(undocumented)` is met in the middle of a page, one module at a t
 place to jump to, and a gate over it could pin the COUNT and not the set. An equality on a
 total is met by two errors cancelling — write one comment, add one bare `pub`, and the number
 has not moved while the set underneath it has moved twice.
+
+## Finding a declaration by name
+
+`zerg doc -s <term>` (`--search`) answers the question the four above cannot: where a declaration is, when the reader
+knows how its name begins and not which module holds it. It lists every exposed declaration whose name the term
+begins, one row each:
+
+```text
+$ zerg doc -s spl
+
+DECLARATIONS
+
+  strings.split   split breaks s into the pieces separated by sep, returning
+                  every piece between occurrences (so N separators yield N+1
+                  pieces, and a piece may be empty).
+```
+
+| The term                   | Finds a name when                                                   |
+| -------------------------- | ------------------------------------------------------------------- |
+| `lev`, `Logger.l`          | it begins any segment of the name after the module's                |
+| `strings.sp`, with a `.`   | the same, or it begins the whole name                               |
+| `log`, a module's own name | nothing on that account: `log.` lists the module, `--brief log` too |
+| anything nothing begins    | never — a refusal, exit 1                                           |
+
+**A name is spelled the way `zerg doc` answers it**: `strings.split`, and `log.Logger.level` for a method, which is
+found by `lev` and by `Logger.l` alike. A field, a variant and a spec's requirement are not on the list — each is shown
+inside the entry of the type that holds it, and a name a search found that the command then refused would be two
+answers to one question. For the same reason the match is **case sensitive**, as an identifier is.
+
+**The scope is the index**: every module `zerg doc` on its own lists, the ones beside the reader first and the
+standard library after, each in source order. A module or a path named after the term narrows it to that one,
+resolved as `--check` resolves one. A private declaration is on no page, so no search lists it.
+
+Each row is the name and the first sentence of its `##` text — the index's layout, and `--brief`'s summary — or
+`(undocumented)`. A search is a listing, so `--all`, `--brief` and `--check` beside it are refused. The list of
+names is one function in the extraction, `doc_names`, so that the HTML pages' search
+([#20](https://github.com/cmj0121/zerg/issues/20)) will find what this finds.
 
 ## What is exposed is what is documented
 
@@ -244,10 +282,10 @@ documents is decided by the rules above, whatever its lines are marked.
 | ---------------------------- | -------------------------------------------- |
 | `zerg doc`, the default      | the `##` lines of every comment              |
 | `zerg doc --all`             | every comment as written, `#` and `##` alike |
-| `--brief` and the index      | the first sentence of the `##` lines         |
+| `--brief`, `-s`, the index   | the first sentence of the `##` lines         |
 | `--check`, and a `lsp` hover | the `##` lines, and whether there are any    |
 
-`--all` beside `--brief`, `--check` or no name at all is refused: a listing has nothing of the maintainer's to add,
+`--all` beside `--brief`, `--check`, `-s` or no name is refused: a listing has nothing of the maintainer's to add,
 and a flag that changes nothing on its page is a question the reader believes was answered.
 
 **A declaration with `#` notes and no `##` line is undocumented.** The page marks it and `--check` names it, and
@@ -488,11 +526,10 @@ into the standard library's chapter is added only when the file is in the standa
 Named here rather than left to be discovered, because a documentation tool that overstates
 itself is the one failure it cannot recover from:
 
-| Not built                                       | Issue                                            |
-| ----------------------------------------------- | ------------------------------------------------ |
-| finding a declaration without naming its module | [#19](https://github.com/cmj0121/zerg/issues/19) |
-| static HTML pages                               | [#20](https://github.com/cmj0121/zerg/issues/20) |
-| `--serve`                                       | [#21](https://github.com/cmj0121/zerg/issues/21) |
+| Not built         | Issue                                            |
+| ----------------- | ------------------------------------------------ |
+| static HTML pages | [#20](https://github.com/cmj0121/zerg/issues/20) |
+| `--serve`         | [#21](https://github.com/cmj0121/zerg/issues/21) |
 
 HTML will be a **second rendering of the same extraction**, never a second extractor. That is
 why what a module contains and how it is laid out are already two separate pieces of code, with

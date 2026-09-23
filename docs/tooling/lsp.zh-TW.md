@@ -240,6 +240,29 @@ zerg lint examples/01_bindings.zg
 存在的目的就是示範一個 literal 採用它所在位置的型別——`ratio: float = 2` 就是那一課,而 `L502` 是 linter 把它叫出名
 字。它們編得過,也跑得動。
 
+## Claude Code
+
+coding agent 是又一個 client。checkout 根目錄的 `.claude-plugin/marketplace.json` 列出一個 plugin `zerg-lsp`,它的
+全部內容就是為 `.zg` 檔啟動 `zerg lsp` 的那一行——與官方 `gopls-lsp` plugin 同樣的 inline `lspServers` 條目。
+
+```text
+/plugin marketplace add ./
+/plugin install zerg-lsp@zerg
+```
+
+裝完後重開 session;server 是在 session 開始時載入的,不是在啟用時。
+
+**agent 拿到的,就是人拿到的。** 每次編輯一個 `.zg` 檔之後,agent 會收到 `zerg build` 與 `zerg lint` 本來會印出的
+diagnostics,而不必執行其中任何一個;它的 go-to-definition、find-references 與大綱,就是上面的 `definition`、
+`references` 與 `documentSymbol`。hover 與 workspace symbol 沒有做,server 會用 method-not-found 錯誤這麼說,而不是給
+一個空答案。
+
+**它執行 `PATH` 上的 `zerg`,理由與 nvim 相同**——server 就是編譯器,所以裝好的 toolchain 就是裝好的 server。代價正是
+這個 checkout 最容易碰上的那一個:一個在編輯 `src/compiler/` 的 agent,是被最後一次安裝的編譯器檢查的,不是它分支上的
+那一個。分支上改掉的規則,在 `make install` 之前 server 都不知道,所以對編譯器自己的原始碼,`make build` 仍然是答案,
+diagnostic 只是提示。request 本身也一樣:比 definition 與 references 更舊的安裝,在 `initialize` 裡兩者都不宣告,而
+agent 沒有辦法要求一個從未被提供的東西。
+
 ## quick fix 是編譯器的答案,不是 server 的
 
 **code action** 是編輯器在一則診斷上提供的東西:一個具名的編輯,使用者按一個鍵就能套用。`L502` 有一個——finding 本來

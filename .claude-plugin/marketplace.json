@@ -1,0 +1,27 @@
+{
+  "$schema": "https://anthropic.com/claude-code/marketplace.schema.json",
+  "name": "zerg",
+  "description": "Claude Code integrations for the Zerg toolchain",
+  "owner": {
+    "name": "cmj"
+  },
+  "plugins": [
+    {
+      "name": "zerg-lsp",
+      "description": "Zerg language server (`zerg lsp`) for diagnostics, definition, references and outline",
+      "version": "0.1.0",
+      "source": "./editors/claude",
+      "category": "development",
+      "strict": false,
+      "lspServers": {
+        "zerg": {
+          "command": "zerg",
+          "args": ["lsp"],
+          "extensionToLanguage": {
+            ".zg": "zerg"
+          }
+        }
+      }
+    }
+  ]
+}

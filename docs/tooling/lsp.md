@@ -292,6 +292,34 @@ A finding at **severity 3** is INFORMATION about a legal program, not an error. 
 `examples/03` both carry one, because both exist to show a literal adopting the type of its position
 — `ratio: float = 2` is the lesson, and `L502` is the linter naming it. They compile and run.
 
+## Claude Code
+
+A coding agent is one more client. `.claude-plugin/marketplace.json` at the root of the checkout
+lists one plugin, `zerg-lsp`, whose whole content is the line that starts `zerg lsp` for a `.zg`
+file — the same inline `lspServers` entry the official `gopls-lsp` plugin is made of.
+
+```text
+/plugin marketplace add ./
+/plugin install zerg-lsp@zerg
+```
+
+Restart the session afterwards; a server is loaded when a session starts, not when it is enabled.
+
+**What the agent gets is what a person gets.** After every edit to a `.zg` file the agent receives
+the diagnostics `zerg build` and `zerg lint` would have printed, without running either; and its
+go-to-definition, find-references and outline are `definition`, `references` and `documentSymbol`
+above. Hover and workspace symbols are not built, and the server says so with a method-not-found
+error rather than an empty answer.
+
+**It runs the `zerg` on `PATH`, for the reason nvim does** — the server is the compiler, so a
+toolchain that is installed is a server that is installed. The cost is the one this checkout is
+most exposed to: an agent editing `src/compiler/` is checked by the compiler that was last
+installed, not by the one on its branch. A rule changed on a branch is not a rule the server knows
+until `make install`, so for the compiler's own source `make build` stays the answer and a
+diagnostic is a hint. The same holds for the requests themselves: an install older than
+definition and references declares neither in `initialize`, and the agent has no way to ask for
+what was never offered.
+
 ## A quick fix is the compiler's answer, not the server's
 
 A **code action** is what an editor offers at a diagnostic: a named edit the user can apply with a

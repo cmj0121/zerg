@@ -1068,6 +1068,63 @@ fn main() {
 }
 EOF
 
+# NAMED WITHOUT A CALL, an associated fn is a value (docs/code/functions.md), and each refusal is
+# the call's own rule met without the call: a method has no receiver to be bound to, and a
+# generic fn is not a value until a call's arguments decide its parameters.
+
+reject a-method-named-through-its-type-without-a-call E3151 '`twice` is a METHOD of `P`' <<'EOF'
+struct P {
+	pub x: int
+}
+
+impl P {
+	fn twice() -> int {
+		return this.x * 2
+	}
+}
+
+fn main() {
+	f := P.twice
+	print f()
+}
+EOF
+
+reject a-generic-associated-fn-named-without-a-call E4009 '`P.wrap` is named without one' <<'EOF'
+struct P {
+	pub x: int
+}
+
+impl P {
+	fn wrap[U](v: U) -> list[U] {
+		return [v]
+	}
+}
+
+fn main() {
+	f := P.wrap
+	print f(1).len()
+}
+EOF
+
+# ONE THAT WRITES THE TYPE'S PARAMETER needs a call to solve it, and a declared binding does not
+# stand in for one — as `f: fn (int) -> int = id` does not for a generic `fn`.
+reject a-generic-types-fn-named-without-a-call E4009 '`Box.make` is named without one' <<'EOF'
+struct Box[T] {
+	pub v: T
+}
+
+impl[T] Box[T] {
+	fn make(v: T) -> Box[T] {
+		return Box(v)
+	}
+}
+
+fn main() {
+	f: fn (int) -> Box[int] = Box.make
+	print f(3).v
+}
+EOF
+
 # --- an array length that names a constant (GRAMMAR#array-type) ----------------------
 #
 # The length is part of the TYPE, so `[int; N]` and `[int; 4]` have to be ONE type wherever two

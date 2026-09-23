@@ -323,7 +323,8 @@ tuple 的結果是 **first-class**——可存、可傳、可解構——所以�
 **constructor 不是獨立特性**：它就是一個（通常 `pub` 的）associated function，內部回傳一個 literal；該函式在型別
 自己的 module 內執行，能在**建構當下**就把型別的 invariant 立好。inherent `impl` 裡的一個 `fn` 是 associated
 function 還是方法,由它的 **body** 決定:[`GRAMMAR#impl-decl`](../../GRAMMAR) 把線畫在 `this` 上——不用它的 `fn`
-不帶 receiver,要透過**型別**去叫,`User.from_id(…)`。**私有欄位是外部永遠指不出的欄位**：它必須帶預設值
+不帶 receiver,要透過**型別**去叫,`User.from_id(…)`;不呼叫地寫成 `User.from_id`,就是那個函式作為
+[值](../code/functions.zh-TW.md)。**私有欄位是外部永遠指不出的欄位**：它必須帶預設值
 （見下），所以外部的建構把它省略掉、由宣告決定它的值。要讓 literal 本身在 module 之外不可用，那是 `#[sealed]`
 decorator 的職責——**[not yet]**,_E9079 NotImplemented: the decorator `#[sealed]`_,所以今天只要型別可及,
 literal 就可及。

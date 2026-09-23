@@ -11575,6 +11575,70 @@ fn c_assoc_key(mut &em: Emitter, tn: str, meth: str, args: list[ast.Expr]) -> st
 	return c_instantiate(em, key, args)
 }
 
+# c_assoc_fn_key is the signature key of `Type.f` written WITHOUT a call — an associated fn taken
+# as a value, the way `f := helper` takes a free one (docs/code/functions.md) — or "" when `Type`
+# declares no fn `f`. The lowering and the inference both ask it, so the value emitted and the
+# type it is read as are one answer.
+#
+# EACH REFUSAL IS THE CALL'S OWN RULE, met without the call. A METHOD has no receiver here to be
+# bound to (E3151, the sentence `Type.f(…)` gets). A GENERIC fn is not a value until a call
+# instantiates it — and on a generic TYPE that is any fn whose body or signature writes the
+# type's parameters, because the call's arguments are what c_gen_assoc_recv solves them from.
+# One that writes none is the same body under every argument, and is seated as the call seats it.
+fn c_assoc_fn_key(mut &em: Emitter, tn: str, fld: str) -> str {
+	mut recv := tn
+	tr := c_impl_tpl_fn_row(em, tn, fld)
+	if tr >= 0 {
+		m := em.impl_tpl_fns[tr]
+		if not m.is_assoc {
+			c_refuse_method_through_type(em, tn, fld)
+		}
+		for tp in c_tpl_params_at(em, m.recv) {
+			if generic.gen_mentions(tp, em.ty_apps, m) {
+				c_refuse_generic_value(em, tp, tn, f"{tn}.{fld}")
+			}
+		}
+		mut noargs: list[ast.Expr] = []
+		recv = c_gen_assoc_recv(em, tn, fld, noargs)
+	}
+
+	key := c_sig_key(recv, fld)
+	if c_is_generic(em, key) {
+		if not c_gen_is_assoc(em, key) {
+			c_refuse_method_through_type(em, tn, fld)
+		}
+		c_refuse_generic_value(em, em.gen_tpls[c_generic_row(em, key)].tparams[0], f"{tn}.{fld}", f"{tn}.{fld}")
+	}
+
+	r := c_sig_row(em, key)
+	return "" if r < 0
+	if not em.sig_assoc[r] {
+		c_refuse_method_through_type(em, tn, fld)
+	}
+	return key
+}
+
+# c_refuse_generic_value is E4009 where there is no call: `spelled` names a generic fn, and with no
+# arguments nothing decides `tp`.
+fn c_refuse_generic_value(mut &em: Emitter, tp: str, owner: str, spelled: str) {
+	c_refuse_undecided(em, tp, owner, f"`{spelled}` is named without one, and a generic fn is a value only once a call instantiates it (docs/code/functions.md)")
+}
+
+# c_assoc_fn_value lowers `Type.f`, the associated fn `key` names, as a value: the shape every fn
+# value has, around the fn's own C name. Naming an `unsafe` one is ordinary code, as it is for a
+# free fn — the type carries the marker, so the call through the value is what the caller rule
+# checks.
+fn c_assoc_fn_value(mut &em: Emitter, target: ast.Expr, tn: str, key: str, l: int, c: int) -> str {
+	if em.want_index {
+		c_nx_type_name(em, target, tn)
+		c_nx_use(em, l, c, c_sig_meth_of(key), c_nx_sig(em, c_sig_row(em, key)))
+	}
+
+	em.used_fnptr = true
+	callee := c_fn_cname(c_nx_until(key, b'#', b'#'), c_sig_meth_of(key))
+	return f"((zg_fnptr){{(void (*)(void))zg_{c_fnval_thunk_to(em, callee, c_fn_ty_of(em, key))}, NULL}})"
+}
+
 # c_assoc_type is the TYPE a `Type.f` names, or "" when what stands left of the dot is not one.
 # It is THE resolution of the form, asked by the lowering and by the inference alike, so the
 # type a call is emitted against and the type its answer is read from cannot be two answers.
@@ -13610,6 +13674,15 @@ fn c_is_bound(mut &em: Emitter, n: str) -> bool {
 # one shape and a thunk that ignores the pointer. It costs a static function per name taken
 # as a value, which is a handful in any program that does it at all.
 fn c_fnval_thunk(mut &em: Emitter, target: str, t: ast.Ty) -> str {
+	# THE CALLEE'S C NAME, not `zg_` plus the source name. A private name two modules both
+	# declare is tagged by its module (c_fn_cname_in), and this wrote the untagged spelling —
+	# so the thunk called a function no unit declares and cc reported it against generated C.
+	return c_fnval_thunk_to(em, c_fn_cname_in(em, check.c_mod_of(em, em.at_path), "", target), t)
+}
+
+# c_fnval_thunk_to is the thunk around a callee already spelled in C — an associated fn's,
+# whose name is its type's and not the reader's module's (c_fn_cname).
+fn c_fnval_thunk_to(mut &em: Emitter, callee: str, t: ast.Ty) -> str {
 	name := f"fnval__{strconv.to_string(em.lam_n, 10)}"
 	em.lam_n = em.lam_n + 1
 
@@ -13631,10 +13704,6 @@ fn c_fnval_thunk(mut &em: Emitter, target: str, t: ast.Ty) -> str {
 		ret = ""
 	}
 
-	# THE CALLEE'S C NAME, not `zg_` plus the source name. A private name two modules both
-	# declare is tagged by its module (c_fn_cname_in), and this wrote the untagged spelling —
-	# so the thunk called a function no unit declares and cc reported it against generated C.
-	callee := c_fn_cname_in(em, check.c_mod_of(em, em.at_path), "", target)
 	em.lam_defs.append(f"static {c_type(c_fn_ret(t))} zg_{name}(const void *zg_envp{sig}) {{ (void)zg_envp; {ret}{callee}({call}); }}\n")
 	return name
 }
@@ -19563,6 +19632,12 @@ fn c_field_ty_of(mut &em: Emitter, target: ast.Expr, fld: str) -> ast.Ty {
 		return em.k_tys[ki] if ki >= 0
 	}
 
+	# `P.make` — an associated fn as a value has its declaration's fn type (c_assoc_fn_key).
+	if tn != "" and (c_is_struct_name(em, tn) or (c_gen_struct_row(em, tn) >= 0 and c_impl_tpl_fn_row(em, tn, fld) >= 0)) {
+		key := c_assoc_fn_key(em, tn, fld)
+		return c_fn_ty_of(em, key) if key != ""
+	}
+
 	t := c_infer(em, target)
 	if c_is_tuple(t) and c_all_digits(fld) {
 		ts := c_tuple_tys(t)
@@ -19665,7 +19740,20 @@ fn c_fieldref(mut &em: Emitter, target: ast.Expr, fld: str, l: int, c: int, sb: 
 			return c_ident_val(em, qn, 0, 0, sb)
 		}
 
-		raise c_diag(em, rule.Rule.NoAssociatedValue, f"`{tn}` has no associated value `{fld}` — a type is not a value, so `{tn}.{fld}` reads one an `impl {tn}` declares with `{fld} := …`")
+		# `P.make` — an ASSOCIATED FN named without a call is that fn as a value, as `f := helper`
+		# is a free one (docs/code/functions.md). The constant above is asked first, as the
+		# spelling's older reading.
+		key := c_assoc_fn_key(em, tn, fld)
+		return c_assoc_fn_value(em, target, tn, key, l, c) if key != ""
+
+		raise c_diag(em, rule.Rule.NoAssociatedValue, f"`{tn}` has no associated value `{fld}` — a type is not a value, so `{tn}.{fld}` names a constant (`{fld} := …`) or an associated fn an `impl {tn}` declares, and it declares neither")
+	}
+
+	# `Box.make` — the same, on a GENERIC type, whose fn rows are its template impls'. The type is
+	# asked first: its table is the short one, and every `x.f` with a name on the left reaches here.
+	if tn != "" and c_gen_struct_row(em, tn) >= 0 and c_impl_tpl_fn_row(em, tn, fld) >= 0 {
+		key := c_assoc_fn_key(em, tn, fld)
+		return c_assoc_fn_value(em, target, tn, key, l, c) if key != ""
 	}
 
 	if tn != "" and c_is_enum_name(em, tn) {

@@ -377,6 +377,9 @@ impl 選定的輸出」。必須**摺疊**的值用常數形式,必須**執行**
 _E4089 `P` has no associated value `NOPE`_,而那句話取代的是一次外漏:在它之前,型別名字會被降階成一個**值**,
 所以 `P.NOPE` 變成對一個型別取成員,由 `cc` 對著產生出來的程式碼抱怨。
 
+這個拼法與 **associated fn** 共用,由 impl 的宣告區分兩者:impl 宣告 `name := …` 時,`Type.name` 是這個常數;
+宣告 `fn name` 時,它是作為值的那個 fn（[函式](../code/functions.zh-TW.md)）。_E4089_ 是兩者都沒宣告的型別。
+
 ## 內建 spec（Built-in specs）
 
 每個內建行為都是一個 spec、**靠實作（或 derive）它才取得**——沒有自動實作的頂層 spec、也沒有隱式的。通用的結構性

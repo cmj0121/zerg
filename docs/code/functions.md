@@ -11,6 +11,16 @@ local function. A **generic** function is **not first-class until instantiated**
 generic name is not itself a value — it becomes one only once its type arguments are **inferred** at a
 use site.
 
+An **associated fn** is a value the same way, named through its **type**: `f := Bag.wrap` binds the fn an
+`impl Bag` declares, and `f(3)` calls it. `Type.name` is a [type constant](../core/specs.md#type-constants)
+when the impl declares `name := …` and this fn when it declares `fn name`. Its type is the declaration's,
+defaults left out as for any function. A **method** — a `fn` whose body uses `this` — has no receiver to
+be bound to, so `Bag.m` without a call is _E3151_, as `Bag.m()` is. A generic one waits for its call: an
+associated fn with type parameters of its own, or one on a generic type whose body or signature writes the
+type's parameters, is _E4009_ named without a call, and a declared binding does not stand in for the call's
+arguments. One on a generic type that writes none of them (`Box.one`) is one fn under every `Box[…]`, and a
+value.
+
 > Writing the arguments WITHOUT a call does not instantiate one either, and it is not a form waiting to be
 > built: a postfix `[ … ]` is ALWAYS an index ([`GRAMMAR`](../../GRAMMAR)), so nothing derived reaches this.
 > `m := map[str, int]` is _E2072 `map[…]` with no call after it — this compiler instantiates a generic at the

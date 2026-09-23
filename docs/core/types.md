@@ -387,7 +387,8 @@ usable only where every field is visible. A "constructor" is not a separate feat
 establish the type's invariant at the moment of construction. What makes a `fn` in an inherent `impl` an
 associated function rather than a method is its **body**: [`GRAMMAR#impl-decl`](../../GRAMMAR) draws the
 line at `this` — a `fn` that does not use it takes no receiver and is reached through the **type**,
-`User.from_id(…)`. A **private field is one an outsider never
+`User.from_id(…)` — and, named without a call, `User.from_id` is that function as a
+[value](../code/functions.md). A **private field is one an outsider never
 names**: it must carry a default (below), so an outside construction leaves it off and the declaration
 decides its value. Making the literal itself unavailable outside the module is what the `#[sealed]`
 decorator is for — **[not yet]**, _E9079 NotImplemented: the decorator `#[sealed]`_, so today the literal is

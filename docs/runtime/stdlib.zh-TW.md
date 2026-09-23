@@ -15,22 +15,23 @@ syscall／硬體 leaf 在 C runtime（見 [`src/runtime`](../../src/runtime/READ
 
 ## 模組註解裡可執行的範例
 
-`pub` 函式的註解可以帶範例：在普通的 `#` 註解裡寫成一組 fenced block——運算式放 ` ```zerg `，它印出什麼放
+`pub` 函式的註解可以帶範例：在它的 `##` 註解裡寫成一組 fenced block——運算式放 ` ```zerg `，它印出什麼放
 ` ```output `。`make stdlib-test` 會**編譯並執行**每一組，再把實際輸出與寫下的輸出 diff，所以範例是一個被檢查的
 主張，而不是一段寫下來的話；而 `zerg doc` 會把同一段註解讀回來——`zerg doc strings` 印出一個模組的完整文件，
 `zerg doc strings.split` 印出單一宣告。
 
-> **[not yet]** `##` 讀得到、也渲染得對——標記會被抄掉，整塊附著到它底下那個宣告，這正是 `GRAMMAR` 要求的。
-> **沒有**建的是同一句話畫的那條界線：_any other `#` begins an ordinary line comment_，而這裡普通 `#` 一樣會
-> 成為文件。十五個模組全是這樣寫的，所以把讀者的文件與維護者的筆記分開是一次遷移，不是一個開關（#18）。
+`##` 那一行是**讀者**的文字，`#` 那一行是**維護者**的，逐行區分，這正是 `GRAMMAR` 畫的那條界線：`##` 是文件
+註解，而 _any other `#` begins an ordinary line comment_。這裡每個模組都這樣寫——呼叫者需要知道的寫成 `##`，
+程式碼為什麼長這樣則留在 `#`。`zerg doc` 印出 `##` 那幾行；`zerg doc --all` 兩者都印
+（[文件工具](../tooling/doc.zh-TW.md#讀者的文字與維護者的)）。
 
 ````text
-# ```zerg
-# strings.index_of("日本語", "本")
-# ```
-# ```output
-# 3
-# ```
+## ```zerg
+## strings.index_of("日本語", "本")
+## ```
+## ```output
+## 3
+## ```
 ````
 
 > **` ```output ` 的行尾不能是空白。** 本倉庫自己的 pre-commit hook 會裁掉行尾空白，而且就在**新增該範例的那一次

@@ -16,25 +16,25 @@ its own. `zerg test src/stdlib` runs all of them; `zerg test src/stdlib/strings.
 
 ## Runnable examples in a module's comments
 
-A `pub` function's comment may carry an example, as a pair of fenced blocks in a plain `#` comment — the
+A `pub` function's comment may carry an example, as a pair of fenced blocks in its `##` comment — the
 expressions in ` ```zerg `, and what they print in ` ```output `. `make stdlib-test` **compiles and runs**
 every pair and diffs the real output against the stated one, so an example is a claim that is checked
 rather than one that is written down, and `zerg doc` reads the same comment back — `zerg doc strings`
 prints a module's whole document, `zerg doc strings.split` one declaration.
 
-> **[not yet]** `##` is read and rendered — the marker comes off and the block attaches to the declaration
-> under it, which is what `GRAMMAR` asks of it. What is **not** built is the DISTINCTION the same sentence
-> draws: _any other `#` begins an ordinary line comment_, and here a plain `#` documents too. That is how
-> all fifteen modules are written, so separating the reader's document from the maintainer's notes is a
-> migration rather than a switch (#18).
+A `##` line is the **reader's** text and a `#` line the **maintainer's**, line by line, which is the
+distinction `GRAMMAR` draws: `##` is a doc comment, and _any other `#` begins an ordinary line comment_.
+Every module here is written that way — what a caller needs is `##`, and why the code is the way it is
+stays `#`. `zerg doc` prints the `##` lines; `zerg doc --all` prints both
+([the documentation tool](../tooling/doc.md#the-readers-text-and-the-maintainers)).
 
 ````text
-# ```zerg
-# strings.index_of("日本語", "本")
-# ```
-# ```output
-# 3
-# ```
+## ```zerg
+## strings.index_of("日本語", "本")
+## ```
+## ```output
+## 3
+## ```
 ````
 
 > **An ` ```output ` line may not end in whitespace.** The repository's own pre-commit hook trims trailing

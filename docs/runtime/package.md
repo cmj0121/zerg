@@ -630,8 +630,8 @@ A test file is not importable from anywhere, a sibling test file included — a 
 module's namespace and reaches its internals with no import at all, which is what makes `zerg test` a
 matter of compiling more files rather than of relaxing a visibility rule.
 
-> **[not yet]** Four things past the above: a doc comment (`##`), a doc example run as a test, benchmarks,
-> and **running two tests at once** — tests are serial, `ctx.parallel()` is unbuilt (_E3131 the method
+> **[not yet]** Three things past the above: a doc example run as a test, benchmarks, and **running two
+> tests at once** — tests are serial, `ctx.parallel()` is unbuilt (_E3131 the method
 > `parallel` on a Context_), and when it lands
 > tests sharing a fixture will share one instance of it.
 >

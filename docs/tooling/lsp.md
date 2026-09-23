@@ -545,7 +545,8 @@ by renaming nothing.
 
 `textDocument/hover` is what an editor shows when the cursor rests on a name. The
 [index](#a-name-answers-from-one-index) says which declaration that name is; what is shown is the
-**document `zerg doc` prints for it** — the comment above it, and the signature the compiler spells.
+**document `zerg doc` prints for it** — the reader's text of the comment above it, its `##` lines, and the
+signature the compiler spells. A `#` line is the maintainer's and is in no hover, as it is in no default page.
 
 > **There is one reader of comments in this tree.** A hover that scanned for `#` itself would be a
 > document the terminal does not have and a document the editor does not share.
@@ -554,7 +555,7 @@ So the text comes from `doc_decl_at`, which is `zerg doc`'s own extraction asked
 than for a whole module: the same attachment rules — a run of whole-line comments directly above the
 declaration, a decorator is not a break, a banner claims nothing ([Which comment documents which
 declaration](doc.md#which-comment-documents-which-declaration)) — the same signature from the
-compiler's type printer, and the same `(undocumented)` where nothing was written. One extraction, two
+compiler's type printer, and the same `(undocumented)` where no `##` line was written. One extraction, two
 readers.
 
 **It is asked for every declaration, and `zerg doc` for the exposed ones.** That is one walk with two

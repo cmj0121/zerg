@@ -329,6 +329,11 @@ x: float = 1 / 2      # 兩則 finding:這個 `1` 在這裡是 float,那個 `2` 
 沒有機械答案的 finding 不帶 `fix`,也就不提供 action。一個提供了 quick fix 然後什麼也不做的編輯器,比一個什麼都不提供
 的更糟,因為使用者學到的是「這個選單會騙人」。
 
+**選單是檢查的答案,不是它自己的一趟走訪。** 帶著 `fix` 的 notes,出自發布這個 buffer 診斷的同一趟走訪,而 server
+把它們跟 buffer 存在一起,所以要選單只是一次查表。新的文字存進來時不帶任何 fix,而每個改動 buffer 的 handler 都會
+在讀下一個 request 之前檢查它,所以選單永遠不會替 buffer 已經不再持有的文字作答。由另一個程式的檢查代為發言的
+buffer,提供的是那次檢查找到的——也就是它的底線所出自的那些 fix。中止的檢查不提供任何 fix,就像走訪那個程式也會的那樣。
+
 這個改寫**不是** `zerg fmt` 的工作。formatter 讀的是 token,而且必須能在編譯器編不過的原始碼上運作(見
 [格式化器規則](fmt.zh-TW.md));要知道 `1` 變成了 `float` 需要型別,所以一個做這件事的 formatter,會剛好在人們
 最需要它的那種 buffer 裡失效。它同時也是一個意見——`1.5 + 1` 是合法程式——而 formatter 沒有意見。
@@ -667,3 +672,8 @@ notes 在走過時順手留下,這不改變任何錯誤,所以錯誤仍然是 `c
 外面量 `src/compiler/` 底下一個檔案的一次檢查成本,對照同一個程式的 `zerg build --emit check`——定義上就是一趟——
 單位是 instructions retired:之前 2.07 趟,之後 1.09 趟,到一趟半就失敗。用 instructions 而不是秒數,因為秒數取決
 於機器和行程落在哪一顆核心上,instructions 才是工作量。debounce 只會把剩下的藏起來。
+
+**quick fix 也不再花一趟走訪。** `textDocument/codeAction` 過去為了它的 fix 再 lower 一次程式——也就是上面那第二趟
+走訪,在每一次要選單時再付一次,不論有沒有提供任何東西,都是半次檢查。現在它從檢查留下的東西作答。`make lsp` 從行程
+外面量一個開啟程式後要求 code action 的 session,對照同一個不要求的 session:八個 request 之前約花五次檢查,之後不到
+一次的十分之一,到一半就失敗。

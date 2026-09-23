@@ -409,6 +409,13 @@ A finding with no mechanical answer carries no `fix` and offers no action. An ed
 quick fix and then does nothing is worse than one that offers none, because the user learns the menu
 lies.
 
+**The menu is the check's answer, not a walk of its own.** The notes that carry a fix come out of
+the same walk that published the buffer's diagnostics, and the server keeps them with the buffer, so
+asking for the menu is a lookup. A new text is stored with none, and every handler that changes a
+buffer checks it before reading the next request, so the menu never answers for a text the buffer no
+longer holds. A buffer that another program's check spoke for offers what that check found — the
+fixes its underlines came from. A check that aborted offers none, as a walk of that program would.
+
 The rewrite is **not** `zerg fmt`'s. The formatter reads tokens and must work on source the compiler
 cannot compile ([Formatter Rules](fmt.md)); knowing that `1` became a `float` needs types, so a
 formatter that did this would fail in exactly the buffer a person reaches for it in. It is also an
@@ -867,3 +874,10 @@ the build's. `make lsp` measures what one check of a file under `src/compiler/` 
 from outside the process: 2.07 walks before, 1.09 after, and it fails at one and a half. Instructions
 rather than seconds, because the seconds depend on the machine and which core the process lands on,
 and the instructions are the work. A debounce would hide what is left.
+
+**And a quick fix costs no walk.** `textDocument/codeAction` used to lower the program again for its
+fixes — the second walk above, paid again on every request for the menu, half a check whether it
+offered anything or not. It answers now from what the check kept. `make lsp` measures a session that
+opens a program and asks for code actions against the same session asking none, from outside the
+process: eight requests cost about five checks before and under a tenth of one after, and it fails
+at half.

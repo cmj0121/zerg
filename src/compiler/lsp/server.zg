@@ -71,6 +71,17 @@ pub fn program(paths: list[str], srcs: list[str], mods: list[str], imp_at: list[
 struct Doc {
 	pub uri: str
 	pub text: str
+
+	# fixes is every finding in this buffer that carries a fix, as the most recent check that
+	# spoke for it found them — what `textDocument/codeAction` answers from, so a quick fix costs
+	# a lookup and not a second walk of the program (#204).
+	#
+	# THEY BELONG TO `text` BY CONSTRUCTION: a new text is stored with none, and every handler
+	# that stores one checks it before it reads the next frame, so no request is ever answered
+	# from the findings of a text the buffer no longer holds. A buffer whose text did not change
+	# keeps them until a check speaks for it again — which is every check whose program contains
+	# a file that did change (ls_publish_dependants), and so exactly when they could differ.
+	pub fixes: list[zerg.Diag]
 }
 
 struct Server {
@@ -287,7 +298,7 @@ fn ls_handle(mut &s: Server, body: str, load: fn (str, list[str], list[str]) -> 
 	} else if method == "textDocument/codeAction" {
 		params := json.get(msg, "params")
 		uri := json.as_str(json.walk3(msg, "params", "textDocument", "uri"))
-		ls_reply(id, ls_code_action_result(s, uri, ls_req_span(params), load))
+		ls_reply(id, ls_code_action_result(s, uri, ls_req_span(params)))
 	} else if method == "textDocument/documentSymbol" {
 		ls_document_symbol_reply(s, id, json.as_str(json.walk3(msg, "params", "textDocument", "uri")))
 	} else if method == "textDocument/definition" {
@@ -401,12 +412,25 @@ fn ls_put_doc(mut &s: Server, uri: str, text: str) {
 	mut i := 0
 	for i < s.docs.len() {
 		if s.docs[i].uri == uri {
-			s.docs[i] = Doc(uri, text)
+			s.docs[i] = Doc(uri, text, [])
 			return
 		}
 		i = i + 1
 	}
-	s.docs.append(Doc(uri, text))
+	s.docs.append(Doc(uri, text, []))
+}
+
+# ls_keep_fixes records what a check found fixable in `uri`'s buffer, as the answer every code
+# action on it gives until a check speaks for it again.
+fn ls_keep_fixes(mut &s: Server, uri: str, fixes: list[zerg.Diag]) {
+	mut i := 0
+	for i < s.docs.len() {
+		if s.docs[i].uri == uri {
+			s.docs[i].fixes = fixes
+			return
+		}
+		i = i + 1
+	}
 }
 
 fn ls_drop_doc(mut &s: Server, uri: str) {
@@ -552,7 +576,7 @@ fn ls_publish_report(rep: Report) -> list[str] {
 
 # ls_load is the program `path` belongs to as the EDITOR holds it, or an EMPTY one where the
 # loader raised. It is for the answers that are a view rather than a verdict — which files a
-# program contains, a hover, a quick fix: a refusal inside `load` is a finding `ls_check`
+# program contains, a hover: a refusal inside `load` is a finding `ls_check`
 # publishes with the sentence it raised, and a caller that repeated it would say the same thing
 # twice in two places. What they do instead is answer with less.
 fn ls_load(s: Server, path: str, load: fn (str, list[str], list[str]) -> Program) -> Program {
@@ -629,7 +653,7 @@ fn ls_check(mut &s: Server, uri: str, load: fn (str, list[str], list[str]) -> Pr
 		Either.Left(_)  => ""
 		Either.Right(e) => e.message()
 	}
-	return ls_abort_report(s, uri, lerr, "") if lerr != ""
+	return ls_aborted(s, uri, lerr, "") if lerr != ""
 
 	prog := match res {
 		Either.Left(p)  => p
@@ -654,6 +678,17 @@ fn ls_abort_report(s: Server, uri: str, msg: str, of: str) -> Report {
 	owner := ls_abort_owner(s, uri, msg)
 	one := [ls_abort_diag(ls_uri_path(owner), ls_doc_text(s, owner), msg, of)]
 	return Report([owner], [one])
+}
+
+# ls_aborted is that report, and what it says about the quick fixes: none, in the buffer that
+# was checked and in the one the abort is published in. A program that aborted has no notes —
+# the walk that writes them did not finish — and a walk of it for a code action would abort the
+# same way and offer nothing either.
+fn ls_aborted(mut &s: Server, uri: str, msg: str, of: str) -> Report {
+	rep := ls_abort_report(s, uri, msg, of)
+	ls_keep_fixes(s, uri, [])
+	ls_keep_fixes(s, rep.uris[0], [])
+	return rep
 }
 
 # ls_abort_owner is the open buffer the abort's place names, and `uri` when it names none. A
@@ -708,11 +743,15 @@ fn ls_check_program(mut &s: Server, uri: str, prog: Program, said: list[str], su
 	#
 	# AND THE NAME INDEX FROM THE SAME WALK (`check_lint_index`), which costs recording and not a
 	# second walk. It is written only if the walk returns.
+	#
+	# AND THE QUICK FIXES FROM IT TOO: `notes` is the walk's L5xx notes with their `fix`, kept per
+	# buffer below so a code action is answered without walking again (#204).
 	mut ds: list[zerg.Diag] = []
 	mut lints: list[zerg.Finding] = []
 	mut nx := zerg.no_index()
+	mut notes: list[zerg.Diag] = []
 	err := match guard {
-		lints = zerg.check_lint_index(prog.srcs, prog.paths, zerg.mods_of(prog.paths, prog.mods, prog.imp_at, prog.imp_path, prog.imp_mod), ds, nx)
+		lints = zerg.check_lint_index(prog.srcs, prog.paths, zerg.mods_of(prog.paths, prog.mods, prog.imp_at, prog.imp_path, prog.imp_mod), ds, nx, notes)
 		ds.len()
 	} {
 		Either.Left(_)  => ""
@@ -721,7 +760,7 @@ fn ls_check_program(mut &s: Server, uri: str, prog: Program, said: list[str], su
 
 	# An ABORT is a refusal or a parse error, raised as a sentence naming a place, and it is
 	# published in the buffer that place belongs to — ls_abort_report says which.
-	return ls_abort_report(s, uri, err, ls_abort_for(ds, err)) if err != ""
+	return ls_aborted(s, uri, err, ls_abort_for(ds, err)) if err != ""
 
 	if subject {
 		ls_nx_utf16(nx, prog.paths, prog.srcs)
@@ -764,6 +803,7 @@ fn ls_check_program(mut &s: Server, uri: str, prog: Program, said: list[str], su
 				one.append(ls_finding(f.path, ls_word_span(lines, f.line, f.col), text, "", f.code, f.msg, ls_severity(f.sev)))
 			}
 		}
+		ls_keep_fixes(s, u, ls_fixes_in(notes, p))
 		uris.append(u)
 		each.append(one)
 	}
@@ -1418,17 +1458,19 @@ fn ls_is_word(c: byte) -> bool {
 # sentence says "write `1.0`", and the day it says something else the copy would rewrite source
 # into whatever it managed to parse.
 #
-# It re-lints rather than remembering what was published. Phase 1 re-checks the whole program per
-# keystroke anyway, so a cache would be a second answer to a question already being asked — and
-# a stale one exactly when the buffer has just changed, which is when a fix is asked for.
-fn ls_code_action_result(s: Server, uri: str, req: Span, load: fn (str, list[str], list[str]) -> Program) -> json.Val {
+# IT ANSWERS FROM THE CHECK, not from a walk of its own (#204). The check that published this
+# buffer's findings lowered the program to find them, and the notes that carry a fix came out of
+# that same walk — lowering the program again for them cost half a check per request, for a menu
+# that usually offers nothing. So the check keeps them per buffer (Doc.fixes, which says why
+# they cannot be a stale answer), and the menu follows what the buffer shows: a buffer another
+# program's check spoke for offers the fixes that check found.
+fn ls_code_action_result(s: Server, uri: str, req: Span) -> json.Val {
 	mut out: list[json.Val] = []
 	return json.of_list(out) if not ls_has_doc(s, uri)
 
 	text := ls_doc_text(s, uri)
-	path := ls_uri_path(uri)
 	lines := ls_lines(text)
-	for d in ls_fixable(s, path, load) {
+	for d in ls_doc_fixes(s, uri) {
 		sp := ls_word_span(lines, d.line, d.col)
 		if ls_span_touches(sp, req) {
 			out.append(ls_quick_fix(uri, sp, d))
@@ -1437,21 +1479,19 @@ fn ls_code_action_result(s: Server, uri: str, req: Span, load: fn (str, list[str
 	return json.of_list(out)
 }
 
-# ls_fixable is every finding on THIS file that carries a fix. A finding without one is not an
-# action: an editor that offers "quick fix" and then does nothing is worse than an editor that
-# offers nothing, because the user learns the menu lies.
-fn ls_fixable(s: Server, path: str, load: fn (str, list[str], list[str]) -> Program) -> list[zerg.Diag] {
-	mut out: list[zerg.Diag] = []
-	prog := ls_load(s, path, load)
-	return out if prog.srcs.len() == 0
-
-	lints := match guard {
-		zerg.lint_conversions(prog.srcs, prog.paths, zerg.mods_of(prog.paths, prog.mods, prog.imp_at, prog.imp_path, prog.imp_mod))
-	} {
-		Either.Left(ls) => ls
-		Either.Right(_) => []
+fn ls_doc_fixes(s: Server, uri: str) -> list[zerg.Diag] {
+	for d in s.docs {
+		return d.fixes if d.uri == uri
 	}
-	for d in lints {
+	return []
+}
+
+# ls_fixes_in is the notes on THIS file that carry a fix. A finding without one is not an action:
+# an editor that offers "quick fix" and then does nothing is worse than an editor that offers
+# nothing, because the user learns the menu lies.
+fn ls_fixes_in(notes: list[zerg.Diag], path: str) -> list[zerg.Diag] {
+	mut out: list[zerg.Diag] = []
+	for d in notes {
 		if d.path == path and d.fix != "" {
 			out.append(d)
 		}

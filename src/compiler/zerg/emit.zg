@@ -21633,7 +21633,7 @@ pub fn emit_unit_at(prog: ast.File, own: ast.File, ms: Mods, mut &diags: list[as
 	return c_emit_unit(prog, own, ms, false, false, false, false, diags, lints, nx)
 }
 
-# lint_conversions is the L5xx family, and it is the one lint that cannot be answered from
+# lint_conversions_of is the L5xx family, and it is the one lint that cannot be answered from
 # the parsed tree: a conversion is a fact about TYPES. So the linter asks the lowering walk,
 # which has them — and what is kept is what the walk noticed on the way past. A program that
 # does not compile answers nothing, which is right: there is no point advising about the
@@ -21641,13 +21641,9 @@ pub fn emit_unit_at(prog: ast.File, own: ast.File, ms: Mods, mut &diags: list[as
 #
 # It walks in CHECK mode. The C was always thrown away here — that is what this comment used
 # to say — and building it first cost the caller a gigabyte for a string nobody read.
-pub fn lint_conversions(srcs: list[str], paths: list[str], ms: Mods) -> list[ast.Diag] {
-	mut diags: list[ast.Diag] = []
-	return lint_conversions_of(merge_files_at(srcs, paths), ms, diags)
-}
-
-# lint_conversions_of is lint_conversions over a program the caller has already merged, and
-# it hands back the walk's FINDINGS too, in `diags` — so one walk answers both the check and
+#
+# It takes a program the caller has already merged, and it hands back the walk's FINDINGS too,
+# in `diags` — so one walk answers both the check and
 # the L5xx family (lint.check_and_lint says why that matters). Asking for the notes changes no
 # finding: `want_lints` is read by `chk_note_at` alone, so `diags` is what check_files_diag
 # reports, and `make check-equal` holds that walk to the build's.

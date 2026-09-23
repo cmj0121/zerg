@@ -4815,7 +4815,40 @@ pub fn c_sig_row_in(mut &em: Emitter, mod: str, key: str) -> int {
 	return c_sig_row(em, key)
 }
 
+# c_key_in is the key of a call that NAMES the module it means — `bb.g(1)` — and c_key_name and
+# c_key_mod read it back. A key is the whole identity every row lookup below is handed, so the
+# module rides in it rather than beside it: a call's key reaches the arity rule, each argument's
+# row, the defaults it fills and a `spawn`'s env through one string, and the module has to reach
+# every one of them. Without it each looked the name up from the READER's module first and then
+# the first file read, so `bb.g(1)` took `aa`'s defaults (#214). An identifier never holds `@`.
+pub fn c_key_in(mod: str, key: str) -> str {
+	return key if mod == ""
+
+	return f"{key}@{mod}"
+}
+
+fn c_key_name(key: str) -> str {
+	return c_nx_until(key, b'@', b'@')
+}
+
+fn c_key_mod(key: str) -> str {
+	mut out: list[byte] = []
+	mut seen := false
+	for b in bytearray(key) {
+		if seen {
+			out.append(b)
+		}
+		seen = seen or b == b'@'
+	}
+	return str(out)
+}
+
 pub fn c_sig_row(mut &em: Emitter, key: str) -> int {
+	# THE MODULE THE CALL NAMED, when it named one (c_key_in): that is the declaration, whatever
+	# the reader's own module or the first file read declares under the same name.
+	mod := c_key_mod(key)
+	return c_sig_row_in(em, mod, c_key_name(key)) if mod != ""
+
 	# THE READER'S OWN MODULE FIRST, where two of them declare the name. A private name two
 	# modules both have is two rows, and the first is whichever file was read first — so
 	# every rule that reads a row by name alone would answer about the other module's
@@ -4843,7 +4876,10 @@ pub fn c_param_row(mut &em: Emitter, fname: str, idx: int) -> int {
 	# stops at the end of the first one it meets — whichever file was read first. So a call was
 	# measured against the other module's parameters: `helper(1)` in the module that declares
 	# `helper(n: int)` was refused as _argument 1 of `helper` is str_, naming a declaration the
-	# reader cannot see.
+	# reader cannot see. And the module the CALL named before either, for c_sig_row's reason.
+	mod := c_key_mod(fname)
+	return c_param_row_in(em, c_key_name(fname), idx, mod) if mod != ""
+
 	here := check.c_mod_of(em, em.at_path)
 	if here != "" {
 		r := c_param_row_in(em, fname, idx, here)
@@ -4886,8 +4922,11 @@ fn c_is_ref_name(mut &em: Emitter, name: str) -> bool {
 # a private `helper` gave the caller the OTHER one's return type, and `from_b` was refused as
 # _this function's answer is int, and this gives str_ — about a declaration it cannot see.
 fn c_lookup_sig_ret(mut &em: Emitter, name: str) -> ast.Ty {
-	r := c_sig_row(em, name)
+	return c_sig_row_ret(em, c_sig_row(em, name))
+}
 
+# c_sig_row_ret is the answer type a signature row declares, for a caller already holding the row.
+fn c_sig_row_ret(mut &em: Emitter, r: int) -> ast.Ty {
 	return ast.Ty.TUnknown if r < 0
 
 	return em.sig_rets[r] if em.sig_hasret[r]
@@ -11462,7 +11501,9 @@ fn c_free_method(mut &em: Emitter, target: ast.Expr, meth: str, args: list[ast.E
 
 		c_chk_visible_fn(em, meth, callee)
 
-		return f"{c_fn_cname_in(em, callee_mod, "", meth)}({c_call_args(em, meth, args, sb)})"
+		# and the ARGUMENTS are measured against that module's declaration too — its arity, its
+		# parameters, the defaults it fills — which the key carries to every rule that reads one
+		return f"{c_fn_cname_in(em, callee_mod, "", meth)}({c_call_args(em, c_key_in(callee_mod, meth), args, sb)})"
 	}
 
 	# AN INVENTED PREFIX. The finding is about the prefix and there is nothing further to
@@ -12482,7 +12523,7 @@ fn c_defaults_read_earlier(mut &em: Emitter, key: str, base: int, n: int, filled
 
 	mut names: list[str] = []
 	mut k := 0
-	for first + k < em.pr_fn.len() and em.pr_fn[first + k] == key and em.pr_idx[first + k] == base + k {
+	for first + k < em.pr_fn.len() and c_param_same_fn(em, first, first + k) and em.pr_idx[first + k] == base + k {
 		row := first + k
 
 		return false if k >= n and not em.pr_hasdef[row]
@@ -12663,13 +12704,25 @@ fn c_slot_taken(slot: list[int], at: int) -> bool {
 
 # c_param_named is the index of the parameter this name picks, or -1. The row table already
 # answers every other half of "which parameter"; this is the half a named argument asks.
+#
+# WITHIN THE BLOCK c_param_row resolves, not the first row anywhere with this name and key: two
+# modules declaring `g` are two blocks, and `bb.g(1, c: 2)` placed `c` by `aa`'s list (#214).
 fn c_param_named(mut &em: Emitter, key: str, nm: str) -> int {
-	mut i := 0
-	for i < em.pr_fn.len() {
-		return em.pr_idx[i] if em.pr_fn[i] == key and em.pr_name[i] == nm
+	first := c_param_row(em, key, 0)
+	return 0 - 1 if first < 0
+
+	mut i := first
+	for i < em.pr_fn.len() and c_param_same_fn(em, first, i) {
+		return em.pr_idx[i] if em.pr_name[i] == nm
 		i = i + 1
 	}
 	return 0 - 1
+}
+
+# c_param_same_fn is whether two parameter rows belong to one declaration: the same key in the
+# same module, since a key alone is shared by every module that declares the name.
+fn c_param_same_fn(mut &em: Emitter, a: int, b: int) -> bool {
+	return em.pr_fn[a] == em.pr_fn[b] and em.pr_mod[a] == em.pr_mod[b]
 }
 
 fn c_named_arg_name(e: ast.Expr) -> str {
@@ -14861,8 +14914,21 @@ fn c_infer_methcall(mut &em: Emitter, target: ast.Expr, meth: str, args: list[as
 
 		# the `_` arm is the NAMESPACED call — a module's names are the one free-function
 		# space — so it answers what a free call of that name answers, generics included
-		_ => c_infer_call(em, meth, args)
+		_ => c_infer_ns_call(em, target, meth, args)
 	}
+}
+
+# c_infer_ns_call is that answer read off the NAMED module's declaration when it has one — the
+# row the emission path calls (c_key_in). Asked by name alone it was the reader's module's, or
+# the first file's: `bb.ret(1)` on a `bb` answering `str` and an `aa` answering `int` was typed
+# `int` and printed a pointer (#214).
+fn c_infer_ns_call(mut &em: Emitter, target: ast.Expr, meth: str, args: list[ast.Expr]) -> ast.Ty {
+	mod := c_ns_mod_of(em, c_ident_name(target))
+	if mod != "" and not c_is_generic(em, meth) {
+		r := c_sig_row_in(em, mod, c_sig_key("", meth))
+		return c_sig_row_ret(em, r) if r >= 0 and em.sig_mod[r] == mod
+	}
+	return c_infer_call(em, meth, args)
 }
 
 # c_elem_ty is what `x[i]` yields: a map indexes to its VALUE type, a list to its element.
@@ -17614,12 +17680,22 @@ fn c_callee_args_of(x: ast.Expr) -> list[ast.Expr] {
 #
 # WHETHER THE NAME IS A FUNCTION AT ALL is asked one step earlier, by c_chk_callable, and
 # only of the BARE spelling — see there.
-fn c_callee_free(mut &em: Emitter, name: str, args: list[ast.Expr], what: str) -> Callee {
-	sr := c_sig_row_of(em, name)
+#
+# `mod` is the module the statement NAMED — `spawn mod.work()` — and "" for the bare spelling,
+# which means the reader's own. The ordinary call reads the named module's declaration for its
+# symbol and every row (c_key_in); this spelled the READER's symbol and read the first module's
+# rows, so a name two modules declare reached cc as a function neither unit defines (#214).
+fn c_callee_free(mut &em: Emitter, mod: str, name: str, args: list[ast.Expr], what: str) -> Callee {
+	key := c_key_in(mod, c_sig_key("", name))
+	sr := c_sig_row(em, key)
 	c_chk_visible_fn(em, name, sr)
 	c_chk_unsafe_fn(em, name, f"this `{what}` is in safe code", sr)
 
-	return Callee(c_fn_cname_in(em, check.c_mod_of(em, em.at_path), "", name), args, name)
+	mut at := mod
+	if at == "" {
+		at = check.c_mod_of(em, em.at_path)
+	}
+	return Callee(c_fn_cname_in(em, at, "", name), args, key)
 }
 
 # c_chk_callable is "is this name a function", and it was the question a `spawn` and a
@@ -17672,7 +17748,7 @@ fn c_callee_raw(mut &em: Emitter, x: ast.Expr, what: str) -> Callee {
 	if n != "" {
 		c_chk_callable(em, n, what)
 
-		return c_callee_free(em, n, c_call_args_of(x), what)
+		return c_callee_free(em, "", n, c_call_args_of(x), what)
 	}
 	raise c_diag(em, rule.Rule.SpawnOfNonFunction, f"{what} of anything but a function, a method, or a namespaced function") if not c_is_method_expr(x)
 
@@ -17706,7 +17782,7 @@ fn c_callee_raw(mut &em: Emitter, x: ast.Expr, what: str) -> Callee {
 				check.chk_no_member(em, c_ns_root(tgt), m)
 				return Callee("0", [], "")
 			}
-			return c_callee_free(em, m, margs, what)
+			return c_callee_free(em, c_ns_mod_of(em, c_ns_root(tgt)), m, margs, what)
 		}
 
 		# ONE NUMBER, TWO QUESTIONS, and a sentence that was false for both halves (#87).

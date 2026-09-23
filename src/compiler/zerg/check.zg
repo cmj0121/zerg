@@ -1721,7 +1721,9 @@ fn chk_call_name(key: str) -> str {
 		# none of that — `two(1, "x")` was answered with "`two$int` takes int as argument 2".
 		# The mangling is how the compiler tells two instantiations apart; it is not a name
 		# any program contains, so it stops here, at the one place a key becomes a sentence.
-		break if b == b'$'
+		# And the module a namespaced call named rides after an `@` (emit.c_key_in) for the same
+		# reason: the reader wrote `bb.g`, and the sentences about it name `g` as they always did.
+		break if b == b'$' or b == b'@'
 
 		if b == b'#' {
 			out.append(b'.')

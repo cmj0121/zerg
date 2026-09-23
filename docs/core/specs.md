@@ -149,9 +149,10 @@ and the two do not collide: they are implementations of two different types.
 
 A target reached **through a module** — `impl Show for shape.P` — is the ordinary way to make a foreign
 type satisfy an interface you own, and the orphan rule above is what allows it: the impl is in the spec's
-module. The name it resolves to is the **bare** one, because every module flattens into one namespace and
-two modules declaring one type name is refused; the qualifier is a separate claim about where the type came
-from, and it is checked the way every other type position's is — an invented one is `undefined name`.
+module. The name it resolves to is the **bare** one, because a type another module can reach is a `pub`
+one and two modules declaring one public type name is refused; the qualifier is a separate claim about where
+the type came from, and it is checked the way every other type position's is — an invented one is
+`undefined name`.
 
 An **inherent** `impl` on such a type is not allowed, and that is the orphan rule with one of its two
 owners missing: there is no spec whose module could own it, so it belongs with the type.

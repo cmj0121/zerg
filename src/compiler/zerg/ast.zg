@@ -756,6 +756,14 @@ pub struct Diag {
 	# a language fact docs/tooling/lsp.md exists to forbid. A finding carrying one owes an
 	# exact place too, since something is going to be overwritten there.
 	pub fix: str
+
+	# `derived_for` is the DECLARATION a compiler-written tree was expanded for — the type a
+	# `#[derive(…)]` sat above — and empty for a finding in a file somebody wrote. It exists
+	# because the place of such a finding is a line of `<derive:FILE>`, and every expansion of
+	# one file is walked at that one path from its own line 1: the place says which FILE and
+	# not which decorator. The language server needs the decorator, since that is the line a
+	# reader has on screen (docs/tooling/lsp.md), and this is the one thing that names it.
+	pub derived_for: str
 }
 
 # diag_at builds one Diag. The DRIVER needs one for the finding only it can make — a
@@ -764,7 +772,7 @@ pub struct Diag {
 # so the constructor lives here, beside the struct, as an ordinary function a caller in
 # another module can reach.
 pub fn diag_at(path: str, line: int, col: int, code: rule.Rule, msg: str) -> Diag {
-	return Diag(path, line, col, 0, 0, rule.rule_code(code), msg, "")
+	return Diag(path, line, col, 0, 0, rule.rule_code(code), msg, "", "")
 }
 
 # place_line is the `  --> file:line:col` trailer every diagnostic of this compiler carries

@@ -226,11 +226,18 @@ fn pkg_identity(p: test_pkg.Pkg) -> str {
 # examples import it from, because a stdlib module is imported by its bare name and nothing
 # else is.
 pub fn in_stdlib(dir: str) -> bool {
-	# THE TWO PATHS ARE THE SAME DIRECTORY SPELLED TWICE — `stdlib_dir()` is absolute, and a
-	# package's directory is whatever the caller typed — so this asks whether one is the tail of
-	# the other rather than whether the strings are equal: a path is not an identity.
-	std := layout.stdlib_dir()
-	return dir == std or layout.has_suffix(std, "/" + dir) or has_prefix(dir, std + "/")
+	# THE DIRECTORY IT IS, NOT HOW IT IS SPELLED. `stdlib_dir()` is absolute and a package's
+	# directory is whatever the caller typed, and a path is not an identity: asking whether one
+	# string was the tail of the other made a project's own relative `stdlib/` the standard
+	# library's, and its modules then stood in for the real ones every stdlib import named. Both
+	# are resolved to the canonical path of what is on disk, so `stdlib`, `.`, `../x` and the
+	# absolute spelling of one directory answer alike, and a directory that is not there is
+	# nobody's standard library.
+	real := __zrt_real_path(dir)
+	std := __zrt_real_path(layout.stdlib_dir())
+	return false if real == "" or std == ""
+
+	return real == std or has_prefix(real, std + "/")
 }
 
 # run_pkg builds one package's test binary and runs it, adding its counts to the run's.

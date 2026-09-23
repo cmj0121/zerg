@@ -1166,6 +1166,10 @@ fn chk_inherent_local(mut &em: emit.Emitter, f: ast.File) {
 		type_mod := chk_type_mod(em, f, fn_i.recv)
 		continue if type_mod == "" or type_mod == here or chk_spec_impl_here(em, f, fn_i.recv, here)
 
+		# a default a SPEC impl inherits is a member of that impl, which chk_impl_local
+		# judges where the impl was written — not an inherent block in the spec's file (#202)
+		continue if emit.c_inherited_by(f, fn_i) >= 0
+
 		chk_impl_owner(em, fn_i.path, fn_i.line, fn_i.col, f"impl {fn_i.recv} {{ … }}", "an inherent `impl` has no spec whose module could own it, so it belongs with the type")
 	}
 }

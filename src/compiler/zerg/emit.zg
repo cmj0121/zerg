@@ -5631,9 +5631,21 @@ fn c_decl_sites(f: ast.File) -> list[Site] {
 		# function does. So the bound names travel with the site rather than the template
 		# being skipped, which would have left an unknown type in a generic's signature to
 		# reach cc under whatever name a specialization gave it.
-		out.append(Site(fn_i.ret, f"the result of `{fn_i.name}`", fn_i.tparams, fn_i.path, fn_i.line, fn_i.col, fn_i.is_pub))
+		#
+		# AN INHERITED DEFAULT'S SIGNATURE IS THE IMPL'S (c_inherited_by): its receiver and
+		# every `This` in it are the implementing type, named where the impl names it.
+		mut path := fn_i.path
+		mut line := fn_i.line
+		mut col := fn_i.col
+		by := c_inherited_by(f, fn_i)
+		if by >= 0 {
+			path = f.impls[by].path
+			line = f.impls[by].line
+			col = f.impls[by].col
+		}
+		out.append(Site(fn_i.ret, f"the result of `{fn_i.name}`", fn_i.tparams, path, line, col, fn_i.is_pub))
 		for pm in fn_i.params {
-			out.append(Site(pm.ty, c_param_says(fn_i, pm), fn_i.tparams, fn_i.path, fn_i.line, fn_i.col, fn_i.is_pub))
+			out.append(Site(pm.ty, c_param_says(fn_i, pm), fn_i.tparams, path, line, col, fn_i.is_pub))
 		}
 	}
 	return out
@@ -21651,6 +21663,41 @@ fn c_default_method(sp: ast.SpecDecl, ip: ast.ImplDecl, req: ast.FnDecl) -> ast.
 		ps.append(ast.Param(pm.name, c_spec_subst(pm.ty, sp, ip), pm.is_ref, pm.has_def, pm.def, pm.line, pm.col))
 	}
 	return ast.FnDecl(req.name, ip.target, ps, req.has_ret, c_spec_subst(req.ret, sp, ip), req.body, req.is_pub, req.path, req.line, req.col, req.tparams, req.tbounds, req.in_unsafe, false, false, true, false, c_impl_spec_of(ip), req.name_line, req.name_col, req.end_line, req.end_col)
+}
+
+# c_inherited_by is the IMPL a seated default is a member of — its index in `f.impls` — and -1
+# for every other function: the one question c_default_method's place cannot answer (#202).
+#
+# A seated default belongs to TWO declarations, and each rule wants one of them. Its BODY is
+# the spec's: the names in it resolve where they were written, so a default calling a private
+# helper of the spec's module still reaches it. Its SIGNATURE is the impl's: the receiver, and
+# every `This` in it, is the implementing type, which the spec's module may not be able to
+# name. Asked of the spec's file for both, an impl of a spec from another module was judged as
+# an inherent `impl` written in the spec's module (E3096) naming a type private to the
+# implementer's (E5008) — a declaration nobody wrote.
+#
+# THE MEMBER IS FOUND BY ITS PLACE, which is what c_default_method copies unchanged: a method
+# the implementer wrote sits in the impl's block, never on the spec member's own line.
+pub fn c_inherited_by(f: ast.File, fn_d: ast.FnDecl) -> int {
+	return -1 if fn_d.recv == ""
+
+	mut i := 0
+	for i < f.impls.len() {
+		if f.impls[i].target == fn_d.recv and c_impl_spec_of(f.impls[i]) == fn_d.spec_of {
+			at := c_derive_spec_at(f, f.impls[i].on)
+			return i if at >= 0 and c_provided_at(f.specs[at], fn_d)
+		}
+		i = i + 1
+	}
+	return -1
+}
+
+# c_provided_at is whether `fn_d` stands where one of the spec's PROVIDED members is written.
+fn c_provided_at(sp: ast.SpecDecl, fn_d: ast.FnDecl) -> bool {
+	for req in sp.reqs {
+		return true if req.has_body and req.path == fn_d.path and req.line == fn_d.line and req.col == fn_d.col
+	}
+	return false
 }
 
 # c_with_derived expands every `#[derive(…)]` into the impl it stands for.

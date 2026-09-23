@@ -270,7 +270,7 @@ pub fn gen_resolve_lens(f: ast.File) -> ast.File {
 	for sp in f.specs {
 		specs.append(ast.SpecDecl(sp.name, sp.params, sp.supers, sp.super_args, gen_len_fns(su, sp.reqs), sp.is_pub, sp.path, sp.line, sp.col, sp.name_line, sp.name_col, sp.end_line, sp.end_col))
 	}
-	return ast.File(f.imports, structs, enums, specs, f.impls, fns, types, consts, f.derive_on, f.derive_spec, f.stmts, f.ty_quals, f.ty_apps, f.ty_uses, f.tp_scopes)
+	return ast.File(f.imports, structs, enums, specs, f.impls, fns, types, consts, f.derive_on, f.derive_spec, f.derive_at, f.stmts, f.ty_quals, f.ty_apps, f.ty_uses, f.tp_scopes)
 }
 
 # gen_len_table folds every module-level constant an array length may name. A `mut` binding is

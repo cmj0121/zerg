@@ -764,6 +764,12 @@ pub struct Emitter {
 	# rides beside the text rather than in an environment row (c_extend_bound).
 	pub nx_sub_repls: list[str]
 	pub nx_sub_decls: list[int]
+
+	# ft_to / ft_name are the rename table's two columns (c_file_types): a private type another
+	# file also declares is lowered under a name of its own, and a value RENDERED at run time
+	# says the name its file wrote — `P(x: 7)`, never the name the compiler kept it apart by.
+	pub ft_to: list[str]
+	pub ft_name: list[str]
 }
 
 # Subst is an active set of identifier substitutions: an EIdent whose name appears in
@@ -3231,7 +3237,7 @@ fn c_fn_cname(recv: str, name: str) -> str {
 	# AN APPLIED RECEIVER carries the characters C has no place for, the same way the type
 	# itself does — `impl Atomic[int]` gives its methods that receiver, and `zg_Atomic[int]_new`
 	# is not a name cc can read.
-	return c_spec_cname(f"{recv}${name}") if c_is_applied(recv)
+	return c_spec_cname(f"{recv}${name}") if c_is_applied(recv) or c_is_filed(recv)
 
 	return f"zg_{recv}_{name}"
 }
@@ -3250,13 +3256,13 @@ fn c_named_ctype(nm: str) -> str {
 }
 
 pub fn c_ty_cname(nm: str) -> str {
-	return c_spec_cname(nm) if c_is_applied(nm)
+	return c_spec_cname(nm) if c_is_applied(nm) or c_is_filed(nm)
 
 	return "zg_" + nm
 }
 
 fn c_ty_helper(what: str, nm: str) -> str {
-	return c_spec_cname(f"{what}${nm}") if c_is_applied(nm)
+	return c_spec_cname(f"{what}${nm}") if c_is_applied(nm) or c_is_filed(nm)
 
 	return f"zg_{what}_{nm}"
 }
@@ -3278,6 +3284,8 @@ fn c_is_mangled(name: str) -> bool {
 }
 
 fn c_spec_cname(name: str) -> str {
+	return c_file_cname(name) if c_is_filed(name)
+
 	mut out := "zgg_"
 	for b in bytearray(name) {
 		out = out + c_cname_byte(b)
@@ -5270,7 +5278,7 @@ fn c_type_decls(mut &em: Emitter, f: ast.File, carriers: list[ast.Ty], tuples: l
 	# They precede the structs because a struct field may be declared with one, and they need
 	# no dependency sweep of their own: a typedef over a typedef is refused at declaration.
 	for td in f.types {
-		out = out + f"typedef {c_type(td.under)} zg_{td.name};\n"
+		out = out + f"typedef {c_type(td.under)} {c_ty_cname(td.name)};\n"
 		done.append(td.name)
 	}
 	if f.types.len() > 0 {
@@ -6499,11 +6507,13 @@ fn c_dup_report(mut &em: Emitter, name: str, prev: str, what: str, path: str, li
 
 	return if what == "a function" or what == "a module constant"
 
-	# THE OTHER HALF is what module flattening is actually about: a thing the reader can only
-	# have done across files. Said about two declarations in one file it hands them an
-	# explanation for something they did not do, and loses the one fact no caret can carry —
-	# where the first declaration is.
-	check.chk_at_place(em, path, line, col, rule.Rule.DeclaredTwiceSameKind, f"`{name}` is declared twice — a type name is one name, and every module of a program flattens into one namespace here")
+	# THE OTHER HALF is a thing the reader can only have done across files, and since #201 it
+	# is narrower than it was: a PRIVATE struct, enum or `type` is its file's, and two of them
+	# were given two names before this walk (c_file_types), so what arrives here is a public
+	# type or a spec declared in two files — a name one program still spells once. Said about
+	# two declarations in one file it hands the reader an explanation for something they did
+	# not do, and loses the one fact no caret can carry — where the first declaration is.
+	check.chk_at_place(em, path, line, col, rule.Rule.DeclaredTwiceSameKind, f"`{name}` is declared twice — a private struct, enum or `type` is its file's, and any other type name is one name across the program")
 }
 
 # c_build_typedefs registers the `type X = Y` declarations. It runs BEFORE the structs, so a
@@ -11375,7 +11385,7 @@ fn c_enum_of(mut &em: Emitter, en: str, meth: str, args: list[ast.Expr], sb: Sub
 	}
 
 	mut out := f"({{ int64_t {v} = {n}; {cn} {r};"
-	out = out + f" if ({test}) {{ {c_res_mark_left(r)} {c_res_put(em, ast.Ty.TOpt(ast.Ty.TNamed(en)), r, f"(zg_{en}){{ .tag = (int32_t){v} }}")} }}"
+	out = out + f" if ({test}) {{ {c_res_mark_left(r)} {c_res_put(em, ast.Ty.TOpt(ast.Ty.TNamed(en)), r, f"({c_ty_cname(en)}){{ .tag = (int32_t){v} }}")} }}"
 	return out + f" else {{ {c_res_mark_right(r)} }} {r}; }})"
 }
 
@@ -15949,6 +15959,7 @@ fn c_const_globals(mut &em: Emitter, f: ast.File, own: ast.File, whole: bool) ->
 # is what keeps `impl P { LIMIT := 5 }` and a module `LIMIT` apart in the one flat C namespace —
 # the same reason a method is `zg_P_show` and not `zg_show`.
 fn c_const_cname(c: ast.ConstDecl) -> str {
+	return c_spec_cname(f"{c.recv}${c.name}") if c_is_filed(c.recv)
 	return f"zg_{c.recv}_{c.name}" if c.recv != ""
 
 	return "zg_" + c.name
@@ -18719,6 +18730,10 @@ fn c_render_fn(mut &em: Emitter, t: ast.Ty) -> str {
 # one renderer — and the outer one then recursed into itself, rendering nonsense for a nested
 # composite. What a renderer is keyed on is what it renders, which is the Zerg type.
 fn c_render_key(mut &em: Emitter, t: ast.Ty) -> str {
+	# a file's new type name keys by its injective C spelling, which no other key can meet
+	# (c_file_cname) — the bytes below map `P'1` and `P_1` alike
+	return c_file_cname(ast.ty_name(t)) if c_is_filed(ast.ty_name(t))
+
 	mut out: list[byte] = []
 	for c in bytearray(ast.ty_name(t)) {
 		if ascii.is_alpha(c) or ascii.is_digit(c) or c == b'_' {
@@ -18873,7 +18888,7 @@ fn c_render_enum_body(mut &em: Emitter, en: str) -> str {
 		}
 		i = i + 1
 	}
-	return out + "    default: break;\n    }\n    return zrt_str_dup(\"" + en + "\");\n"
+	return out + "    default: break;\n    }\n    return zrt_str_dup(\"" + c_ft_written(em, en) + "\");\n"
 }
 
 fn c_render_variant(mut &em: Emitter, en: str, vn: str) -> str {
@@ -18894,7 +18909,7 @@ fn c_render_variant(mut &em: Emitter, en: str, vn: str) -> str {
 		i = i + 1
 	}
 
-	lit := f"zrt_str_dup(\"{en}.{vn}\")"
+	lit := f"zrt_str_dup(\"{c_ft_written(em, en)}.{vn}\")"
 
 	# A VARIANT WITH NO PAYLOAD is its own name and nothing else — no accumulator and no
 	# parentheses. It returns a STATEMENT like the arm below it, because the caller now opens a
@@ -18921,7 +18936,7 @@ fn c_render_variant(mut &em: Emitter, en: str, vn: str) -> str {
 # A PRODUCT RENDERS BY ITS FIELDS, named: `P(x: 1, y: "a")` is the constructor a reader would
 # write with the names a reader would have to count without.
 fn c_render_struct_body(mut &em: Emitter, sn: str) -> str {
-	mut out := f"    const char *s = zrt_str_dup(\"{sn}(\");\n"
+	mut out := f"    const char *s = zrt_str_dup(\"{c_ft_written(em, sn)}(\");\n"
 	mut first := true
 	mut i := 0
 	for i < em.fld_struct.len() {
@@ -21432,6 +21447,7 @@ pub fn merge_asts(fs: list[ast.File]) -> ast.File {
 	mut types: list[ast.TypeDecl] = []
 	mut derive_on: list[str] = []
 	mut derive_spec: list[str] = []
+	mut derive_at: list[str] = []
 	mut stmts: list[ast.TopStmt] = []
 	mut ty_quals: list[ast.TyQual] = []
 	mut ty_apps: list[ast.TyApp] = []
@@ -21484,6 +21500,7 @@ pub fn merge_asts(fs: list[ast.File]) -> ast.File {
 		for i < f.derive_on.len() {
 			derive_on.append(f.derive_on[i])
 			derive_spec.append(f.derive_spec[i])
+			derive_at.append(f.derive_at[i])
 			i = i + 1
 		}
 	}
@@ -21493,7 +21510,7 @@ pub fn merge_asts(fs: list[ast.File]) -> ast.File {
 	# because it reads one file at a time, and the length is part of the TYPE — so it has to
 	# become a number before anything compares two types, and this is the one door every path
 	# into the emitter goes through.
-	return generic.gen_resolve_lens(ast.File(imports, structs, enums, specs, impls, fns, types, consts, derive_on, derive_spec, stmts, ty_quals, ty_apps, ty_uses, tp_scopes))
+	return generic.gen_resolve_lens(ast.File(imports, structs, enums, specs, impls, fns, types, consts, derive_on, derive_spec, derive_at, stmts, ty_quals, ty_apps, ty_uses, tp_scopes))
 }
 
 fn c_emit_file_at(f: ast.File, ms: Mods, mut &diags: list[ast.Diag]) -> str {
@@ -21701,16 +21718,19 @@ fn c_provided_at(sp: ast.SpecDecl, fn_d: ast.FnDecl) -> bool {
 }
 
 # c_with_derived expands every `#[derive(…)]` into the impl it stands for.
-pub fn c_with_derived(prog: ast.File) -> ast.File {
+pub fn c_with_derived(ft: FileTypes, prog: ast.File) -> ast.File {
 	mut out := prog
 	mut i := 0
 	for i < prog.derive_on.len() {
-		src := c_derive_src(prog, prog.derive_on[i], prog.derive_spec[i])
+		# A PRIVATE TYPE'S NEW NAME IS NOT SOURCE (c_ft_fresh): it holds a byte no identifier
+		# may, so the expansion is written back in its file's spelling, parsed, and renamed the
+		# way that file was — which is what the file would have got had it written the impl.
+		src := c_ft_says(ft, c_derive_src(prog, prog.derive_on[i], prog.derive_spec[i]))
 
 		# AT THE DECLARATION'S FILE, inside the synthetic mark: the expansion is compiler-written
 		# (every privacy silence still applies) but the bare names it writes are that file's
 		# (check.c_origin_path)
-		gen := parser.parse_at(src, f"<derive:{c_derive_origin(prog, prog.derive_on[i])}>")
+		gen := c_with_file_types(ft, parser.parse_at(src, f"<derive:{c_derive_origin(prog, prog.derive_on[i])}>"))
 		for ip in gen.impls {
 			out.impls.append(ip)
 		}
@@ -22862,12 +22882,677 @@ fn c_section(parts: list[str], budget: int, at: str, mut &sofar: int) -> str {
 	return str(out)
 }
 
+# --- a private type is its file's (#201) ---------------------------------------------------
+#
+# "The file is the unit of privacy and of naming" (docs/runtime/package.md): a type declared
+# without `pub` is its file's, and a sibling that declares the same name declares a second
+# type. Every table below this point keys a type by its NAME — the registry, the field and
+# variant rows, a `TNamed`, a method's receiver, a C symbol — so two private `P`s would be one
+# row, and the second file's uses would read the first file's fields.
+#
+# THE TWO ARE GIVEN TWO NAMES, before any table is built. A private type whose name another
+# file also declares is renamed, in its own file only, to a spelling no source can write
+# (c_ft_fresh); from here down it is an ordinary type with a name of its own, so
+# construction, field access, patterns, exhaustiveness, methods, derives, instantiation and
+# the C name all tell the two apart without knowing there were ever two. A `pub` type keeps
+# its name: it is the one another file can reach, qualified, and a qualified spelling is
+# resolved to the bare name it ends in.
+#
+# THE READER NEVER SEES THE NEW NAME. Every finding the walk produces is spoken back in the
+# written spelling (c_ft_says), because the rename is how this compiler keeps two names apart
+# and not something the program said.
+#
+# A program with no such pair — every program this compiler builds of itself among them —
+# has an empty table, and every function here hands its input back untouched.
+
+# FileTypes is the rename table, one row per (file, name): the private type `name` declared
+# in `at` is `to` from here down.
+pub struct FileTypes {
+	pub at: list[str]
+	pub name: list[str]
+	pub to: list[str]
+}
+
+# TyRen is one file's rows, the only ones a walk over that file's declarations may apply.
+struct TyRen {
+	pub olds: list[str]
+	pub to: list[str]
+}
+
+# c_file_types builds the table. A private struct, enum or `type` is renamed when a SECOND
+# FILE declares a type of the same name: one file declaring it twice is E4073's, and is left
+# for that rule to name. Two `pub` declarations keep their shared name and meet E3078.
+pub fn c_file_types(prog: ast.File) -> FileTypes {
+	mut names: list[str] = []
+	mut paths: list[str] = []
+	mut pubs: list[bool] = []
+	for sd in prog.structs {
+		names.append(sd.name)
+		paths.append(sd.path)
+		pubs.append(sd.is_pub)
+	}
+	for ed in prog.enums {
+		names.append(ed.name)
+		paths.append(ed.path)
+		pubs.append(ed.is_pub)
+	}
+	for td in prog.types {
+		names.append(td.name)
+		paths.append(td.path)
+		pubs.append(td.is_pub)
+	}
+
+	mut out := FileTypes([], [], [])
+	mut i := 0
+	for i < names.len() {
+		n := names[i]
+		if not pubs[i] and c_ft_to(out, paths[i], n) == "" {
+			files := c_ft_files(names, paths, n)
+			if files.len() > 1 {
+				out.at.append(paths[i])
+				out.name.append(n)
+				out.to.append(c_ft_fresh(n, c_name_index(files, paths[i])))
+			}
+		}
+		i = i + 1
+	}
+	return out
+}
+
+# c_ft_files is every file declaring `n`, SORTED — the new name carries the file's place in
+# this list, and `fixpoint` compares emitted C byte for byte, so it must not depend on the
+# order the files were read in.
+fn c_ft_files(names: list[str], paths: list[str], n: str) -> list[str] {
+	mut out: list[str] = []
+	mut i := 0
+	for i < names.len() {
+		if names[i] == n and not c_name_in(out, paths[i]) {
+			out.append(paths[i])
+		}
+		i = i + 1
+	}
+	return c_sorted_names(out)
+}
+
+# c_ft_fresh spells the new name: `P'1` for the second file declaring `P`. The `'` is a byte no
+# Zerg identifier may hold, so the name cannot be one a program writes — not a type, a
+# function, or anything a sentence quotes back — and c_ft_says speaks it back without touching
+# a name somebody wrote. It is not the `$` a specialization carries, because the readers of
+# that one mean something by it; and C cannot hold either, so a name carrying `'` is spelled
+# in C by c_file_cname, which is injective where the `$` spelling is not.
+fn c_ft_fresh(n: str, k: int) -> str {
+	return f"{n}'{strconv.to_string(k, 10)}"
+}
+
+# c_is_filed is whether a name carries a file's new type name, anywhere in it — `P'1` or an
+# application of one, `Box[P'1]`.
+fn c_is_filed(nm: str) -> bool {
+	for b in bytearray(nm) {
+		return true if b == b'\''
+	}
+	return false
+}
+
+# c_file_cname is the C name of anything spelled with a file's new type name: `zgf_` and the
+# name escaped byte for byte — `_` doubles, a byte C cannot hold becomes `_<hex>_` — so two
+# distinct names never meet, and nothing else is spelled under the prefix.
+fn c_file_cname(nm: str) -> str {
+	mut out := "zgf_"
+	for b in bytearray(nm) {
+		if b == b'_' {
+			out = out + "__"
+		} else if lexer.is_ident(b) {
+			out = out + str([b])
+		} else {
+			out = out + f"_{strconv.to_string(int(b), 16)}_"
+		}
+	}
+	return out
+}
+
+# c_ft_to is the new name of `n` in file `at`, or "" when that file's `n` keeps its name.
+fn c_ft_to(ft: FileTypes, at: str, n: str) -> str {
+	mut i := 0
+	for i < ft.at.len() {
+		return ft.to[i] if ft.at[i] == at and ft.name[i] == n
+		i = i + 1
+	}
+	return ""
+}
+
+# c_ft_for is one file's rows. A decorator's expansion is parsed at `<derive:FILE>` and
+# answers for FILE (c_with_derived), which is check.c_origin_path's reading without the
+# Emitter it asks: no expansion's path is a file the loader read.
+fn c_ft_for(ft: FileTypes, at: str) -> TyRen {
+	mut r := TyRen([], [])
+	path := c_ft_origin(at)
+	mut i := 0
+	for i < ft.at.len() {
+		if ft.at[i] == path {
+			r.olds.append(ft.name[i])
+			r.to.append(ft.to[i])
+		}
+		i = i + 1
+	}
+	return r
+}
+
+fn c_ft_origin(at: str) -> str {
+	b := bytearray(at)
+	pre := bytearray("<derive:")
+	return at if b.len() <= pre.len() or b[b.len() - 1] != b'>'
+
+	mut i := 0
+	for i < pre.len() {
+		return at if b[i] != pre[i]
+		i = i + 1
+	}
+	mut out: list[byte] = []
+	for i < b.len() - 1 {
+		out.append(b[i])
+		i = i + 1
+	}
+	return str(out)
+}
+
+# c_ft_says speaks a sentence back in the written spelling: every new name in it becomes the
+# name its file wrote.
+fn c_ft_says(ft: FileTypes, msg: str) -> str {
+	return c_ren_text(TyRen(ft.to, ft.name), msg)
+}
+
+# c_ft_written is a type's name as its file wrote it, for text the running program shows.
+fn c_ft_written(mut &em: Emitter, n: str) -> str {
+	return n if em.ft_to.len() == 0
+
+	return c_ren_text(TyRen(em.ft_to, em.ft_name), n)
+}
+
+# c_with_file_types applies the table to a program, each declaration by the rows of the file
+# it was written in.
+pub fn c_with_file_types(ft: FileTypes, f: ast.File) -> ast.File {
+	return f if ft.at.len() == 0
+
+	c_ft_qualified(ft, f)
+
+	mut out := f
+	out.structs = []
+	for sd in f.structs {
+		r := c_ft_for(ft, sd.path)
+		mut d := sd
+		d.name = c_ren_name(r, sd.name)
+		d.fields = c_ren_fields(r, sd.fields)
+		out.structs.append(d)
+	}
+	out.enums = []
+	for ed in f.enums {
+		r := c_ft_for(ft, ed.path)
+		mut d := ed
+		d.name = c_ren_name(r, ed.name)
+		d.variants = c_ren_variants(r, ed.variants)
+		out.enums.append(d)
+	}
+	out.types = []
+	for td in f.types {
+		r := c_ft_for(ft, td.path)
+		mut d := td
+		d.name = c_ren_name(r, td.name)
+		d.under = c_ren_ty(r, td.under)
+		out.types.append(d)
+	}
+	out.specs = []
+	for sp in f.specs {
+		r := c_ft_for(ft, sp.path)
+		mut d := sp
+		d.reqs = c_ren_fns(r, sp.reqs)
+		mut sargs: list[list[ast.Ty]] = []
+		for a in sp.super_args {
+			sargs.append(c_ren_tys(r, a))
+		}
+		d.super_args = sargs
+		out.specs.append(d)
+	}
+	out.impls = []
+	for ip in f.impls {
+		r := c_ft_for(ft, ip.path)
+		mut d := ip
+		d.args = c_ren_tys(r, ip.args)
+		d.target = c_ren_text(r, ip.target)
+		out.impls.append(d)
+	}
+	out.fns = []
+	for fd in f.fns {
+		out.fns.append(c_ren_fn(c_ft_for(ft, fd.path), fd))
+	}
+	out.consts = []
+	for cd in f.consts {
+		r := c_ft_for(ft, cd.path)
+		mut d := cd
+		d.recv = c_ren_text(r, cd.recv)
+		d.ty = c_ren_ty(r, cd.ty)
+		d.value = c_ren_expr(r, cd.value)
+		out.consts.append(d)
+	}
+	out.derive_on = []
+	mut i := 0
+	for i < f.derive_on.len() {
+		out.derive_on.append(c_ren_name(c_ft_for(ft, f.derive_at[i]), f.derive_on[i]))
+		i = i + 1
+	}
+	out.ty_quals = []
+	for q in f.ty_quals {
+		mut d := q
+		if q.ns == "" {
+			d.member = c_ren_name(c_ft_for(ft, q.path), q.member)
+		}
+		out.ty_quals.append(d)
+	}
+	out.ty_apps = []
+	for a in f.ty_apps {
+		r := c_ft_for(ft, a.path)
+		mut d := a
+		d.name = c_ren_text(r, a.name)
+		d.base = c_ren_name(r, a.base)
+		d.args = c_ren_tys(r, a.args)
+		out.ty_apps.append(d)
+	}
+	out.ty_uses = []
+	for u in f.ty_uses {
+		mut d := u
+		d.name = c_ren_text(c_ft_for(ft, u.path), u.name)
+		out.ty_uses.append(d)
+	}
+	return out
+}
+
+# c_ft_qualified is the one place the rename cannot follow the program: a type position drops
+# its qualifier as it is read (parse_base_type), so in a file with its own private `P` a
+# written `shape.P` arrives as the same bare `P` as the file's own. The expression side keeps
+# its qualifier and needs nothing, and a type position is refused rather than read as the
+# wrong one of the two.
+fn c_ft_qualified(ft: FileTypes, f: ast.File) {
+	for q in f.ty_quals {
+		continue if q.ns == ""
+
+		raise c_diag_at(q.path, q.line, q.col, rule.Rule.QualifiedTypeBesideOwn, f"`{q.ns}.{q.member}` in a type position is spelled as this file's own private `{q.member}` — a type position keeps the name and not its qualifier, so the two cannot be told apart here; rename this file's `{q.member}`") if c_ft_to(ft, q.path, q.member) != ""
+	}
+}
+
+# c_ren_name renames a name written whole; c_ren_text renames every identifier inside a
+# spelled type — `Box[P]`, `map[str, P]` — which is how an applied type carries its arguments.
+fn c_ren_name(r: TyRen, n: str) -> str {
+	mut i := 0
+	for i < r.olds.len() {
+		return r.to[i] if r.olds[i] == n
+		i = i + 1
+	}
+	return n
+}
+
+#
+# A WORD HOLDS `'`, so a new name is one word and is spoken back whole, and a written name
+# that merely begins one (`P` in `P'1`) is never read out of it.
+fn c_ren_text(r: TyRen, s: str) -> str {
+	return s if r.olds.len() == 0
+
+	b := bytearray(s)
+	mut out: list[byte] = []
+	mut i := 0
+	for i < b.len() {
+		if not c_ren_byte(b[i]) {
+			out.append(b[i])
+			i = i + 1
+			continue
+		}
+		mut word: list[byte] = []
+		for i < b.len() and c_ren_byte(b[i]) {
+			word.append(b[i])
+			i = i + 1
+		}
+		for c in bytearray(c_ren_name(r, str(word))) {
+			out.append(c)
+		}
+	}
+	return str(out)
+}
+
+fn c_ren_byte(b: byte) -> bool {
+	return lexer.is_ident(b) or b == b'\''
+}
+
+# The walk itself is generic.zg's substitution walk with a different leaf: every place a type
+# is written, and every place an expression or a pattern names one — a construction `P(…)`,
+# a receiver `P.make()`, a variant `Mode.On`, a pattern `P{x}`, an `is P`.
+fn c_ren_ty(r: TyRen, t: ast.Ty) -> ast.Ty {
+	return t if r.olds.len() == 0
+
+	return match t {
+		Ty.TNamed(n) => ast.Ty.TNamed(c_ren_text(r, n))
+		Ty.TList(e) => ast.Ty.TList(c_ren_ty(r, e))
+		Ty.TOpt(e) => ast.Ty.TOpt(c_ren_ty(r, e))
+		Ty.TChan(e, d) => ast.Ty.TChan(c_ren_ty(r, e), d)
+		Ty.TMap(k, v) => ast.Ty.TMap(c_ren_ty(r, k), c_ren_ty(r, v))
+		Ty.TSet(e) => ast.Ty.TSet(c_ren_ty(r, e))
+		Ty.TRange(e) => ast.Ty.TRange(c_ren_ty(r, e))
+		Ty.TTuple(es) => ast.Ty.TTuple(c_ren_tys(r, es))
+		Ty.TEither(x, y) => ast.Ty.TEither(c_ren_ty(r, x), c_ren_ty(r, y))
+		Ty.TArr(e, n) => ast.Ty.TArr(c_ren_ty(r, e), n)
+		Ty.TRef(e) => ast.Ty.TRef(c_ren_ty(r, e))
+		Ty.TPtr(e) => ast.Ty.TPtr(c_ren_ty(r, e))
+		Ty.TUnsafe(e) => ast.Ty.TUnsafe(c_ren_ty(r, e))
+		Ty.TFn(ps, rt) => ast.Ty.TFn(c_ren_tys(r, ps), c_ren_ty(r, rt))
+		_ => t
+	}
+}
+
+fn c_ren_tys(r: TyRen, ts: list[ast.Ty]) -> list[ast.Ty] {
+	mut out: list[ast.Ty] = []
+	for t in ts {
+		out.append(c_ren_ty(r, t))
+	}
+	return out
+}
+
+fn c_ren_fields(r: TyRen, fs: list[ast.FieldDef]) -> list[ast.FieldDef] {
+	mut out: list[ast.FieldDef] = []
+	for fd in fs {
+		mut d := fd
+		d.ty = c_ren_ty(r, fd.ty)
+		d.def = c_ren_expr(r, fd.def)
+		out.append(d)
+	}
+	return out
+}
+
+fn c_ren_variants(r: TyRen, vs: list[ast.VariantDef]) -> list[ast.VariantDef] {
+	mut out: list[ast.VariantDef] = []
+	for v in vs {
+		mut d := v
+		d.fields = c_ren_tys(r, v.fields)
+		d.discr = c_ren_expr(r, v.discr)
+		out.append(d)
+	}
+	return out
+}
+
+fn c_ren_fns(r: TyRen, fs: list[ast.FnDecl]) -> list[ast.FnDecl] {
+	mut out: list[ast.FnDecl] = []
+	for fd in fs {
+		out.append(c_ren_fn(r, fd))
+	}
+	return out
+}
+
+fn c_ren_fn(r: TyRen, fd: ast.FnDecl) -> ast.FnDecl {
+	return fd if r.olds.len() == 0
+
+	mut d := fd
+	d.recv = c_ren_text(r, fd.recv)
+	d.params = c_ren_params(r, fd.params)
+	d.ret = c_ren_ty(r, fd.ret)
+	d.body = c_ren_block(r, fd.body)
+	return d
+}
+
+fn c_ren_params(r: TyRen, ps: list[ast.Param]) -> list[ast.Param] {
+	mut out: list[ast.Param] = []
+	for pm in ps {
+		mut d := pm
+		d.ty = c_ren_ty(r, pm.ty)
+		d.def = c_ren_expr(r, pm.def)
+		out.append(d)
+	}
+	return out
+}
+
+fn c_ren_block(r: TyRen, b: list[ast.Stmt]) -> list[ast.Stmt] {
+	mut out: list[ast.Stmt] = []
+	for s in b {
+		out.append(c_ren_stmt(r, s))
+	}
+	return out
+}
+
+# no catch-all, for subst_stmt's reason: a Stmt added later is a type error here rather than
+# a place a type name goes unrenamed
+fn c_ren_stmt(r: TyRen, s: ast.Stmt) -> ast.Stmt {
+	return match s {
+		Stmt.SLet(nm, ty, ht, im, ic, v, l, c) => ast.Stmt.SLet(nm, c_ren_ty(r, ty), ht, im, ic, c_ren_expr(r, v), l, c)
+		Stmt.SDestructure(t, v, ib, im, ic) => ast.Stmt.SDestructure(c_ren_target(r, t), c_ren_expr(r, v), ib, im, ic)
+		Stmt.SAssign(a, b) => ast.Stmt.SAssign(c_ren_expr(r, a), c_ren_expr(r, b))
+		Stmt.SPrint(v) => ast.Stmt.SPrint(c_ren_expr(r, v))
+		Stmt.SReturn(hv, v) => ast.Stmt.SReturn(hv, c_ren_expr(r, v))
+		Stmt.SReturnIf(v, c) => ast.Stmt.SReturnIf(c_ren_expr(r, v), c_ren_expr(r, c))
+		Stmt.SExpr(v) => ast.Stmt.SExpr(c_ren_expr(r, v))
+		Stmt.SIf(c, tb, he, eb) => ast.Stmt.SIf(c_ren_expr(r, c), c_ren_block(r, tb), he, c_ren_block(r, eb))
+		Stmt.SFor(hc, c, b) => ast.Stmt.SFor(hc, c_ren_expr(r, c), c_ren_block(r, b))
+		Stmt.SForIn(nm, it, b, l, c) => ast.Stmt.SForIn(nm, c_ren_expr(r, it), c_ren_block(r, b), l, c)
+		Stmt.SForSelect(arms) => ast.Stmt.SForSelect(c_ren_sel_arms(r, arms))
+		Stmt.SRaise(e, hf, cause) => ast.Stmt.SRaise(c_ren_expr(r, e), hf, c_ren_expr(r, cause))
+		Stmt.SDefer(v) => ast.Stmt.SDefer(c_ren_expr(r, v))
+		Stmt.SSpawn(v) => ast.Stmt.SSpawn(c_ren_expr(r, v))
+		Stmt.SSend(ch, v) => ast.Stmt.SSend(c_ren_expr(r, ch), c_ren_expr(r, v))
+		Stmt.SSelect(arms) => ast.Stmt.SSelect(c_ren_sel_arms(r, arms))
+		Stmt.SClose(ch, tw) => ast.Stmt.SClose(c_ren_expr(r, ch), tw)
+		Stmt.SIfLet(nm, v, tb, he, eb, l, c) => ast.Stmt.SIfLet(nm, c_ren_expr(r, v), c_ren_block(r, tb), he, c_ren_block(r, eb), l, c)
+		Stmt.SAssert(b) => ast.Stmt.SAssert(c_ren_block(r, b))
+		Stmt.SScope(b, u) => ast.Stmt.SScope(c_ren_block(r, b), u)
+		Stmt.SBreak => s
+		Stmt.SContinue => s
+		Stmt.SNop => s
+		Stmt.SDel(_, _, _) => s
+		Stmt.SAt(_, _, _, _) => s
+	}
+}
+
+fn c_ren_sel_arms(r: TyRen, arms: list[ast.SelArm]) -> list[ast.SelArm] {
+	mut out: list[ast.SelArm] = []
+	for a in arms {
+		mut d := a
+		d.ch = c_ren_expr(r, a.ch)
+		d.val = c_ren_expr(r, a.val)
+		d.body = c_ren_block(r, a.body)
+		out.append(d)
+	}
+	return out
+}
+
+# A NAME WRITTEN WHOLE is renamed where it stands for a type: a construction's callee, and a
+# bare identifier — the receiver of `P.make()` and the enum of `Mode.On`. What follows a `.`
+# is a member, and `shape.P(…)` names another file's `P` through its qualifier, so neither is
+# touched.
+fn c_ren_expr(r: TyRen, e: ast.Expr) -> ast.Expr {
+	return match e {
+		Expr.EUnary(o, x) => ast.Expr.EUnary(o, c_ren_expr(r, x))
+		Expr.EBinary(o, a, b) => ast.Expr.EBinary(o, c_ren_expr(r, a), c_ren_expr(r, b))
+		Expr.ECall(nm, xs, ts, l, c) => ast.Expr.ECall(c_ren_name(r, nm), c_ren_exprs(r, xs), c_ren_tys(r, ts), l, c)
+		Expr.ECallVal(c, xs) => ast.Expr.ECallVal(c_ren_expr(r, c), c_ren_exprs(r, xs))
+		Expr.ENamedArg(nm, x, l, c) => ast.Expr.ENamedArg(nm, c_ren_expr(r, x), l, c)
+		Expr.EField(x, f, l, c) => ast.Expr.EField(c_ren_expr(r, x), f, l, c)
+		Expr.EOptChain(x, f, l, c) => ast.Expr.EOptChain(c_ren_expr(r, x), f, l, c)
+		Expr.ETry(x) => ast.Expr.ETry(c_ren_expr(r, x))
+		Expr.EIndex(x, i) => ast.Expr.EIndex(c_ren_expr(r, x), c_ren_expr(r, i))
+		Expr.EMethod(x, m, xs, l, c) => ast.Expr.EMethod(c_ren_expr(r, x), m, c_ren_exprs(r, xs), l, c)
+		Expr.EListLit(xs) => ast.Expr.EListLit(c_ren_exprs(r, xs))
+		Expr.EConv(ty, x, as_) => ast.Expr.EConv(c_ren_ty(r, ty), c_ren_expr(r, x), as_)
+		Expr.EFmt(x, cv, sp) => ast.Expr.EFmt(c_ren_expr(r, x), cv, sp)
+		Expr.EIf(c, a, b) => ast.Expr.EIf(c_ren_expr(r, c), c_ren_expr(r, a), c_ren_expr(r, b))
+		Expr.EMatch(x, arms) => ast.Expr.EMatch(c_ren_expr(r, x), c_ren_arms(r, arms))
+		Expr.ERange(a, b, inc) => ast.Expr.ERange(c_ren_expr(r, a), c_ren_expr(r, b), inc)
+		Expr.ETuple(xs) => ast.Expr.ETuple(c_ren_exprs(r, xs))
+		Expr.EMapLit(ks, vs) => ast.Expr.EMapLit(c_ren_exprs(r, ks), c_ren_exprs(r, vs))
+		Expr.EFn(ps, hr, rt, b) => ast.Expr.EFn(c_ren_params(r, ps), hr, c_ren_ty(r, rt), c_ren_block(r, b))
+		Expr.EChanNew(ty, cap) => ast.Expr.EChanNew(c_ren_ty(r, ty), c_ren_expr(r, cap))
+		Expr.ERecv(x) => ast.Expr.ERecv(c_ren_expr(r, x))
+		Expr.EForce(x) => ast.Expr.EForce(c_ren_expr(r, x))
+		Expr.ECoalesce(a, b, jump) => ast.Expr.ECoalesce(c_ren_expr(r, a), c_ren_expr(r, b), c_ren_block(r, jump))
+		Expr.EGuard(b) => ast.Expr.EGuard(c_ren_block(r, b))
+		Expr.EBlock(b) => ast.Expr.EBlock(c_ren_block(r, b))
+		Expr.EUnsafe(b) => ast.Expr.EUnsafe(c_ren_block(r, b))
+		Expr.EAsm(tpl, ops) => ast.Expr.EAsm(tpl, c_ren_asm_ops(r, ops))
+		Expr.EIs(x, nm) => ast.Expr.EIs(c_ren_expr(r, x), c_ren_text(r, nm))
+		Expr.EIn(x, s) => ast.Expr.EIn(c_ren_expr(r, x), c_ren_expr(r, s))
+		Expr.EFill(v, n) => ast.Expr.EFill(c_ren_expr(r, v), c_ren_expr(r, n))
+		Expr.EIdent(nm, l, c) => ast.Expr.EIdent(c_ren_name(r, nm), l, c)
+		Expr.EInt(_, _, _) => e
+		Expr.EFloat(_) => e
+		Expr.EStr(_) => e
+		Expr.EBool(_) => e
+		Expr.ENil => e
+	}
+}
+
+fn c_ren_exprs(r: TyRen, xs: list[ast.Expr]) -> list[ast.Expr] {
+	mut out: list[ast.Expr] = []
+	for x in xs {
+		out.append(c_ren_expr(r, x))
+	}
+	return out
+}
+
+fn c_ren_asm_ops(r: TyRen, ops: list[ast.AsmOp]) -> list[ast.AsmOp] {
+	mut out: list[ast.AsmOp] = []
+	for o in ops {
+		mut d := o
+		d.expr = c_ren_expr(r, o.expr)
+		out.append(d)
+	}
+	return out
+}
+
+fn c_ren_target(r: TyRen, t: ast.Target) -> ast.Target {
+	return match t {
+		Target.TgtWild => t
+		Target.TgtPlace(e) => ast.Target.TgtPlace(c_ren_expr(r, e))
+		Target.TgtTuple(ts) => ast.Target.TgtTuple(c_ren_targets(r, ts))
+		Target.TgtStruct(n, fs, ts, rest) => ast.Target.TgtStruct(c_ren_name(r, n), fs, c_ren_targets(r, ts), rest)
+	}
+}
+
+fn c_ren_targets(r: TyRen, ts: list[ast.Target]) -> list[ast.Target] {
+	mut out: list[ast.Target] = []
+	for t in ts {
+		out.append(c_ren_target(r, t))
+	}
+	return out
+}
+
+fn c_ren_pat(r: TyRen, pt: ast.Pat) -> ast.Pat {
+	return match pt {
+		Pat.PWild => pt
+		Pat.PBind(_, _, _) => pt
+		Pat.PLit(e) => ast.Pat.PLit(c_ren_expr(r, e))
+		Pat.PVariant(q, c, ps, pl, pc) => ast.Pat.PVariant(c_ren_name(r, q), c, c_ren_pats(r, ps), pl, pc)
+		Pat.PStruct(n, fs, ps, open) => ast.Pat.PStruct(c_ren_name(r, n), fs, c_ren_pats(r, ps), open)
+		Pat.PList(ps, rest, rname, l, c) => ast.Pat.PList(c_ren_pats(r, ps), rest, rname, l, c)
+		Pat.PTuple(ps) => ast.Pat.PTuple(c_ren_pats(r, ps))
+		Pat.POr(ps) => ast.Pat.POr(c_ren_pats(r, ps))
+		Pat.PAs(inner, n, l, c) => ast.Pat.PAs(c_ren_pat(r, inner), n, l, c)
+	}
+}
+
+fn c_ren_pats(r: TyRen, ps: list[ast.Pat]) -> list[ast.Pat] {
+	mut out: list[ast.Pat] = []
+	for pt in ps {
+		out.append(c_ren_pat(r, pt))
+	}
+	return out
+}
+
+fn c_ren_arms(r: TyRen, arms: list[ast.Arm]) -> list[ast.Arm] {
+	mut out: list[ast.Arm] = []
+	for a in arms {
+		mut d := a
+		d.pat = c_ren_pat(r, a.pat)
+		d.guard_expr = c_ren_expr(r, a.guard_expr)
+		d.body = c_ren_expr(r, a.body)
+		out.append(d)
+	}
+	return out
+}
+
+# c_ft_unsay speaks the findings a renamed walk recorded, from `start` on, back in the written
+# spelling. A finding that then repeats one already on the list is dropped, which is the rule
+# chk_at_place keeps (one mistake, one message) — a unit's walk compared the renamed sentence
+# against the spoken one and could not see that the two were the same.
+fn c_ft_unsay(ft: FileTypes, mut &ds: list[ast.Diag], start: int) {
+	mut out: list[ast.Diag] = []
+	mut i := 0
+	for i < ds.len() {
+		mut d := ds[i]
+		if i >= start {
+			d.msg = c_ft_says(ft, d.msg)
+			d.fix = c_ft_says(ft, d.fix)
+		}
+		if not c_ft_seen(out, d) {
+			out.append(d)
+		}
+		i = i + 1
+	}
+	ds = out
+}
+
+fn c_ft_seen(ds: list[ast.Diag], d: ast.Diag) -> bool {
+	for x in ds {
+		return true if x.line == d.line and x.col == d.col and x.path == d.path and x.msg == d.msg
+	}
+	return false
+}
+
+# c_ft_unindex is the same for the name index: a declaration's text is what the language
+# server shows, and it is the written name.
+fn c_ft_unindex(ft: FileTypes, mut &nx: ast.NameIndex) {
+	mut text: list[byte] = []
+	mut offs: list[int] = []
+	mut d := 0
+	for d < nx.d_off.len() {
+		offs.append(text.len())
+		for b in bytearray(c_ft_says(ft, ast.nx_name(nx, d))) {
+			text.append(b)
+		}
+		d = d + 1
+	}
+	nx.d_text = text
+	nx.d_off = offs
+}
+
+# c_emit_unit is c_emit_unit_as over a program whose private types are their files' — the
+# table built from the WHOLE program, so a unit and the program it is compiled against agree
+# on every new name — with every finding spoken back in the written spelling.
+fn c_emit_unit(prog0: ast.File, own0: ast.File, ms: Mods, whole: bool, want_lints: bool, checking: bool, want_index: bool, mut &diags: list[ast.Diag], mut &lints: list[ast.Diag], mut &nx: ast.NameIndex) -> str {
+	ft := c_file_types(prog0)
+	return c_emit_unit_as(prog0, own0, ft, ms, whole, want_lints, checking, want_index, diags, lints, nx) if ft.at.len() == 0
+
+	prog := c_with_file_types(ft, prog0)
+	own := c_with_file_types(ft, own0)
+	d0 := diags.len()
+	l0 := lints.len()
+	got := guard {
+		c_emit_unit_as(prog, own, ft, ms, whole, want_lints, checking, want_index, diags, lints, nx)
+	}
+	c_ft_unsay(ft, diags, d0)
+	c_ft_unsay(ft, lints, l0)
+	if want_index {
+		c_ft_unindex(ft, nx)
+	}
+	why := match got {
+		Either.Left(_)  => ""
+		Either.Right(e) => e.message()
+	}
+	raise c_ft_says(ft, why) if why != ""
+
+	return match got {
+		Either.Left(code) => code
+		Either.Right(_)   => ""
+	}
+}
+
 # `check` is the walk that answers whether this is a program without answering what C it
 # becomes: every pass and every rule below runs unchanged, and only the TEXT is dropped
 # (c_lowered). The returned C is empty, which is what a caller in this mode asked for.
 #
 # `want_index` asks for the name index as well, handed back in `nx` (lint_index_of says who asks).
-fn c_emit_unit(prog0: ast.File, own0: ast.File, ms: Mods, whole: bool, want_lints: bool, checking: bool, want_index: bool, mut &diags: list[ast.Diag], mut &lints: list[ast.Diag], mut &nx: ast.NameIndex) -> str {
+fn c_emit_unit_as(prog0: ast.File, own0: ast.File, ft: FileTypes, ms: Mods, whole: bool, want_lints: bool, checking: bool, want_index: bool, mut &diags: list[ast.Diag], mut &lints: list[ast.Diag], mut &nx: ast.NameIndex) -> str {
 	# the derive expansion runs over the program the builtin specs are already in, because
 	# what it writes is `impl Eq for …` and the spec that names has to be there to meet it.
 	#
@@ -22876,7 +23561,7 @@ fn c_emit_unit(prog0: ast.File, own0: ast.File, ms: Mods, whole: bool, want_lint
 	# first left `zg_ArgKind_eq` declared, called, and defined nowhere — a link error against
 	# a function the program never spells. Each expands from its own derive list, so the unit
 	# gets exactly the impls whose decorators are in it.
-	f0 := c_with_spec_defaults_self(c_with_derived(c_with_builtin_specs(prog0)))
+	f0 := c_with_spec_defaults_self(c_with_derived(ft, c_with_builtin_specs(prog0)))
 
 	# THE FINDINGS SO FAR TRAVEL IN, in the `diags` slot. `chk_at_place` drops an exact repeat —
 	# same file, same line, same column, same sentence — so that one mistake earns one message;
@@ -22885,7 +23570,7 @@ fn c_emit_unit(prog0: ast.File, own0: ast.File, ms: Mods, whole: bool, want_lint
 	# is what makes that invariant hold for a multi-unit program, at the place it already lives,
 	# and it is what lets the declaration passes below go back to reading the WHOLE program.
 	seen := diags.len()
-	mut em := Emitter([], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], false, false, false, false, [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], 0, [], 0, [], [], false, "", "", [], [], ast.Ty.TVoid, 0, "", 0, 0, 0, 0, diags, 0, 0, [], [], [], [], [], false, 0, false, "", 0, false, false, [], [], [], [], [], [], [], [], [], [], [], "", want_lints, [], [], [], [], [], [], [], [], [], [], [], [], false, 0, [], [], "", c_nosub(), [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], false, ast.no_index(), [], [], [], [], [], [], [], [], [], [])
+	mut em := Emitter([], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], false, false, false, false, [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], 0, [], 0, [], [], false, "", "", [], [], ast.Ty.TVoid, 0, "", 0, 0, 0, 0, diags, 0, 0, [], [], [], [], [], false, 0, false, "", 0, false, false, [], [], [], [], [], [], [], [], [], [], [], "", want_lints, [], [], [], [], [], [], [], [], [], [], [], [], false, 0, [], [], "", c_nosub(), [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], false, ast.no_index(), [], [], [], [], [], [], [], [], [], [], [], [])
 
 	# ASSIGNED, NOT PASSED. Every argument above is a zero value, and `layering` asserts that
 	# — it lines the call up with the fields by KIND, which only works while nothing in it
@@ -22897,13 +23582,15 @@ fn c_emit_unit(prog0: ast.File, own0: ast.File, ms: Mods, whole: bool, want_lint
 	em.imp_path = ms.imp_path
 	em.imp_mod = ms.imp_mod
 	em.want_index = want_index
+	em.ft_to = ft.to
+	em.ft_name = ft.name
 
 	# THE TEMPLATES ARE RECORDED AND THEN REMOVED, before any other pass sees the program.
 	# A template is not a function, and this is the honest way to say so: from here down —
 	# in these passes and in any added later — `f.fns` holds functions only.
 	c_build_generics(em, f0)
 	f := c_with_type_insts(em, c_with_spec_keys(c_without_templates(f0)))
-	own := c_with_impl_insts(em, c_with_spec_keys(c_without_templates(c_with_spec_defaults(f0, c_with_derived(own0)))), false)
+	own := c_with_impl_insts(em, c_with_spec_keys(c_without_templates(c_with_spec_defaults(f0, c_with_derived(ft, own0)))), false)
 
 	# OVER `f0`, THE PROGRAM WITH ITS TEMPLATES STILL IN IT. A template is not a function
 	# to lower, which is what the removal above says, but it IS a name at the top level:

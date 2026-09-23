@@ -277,10 +277,12 @@ byte)` compiles to a truncation and cc warns about the generated C. `zerg` refus
   alone. `zerg` copies either: a tuple gets a per-shape `_copy` with a `_drop` beside it,
   which is what makes `(int, str)` give its `str` back at scope exit.
 - **A TYPE NAME declared twice is accepted.** A `struct`, an `enum` and a `spec` share one
-  namespace, and every module of a program flattens into one scope in both compilers — so
-  `enum E` twice, `spec T` twice, and a `struct A` beside a `spec A` are all one name for
-  two declarations. The seed builds and runs each of them. `zerg` refuses the pair, naming
-  the two kinds when they differ.
+  namespace — so `enum E` twice in one file, `spec T` twice, and a `struct A` beside a
+  `spec A` are all one name for two declarations. The seed builds and runs each of them.
+  `zerg` refuses the pair, naming the two kinds when they differ. A private type in each of
+  two files is two types in both compilers; a file that declares its own `P` and also writes
+  `sink.P` in a type position the seed builds, and `zerg` refuses, because a type position
+  drops its qualifier and the two are spelled alike.
 - **A mis-shaped `display` / `debug` override is accepted.** docs/runtime/format.md fixes
   the override contract — `fn display() -> str`, the value alone in, its text out — and
   `zerg` refuses a method of either name that takes an argument or answers something else,

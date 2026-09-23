@@ -303,6 +303,11 @@ can mark the type `pub` or stop returning it, where a dependent reading a privat
 Every module's names are still one flat space of C SYMBOLS, which is why two modules that declare the
 same public name collide — that refusal is about the name, not about the visibility.
 
+A private type is not in that space. Two files that each declare a struct, enum or `type` of one name without
+`pub` declare two types, and each file's constructions, field reads, patterns and methods reach its own. What
+is refused is a file that declares its own `P` and also writes another module's `sink.P` in a type position:
+a type position drops its qualifier, so the two would be spelled alike, and that is _E3158_.
+
 What the rule compares is the **import path a module was reached by** — the loader's answer, recorded
 where the module was resolved and read back by name. It is not computed from where a file sits: `./a`
 and `./b` beside each other are two modules, and the standard library is fifteen of them in one flat

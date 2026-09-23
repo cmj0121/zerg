@@ -330,8 +330,11 @@ jobs:
       - name: Every linter rule has a program that makes it fire
         run: make lint-check
 
+      # REQUIRE_NODE=1 because the HTML pages' search is a rule written twice, once in Zerg and
+      # once in JavaScript, and `node` is what runs the second against the first. Both runners
+      # carry it; a runner that lost it fails here rather than skipping the comparison.
       - name: The document is every exposed declaration, and no more
-        run: make doc-check
+        run: REQUIRE_NODE=1 make doc-check
 
       # `bin/zerg` is a real target, so thirty-one gates no longer recompile a tree that has
       # not changed. The prerequisite list is the whole of that change: a gate running against

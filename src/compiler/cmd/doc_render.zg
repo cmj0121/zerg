@@ -41,7 +41,7 @@
 #     because the text inside one is meant to be copied out and run, and running it is
 #     `--check`'s.
 #   - a second opinion about what a sentence is. `zerg.doc_first_sentence` answers that for the
-#     brief listing and the module index alike, and #20 will ask the same function.
+#     brief listing and the module index alike, and the HTML search asks the same function.
 
 import "./diag"
 import "./layout"
@@ -73,7 +73,7 @@ const DOC_MUT := "mut "
 # IT CARRIES NO COLOUR, unlike `(undocumented)`. Four spans take colour in this document and
 # the chapter counts them; a fifth would be a rendering decision made here and written down
 # nowhere.
-const DOC_NOTHING := "(nothing exposed)"
+pub const DOC_NOTHING := "(nothing exposed)"
 
 # --- the device ---------------------------------------------------------------------------
 
@@ -157,56 +157,87 @@ fn doc_file(mut &out: list[str], m: zerg.DocModule, f: zerg.DocFile, v: DocView,
 	doc_head(out, m, f, v)
 	doc_note(out, f)
 
-	mut consts: list[int] = []
-	mut types: list[int] = []
-	mut fns: list[int] = []
-	mut orphans: list[int] = []
-	mut i := 0
-	for i < m.decls.len() {
-		d := m.decls[i]
-		if d.path == f.path {
-			if d.kind == "const" {
-				consts.append(i)
-			} else if doc_is_type(d.kind) {
-				types.append(i)
-			} else if d.recv == "" {
-				fns.append(i)
-			} else if doc_index_of(m, d.recv) < 0 {
-				orphans.append(i)
-			}
-		}
-		i = i + 1
-	}
-
-	if consts.len() > 0 {
-		doc_heading(out, "CONSTANTS", col)
-		for k in consts {
+	g := doc_groups(m, f.path)
+	if g.consts.len() > 0 {
+		doc_heading(out, DOC_CONSTANTS, col)
+		for k in g.consts {
 			doc_entry(out, m.decls[k], 2, v, col)
 		}
 	}
 
-	if types.len() > 0 or orphans.len() > 0 {
-		doc_heading(out, "TYPES", col)
-		for k in types {
+	if g.types.len() > 0 or g.orphans.len() > 0 {
+		doc_heading(out, DOC_TYPES, col)
+		for k in g.types {
 			doc_entry(out, m.decls[k], 2, v, col)
 			for j in doc_methods_of(m, m.decls[k].name) {
 				doc_entry(out, m.decls[j], 6, v, col)
 			}
 		}
-		doc_orphans(out, m, orphans, v, col)
+		doc_orphans(out, m, g.orphans, v, col)
 	}
 
-	if fns.len() > 0 {
-		doc_heading(out, "FUNCTIONS", col)
-		for k in fns {
+	if g.fns.len() > 0 {
+		doc_heading(out, DOC_FUNCTIONS, col)
+		for k in g.fns {
 			doc_entry(out, m.decls[k], 2, v, col)
 		}
 	}
 
-	if f.ok and doc_lines(v, f.header, f.written).len() == 0 and consts.len() == 0 and types.len() == 0 and fns.len() == 0 and orphans.len() == 0 {
+	if doc_says_nothing(f, g, doc_lines(v, f.header, f.written)) {
 		doc_gap(out)
 		out.append(DOC_NOTHING)
 	}
+}
+
+# The three section titles a file's declarations are read under, in the order they are read.
+# They are named because the HTML page (doc_html.zg) prints the same three over the same three
+# lists, and a page whose sections were spelled twice would be two documents of one module.
+pub const DOC_CONSTANTS := "CONSTANTS"
+pub const DOC_TYPES := "TYPES"
+pub const DOC_FUNCTIONS := "FUNCTIONS"
+
+# DocGroups is one file's exposed declarations sorted into the sections they are read under, as
+# indices into the module's `decls`: a type's methods are not among them, because they are read
+# under the type (`doc_methods_of`), and `orphans` is every method whose type this module does
+# not declare.
+#
+# IT IS THE WALK OF A PAGE, AND BOTH PAGES ASK IT. The terminal and the HTML render the same
+# sections over the same indices, so which declaration sits under which heading is decided once.
+pub struct DocGroups {
+	pub consts: list[int]
+	pub types: list[int]
+	pub fns: list[int]
+	pub orphans: list[int]
+}
+
+# doc_groups is the declarations of the file at `path`, grouped, each group in source order.
+pub fn doc_groups(m: zerg.DocModule, path: str) -> DocGroups {
+	mut g := DocGroups([], [], [], [])
+	mut i := 0
+	for i < m.decls.len() {
+		d := m.decls[i]
+		if d.path == path {
+			if d.kind == "const" {
+				g.consts.append(i)
+			} else if doc_is_type(d.kind) {
+				g.types.append(i)
+			} else if d.recv == "" {
+				g.fns.append(i)
+			} else if doc_index_of(m, d.recv) < 0 {
+				g.orphans.append(i)
+			}
+		}
+		i = i + 1
+	}
+	return g
+}
+
+# doc_says_nothing is whether a file's section is `(nothing exposed)`: it parsed, and neither its
+# header (in the view asked for, `head`) nor any group has anything in it.
+pub fn doc_says_nothing(f: zerg.DocFile, g: DocGroups, head: list[str]) -> bool {
+	return false if not f.ok or head.len() > 0
+
+	return g.consts.len() == 0 and g.types.len() == 0 and g.fns.len() == 0 and g.orphans.len() == 0
 }
 
 # render_doc_decls is what one name answered with — the same entries the whole document holds,
@@ -467,6 +498,17 @@ fn doc_orphans(mut &out: list[str], m: zerg.DocModule, orphans: list[int], v: Do
 fn doc_sig_line(d: zerg.DocDecl, col: bool) -> str {
 	return d.sig if not col
 
+	n := doc_sig_lead(d)
+	return d.sig if n == 0
+
+	b := bytearray(d.sig)
+	return doc_bold(diag.line_slice(b, 0, n), col) + diag.line_slice(b, n, b.len())
+}
+
+# doc_sig_lead is how many bytes of a signature are emphasised — everything in front of the
+# name, and the name — or 0 when the signature does not carry the name where it is looked for.
+# The HTML page emphasises the same span, so the two pages agree about which words are scanned.
+pub fn doc_sig_lead(d: zerg.DocDecl) -> int {
 	b := bytearray(d.sig)
 	mut at := 0
 	at = doc_step(b, at, DOC_UNSAFE)
@@ -474,9 +516,9 @@ fn doc_sig_line(d: zerg.DocDecl, col: bool) -> str {
 	at = doc_step(b, at, d.kind + " ")
 
 	n := at + bytearray(d.name).len()
-	return d.sig if n > b.len() or diag.line_slice(b, at, n) != d.name
+	return 0 if n > b.len() or diag.line_slice(b, at, n) != d.name
 
-	return doc_bold(diag.line_slice(b, 0, n), col) + diag.line_slice(b, n, b.len())
+	return n
 }
 
 # doc_step is `at` moved past `word` when the signature carries it there, and `at` unchanged
@@ -556,7 +598,7 @@ pub fn doc_note_text(f: zerg.DocFile) -> str {
 # or could type. What is left is the name inside the standard library, which is what `zerg doc`
 # takes. Every other path was reached from something the reader wrote, so it is printed as it
 # stands.
-fn doc_short_path(path: str) -> str {
+pub fn doc_short_path(path: str) -> str {
 	return path if not doc_is_stdlib(path)
 
 	b := bytearray(path)
@@ -582,38 +624,93 @@ fn doc_stdlib_lead() -> str {
 # refill has to preserve.
 #
 # WHAT IS NEVER REFILLED is anything whose columns carry meaning: a ```` ``` ```` fence, every
-# line inside one, any line indented four or more spaces, and a doctest prompt line. Those are examples — text meant
-# to be copied out and run — and a fill would silently join two statements onto one line.
+# line inside one, any line indented four or more spaces, and a doctest prompt line. Those are
+# examples — text meant to be copied out and run — and a fill would silently join two
+# statements onto one line. Which line is which is `doc_blocks`'s answer, and this is the
+# terminal's rendering of it.
 fn doc_body(mut &out: list[str], doc: list[str], indent: int) {
-	mut para: list[str] = []
-	mut fence := false
-	for ln in doc {
-		if doc_fence(ln) {
-			doc_flush(out, para, indent)
-			out.append(doc_at(indent, ln))
-			fence = not fence
-			continue
-		}
-		if fence {
-			out.append(doc_at(indent, ln))
-			continue
-		}
-		if ln == "" {
-			doc_flush(out, para, indent)
+	for bl in doc_blocks(doc) {
+		if bl.kind == DOC_PARA {
+			doc_wrap(out, doc_joined(bl.lines), indent)
+		} else if bl.kind == DOC_GAP {
 			doc_gap(out)
-			continue
+		} else {
+			for ln in bl.lines {
+				out.append(doc_at(indent, ln))
+			}
 		}
-		if test.has_prefix(ln, "    ") or doc_is_prompt(ln) {
-			doc_flush(out, para, indent)
-			out.append(doc_at(indent, ln))
-			continue
-		}
-		para.append(ln)
 	}
-	doc_flush(out, para, indent)
 }
 
-# doc_flush turns the paragraph collected so far into filled lines and empties it.
+# The four kinds of block a comment is read into. A PARAGRAPH is refilled; a FENCE is a line
+# opening with three backticks, every line up to the one that closes it, and that closing line;
+# VERBATIM is a run of lines indented four spaces or opening with the doctest prompt; a GAP is
+# the blank line between two blocks.
+pub const DOC_PARA := 0
+pub const DOC_FENCE := 1
+pub const DOC_VERBATIM := 2
+pub const DOC_GAP := 3
+
+# DocBlock is one block of a comment: its kind, and its lines exactly as the comment holds them.
+pub struct DocBlock {
+	pub kind: int
+	pub lines: list[str]
+}
+
+# doc_blocks reads one comment into its blocks, in order. It is THE READER OF A COMMENT'S SHAPE
+# for both pages — the terminal fills a paragraph and prints the rest as written, and the HTML
+# (doc_html.zg) makes a paragraph a `<p>` and the rest a `<pre>` — so a line one of them reads
+# as an example the other cannot read as prose.
+#
+# A FENCE NOBODY CLOSED RUNS TO THE END of the comment, as it always has on the terminal: every
+# line after the opening one is the example's, since nothing says where it stops.
+pub fn doc_blocks(doc: list[str]) -> list[DocBlock] {
+	mut out: list[DocBlock] = []
+	mut run: list[str] = []
+	mut kind := DOC_PARA
+	for ln in doc {
+		if kind == DOC_FENCE {
+			run.append(ln)
+			if doc_fence(ln) {
+				doc_block_end(out, kind, run)
+				kind = DOC_PARA
+			}
+			continue
+		}
+
+		mut here := DOC_PARA
+		if doc_fence(ln) {
+			here = DOC_FENCE
+		} else if ln == "" {
+			here = DOC_GAP
+		} else if test.has_prefix(ln, "    ") or doc_is_prompt(ln) {
+			here = DOC_VERBATIM
+		}
+		if here != kind {
+			doc_block_end(out, kind, run)
+			kind = here
+		}
+		if here == DOC_GAP {
+			out.append(DocBlock(DOC_GAP, []))
+		} else {
+			run.append(ln)
+		}
+	}
+	doc_block_end(out, kind, run)
+	return out
+}
+
+# doc_block_end closes the run collected so far into a block, and empties it. An empty run is no
+# block: a paragraph that never started is not one.
+fn doc_block_end(mut &out: list[DocBlock], kind: int, mut &run: list[str]) {
+	return if run.len() == 0
+
+	out.append(DocBlock(kind, run))
+	run = []
+}
+
+# doc_joined is one paragraph's lines as one line of text, which the terminal then fills and the
+# HTML prints as it stands.
 #
 # THE AUTHOR'S LINE BREAK BECOMES A SPACE, because in text written with spaces that is what it
 # stands for — the two lines are two runs of words, and the break between them is the gap. It
@@ -633,9 +730,7 @@ fn doc_body(mut &out: list[str], doc: list[str], indent: int) {
 # ONE SIDE FULL-WIDTH KEEPS THE SPACE. `而 zerg doc 的排版` is how this tree's own zh-TW
 # documents are written: the space around a Latin run is one the AUTHOR typed, and swallowing
 # it at a line break would lose a space the source has — the same defect the other way round.
-fn doc_flush(mut &out: list[str], mut &para: list[str], indent: int) {
-	return if para.len() == 0
-
+pub fn doc_joined(para: list[str]) -> str {
 	mut text := ""
 	mut wide := false
 	for p in para {
@@ -646,8 +741,7 @@ fn doc_flush(mut &out: list[str], mut &para: list[str], indent: int) {
 		text = text + p
 		wide = doc_rune_width(rs[rs.len() - 1]) == 2
 	}
-	doc_wrap(out, text, indent)
-	para = []
+	return text
 }
 
 # doc_is_prompt reports whether a line carries the doctest prompt — `>>>` opening an item, `...`
@@ -852,7 +946,7 @@ fn doc_mark(col: bool) -> str {
 # Every header in the standard library opens `name — what it is`, and the name is already the
 # column to the left. Dropping it is a rendering decision and it is made here, not in the
 # extraction: the header is what the file says, and a listing is one arrangement of it.
-fn doc_tagline(m: zerg.DocModule) -> str {
+pub fn doc_tagline(m: zerg.DocModule) -> str {
 	s := zerg.doc_first_sentence(doc_module_header(m))
 	return "" if s == ""
 
@@ -876,7 +970,7 @@ fn doc_module_header(m: zerg.DocModule) -> list[str] {
 
 # doc_is_type reports whether a declaration belongs under TYPES. The four kinds that do are the
 # four that can carry members or methods.
-fn doc_is_type(kind: str) -> bool {
+pub fn doc_is_type(kind: str) -> bool {
 	return kind == "struct" or kind == "enum" or kind == "type" or kind == "spec"
 }
 
@@ -893,7 +987,7 @@ fn doc_index_of(m: zerg.DocModule, name: str) -> int {
 }
 
 # doc_methods_of is every method declared on one type, in source order.
-fn doc_methods_of(m: zerg.DocModule, name: str) -> list[int] {
+pub fn doc_methods_of(m: zerg.DocModule, name: str) -> list[int] {
 	mut out: list[int] = []
 	mut i := 0
 	for i < m.decls.len() {

@@ -316,6 +316,10 @@ pub enum Rule {
 	BinaryOnExistential = 3155
 	GenericVariantNoPosition = 3156
 	GenericMethodOnExistential = 3157
+
+	# A TYPE POSITION CANNOT HOLD A QUALIFIER (#201): `sink.P` is read as the bare `P`, and in a
+	# file that declares its own private `P` the two would be spelled alike.
+	QualifiedTypeBesideOwn = 3158
 	SpecDefaultReadsField = 3138
 
 	# emitting — a form this compiler will not lower

@@ -4520,11 +4520,12 @@ EOF
 # The follow-on is deliberate and c_dup_say's comment says why, so this case does not pin a
 # count — a later change that suppressed it would be a decision, and one this file should be
 # made to state rather than absorb.
-# TWO FILES of one module declaring a type, which is what E3078's sentence is about: the
-# module flattening it names is a thing the reader can only have done across files. The
-# same-file half is E4073 below, and the pair mirrors E4077 / E4073 for functions — a rule
-# whose two halves have different LIFETIMES is two rules, and types had one.
-reject two-files-of-one-module-declaring-a-struct E3078 'flattens into one namespace' <<'EOF'
+# TWO FILES of one module declaring a PUBLIC type, which is what is left of E3078: a thing
+# the reader can only have done across files, and since #201 only for a name one program
+# still spells once — a private struct, enum or `type` is its file's. The same-file half is
+# E4073 below, and the pair mirrors E4077 / E4073 for functions — a rule whose two halves
+# have different LIFETIMES is two rules, and types had one.
+reject two-files-of-one-module-declaring-a-struct E3078 'any other type name is one name across the program' <<'EOF'
 import "./one"
 
 fn main() {
@@ -4545,6 +4546,28 @@ pub struct A {
 --- one/mod.zg
 import pub "./a"
 import pub "./b"
+EOF
+
+# A PRIVATE TYPE IS ITS FILE'S (#201), and each file names its own `P` bare — but a TYPE
+# POSITION drops the qualifier it is written with, so a file that declares a `P` and also
+# writes `sink.P` in a type spells two declarations alike, and is refused rather than read
+# as the wrong one; the expression `sink.P(3)` keeps its qualifier and is not refused.
+reject a-type-position-naming-another-files-type-beside-this-files-own E3158 '`sink.P` in a type position is spelled as this file' seed-gap <<'EOF'
+import "./sink"
+
+struct P {
+	pub name: str
+}
+
+fn main() {
+	q: sink.P = sink.P(3)
+	print(q.x)
+	print(P("own").name)
+}
+--- sink/mod.zg
+pub struct P {
+	pub x: int
+}
 EOF
 
 reject a-struct-declared-twice E4073 'the first is at line 1' <<'EOF'

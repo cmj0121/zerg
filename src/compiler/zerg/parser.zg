@@ -1364,6 +1364,7 @@ pub fn parse_at(src: str, path: str) -> ast.File {
 	mut deco_col := 0
 	mut derive_on: list[str] = []
 	mut derive_spec: list[str] = []
+	mut derive_at: list[str] = []
 
 	# in_unsafe tracks a module-level `unsafe { … }` group. The group's items go
 	# through the SAME arms as everything else — a `fn` was always read there, and the
@@ -1458,17 +1459,17 @@ pub fn parse_at(src: str, path: str) -> ast.File {
 			# flag nothing reads is a lie the next reader believes; now the type registry
 			# records it and chk_ty_visible asks it.
 			sd := parse_struct(p, t, is_pub)
-			p_take_derives(sd.name, pending, derive_on, derive_spec)
+			p_take_derives(sd.name, p.path, pending, derive_on, derive_spec, derive_at)
 			structs.append(sd)
 		} else if p_at(p, token.Kind.Enum) {
 			# `pub enum` — carried, the struct arm's reason
 			ed := parse_enum(p, t, is_pub)
-			p_take_derives(ed.name, pending, derive_on, derive_spec)
+			p_take_derives(ed.name, p.path, pending, derive_on, derive_spec, derive_at)
 			enums.append(ed)
 		} else if p_at(p, token.Kind.Spec) {
 			# `pub spec` — carried, the struct arm's reason
 			sp := parse_spec(p, t, is_pub)
-			p_take_derives(sp.name, pending, derive_on, derive_spec)
+			p_take_derives(sp.name, p.path, pending, derive_on, derive_spec, derive_at)
 			specs.append(sp)
 		} else if p_at(p, token.Kind.Const) {
 			# `const` at the top level is a module constant, not a statement: it becomes a
@@ -1624,7 +1625,7 @@ pub fn parse_at(src: str, path: str) -> ast.File {
 	# not the end of the file, because that is where the reader has to go.
 	raise p_diag_at(p, unsafe_line, unsafe_col, rule.Rule.UnsafeGroupUnterminated, "this module-level `unsafe { … }` group is never closed — a group marks a context and the context has to end, or every declaration after it is read as being inside") if in_unsafe
 
-	return ast.File(imports, structs, enums, specs, impls, fns, types, consts, derive_on, derive_spec, stmts, p.ty_quals, p.ty_apps, p.ty_uses, p.tp_scopes)
+	return ast.File(imports, structs, enums, specs, impls, fns, types, consts, derive_on, derive_spec, derive_at, stmts, p.ty_quals, p.ty_apps, p.ty_uses, p.tp_scopes)
 }
 
 # p_take_top_stmt records a top-level statement for the build to refuse, and is the one
@@ -1749,10 +1750,11 @@ fn p_deco_says(nm: str) -> str {
 }
 
 # p_take_derives moves the pending derive names onto the declaration just parsed, as pairs.
-fn p_take_derives(name: str, mut &pending: list[str], mut &on: list[str], mut &specs: list[str]) {
+fn p_take_derives(name: str, path: str, mut &pending: list[str], mut &on: list[str], mut &specs: list[str], mut &at: list[str]) {
 	for nm in pending {
 		on.append(name)
 		specs.append(nm)
+		at.append(path)
 	}
 	pending = []
 }
@@ -2874,10 +2876,11 @@ fn parse_impl(mut &p: Parser, mut &fns: list[ast.FnDecl], mut &impls: list[ast.I
 		raise p_diag_at(p, d.line, d.col, rule.Rule.ImplSpecNotBare, f"an `impl`'s spec is named by a bare `type-name` (GRAMMAR#impl-decl), and `{target}.{tail}` is a name reached through an import — import the spec's module and name the spec alone") if sp == "" and p_at(p, token.Kind.For)
 
 		# WHAT THE QUALIFIER IS FOR, and what it is not. GRAMMAR#base-type derives the dotted
-		# name, and the name it resolves to is the BARE one: every module of a program flattens
-		# into one namespace here, and two modules declaring one type name is E3078 — so `P` is
-		# the key whichever module wrote it. The qualifier is a separate claim, about which
-		# module the writer believes it came from, and only the emitter can check that.
+		# name, and the name it resolves to is the BARE one: a type another module can reach is
+		# a `pub` one, two modules declaring one public type name is E3078, and a private type
+		# of the same name in the writer's own file is refused beside it (c_ft_qualified) — so
+		# `P` is the key whichever module wrote it. The qualifier is a separate claim, about
+		# which module the writer believes it came from, and only the emitter can check that.
 		#
 		# THE REFUSAL SAID THE OPPOSITE. It read *a type reached through an import does not have
 		# a bare name here*, and it does: `shape.P` is `P`, uniquely, by a rule this compiler

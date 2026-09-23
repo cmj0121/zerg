@@ -3757,9 +3757,8 @@ pub fn chk_no_member(mut &em: emit.Emitter, ns: str, member: str) {
 # coexisted with it, and which of the two a `text…` reached depended on whether the reader
 # wrote a `(` or a `.`.
 #
-# It is asked of the WHOLE program, which is the grain E3078 already states for the same
-# reason: every module of a program flattens into one namespace here, so a name taken
-# anywhere is taken. A repeat of the SAME import is not a collision — a module two files
+# It is asked of the WHOLE program, because a module's namespace binding is a name every
+# module of the program shares here, so a name taken anywhere is taken. A repeat of the SAME import is not a collision — a module two files
 # import is the ordinary case, and it binds one namespace to one module either way.
 # The verdict is the WHOLE program's and the reporting is the UNIT's, which is a split
 # chk_top_muts explains: this runs once per unit, so a rule that reported over the merged

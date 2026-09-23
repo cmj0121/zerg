@@ -274,7 +274,7 @@ shipping compiler rather than a part of it (the line
 | `E3075` | `for … in` walks a list, a map, a str, a range or a channel, and … is not iterable                    |
 | `E3076` | raise carries an `Err`, or a message to build one from                                                |
 | `E3077` | `…` is declared twice, once as one kind of declaration and once as another                            |
-| `E3078` | `…` is declared twice as the same kind — every module flattens into one namespace                     |
+| `E3078` | `…` is declared twice as the same kind, and not as the private types of two files                     |
 | `E3079` | a variant is named through its enum, and this one is bare                                             |
 | `E3080` | a side of an `Either` is named through its type, and this one is bare                                 |
 | `E3081` | a closure parameter has no type, and its position gives it none                                       |
@@ -354,6 +354,7 @@ shipping compiler rather than a part of it (the line
 | `E3155` | a binary same-type member called on a boxed value                                                     |
 | `E3156` | a generic enum's variant written where nothing says which specialization                              |
 | `E3157` | a generic method called on a boxed value                                                              |
+| `E3158` | a type position qualifies a type this file also declares as its own private one                       |
 | `E4001` | `…` outside of a loop: it belongs to a `for`, and a `select` arm is not one                           |
 | `E4002` | a `from` cause is an `Err`, and … is not one                                                          |
 | `E4004` | `…(…)` names one side of an `Either`, which holds exactly one value                                   |

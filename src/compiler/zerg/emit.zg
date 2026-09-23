@@ -5669,12 +5669,56 @@ fn c_decl_sites(f: ast.File) -> list[Site] {
 			line = f.impls[by].line
 			col = f.impls[by].col
 		}
-		out.append(Site(fn_i.ret, f"the result of `{fn_i.name}`", fn_i.tparams, path, line, col, fn_i.is_pub))
-		for pm in fn_i.params {
-			out.append(Site(pm.ty, c_param_says(fn_i, pm), fn_i.tparams, path, line, col, fn_i.is_pub))
-		}
+		c_fn_sites(fn_i, fn_i.tparams, path, line, col, out)
 	}
 	return out
+}
+
+# c_tpl_sites are the same sites, spelled by the TEMPLATES — which were removed from the program
+# before c_decl_sites reads it, so an unknown name in one was never asked about. `fn same() ->
+# Self` in `impl[T] Bag[T]` was judged as a type by the first body that met a specialization,
+# and a template nothing instantiated let it through altogether; the sentence a plain `fn` gets,
+# _no type named `Self`_, is owed to the declaration either way.
+#
+# They are checked and nothing else: a template's types still name its parameters, so no
+# typedef is written for them — its specializations are ordinary declarations and are sited
+# as such.
+fn c_tpl_sites(mut &em: Emitter) -> list[Site] {
+	mut out: list[Site] = []
+	for sd in em.gen_structs {
+		for fd in sd.fields {
+			out.append(Site(fd.ty, f"field `{sd.name}.{fd.name}`", sd.tparams, sd.path, fd.line, fd.col, sd.is_pub and fd.is_pub))
+		}
+	}
+	for ed in em.gen_enums {
+		for v in ed.variants {
+			mut i := 0
+			for i < v.fields.len() {
+				out.append(Site(v.fields[i], f"payload {strconv.to_string(i, 10)} of `{ed.name}.{v.name}`", ed.tparams, ed.path, v.line, v.col, ed.is_pub))
+				i = i + 1
+			}
+		}
+	}
+	for fn_i in em.gen_tpls {
+		c_fn_sites(fn_i, fn_i.tparams, fn_i.path, fn_i.line, fn_i.col, out)
+	}
+
+	# A METHOD OF A TEMPLATE IMPL is bound by the impl's parameters as well as its own
+	for m in em.impl_tpl_fns {
+		mut tps := c_tpl_params_at(em, m.recv)
+		for t in m.tparams {
+			tps.append(t)
+		}
+		c_fn_sites(m, tps, m.path, m.line, m.col, out)
+	}
+	return out
+}
+
+fn c_fn_sites(fn_i: ast.FnDecl, tps: list[str], path: str, line: int, col: int, mut &out: list[Site]) {
+	out.append(Site(fn_i.ret, f"the result of `{fn_i.name}`", tps, path, line, col, fn_i.is_pub))
+	for pm in fn_i.params {
+		out.append(Site(pm.ty, c_param_says(fn_i, pm), tps, path, line, col, fn_i.is_pub))
+	}
 }
 
 # c_param_says names a parameter in a sentence, and the RECEIVER is the one it must not name
@@ -5870,15 +5914,24 @@ fn c_check_named_types(mut &em: Emitter, f: ast.File, sites: list[Site]) {
 	}
 
 	for s in sites {
-		# the declaration's own place. This pass runs before any statement is emitted, so the
-		# SAt markers have said nothing and `em.at_*` still holds the last unit's — which is
-		# why every site carries one rather than some of them doing so. The guard that used
-		# to stand here, skipping a site whose path was empty, was the half of the defect
-		# that made a missing position look deliberate.
-		em.at_path = s.path
-		c_mark(em, s.line, s.col)
-		c_check_named_ty(em, s.ty, s)
+		c_check_site(em, s)
 	}
+
+	# AND THE TEMPLATES', which are declarations too (c_tpl_sites)
+	for s in c_tpl_sites(em) {
+		c_check_site(em, s)
+	}
+}
+
+fn c_check_site(mut &em: Emitter, s: Site) {
+	# the declaration's own place. This pass runs before any statement is emitted, so the
+	# SAt markers have said nothing and `em.at_*` still holds the last unit's — which is
+	# why every site carries one rather than some of them doing so. The guard that used
+	# to stand here, skipping a site whose path was empty, was the half of the defect
+	# that made a missing position look deliberate.
+	em.at_path = s.path
+	c_mark(em, s.line, s.col)
+	c_check_named_ty(em, s.ty, s)
 }
 
 # c_check_named_ty walks a type to its named leaves. A container is transparent here: the
@@ -5959,6 +6012,11 @@ fn c_check_type_name(mut &em: Emitter, nm: str, s: Site) {
 	# is emitted, because a specialization has a real type in its place.
 	return if c_name_in(s.tparams, nm)
 
+	# AN APPLICATION A TEMPLATE WRITES — `Box[T]`, the receiver of `impl[T] Box[T]` — is no type
+	# until it is instantiated, and what can be asked of it here is its parts: a generic type,
+	# and arguments that each resolve or are the template's own parameters.
+	return if c_open_app_checked(em, nm, s)
+
 	# `This` is the SELF TYPE (GRAMMAR#param), so it names something only where there is a
 	# self — inside an `impl`, where c_impl_ty has already substituted it. Reaching here
 	# means there was none, and saying "no type named `This`" invites the reader to go and
@@ -5980,6 +6038,23 @@ fn c_check_type_name(mut &em: Emitter, nm: str, s: Site) {
 	raise c_diag(em, rule.Rule.TypeArgsMissing, f"`{nm}` is a generic type and this names it without arguments — a type is `{nm}[…]`, one argument per parameter ({site})") if c_gen_struct_row(em, nm) >= 0
 
 	raise c_diag(em, rule.Rule.NoSuchType, f"no type named `{nm}` ({site})")
+}
+
+# c_open_app_checked checks an application's arguments when its base is a generic type, and
+# answers whether it did. Only a template's site reaches it with one open: every closed
+# application was instantiated before this pass and resolves as a type.
+fn c_open_app_checked(mut &em: Emitter, nm: str, s: Site) -> bool {
+	return false if not c_is_applied(nm) or s.tparams.len() == 0
+
+	for a in em.ty_apps {
+		if a.name == nm {
+			return false if c_gen_struct_row(em, a.base) < 0 and c_gen_enum_row(em, a.base) < 0
+
+			c_check_named_ty_list(em, a.args, s)
+			return true
+		}
+	}
+	return false
 }
 
 # c_typedef_of answers what a `type X = Y` name is underneath, or TUnknown for a name that

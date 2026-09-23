@@ -29,6 +29,15 @@
 #      does break it, and needs no rule of its own: a blank line emits no token, so the run
 #      simply ends further up than the line above.
 #
+# EVERY COMMENT IS READ TWICE, ONCE FOR EACH OF ITS READERS (#18). A `##` line is the READER'S
+# text — what someone calling the declaration needs — and a `#` line is the MAINTAINER'S, which
+# is where a comment in this tree says why the code is the way it is. The marker is per LINE, so
+# one run can hold both, and it is what GRAMMAR's DOC-COMMENT has always said: `##` documents,
+# and any other `#` is an ordinary comment. So a run yields its reader text (`doc_reader`) and
+# the whole run as written, and a declaration whose run holds no `##` at all is UNDOCUMENTED
+# however much was written above it — one rule, which `--check` holds, so a forgotten `##` is a
+# finding rather than a page that quietly went blank.
+#
 # A RUN THAT OPENS WITH A SECTION BANNER — `# --- levels ------` — DOCUMENTS NOTHING, and the
 # WHOLE run goes, not just the banner line. A banner is a mark on the FILE: it divides the
 # source into chapters for someone reading the source, and what a chapter is called is not what
@@ -56,7 +65,7 @@
 #     surface text the literal node already carries, and prints `…` for everything else. A
 #     document's signature answers "how do I call this"; it does not promise to evaluate.
 #   - an evaluator of examples. A ```zerg``` fence is carried through as written. Running one
-#     is `--check`'s job, and re-writing one for a reader is issue #18's.
+#     is `--check`'s job.
 #   - silent about what it could not read. A file whose parse RAISES still yields its header —
 #     the header rule needs no AST — and the failure is recorded as `DocFile.ok` for the
 #     renderer to speak about. `src/stdlib/atomic.zg` is the live case: E9038 comes from the
@@ -124,6 +133,11 @@ pub struct DocStray {
 	# a correctly spelled ` ```output ` fence standing where no example is, which is a different
 	# mistake from a misspelled fence and is named as that
 	pub orphan: bool
+
+	# an example whose fence lines are not all marked alike — some `##`, some `#`. The runner
+	# reads the whole comment and runs it whole, while the reader's page shows only its `##`
+	# lines, so such an example is checked as one thing and shown as a fragment of it.
+	pub mixed: bool
 }
 
 # DocExample is one ` ```zerg ` fence and the ` ```output ` fence written directly under it, if
@@ -149,9 +163,13 @@ pub struct DocFile {
 	# reader could type is a rendering decision and is made where the reader is known.
 	pub path: str
 
-	# the file header comment, stripped of its `#` markers; empty when the file opens with a
-	# declaration, with a section banner, or with nothing at all
+	# the file header comment's READER text — its `##` lines, stripped of their markers; empty
+	# when the file opens with a declaration, with a section banner, with nothing at all, or
+	# with a header written for maintainers alone
 	pub header: list[str]
+
+	# the same header as written, both markers — what the maintainer's view prints
+	pub written: list[str]
 
 	# whether the file parsed. False is the exceptional case — `atomic` is the whole list
 	# today — and it means the header above is all this file gave up: a renderer that said
@@ -189,9 +207,16 @@ pub struct DocDecl {
 	# by counting characters instead of parsing the string back.
 	pub sig: str
 
-	# the attached comment, stripped; empty means UNDOCUMENTED, and a renderer must say so
-	# rather than leave a gap the reader cannot tell from a rendering bug
+	# the attached comment's READER text — its `##` lines, stripped; empty means UNDOCUMENTED,
+	# and a renderer must say so rather than leave a gap the reader cannot tell from a
+	# rendering bug. Every summary, the index, `--check` and a hover read this and nothing else.
 	pub doc: list[str]
+
+	# the attached comment as written, both markers — what the maintainer's view (`--all`)
+	# prints. It is a second field rather than a flag on each line of `doc` because every
+	# reader of `doc` would otherwise have to remember to filter, and the one that forgot
+	# would publish the maintainer's notes.
+	pub written: list[str]
 
 	# the struct's public fields, the enum's variants, or the spec's required signatures —
 	# each a line and its own comment. It is deliberately one level deep: none of the three
@@ -221,7 +246,11 @@ pub struct DocMember {
 	pub name: str
 
 	pub sig: str
+
+	# its reader text and its comment as written, exactly as `DocDecl` carries them
 	pub doc: list[str]
+	pub written: list[str]
+
 	pub line: int
 }
 
@@ -253,7 +282,8 @@ pub fn doc_module(name: str, srcs: list[str], paths: list[str]) -> DocModule {
 		ok := doc_file_rows(srcs[i], path, false, tv, decls)
 
 		# after the claim pass, never before it: a header is the run no declaration wanted
-		files.append(DocFile(path, doc_header(tv), ok))
+		head := doc_header(tv)
+		files.append(DocFile(path, doc_reader(head), head.lines, ok))
 		doc_examples(tv, path, examples, strays)
 		i = i + 1
 	}
@@ -274,11 +304,13 @@ fn doc_examples(tv: DocTrivia, path: str, mut &out: list[DocExample], mut &stray
 		for i < r.lines.len() {
 			if r.lines[i] != "```zerg" {
 				if doc_fence_shaped(r.lines[i]) {
-					strays.append(DocStray(path, r.first + i, r.lines[i], r.lines[i] == "```output"))
+					strays.append(DocStray(path, r.first + i, r.lines[i], r.lines[i] == "```output", false))
 				}
 				i = i + 1
 				continue
 			}
+
+			open := i
 			at := r.first + i
 			mut code: list[str] = []
 			i = doc_fence_body(r.lines, i + 1, code)
@@ -288,8 +320,23 @@ fn doc_examples(tv: DocTrivia, path: str, mut &out: list[DocExample], mut &stray
 				i = doc_fence_body(r.lines, i + 1, want)
 			}
 			out.append(DocExample(path, at, code, want, expr))
+			if not doc_alike(r.reader, open, i) {
+				strays.append(DocStray(path, at, r.lines[open], false, true))
+			}
 		}
 	}
+}
+
+# doc_alike reports whether the lines of a run from `lo` up to `hi` — one example, both its
+# fences — carry the same marker. `hi` may run one past the end, where an example was never
+# closed.
+fn doc_alike(reader: list[bool], lo: int, hi: int) -> bool {
+	mut k := lo + 1
+	for k < hi and k < reader.len() {
+		return false if reader[k] != reader[lo]
+		k = k + 1
+	}
+	return true
 }
 
 # doc_fence_shaped reports whether a comment line opens a fence of any spelling — indented or
@@ -546,21 +593,21 @@ fn doc_file_decls(f: ast.File, mut &tv: DocTrivia, mut &out: list[DocDecl], all:
 	mut ds: list[DocDecl] = []
 
 	for c in f.consts {
-		doc := doc_attach(tv, c.line)
+		run := doc_attach(tv, c.line)
 		mut none: list[DocMember] = []
 		if c.is_pub or all {
-			ds.append(DocDecl("const", c.name, "", doc_const_sig(c), doc, none, 0, c.path, c.line))
+			ds.append(DocDecl("const", c.name, "", doc_const_sig(c), doc_reader(run), run.lines, none, 0, c.path, c.line))
 		}
 	}
 
 	for s in f.structs {
-		doc := doc_attach(tv, s.line)
+		run := doc_attach(tv, s.line)
 		mut ms: list[DocMember] = []
 		mut hidden := 0
 		for fd in s.fields {
 			fdoc := doc_attach(tv, fd.line)
 			if fd.is_pub or all {
-				ms.append(DocMember(fd.name, doc_field_sig(fd), fdoc, fd.line))
+				ms.append(DocMember(fd.name, doc_field_sig(fd), doc_reader(fdoc), fdoc.lines, fd.line))
 			} else {
 				# `hidden` is how many were LEFT OUT, so it counts the ones this walk did not
 				# list — under `all` that is none of them, and a row saying otherwise would
@@ -569,39 +616,39 @@ fn doc_file_decls(f: ast.File, mut &tv: DocTrivia, mut &out: list[DocDecl], all:
 			}
 		}
 		if s.is_pub or all {
-			ds.append(DocDecl("struct", s.name, "", f"struct {s.name}{doc_tparams(s.tparams)}", doc, ms, hidden, s.path, s.line))
+			ds.append(DocDecl("struct", s.name, "", f"struct {s.name}{doc_tparams(s.tparams)}", doc_reader(run), run.lines, ms, hidden, s.path, s.line))
 		}
 	}
 
 	for e in f.enums {
-		doc := doc_attach(tv, e.line)
+		run := doc_attach(tv, e.line)
 		mut ms: list[DocMember] = []
 		for vd in e.variants {
 			vdoc := doc_attach(tv, vd.line)
-			ms.append(DocMember(vd.name, doc_variant_sig(vd), vdoc, vd.line))
+			ms.append(DocMember(vd.name, doc_variant_sig(vd), doc_reader(vdoc), vdoc.lines, vd.line))
 		}
 		if e.is_pub or all {
-			ds.append(DocDecl("enum", e.name, "", "enum " + e.name, doc, ms, 0, e.path, e.line))
+			ds.append(DocDecl("enum", e.name, "", "enum " + e.name, doc_reader(run), run.lines, ms, 0, e.path, e.line))
 		}
 	}
 
 	for t in f.types {
-		doc := doc_attach(tv, t.line)
+		run := doc_attach(tv, t.line)
 		mut none: list[DocMember] = []
 		if t.is_pub or all {
-			ds.append(DocDecl("type", t.name, "", f"type {t.name} = {ast.ty_name(t.under)}", doc, none, 0, t.path, t.line))
+			ds.append(DocDecl("type", t.name, "", f"type {t.name} = {ast.ty_name(t.under)}", doc_reader(run), run.lines, none, 0, t.path, t.line))
 		}
 	}
 
 	for sp in f.specs {
-		doc := doc_attach(tv, sp.line)
+		run := doc_attach(tv, sp.line)
 		mut ms: list[DocMember] = []
 		for req in sp.reqs {
 			rdoc := doc_attach(tv, req.line)
-			ms.append(DocMember(req.name, doc_fn_sig(req), rdoc, req.line))
+			ms.append(DocMember(req.name, doc_fn_sig(req), doc_reader(rdoc), rdoc.lines, req.line))
 		}
 		if sp.is_pub or all {
-			ds.append(DocDecl("spec", sp.name, "", doc_spec_sig(sp), doc, ms, 0, sp.path, sp.line))
+			ds.append(DocDecl("spec", sp.name, "", doc_spec_sig(sp), doc_reader(run), run.lines, ms, 0, sp.path, sp.line))
 		}
 	}
 
@@ -610,10 +657,10 @@ fn doc_file_decls(f: ast.File, mut &tv: DocTrivia, mut &out: list[DocDecl], all:
 	}
 
 	for fd in f.fns {
-		doc := doc_attach(tv, fd.line)
+		run := doc_attach(tv, fd.line)
 		mut none: list[DocMember] = []
 		if fd.is_pub or all {
-			ds.append(DocDecl("fn", fd.name, fd.recv, doc_fn_sig(fd), doc, none, 0, fd.path, fd.line))
+			ds.append(DocDecl("fn", fd.name, fd.recv, doc_fn_sig(fd), doc_reader(run), run.lines, none, 0, fd.path, fd.line))
 		}
 	}
 
@@ -865,6 +912,9 @@ struct DocRun {
 	pub first: int
 	pub last: int
 	pub lines: list[str]
+
+	# row for row with `lines`: whether that line was written `##`, the reader's marker
+	pub reader: list[bool]
 }
 
 # DocTrivia is the whole first pass: the runs a file holds, and two facts per LINE that decide
@@ -938,7 +988,7 @@ fn doc_trivia(src: str) -> DocTrivia {
 			# a note at the end of a line of code, which documents nothing below it
 			continue if prev == t.line
 
-			doc_add_line(runs, taken, t.line, doc_strip(t.lexeme))
+			doc_add_line(runs, taken, t.line, doc_strip(t.lexeme), doc_is_reader(t.lexeme))
 			continue
 		}
 
@@ -959,13 +1009,14 @@ fn doc_trivia(src: str) -> DocTrivia {
 # doc_add_line puts one comment line into the run it continues, or opens a new run. A run is
 # extended only when the line ABOVE was the previous comment line, which is what makes a blank
 # line a separator without anything here looking at whitespace.
-fn doc_add_line(mut &runs: list[DocRun], mut &taken: list[bool], line: int, text: str) {
+fn doc_add_line(mut &runs: list[DocRun], mut &taken: list[bool], line: int, text: str, reader: bool) {
 	if runs.len() > 0 {
 		k := runs.len() - 1
 		if runs[k].last == line - 1 {
 			mut r := runs[k]
 			r.last = line
 			r.lines.append(text)
+			r.reader.append(reader)
 			runs[k] = r
 			return
 		}
@@ -973,8 +1024,67 @@ fn doc_add_line(mut &runs: list[DocRun], mut &taken: list[bool], line: int, text
 
 	mut ls: list[str] = []
 	ls.append(text)
-	runs.append(DocRun(line, line, ls))
+	mut rs: list[bool] = []
+	rs.append(reader)
+	runs.append(DocRun(line, line, ls, rs))
 	taken.append(false)
+}
+
+# doc_is_reader reports whether a comment is the reader's — written `##`, a second `#` with no
+# space before it. `# ## Heading` is the maintainer's: the space after the first `#` ends the
+# marker, the same line `doc_strip` draws.
+fn doc_is_reader(lexeme: str) -> bool {
+	b := bytearray(lexeme)
+	return b.len() >= 2 and b[0] == b'#' and b[1] == b'#'
+}
+
+# doc_reader is the reader's text of one run: its `##` lines, in order, and nothing else.
+#
+# WHERE A NOTE WAS TAKEN OUT, A PARAGRAPH ENDS. `## a`, `# why`, `## b` is two remarks the
+# author kept apart with a note between them, and running `a` and `b` together would fill them
+# into one sentence nobody wrote. A blank line either side of the note is the same break, so
+# it is never doubled, and none is left at either end of the text. Inside a fence nothing is
+# joined or dropped: its lines are an example's, blank ones included.
+fn doc_reader(r: DocRun) -> list[str] {
+	mut out: list[str] = []
+	mut cut := false
+	mut fence := false
+	mut i := 0
+	for i < r.lines.len() {
+		text := r.lines[i]
+		i = i + 1
+		if not r.reader[i - 1] {
+			cut = true
+			continue
+		}
+		if fence {
+			out.append(text)
+			fence = not doc_is_fence(text)
+			continue
+		}
+		if text == "" or cut {
+			if out.len() > 0 and out[out.len() - 1] != "" {
+				out.append("")
+			}
+			cut = false
+			continue if text == ""
+		}
+		out.append(text)
+		fence = doc_is_fence(text)
+	}
+	mut n := out.len()
+	for n > 0 and out[n - 1] == "" {
+		n = n - 1
+	}
+	return out if n == out.len()
+
+	mut kept: list[str] = []
+	mut k := 0
+	for k < n {
+		kept.append(out[k])
+		k = k + 1
+	}
+	return kept
 }
 
 # doc_strip takes the `#` off a comment, and one space after it, and any trailing whitespace.
@@ -984,11 +1094,10 @@ fn doc_add_line(mut &runs: list[DocRun], mut &taken: list[bool], line: int, text
 #
 # A SECOND `#` IS THE DOC-COMMENT MARKER and comes off with the first (#93). `GRAMMAR` gives
 # `##` a production of its own — DOC-COMMENT, attached to the declaration that follows — and
-# this compiler lexes it as an ordinary comment whose text happens to begin with a `#`. The
-# attachment was never the missing half: an ordinary comment attaches too, which is how all
-# fifteen stdlib modules are documented. What was missing was taking the marker OFF, so a
-# `## doubles its argument.` rendered as `# doubles its argument.` — the marker leaking into
-# the prose it marks.
+# this compiler lexes it as an ordinary comment whose text happens to begin with a `#`; which
+# reader a line is for is `doc_is_reader`'s question, asked of the same lexeme. Leaving the
+# marker ON rendered `## doubles its argument.` as `# doubles its argument.` — the marker
+# leaking into the prose it marks.
 #
 # ONLY A `#` WITH NO SPACE BEFORE IT is the marker. `# ## Heading` is a markdown heading a
 # author wrote inside ordinary prose: the space after the first `#` ends the marker, and the
@@ -1019,16 +1128,22 @@ fn doc_strip(lexeme: str) -> str {
 # One run can answer only one declaration, and it cannot answer two by accident: a run's last
 # line is unique, so at most one declaration is on the line below it. `taken` records the claim
 # for `doc_header`, which is the only thing that asks about the runs nobody wanted.
-fn doc_attach(mut &tv: DocTrivia, line: int) -> list[str] {
-	mut none: list[str] = []
+fn doc_attach(mut &tv: DocTrivia, line: int) -> DocRun {
 	at := doc_claim(tv, line)
-	return none if at < 0
+	return doc_no_run() if at < 0
 
 	# claimed and then thrown away: a section banner is taken OUT of circulation, so that
 	# `doc_header` cannot pick it up either, and answers nothing
-	return none if doc_is_banner(tv.runs[at].lines[0])
+	return doc_no_run() if doc_is_banner(tv.runs[at].lines[0])
 
-	return tv.runs[at].lines
+	return tv.runs[at]
+}
+
+# doc_no_run is the comment that was not written: no line, in either view.
+fn doc_no_run() -> DocRun {
+	mut ls: list[str] = []
+	mut rs: list[bool] = []
+	return DocRun(0, 0, ls, rs)
 }
 
 # doc_claim is doc_attach without the text — the index of the run claimed, or -1. It is what an
@@ -1075,22 +1190,20 @@ fn doc_claim(mut &tv: DocTrivia, line: int) -> int {
 # a rule phrased as "separated by a blank line" gives the most-read module in the standard
 # library no header at all. An import declares no member of this module's surface and claims no
 # comment; a reader looking above it is reading about the file.
-fn doc_header(tv: DocTrivia) -> list[str] {
-	mut none: list[str] = []
-
-	return none if tv.runs.len() == 0
-	return none if tv.taken[0]
+fn doc_header(tv: DocTrivia) -> DocRun {
+	return doc_no_run() if tv.runs.len() == 0
+	return doc_no_run() if tv.taken[0]
 
 	r := tv.runs[0]
-	return none if doc_is_banner(r.lines[0])
+	return doc_no_run() if doc_is_banner(r.lines[0])
 
 	mut i := 1
 	for i < r.first {
-		return none if tv.code[i]
+		return doc_no_run() if tv.code[i]
 		i = i + 1
 	}
 
 	below := r.last + 1
-	return none if tv.code[below] and not tv.imp[below]
-	return r.lines
+	return doc_no_run() if tv.code[below] and not tv.imp[below]
+	return r
 }

@@ -1,8 +1,8 @@
-# math — basic mathematics (Phase 1f, bundle MVP).
-#
-# Bundled into a program that writes `import "math"`; its members are reached
-# through the namespace, as `math.abs(-3)` or `math.max(3, 9)`. Every function here is
-# ordinary safe Zerg over the primitive numeric types.
+## math — basic mathematics (Phase 1f, bundle MVP).
+##
+## Bundled into a program that writes `import "math"`; its members are reached
+## through the namespace, as `math.abs(-3)` or `math.max(3, 9)`. Every function here is
+## ordinary safe Zerg over the primitive numeric types.
 #
 # Zerg is zero-external-dependency like Go, so the transcendentals are NOT a foreign
 # binding onto libc `<math.h>` — they are pure-Zerg numerical algorithms over the
@@ -11,34 +11,34 @@
 # module-level value constant yet). The trigonometric family and a float-exponent `pow`
 # (needing `exp`/`ln`) are a straightforward extension, deferred.
 
-# abs returns the absolute value of the integer x.
+## abs returns the absolute value of the integer x.
 pub fn abs(x: int) -> int {
 	return -x if x < 0
 	return x
 }
 
-# fabs returns the absolute value of the float x.
+## fabs returns the absolute value of the float x.
 pub fn fabs(x: float) -> float {
 	return -x if x < 0.0
 	return x
 }
 
-# min returns the smaller of two integers.
+## min returns the smaller of two integers.
 pub fn min(a: int, b: int) -> int {
 	return a if a < b
 	return b
 }
 
-# max returns the larger of two integers.
+## max returns the larger of two integers.
 pub fn max(a: int, b: int) -> int {
 	return a if a > b
 	return b
 }
 
-# sqrt returns the non-negative square root of x, computed in pure Zerg by Newton's
-# method: each step replaces the guess with the average of it and x/guess, converging
-# quadratically. A negative x raises ValueError — the domain error, which a `guard`
-# demotes to a value.
+## sqrt returns the non-negative square root of x, computed in pure Zerg by Newton's
+## method: each step replaces the guess with the average of it and x/guess, converging
+## quadratically. A negative x raises ValueError — the domain error, which a `guard`
+## demotes to a value.
 pub fn sqrt(x: float) -> float {
 	raise ValueError("math.sqrt: domain error (negative input)") if x < 0.0
 	return 0.0 if x == 0.0
@@ -60,10 +60,10 @@ pub fn sqrt(x: float) -> float {
 	return guess
 }
 
-# pow raises base to an INTEGER exponent, computed in pure Zerg by exponentiation by
-# squaring (log2(exp) multiplications). A negative exponent returns the reciprocal
-# `1 / base^-exp`; a zero base with a negative exponent raises ValueError (a division
-# by zero). A float-exponent pow awaits exp/ln (deferred).
+## pow raises base to an INTEGER exponent, computed in pure Zerg by exponentiation by
+## squaring (log2(exp) multiplications). A negative exponent returns the reciprocal
+## `1 / base^-exp`; a zero base with a negative exponent raises ValueError (a division
+## by zero). A float-exponent pow awaits exp/ln (deferred).
 pub fn pow(base: float, exp: int) -> float {
 	if exp < 0 {
 		raise ValueError("math.pow: domain error (zero base, negative exponent)") if base == 0.0
@@ -103,44 +103,44 @@ pub fn pow(base: float, exp: int) -> float {
 # to give the surface a spelling for. Its range check is the one every conversion goes
 # through, so the OverflowError above is the runtime's own and not a second rule.
 
-# trunc returns x with its fractional part removed, rounding toward zero: trunc(2.7) is 2
-# and trunc(-2.7) is -2. A magnitude no `int` holds raises OverflowError.
+## trunc returns x with its fractional part removed, rounding toward zero: trunc(2.7) is 2
+## and trunc(-2.7) is -2. A magnitude no `int` holds raises OverflowError.
 pub fn trunc(x: float) -> int {
 	return __zrt_trunc(x)
 }
 
-# floor returns the greatest integer not greater than x: floor(2.7) is 2 and floor(-2.1)
-# is -3. A magnitude no `int` holds raises OverflowError.
+## floor returns the greatest integer not greater than x: floor(2.7) is 2 and floor(-2.1)
+## is -3. A magnitude no `int` holds raises OverflowError.
 pub fn floor(x: float) -> int {
 	t := trunc(x)
 	return t - 1 if float(t) > x
 	return t
 }
 
-# ceil returns the least integer not less than x: ceil(2.1) is 3 and ceil(-2.7) is -2. A
-# magnitude no `int` holds raises OverflowError.
+## ceil returns the least integer not less than x: ceil(2.1) is 3 and ceil(-2.7) is -2. A
+## magnitude no `int` holds raises OverflowError.
 pub fn ceil(x: float) -> int {
 	t := trunc(x)
 	return t + 1 if float(t) < x
 	return t
 }
 
-# round returns x rounded to the nearest integer, with a half rounded away from zero:
-# round(2.5) is 3 and round(-2.5) is -3. A magnitude no `int` holds raises OverflowError.
+## round returns x rounded to the nearest integer, with a half rounded away from zero:
+## round(2.5) is 3 and round(-2.5) is -3. A magnitude no `int` holds raises OverflowError.
 pub fn round(x: float) -> int {
 	return -floor(-x + 0.5) if x < 0.0
 	return floor(x + 0.5)
 }
 
-# pi returns an approximation of the ratio of a circle's circumference to its diameter.
-# It is a function, not a constant binding, because the grammar has no module-level
-# value declaration yet (a `math.PI` value would need that surface).
+## pi returns an approximation of the ratio of a circle's circumference to its diameter.
+## It is a function, not a constant binding, because the grammar has no module-level
+## value declaration yet (a `math.PI` value would need that surface).
 pub fn pi() -> float {
 	return 3.141592653589793
 }
 
-# e returns an approximation of Euler's number, the base of the natural logarithm. Like
-# `pi`, it is a function pending a module-level constant surface.
+## e returns an approximation of Euler's number, the base of the natural logarithm. Like
+## `pi`, it is a function pending a module-level constant surface.
 pub fn e() -> float {
 	return 2.718281828459045
 }

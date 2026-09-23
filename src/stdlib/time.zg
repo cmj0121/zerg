@@ -1,25 +1,25 @@
-# time — clocks (pure-Zerg stdlib over the runtime clock floor).
-#
-# Bundled into a program that writes `import "time"`; members are reached through the
-# namespace, as `time.now()`. Zerg is zero-external-dependency: the two irreducible
-# clock reads are thin runtime leaves (`__zrt_time_unix` / `__zrt_time_mono`, over
-# clock_gettime); any higher-level logic (durations, formatting) is pure Zerg above them.
+## time — clocks (pure-Zerg stdlib over the runtime clock floor).
+##
+## Bundled into a program that writes `import "time"`; members are reached through the
+## namespace, as `time.now()`. Zerg is zero-external-dependency: the two irreducible
+## clock reads are thin runtime leaves (`__zrt_time_unix` / `__zrt_time_mono`, over
+## clock_gettime); any higher-level logic (durations, formatting) is pure Zerg above them.
 import (
 	"strconv"
 	"strings"
 )
 
-# now returns the wall-clock time in whole seconds since the Unix epoch (1970-01-01 UTC).
-# It can jump backwards when the system clock is adjusted — for measuring elapsed time use
-# `monotonic` instead.
+## now returns the wall-clock time in whole seconds since the Unix epoch (1970-01-01 UTC).
+## It can jump backwards when the system clock is adjusted — for measuring elapsed time use
+## `monotonic` instead.
 pub fn now() -> int {
 	return __zrt_time_unix()
 }
 
-# monotonic returns a monotonic clock reading in nanoseconds. Its absolute value is
-# meaningless (it is not a date); only the DIFFERENCE between two readings is — the
-# elapsed time, which never runs backwards. Typical use: `start := time.monotonic()` …
-# `elapsed := time.monotonic() - start`.
+## monotonic returns a monotonic clock reading in nanoseconds. Its absolute value is
+## meaningless (it is not a date); only the DIFFERENCE between two readings is — the
+## elapsed time, which never runs backwards. Typical use: `start := time.monotonic()` …
+## `elapsed := time.monotonic() - start`.
 pub fn monotonic() -> int {
 	return __zrt_time_mono()
 }
@@ -50,8 +50,8 @@ pub fn monotonic() -> int {
 # LEAP SECONDS DO NOT EXIST HERE, because they do not exist in the input: `__zrt_time_unix`
 # is Unix time, which is defined to have exactly 86400 seconds in every day.
 
-# Date is one instant broken into the fields a calendar has, in UTC. `month` is 1..12 and
-# `day` is 1..31 — the numbers a human writes, not the zero-based ones the arithmetic uses.
+## Date is one instant broken into the fields a calendar has, in UTC. `month` is 1..12 and
+## `day` is 1..31 — the numbers a human writes, not the zero-based ones the arithmetic uses.
 pub struct Date {
 	pub year: int = 1970
 	pub month: int = 1
@@ -61,18 +61,18 @@ pub struct Date {
 	pub second: int = 0
 }
 
-# utc breaks a Unix second count into its UTC calendar fields.
-#
-# ```zerg
-# time.utc(0).year
-# time.utc(1755253351).month
-# time.utc(-1).year
-# ```
-# ```output
-# 1970
-# 8
-# 1969
-# ```
+## utc breaks a Unix second count into its UTC calendar fields.
+##
+## ```zerg
+## time.utc(0).year
+## time.utc(1755253351).month
+## time.utc(-1).year
+## ```
+## ```output
+## 1970
+## 8
+## 1969
+## ```
 pub fn utc(t: int) -> Date {
 	days := t / 86400
 	rem := t % 86400
@@ -107,24 +107,24 @@ pub fn utc(t: int) -> Date {
 	return Date(year, month, day, rem / 3600, rem % 3600 / 60, rem % 60)
 }
 
-# rfc3339 renders a Unix second count as `YYYY-MM-DDThh:mm:ssZ` — RFC 3339 with the `Z`
-# offset, which is the timestamp format a log line, a report header and a machine reader all
-# already agree on. Seconds are the whole of the precision because seconds are the whole of
-# what `now()` has.
-#
-# A YEAR OUTSIDE 0000-9999 IS NOT RFC 3339 and this does not pretend otherwise: the digits it
-# has are printed, with a leading `-` if the year is negative. The format has no such year, so
-# there is no right answer — but a clock reading 30000 years out is a clock that is wrong
-# rather than a date somebody meant, and truncating it to four digits would hide that.
-#
-# ```zerg
-# time.rfc3339(0)
-# time.rfc3339(1755253351)
-# ```
-# ```output
-# 1970-01-01T00:00:00Z
-# 2025-08-15T10:22:31Z
-# ```
+## rfc3339 renders a Unix second count as `YYYY-MM-DDThh:mm:ssZ` — RFC 3339 with the `Z`
+## offset, which is the timestamp format a log line, a report header and a machine reader all
+## already agree on. Seconds are the whole of the precision because seconds are the whole of
+## what `now()` has.
+##
+## A YEAR OUTSIDE 0000-9999 IS NOT RFC 3339 and this does not pretend otherwise: the digits it
+## has are printed, with a leading `-` if the year is negative. The format has no such year, so
+## there is no right answer — but a clock reading 30000 years out is a clock that is wrong
+## rather than a date somebody meant, and truncating it to four digits would hide that.
+##
+## ```zerg
+## time.rfc3339(0)
+## time.rfc3339(1755253351)
+## ```
+## ```output
+## 1970-01-01T00:00:00Z
+## 2025-08-15T10:22:31Z
+## ```
 pub fn rfc3339(t: int) -> str {
 	d := utc(t)
 	date := f"{pad(d.year, 4)}-{pad(d.month, 2)}-{pad(d.day, 2)}"
@@ -141,8 +141,8 @@ fn pad(n: int, width: int) -> str {
 
 # --- durations -------------------------------------------------------------------------
 
-# duration renders a nanosecond count the way a person reads one: the largest unit that
-# leaves a whole part, and up to three digits of fraction with the trailing zeros dropped.
+## duration renders a nanosecond count the way a person reads one: the largest unit that
+## leaves a whole part, and up to three digits of fraction with the trailing zeros dropped.
 #
 # THE UNIT IS CHOSEN, NOT FIXED, because the range this has to cover is nine orders of
 # magnitude. `time.monotonic()` differences are what a caller has, and those run from a
@@ -150,23 +150,23 @@ fn pad(n: int, width: int) -> str {
 # other's unit is unreadable. Three digits of fraction is where the precision stops being
 # something a reader uses.
 #
-# SECONDS ARE THE LARGEST UNIT. There are no minutes and no hours, because a duration that
-# long is not what this is for and `1.5m` invites being read as milli-anything.
-#
-# ```zerg
-# time.duration(1500000000)
-# time.duration(250000000)
-# time.duration(1234)
-# time.duration(999)
-# time.duration(0)
-# ```
-# ```output
-# 1.5s
-# 250ms
-# 1.234µs
-# 999ns
-# 0ns
-# ```
+## SECONDS ARE THE LARGEST UNIT. There are no minutes and no hours, because a duration that
+## long is not what this is for and `1.5m` invites being read as milli-anything.
+##
+## ```zerg
+## time.duration(1500000000)
+## time.duration(250000000)
+## time.duration(1234)
+## time.duration(999)
+## time.duration(0)
+## ```
+## ```output
+## 1.5s
+## 250ms
+## 1.234µs
+## 999ns
+## 0ns
+## ```
 pub fn duration(ns: int) -> str {
 	return "-" + duration(0 - ns) if ns < 0
 	return scaled(ns, 1000000000, "s") if ns >= 1000000000
@@ -221,22 +221,22 @@ fn fraction(v: int) -> str {
 # Durations are NANOSECONDS, the unit `monotonic` already reads and the unit the runtime
 # leaf takes. A duration <= 0 fires at once.
 
-# after answers a receive-only channel that delivers one value once d nanoseconds have
-# passed. The end handed back cannot send, which is the point: only the timer fires the
-# timer, and a receiver cannot make it go off early by mistake.
+## after answers a receive-only channel that delivers one value once d nanoseconds have
+## passed. The end handed back cannot send, which is the point: only the timer fires the
+## timer, and a receiver cannot make it go off early by mistake.
 pub fn after(d: int) -> <-chan[int] {
 	ch := chan[int](1)
 	spawn timer_once(ch, d)
 	return ch
 }
 
-# ticker answers a receive-only channel that delivers a value every d nanoseconds. The
-# channel holds ONE tick: a receiver that falls behind makes the ticker park on the send
-# rather than queue ticks up, so a slow consumer slows the ticker instead of accumulating
-# a backlog it can never catch up with.
-#
-# There is no stop: a sleep cannot be cancelled, so the coroutine lives until the program
-# does. A ticker belongs at the top of a program, not inside a loop.
+## ticker answers a receive-only channel that delivers a value every d nanoseconds. The
+## channel holds ONE tick: a receiver that falls behind makes the ticker park on the send
+## rather than queue ticks up, so a slow consumer slows the ticker instead of accumulating
+## a backlog it can never catch up with.
+##
+## There is no stop: a sleep cannot be cancelled, so the coroutine lives until the program
+## does. A ticker belongs at the top of a program, not inside a loop.
 pub fn ticker(d: int) -> <-chan[int] {
 	ch := chan[int](1)
 	spawn timer_loop(ch, d)

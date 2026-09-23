@@ -1,7 +1,7 @@
-# log — structured logging (pure-Zerg stdlib).
-#
-# Bundled into a program that writes `import "log"`; members are reached through the
-# namespace, as `log.info().str("file", path).msg("compiling")`.
+## log — structured logging (pure-Zerg stdlib).
+##
+## Bundled into a program that writes `import "log"`; members are reached through the
+## namespace, as `log.info().str("file", path).msg("compiling")`.
 #
 # THE SHAPE IS A CHAINED BUILDER, and it is right for THIS language rather than merely
 # fashionable. Three things Zerg does not have would each have to be waited for by any other
@@ -10,21 +10,21 @@
 # there is no GENERIC STRUCT, so the builder is one concrete type. A `printf`-shaped or a
 # map-shaped API needs at least two of the three.
 #
-# IT IS ALSO THE ANSWER TO LAZY EVALUATION. `log.debug()` at a level that is off hands back a
-# DEAD entry: every field method returns immediately, nothing is formatted, and `msg` writes
-# nothing. The caller hands over typed values rather than a string it built first, so the
-# formatting a disabled line would have done is not skipped — it never happens. That beats a
-# closure argument (`log.debug(fn () -> str { … })`), which is noise at every call site and
-# allocates an environment per iteration.
-#
-# WHAT IS STILL PAID is evaluating the ARGUMENTS. `log.debug().str("dump", expensive())` calls
-# `expensive()` whether the level is on or not, because Zerg evaluates arguments before the
-# call and no API can change that. For a genuinely expensive one the honest answer is the
-# explicit guard, and it is why `enabled` is public:
-#
-#     if log.enabled(log.Level.DEBUG) {
-#         log.debug().str("dump", expensive()).msg("state")
-#     }
+## THE BUILDER IS THE ANSWER TO LAZY EVALUATION. `log.debug()` at a level that is off hands back a
+## DEAD entry: every field method returns immediately, nothing is formatted, and `msg` writes
+## nothing. The caller hands over typed values rather than a string it built first, so the
+## formatting a disabled line would have done is not skipped — it never happens. That beats a
+## closure argument (`log.debug(fn () -> str { … })`), which is noise at every call site and
+## allocates an environment per iteration.
+##
+## WHAT IS STILL PAID is evaluating the ARGUMENTS. `log.debug().str("dump", expensive())` calls
+## `expensive()` whether the level is on or not, because Zerg evaluates arguments before the
+## call and no API can change that. For a genuinely expensive one the honest answer is the
+## explicit guard, and it is why `enabled` is public:
+##
+##     if log.enabled(log.Level.DEBUG) {
+##         log.debug().str("dump", expensive()).msg("state")
+##     }
 #
 # A LOG LINE IS ONE WRITE. This project has already bought that lesson: `zrt_report` split a
 # prefix and a message into two writes and a stress test found 830 lines in 24000 pairing one
@@ -63,8 +63,9 @@ import (
 # logger set to it writes nothing; `fatal` still EXITS, because silencing a logger changes
 # what is reported, never what is done.
 
-# Level is the severity a line is written at, and the threshold a logger filters on. The
-# ordering is `rank` below and not the declaration order — see the note under it before
+## Level is the severity a line is written at, and the threshold a logger filters on.
+#
+# The ordering is `rank` below and not the declaration order — see the note under it before
 # reordering these names.
 #[derive(Eq)]
 pub enum Level {
@@ -113,10 +114,10 @@ fn rank(l: Level) -> int {
 	}
 }
 
-# parse_level reads a level by NAME — `debug`, not `1`. A number would pin the discriminants
-# the rest of this module is careful never to consult, and a name is what a person types into
-# an environment variable anyway. Anything else is `nil`, so a caller decides what an
-# unrecognised setting means rather than having this module guess.
+## parse_level reads a level by NAME — `debug`, not `1`. A number would pin the discriminants
+## the rest of this module is careful never to consult, and a name is what a person types into
+## an environment variable anyway. Anything else is `nil`, so a caller decides what an
+## unrecognised setting means rather than having this module guess.
 #
 # IT IS `parse_level` AND NOT `parse` for the reason `at_level` is not `at`, and this one was
 # measured after the shorter name was written: a `pub` name has no package to be unique
@@ -130,14 +131,14 @@ fn rank(l: Level) -> int {
 # than taste: a `match` arm is an expression and may not hold a `return` (`E9039`), and every
 # arm of one must answer the SAME type (`E3021`), so `Level` and `nil` do not unify.
 #
-# ```zerg
-# log.new().level(log.parse_level("warn") ?? log.Level.INFO).enabled(log.Level.ERROR)
-# log.new().level(log.parse_level("WARN") ?? log.Level.INFO).enabled(log.Level.DEBUG)
-# ```
-# ```output
-# true
-# false
-# ```
+## ```zerg
+## log.new().level(log.parse_level("warn") ?? log.Level.INFO).enabled(log.Level.ERROR)
+## log.new().level(log.parse_level("WARN") ?? log.Level.INFO).enabled(log.Level.DEBUG)
+## ```
+## ```output
+## true
+## false
+## ```
 pub fn parse_level(s: str) -> Level? {
 	return Level.TRACE if s == "trace"
 	return Level.DEBUG if s == "debug"
@@ -174,9 +175,10 @@ pub fn parse_level(s: str) -> Level? {
 # over a misspelt environment variable would be a logger that takes a program down for a
 # reason that has nothing to do with it.
 
-# Format is the SHAPE a line is written in — `PRETTY` for a person, `JSON` for a program
-# reading a transcript. It is a semantic choice and never switches itself; colour does, which
-# is the distinction the note above draws.
+## Format is the SHAPE a line is written in — `PRETTY` for a person, `JSON` for a program
+## reading a transcript. It is a semantic choice and never switches itself; colour does.
+#
+# That is the distinction the note above draws.
 #[derive(Eq)]
 pub enum Format {
 	PRETTY
@@ -203,16 +205,19 @@ pub enum Format {
 # suite's is deep enough for the lines that test writes. A sink whose reader is another
 # coroutine needs no such care.
 
-# Sink is WHERE FINISHED LINES GO, and it is a spec because that is what it always wanted to
-# be. It was a struct with one `chan[str]?` field used as a MODE — a channel meant send, `nil`
-# meant standard error — and `docs/runtime/stdlib.md` said in its own words why: a spec could
-# not be a value's type. It can (0.4.0), so a third destination is one more struct and one more
-# `impl`, and `emit` does not change.
+## Sink is WHERE FINISHED LINES GO. A destination is one struct and one `impl Sink` for it;
+## `Stderr` and `Chan` are the two this module has.
+#
+# It is a spec because that is what it always wanted to be. It was a struct with one
+# `chan[str]?` field used as a MODE — a channel meant send, `nil` meant standard error — and
+# `docs/runtime/stdlib.md` said in its own words why: a spec could not be a value's type. It can
+# (0.4.0), so a third destination is one more struct and one more `impl`, and `emit` does not
+# change.
 pub spec Sink {
 	fn write(line: str)
 }
 
-# Stderr is the default destination: one `__zrt_write` per line to fd 2.
+## Stderr is the default destination: one `__zrt_write` per line to fd 2.
 pub struct Stderr {
 	pub at: int = 2
 }
@@ -223,9 +228,9 @@ impl Sink for Stderr {
 	}
 }
 
-# Chan sends each finished line, newline included, to a channel. That is what makes a logger
-# testable — there is no reading a `write(2)` back, so this module's own suite asserts the
-# bytes by receiving them.
+## Chan sends each finished line, newline included, to a channel. That is what makes a logger
+## testable — there is no reading a `write(2)` back, so this module's own suite asserts the
+## bytes by receiving them.
 pub struct Chan {
 	pub lines: chan[str]
 }
@@ -236,13 +241,16 @@ impl Sink for Chan {
 	}
 }
 
+## to_stderr writes each finished line to standard error, which is where a logger writes until
+## it is told otherwise.
+#
 # to_stderr and to_chan are kept: a caller writes a destination, not a construction, and the
 # two names are what `docs/runtime/stdlib.md` documents.
 pub fn to_stderr() -> Sink {
 	return Stderr(2)
 }
 
-# to_chan sends each finished line, newline included, to `ch`.
+## to_chan sends each finished line, newline included, to `ch`.
 pub fn to_chan(ch: chan[str]) -> Sink {
 	return Chan(ch)
 }
@@ -264,9 +272,9 @@ fn emit(sk: Sink, line: str) {
 
 # --- what a logger is ----------------------------------------------------------------------
 
-# Logger is one configured logger. It is a VALUE: every method below answers a COPY rather
-# than mutating, so a logger handed to a component cannot reconfigure its caller's. That is
-# the shape `cli.Command` has and it is the same reason.
+## Logger is one configured logger. It is a VALUE: every method below answers a COPY rather
+## than mutating, so a logger handed to a component cannot reconfigure its caller's. That is
+## the shape `cli.Command` has and it is the same reason.
 #
 # A BUILDER DERIVES FROM `this` — `mut c := this; c.f = x; return c` — RATHER THAN LISTING
 # EVERY FIELD IN A CONSTRUCTOR. It used to list them, at seven call sites, and the defect that
@@ -319,8 +327,8 @@ pub struct Logger {
 	base: list[json.Field] = []
 }
 
-# Entry is one line being built. It exists between `log.info()` and `.msg(…)` and nowhere
-# else, which is why `msg` answers nothing: the entry is spent.
+## Entry is one line being built. It exists between `log.info()` and `.msg(…)` and nowhere
+## else, which is why `msg` answers nothing: the entry is spent.
 #
 # `live` IS THE WHOLE DESIGN. A disabled entry carries `live: false`, and every method below
 # returns before touching anything — so no field is formatted, no list grows, and NOTHING IS
@@ -353,23 +361,23 @@ pub struct Entry {
 	lg: Logger = Logger()
 }
 
-# new answers a logger configured from the environment, writing to standard error. It is the
-# INSTANCE constructor, and the global further down is one of these rather than a second
-# implementation beside it.
+## new answers a logger configured from the environment, writing to standard error. It is the
+## INSTANCE constructor, and the global further down is one of these rather than a second
+## implementation beside it.
 #
 # IT IS ONE LINE ONTO THE ZERO VALUE, which is what makes it the ONLY constructor rather than
 # the first of two: `Logger()` carries the same defaults because they are the same defaults,
 # and outside this module it is refused outright (see the struct above). `new` exists to be
 # the NAME a caller and this file's own documentation use.
 #
-# ```zerg
-# log.new().level(log.Level.WARN).enabled(log.Level.INFO)
-# log.new().level(log.Level.WARN).enabled(log.Level.ERROR)
-# ```
-# ```output
-# false
-# true
-# ```
+## ```zerg
+## log.new().level(log.Level.WARN).enabled(log.Level.INFO)
+## log.new().level(log.Level.WARN).enabled(log.Level.ERROR)
+## ```
+## ```output
+## false
+## true
+## ```
 pub fn new() -> Logger {
 	return Logger()
 }
@@ -437,50 +445,50 @@ const ENV_FORMAT := env_format()
 const ENV_COLOUR := env_colour()
 
 impl Logger {
-	# level answers a COPY of this logger writing at `l` and above.
-	#
-	# ```zerg
-	# log.new().level(log.Level.OFF).enabled(log.Level.FATAL)
-	# log.new().level(log.Level.TRACE).enabled(log.Level.TRACE)
-	# ```
-	# ```output
-	# false
-	# true
-	# ```
+	## level answers a COPY of this logger writing at `l` and above.
+	##
+	## ```zerg
+	## log.new().level(log.Level.OFF).enabled(log.Level.FATAL)
+	## log.new().level(log.Level.TRACE).enabled(log.Level.TRACE)
+	## ```
+	## ```output
+	## false
+	## true
+	## ```
 	pub fn level(l: Level) -> This {
 		mut c := this
 		c.lvl = l
 		return c
 	}
 
-	# to answers a COPY writing to `sk`.
+	## to answers a COPY writing to `sk`.
 	pub fn to(sk: Sink) -> This {
 		mut c := this
 		c.sink = Ref(sk)
 		return c
 	}
 
-	# format answers a COPY writing `Format.PRETTY` or `Format.JSON`. It is what `ZERG_LOG`
-	# sets, and it is a method as well as an environment variable because a program that knows
-	# where its output goes should not have to be told by its own launcher.
+	## format answers a COPY writing `Format.PRETTY` or `Format.JSON`. It is what `ZERG_LOG`
+	## sets, and it is a method as well as an environment variable because a program that knows
+	## where its output goes should not have to be told by its own launcher.
 	pub fn format(f: Format) -> This {
 		mut c := this
 		c.fmt = f
 		return c
 	}
 
-	# colour answers a COPY with ANSI colour on or off. The default is the environment's —
-	# `NO_COLOR` first, then whether standard error is a terminal — and this is the override
-	# for a program that knows better, which is mostly a test.
+	## colour answers a COPY with ANSI colour on or off. The default is the environment's —
+	## `NO_COLOR` first, then whether standard error is a terminal — and this is the override
+	## for a program that knows better, which is mostly a test.
 	pub fn colour(on: bool) -> This {
 		mut c := this
 		c.col = on
 		return c
 	}
 
-	# enabled reports whether a line at `l` would be written. It is PUBLIC because the
-	# builder's one residual cost — evaluating the arguments — has no API answer, so a caller
-	# holding a genuinely expensive value needs a way to ask before it computes one.
+	## enabled reports whether a line at `l` would be written. It is PUBLIC because the
+	## builder's one residual cost — evaluating the arguments — has no API answer, so a caller
+	## holding a genuinely expensive value needs a way to ask before it computes one.
 	#
 	# THE `< 0` GUARD IS WHAT MAKES `OFF` SILENT, including for a line written AT `OFF`, which
 	# is the one case a threshold comparison alone gets wrong. See `rank`.
@@ -490,23 +498,23 @@ impl Logger {
 		return rank(l) >= floor
 	}
 
-	# with_str answers a copy carrying `k=v` on every line it writes from here on. It is what
-	# makes an instance logger worth holding: a component names itself once instead of
-	# repeating it at every call site.
-	#
-	# ```zerg
-	# log.new().level(log.Level.INFO).with_str("c", "lexer").with_int("worker", 3).enabled(log.Level.INFO)
-	# ```
-	# ```output
-	# true
-	# ```
+	## with_str answers a copy carrying `k=v` on every line it writes from here on. It is what
+	## makes an instance logger worth holding: a component names itself once instead of
+	## repeating it at every call site.
+	##
+	## ```zerg
+	## log.new().level(log.Level.INFO).with_str("c", "lexer").with_int("worker", 3).enabled(log.Level.INFO)
+	## ```
+	## ```output
+	## true
+	## ```
 	pub fn with_str(k: str, v: str) -> This {
 		mut c := this
 		json.put_str(c.base, k, v)
 		return c
 	}
 
-	# with_int is with_str for a number.
+	## with_int is with_str for a number.
 	pub fn with_int(k: str, v: int) -> This {
 		mut c := this
 		json.put_int(c.base, k, v)
@@ -533,8 +541,8 @@ impl Logger {
 	# be unique within, so a private name in one module can take a public one away from
 	# another. One name for one concept was worth four characters.
 
-	# at_level begins a line at any level. It is the general form the five below are written
-	# on, and it is what an instance writes for DEBUG.
+	## at_level begins a line at any level. It is the general form the five below are written
+	## on, and it is what an instance writes for DEBUG.
 	pub fn at_level(l: Level) -> Entry {
 		# THE ENTRY BORROWS THIS LOGGER rather than being handed a fresh field list, and that is
 		# what makes the disabled path free: `[]` is an allocation, and `base` is copy-on-write,
@@ -543,37 +551,37 @@ impl Logger {
 		return Entry(this.enabled(l), l, this)
 	}
 
-	# trace begins a line at TRACE — the most detailed level, and the first thing a threshold
-	# turns off.
+	## trace begins a line at TRACE — the most detailed level, and the first thing a threshold
+	## turns off.
 	pub fn trace() -> Entry {
 		return this.at_level(Level.TRACE)
 	}
 
-	# info begins a line at INFO — what a program reports when it is working.
+	## info begins a line at INFO — what a program reports when it is working.
 	pub fn info() -> Entry {
 		return this.at_level(Level.INFO)
 	}
 
-	# warn begins a line at WARN — something a reader should know about that did not stop the
-	# program.
+	## warn begins a line at WARN — something a reader should know about that did not stop the
+	## program.
 	pub fn warn() -> Entry {
 		return this.at_level(Level.WARN)
 	}
 
-	# error begins a line at ERROR — a failure the program is reporting rather than dying of.
-	# `fatal` below is the one that also exits.
+	## error begins a line at ERROR — a failure the program is reporting rather than dying of.
+	## `fatal` below is the one that also exits.
 	pub fn error() -> Entry {
 		return this.at_level(Level.ERROR)
 	}
 
-	# fatal begins a line whose `msg` writes it and then exits with status 1.
+	## fatal begins a line whose `msg` writes it and then exits with status 1.
 	pub fn fatal() -> Entry {
 		return this.at_level(Level.FATAL)
 	}
 }
 
 impl Entry {
-	# str adds `k=v` to this line. On a dead entry it is a return and nothing else.
+	## str adds `k=v` to this line. On a dead entry it is a return and nothing else.
 	pub fn str(k: str, v: str) -> This {
 		return this if not this.live
 		mut c := this
@@ -581,7 +589,7 @@ impl Entry {
 		return c
 	}
 
-	# int adds a number.
+	## int adds a number.
 	pub fn int(k: str, v: int) -> This {
 		return this if not this.live
 		mut c := this
@@ -589,7 +597,7 @@ impl Entry {
 		return c
 	}
 
-	# bool adds a flag.
+	## bool adds a flag.
 	pub fn bool(k: str, v: bool) -> This {
 		return this if not this.live
 		mut c := this
@@ -597,25 +605,25 @@ impl Entry {
 		return c
 	}
 
-	# dur adds an elapsed nanosecond count, rendered the way a person reads one. It is a
-	# method rather than `str(k, time.duration(ns))` written at each call site so that an
-	# elapsed time is never logged as a bare nanosecond integer, which is the shape nobody can
-	# compare at a glance.
+	## dur adds an elapsed nanosecond count, rendered the way a person reads one. It is a
+	## method rather than `str(k, time.duration(ns))` written at each call site so that an
+	## elapsed time is never logged as a bare nanosecond integer, which is the shape nobody can
+	## compare at a glance.
 	pub fn dur(k: str, ns: int) -> This {
 		return this if not this.live
 		return this.str(k, time.duration(ns))
 	}
 
-	# err adds what an `Err` said, under the key `error` — a method rather than a convention
-	# so that every program in this ecosystem puts a failure under the same key, which is most
-	# of what structured logging is for.
+	## err adds what an `Err` said, under the key `error` — a method rather than a convention
+	## so that every program in this ecosystem puts a failure under the same key, which is most
+	## of what structured logging is for.
 	pub fn err(e: Err) -> This {
 		return this if not this.live
 		return this.str("error", f"{e}")
 	}
 
-	# msg finishes the line and writes it. It is the TERMINAL: an Entry has no other exit, so
-	# a `log.debug()` nobody finishes writes nothing rather than half a line.
+	## msg finishes the line and writes it. It is the TERMINAL: an Entry has no other exit, so
+	## a `log.debug()` nobody finishes writes nothing rather than half a line.
 	pub fn msg(text: str) {
 		if this.live {
 			line := render(time.now(), this.lvl, this.lg, text)
@@ -914,28 +922,31 @@ unsafe {
 	mut log_cell := new()
 }
 
-# install replaces the global logger, and it is the only thing in this module that writes the
-# cell. Call it in `main`, before anything else runs; rule 4 above is why "before".
+## install replaces the global logger. Call it in `main`, before anything else runs.
+#
+# It is the only thing in this module that writes the cell; rule 4 above is why "before".
 pub fn install(lg: Logger) {
 	log_cell = lg
 }
 
-# enabled is the global's level check, and it is public for the reason the method is: a caller
-# holding a value that costs something to compute needs to ask before it computes one.
+## enabled is the global's level check, and it is public for the reason the method is: a caller
+## holding a value that costs something to compute needs to ask before it computes one.
 pub fn enabled(lvl: Level) -> bool {
 	return log_cell.enabled(lvl)
 }
 
-# at_level begins a line on the global logger at any level.
+## at_level begins a line on the global logger at any level.
 pub fn at_level(lvl: Level) -> Entry {
 	return log_cell.at_level(lvl)
 }
 
-# trace begins a line on the global logger at TRACE.
+## trace begins a line on the global logger at TRACE.
 pub fn trace() -> Entry {
 	return log_cell.trace()
 }
 
+## debug begins a line on the global logger at DEBUG.
+#
 # debug is a FREE function and can therefore carry the level's own name — `debug` is reserved
 # only as a METHOD (see `Logger.at_level` above). It is also the one global level function with
 # no method to delegate to, which is why it is the only one that names its level here.
@@ -943,22 +954,22 @@ pub fn debug() -> Entry {
 	return log_cell.at_level(Level.DEBUG)
 }
 
-# info begins a line on the global logger at INFO.
+## info begins a line on the global logger at INFO.
 pub fn info() -> Entry {
 	return log_cell.info()
 }
 
-# warn begins a line on the global logger at WARN.
+## warn begins a line on the global logger at WARN.
 pub fn warn() -> Entry {
 	return log_cell.warn()
 }
 
-# error begins a line on the global logger at ERROR.
+## error begins a line on the global logger at ERROR.
 pub fn error() -> Entry {
 	return log_cell.error()
 }
 
-# fatal begins a line on the global logger whose `msg` writes it and then exits 1.
+## fatal begins a line on the global logger whose `msg` writes it and then exits 1.
 pub fn fatal() -> Entry {
 	return log_cell.fatal()
 }

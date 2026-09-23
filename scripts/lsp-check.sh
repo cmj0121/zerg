@@ -1687,21 +1687,22 @@ fi
 # program the compiler no longer agrees is this one would be worse than none.
 mkdir -p "$tmp/hover"
 cat >"$tmp/hover/lib.zg" <<'ZG'
-# lib — a module written to be read.
+## lib — a module written to be read.
 
-# twice doubles `m`.
-#
-# ```zerg
-# >>> lib.twice(3)
-# 6
-# ```
+## twice doubles `m`.
+# twice's maintainer note, which neither the page nor a hover shows.
+##
+## ```zerg
+## >>> lib.twice(3)
+## 6
+## ```
 pub fn twice(m: int) -> int {
 	return m * 2
 }
 
-# Point is a place on a grid.
+## Point is a place on a grid.
 pub struct Point {
-	# x is how far along it is.
+	## x is how far along it is.
 	pub x: int
 
 	pub y: int
@@ -1711,7 +1712,7 @@ pub fn plain(n: int) -> int {
 	return n
 }
 
-# Weighed is what has a weight.
+## Weighed is what has a weight.
 pub spec Weighed {
 	fn weight() -> int
 }
@@ -1723,15 +1724,16 @@ import (
 	"./lib"
 )
 
-# Colour is what a thing can be.
+## Colour is what a thing can be.
 enum Colour {
-	# Red is the loud one.
+	## Red is the loud one.
 	Red
 
 	Green
 }
 
-# quiet is private, and documented all the same.
+## quiet is private, and documented all the same.
+# quiet's maintainer note, which a hover does not show.
 fn quiet(n: int) -> int {
 	return n + 1
 }
@@ -1937,7 +1939,8 @@ for (what, _, key, name, whole), got in zip(CASES, hovers_at(CASES)):
     if key is None:
         # a declaration NO document has: `zerg doc` shows what a module exposes, and a private
         # function and an enum of the entry file are in nobody's document. The comment above it
-        # in the source is the second opinion, read the coarse way `doc-check` reads a `pub`.
+        # in the source is the second opinion, read the coarse way `doc-check` reads a `pub` —
+        # its `##` lines, which are the reader's, and none of its `#` ones.
         lines = src[MAIN].split("\n")
         decl = [i for i, t in enumerate(lines) if declared(t) == name]
         check(len(decl) == 1, "the fixture declares `%s` exactly once" % name, decl)
@@ -1947,7 +1950,8 @@ for (what, _, key, name, whole), got in zip(CASES, hovers_at(CASES)):
         run = []
         i = ln - 1
         while i >= 0 and lines[i].strip().startswith("#"):
-            run.insert(0, lines[i].strip()[1:].strip())
+            if lines[i].strip().startswith("##"):
+                run.insert(0, lines[i].strip()[2:].strip())
             i -= 1
         # as a document prints the head: without the brace that opens a body. There is no
         # `pub` to take off — a row reaches this branch because no document covers it
@@ -1970,6 +1974,10 @@ for (what, _, key, name, whole), got in zip(CASES, hovers_at(CASES)):
           "%s says what `zerg doc` says, block for block" % what, hb)
     if [b for b in hb if b[0] == "fence"]:
         fenced += 1
+    # A `#` LINE IS THE MAINTAINER'S, and the fixture writes one into two of these comments. The
+    # equality above holds a hover to the page, so this is the half that holds them both to the
+    # marker: a hover and a page that each printed the note would still agree with each other.
+    check("maintainer note" not in body, "%s shows none of its comment's `#` lines" % what, body)
     documented += 1
 check(documented >= 6, "enough declarations were held to their document", documented)
 check(fenced >= 2, "enough of them carry a worked example, which is what a fence protects", fenced)

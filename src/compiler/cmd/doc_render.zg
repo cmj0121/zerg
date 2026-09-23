@@ -38,8 +38,8 @@
 #     with the device is the whole rule above, and a document that reflows to the window is a
 #     document nobody can quote a line number of.
 #   - a markdown renderer. A ```zerg``` fence is carried through exactly as it was written,
-#     because the text inside one is meant to be copied out and run. Rewriting it for a reader
-#     is issue #18's, and running it is `--check`'s.
+#     because the text inside one is meant to be copied out and run, and running it is
+#     `--check`'s.
 #   - a second opinion about what a sentence is. `zerg.doc_first_sentence` answers that for the
 #     brief listing and the module index alike, and #20 will ask the same function.
 
@@ -114,26 +114,47 @@ pub fn doc_colour() -> bool {
 # surface is the signatures; the whole document is the signatures with everything written above
 # them.
 #
+# `all` is the MAINTAINER'S VIEW (#18): every comment as it was written, `#` notes and `##` text
+# alike, where the default prints the `##` lines alone. It changes which lines of a comment are
+# printed and nothing else — the same entries, the same order, and the same `(undocumented)`
+# beside a declaration with no `##` text, because the mark is a fact about what a READER is
+# given and the notes under it are not that. `brief` never reads it: a summary is the reader's.
+#
 # A TYPE'S METHODS ARE PRINTED UNDER IT, in the section its TYPE was declared in and not the
 # one they were written in. The parser flattens `impl T { … }` into ordinary functions carrying
 # a receiver, so the extraction hands over a flat list; grouping is a rendering decision, and
 # this is where it is made. A method whose receiver names no type in this module is collected
 # under a bare `impl T` at the end of the TYPES of its own file rather than dropped, because a
 # document that silently omits a declaration is the one failure this tool cannot recover from.
-pub fn render_doc_module(m: zerg.DocModule, brief: bool, col: bool) -> str {
+pub fn render_doc_module(m: zerg.DocModule, v: DocView, col: bool) -> str {
 	mut out: list[str] = []
 	for f in m.files {
 		if m.files.len() > 1 {
 			doc_heading(out, doc_short_path(f.path), col)
 		}
-		doc_file(out, m, f, brief, col)
+		doc_file(out, m, f, v, col)
 	}
 	return doc_join(out)
 }
 
+# DocView is which document is asked for: the reader's whole page, the reader's summary
+# (`brief`), or the maintainer's page (`all`). The command refuses the two together, so at most
+# one of them is set.
+pub struct DocView {
+	pub brief: bool
+	pub all: bool
+}
+
+# doc_lines is one comment in the view asked for: its reader text, or the whole of it as written.
+fn doc_lines(v: DocView, doc: list[str], written: list[str]) -> list[str] {
+	return written if v.all
+
+	return doc
+}
+
 # doc_file is one file's section: what the file says about itself, then what it declares.
-fn doc_file(mut &out: list[str], m: zerg.DocModule, f: zerg.DocFile, brief: bool, col: bool) {
-	doc_head(out, m, f, brief)
+fn doc_file(mut &out: list[str], m: zerg.DocModule, f: zerg.DocFile, v: DocView, col: bool) {
+	doc_head(out, m, f, v)
 	doc_note(out, f)
 
 	mut consts: list[int] = []
@@ -160,29 +181,29 @@ fn doc_file(mut &out: list[str], m: zerg.DocModule, f: zerg.DocFile, brief: bool
 	if consts.len() > 0 {
 		doc_heading(out, "CONSTANTS", col)
 		for k in consts {
-			doc_entry(out, m.decls[k], 2, brief, col)
+			doc_entry(out, m.decls[k], 2, v, col)
 		}
 	}
 
 	if types.len() > 0 or orphans.len() > 0 {
 		doc_heading(out, "TYPES", col)
 		for k in types {
-			doc_entry(out, m.decls[k], 2, brief, col)
+			doc_entry(out, m.decls[k], 2, v, col)
 			for j in doc_methods_of(m, m.decls[k].name) {
-				doc_entry(out, m.decls[j], 6, brief, col)
+				doc_entry(out, m.decls[j], 6, v, col)
 			}
 		}
-		doc_orphans(out, m, orphans, brief, col)
+		doc_orphans(out, m, orphans, v, col)
 	}
 
 	if fns.len() > 0 {
 		doc_heading(out, "FUNCTIONS", col)
 		for k in fns {
-			doc_entry(out, m.decls[k], 2, brief, col)
+			doc_entry(out, m.decls[k], 2, v, col)
 		}
 	}
 
-	if f.ok and f.header.len() == 0 and consts.len() == 0 and types.len() == 0 and fns.len() == 0 and orphans.len() == 0 {
+	if f.ok and doc_lines(v, f.header, f.written).len() == 0 and consts.len() == 0 and types.len() == 0 and fns.len() == 0 and orphans.len() == 0 {
 		doc_gap(out)
 		out.append(DOC_NOTHING)
 	}
@@ -200,14 +221,15 @@ fn doc_file(mut &out: list[str], m: zerg.DocModule, f: zerg.DocFile, brief: bool
 # the rows: `zerg doc log.Logger` that answered a struct with no methods would be describing a
 # type nobody can use. A METHOD ASKED FOR BY NAME is promoted to the top indent instead —
 # alone on the page there is no type above it for the deeper indent to mean anything against.
-pub fn render_doc_decls(m: zerg.DocModule, hits: list[int], col: bool) -> str {
+pub fn render_doc_decls(m: zerg.DocModule, hits: list[int], all: bool, col: bool) -> str {
+	v := DocView(false, all)
 	mut out: list[str] = []
 	for i in hits {
 		d := m.decls[i]
-		doc_entry(out, d, 2, false, col)
+		doc_entry(out, d, 2, v, col)
 		if doc_is_type(d.kind) {
 			for j in doc_methods_of(m, d.name) {
-				doc_entry(out, m.decls[j], 6, false, col)
+				doc_entry(out, m.decls[j], 6, v, col)
 			}
 		}
 	}
@@ -272,11 +294,11 @@ pub fn render_doc_list(mods: list[zerg.DocModule], col: bool) -> str {
 # ONE BLANK LINE BETWEEN ENTRIES, in both views. `--brief` used to run them together, and a
 # first sentence that fills three lines (`strings.join`, `strings.replace`) then merged into
 # its neighbour: a listing whose rows cannot be told apart is not a listing.
-fn doc_entry(mut &out: list[str], d: zerg.DocDecl, indent: int, brief: bool, col: bool) {
+fn doc_entry(mut &out: list[str], d: zerg.DocDecl, indent: int, v: DocView, col: bool) {
 	doc_gap(out)
 	out.append(doc_at(indent, doc_sig_line(d, col)))
 
-	if brief {
+	if v.brief {
 		doc_summary(out, d, indent + 4, col)
 
 		# AND ITS MEMBERS, which brief used to drop. `--brief` is the shape the module list
@@ -288,12 +310,16 @@ fn doc_entry(mut &out: list[str], d: zerg.DocDecl, indent: int, brief: bool, col
 		return
 	}
 
+	# the mark and then, in the maintainer's view, the notes that were written instead of
+	# reader text — a paragraph apart, since the mark is not the first line of them
 	if zerg.doc_marks_absence(false, d.doc) {
 		out.append(doc_at(indent + 4, doc_mark(col)))
-	} else {
-		doc_body(out, d.doc, indent + 4)
+		if v.all and d.written.len() > 0 {
+			doc_gap(out)
+		}
 	}
-	doc_members(out, d, indent + 4, col)
+	doc_body(out, doc_lines(v, d.doc, d.written), indent + 4)
+	doc_members(out, d, indent + 4, v, col)
 }
 
 # doc_members_brief is doc_members with the comments left out — one line per member, which is
@@ -336,17 +362,18 @@ fn doc_summary(mut &out: list[str], d: zerg.DocDecl, indent: int, col: bool) {
 # count of private fields is Go's `contains unexported fields` note, printed for the same
 # reason: they are not interface, but a struct shown with two of its six fields describes a
 # literal that will not compile.
-fn doc_members(mut &out: list[str], d: zerg.DocDecl, indent: int, col: bool) {
+fn doc_members(mut &out: list[str], d: zerg.DocDecl, indent: int, v: DocView, col: bool) {
 	return if d.members.len() == 0 and d.hidden == 0
 
 	doc_gap(out)
 	for mb in d.members {
-		if mb.doc.len() > 0 {
+		body := doc_lines(v, mb.doc, mb.written)
+		if body.len() > 0 {
 			doc_gap(out)
 		}
 		out.append(doc_at(indent, mb.sig))
-		if mb.doc.len() > 0 {
-			doc_body(out, mb.doc, indent + 4)
+		if body.len() > 0 {
+			doc_body(out, body, indent + 4)
 			doc_gap(out)
 		} else if zerg.doc_marks_absence(true, mb.doc) {
 			# ASKED, not assumed. A member with no comment is printed bare today, and this
@@ -365,7 +392,7 @@ fn doc_members(mut &out: list[str], d: zerg.DocDecl, indent: int, col: bool) {
 # doc_orphans collects the methods whose receiver names no type this module declares. Nothing
 # in this tree produces one; it is here because the alternative to a heading nobody sees is a
 # declaration nobody sees.
-fn doc_orphans(mut &out: list[str], m: zerg.DocModule, orphans: list[int], brief: bool, col: bool) {
+fn doc_orphans(mut &out: list[str], m: zerg.DocModule, orphans: list[int], v: DocView, col: bool) {
 	mut done: list[str] = []
 	for k in orphans {
 		recv := m.decls[k].recv
@@ -376,7 +403,7 @@ fn doc_orphans(mut &out: list[str], m: zerg.DocModule, orphans: list[int], brief
 		out.append(doc_at(2, doc_bold("impl " + recv, col)))
 		for j in orphans {
 			if m.decls[j].recv == recv {
-				doc_entry(out, m.decls[j], 6, brief, col)
+				doc_entry(out, m.decls[j], 6, v, col)
 			}
 		}
 	}
@@ -437,18 +464,22 @@ fn doc_step(b: list[byte], at: int, word: str) -> int {
 # does not gets the same first line from the only other place its name is known. In a module of
 # several files the heading above already names the file, and a module name repeated over every
 # chapter would be a title claimed six times by six different texts.
-fn doc_head(mut &out: list[str], m: zerg.DocModule, f: zerg.DocFile, brief: bool) {
-	if f.header.len() == 0 {
+#
+# A HEADER WRITTEN FOR MAINTAINERS ALONE is no header on the reader's page, and the fallback
+# stands in for it there; the maintainer's view prints it as written.
+fn doc_head(mut &out: list[str], m: zerg.DocModule, f: zerg.DocFile, v: DocView) {
+	body := doc_lines(v, f.header, f.written)
+	if body.len() == 0 {
 		if m.files.len() == 1 {
 			out.append(m.name)
 		}
 		return
 	}
 
-	if brief {
+	if v.brief {
 		doc_wrap(out, zerg.doc_first_sentence(f.header), 0)
 	} else {
-		doc_body(out, f.header, 0)
+		doc_body(out, body, 0)
 	}
 }
 
@@ -515,7 +546,7 @@ fn doc_stdlib_lead() -> str {
 # refill has to preserve.
 #
 # WHAT IS NEVER REFILLED is anything whose columns carry meaning: a ```` ``` ```` fence, every
-# line inside one, and any line indented four or more spaces. Those are examples — text meant
+# line inside one, any line indented four or more spaces, and a doctest prompt line. Those are examples — text meant
 # to be copied out and run — and a fill would silently join two statements onto one line.
 fn doc_body(mut &out: list[str], doc: list[str], indent: int) {
 	mut para: list[str] = []
@@ -536,7 +567,7 @@ fn doc_body(mut &out: list[str], doc: list[str], indent: int) {
 			doc_gap(out)
 			continue
 		}
-		if test.has_prefix(ln, "    ") {
+		if test.has_prefix(ln, "    ") or doc_is_prompt(ln) {
 			doc_flush(out, para, indent)
 			out.append(doc_at(indent, ln))
 			continue
@@ -581,6 +612,15 @@ fn doc_flush(mut &out: list[str], mut &para: list[str], indent: int) {
 	}
 	doc_wrap(out, text, indent)
 	para = []
+}
+
+# doc_is_prompt reports whether a line carries the doctest prompt — `>>>` opening an item, `...`
+# continuing one — which is how a comment marks an example it does not run
+# (docs/tooling/fmt.md, "Examples in comments"). Its columns are the example's, so it is
+# carried through like an indented line: filled, `cli`'s whole front end ran together into one
+# paragraph of prose.
+fn doc_is_prompt(line: str) -> bool {
+	return test.has_prefix(line, ">>>") or line == "..." or test.has_prefix(line, "... ")
 }
 
 # doc_fence reports whether a line opens or closes a fenced block.

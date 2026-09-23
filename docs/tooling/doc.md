@@ -5,11 +5,12 @@ Part of the [Language Reference](../language.md). Also in [繁體中文](doc.zh-
 
 ```sh
 zerg doc                      # every module that can be read
-zerg doc strings              # that module's whole document
+zerg doc strings              # that module's whole document, as a reader needs it
+zerg doc --all strings        # the same, with every maintainer's note written beside it
 zerg doc --brief strings      # its exposed surface, one line each
 zerg doc strings.split        # one declaration; log.Logger.level for a method
 zerg doc src/stdlib/log.zg    # a file, or a directory, documented where it stands
-zerg doc --check strings      # name what carries no comment, run every example; exit 1 on either
+zerg doc --check strings      # name what carries no `##` text, run every example; exit 1 on either
 ```
 
 ## The claim
@@ -59,7 +60,7 @@ first page a reader ever sees. It is not read for a single declaration: a listin
 the thing itself, so `zerg doc --brief strings.split` prints the whole entry.
 
 `--check` reads the document for what is **missing** from it. Every exposed declaration whose
-comment is empty is named at the place it was declared, a file that did not parse is named
+comment has no `##` line is named at the place it was declared, a file that did not parse is named
 too — because a module whose declarations never reached the document would answer "nothing is
 missing" by having nothing to report — every worked example is run, and the run exits **1** if
 any of that went wrong. How an example is run is its own section below.
@@ -94,7 +95,7 @@ else without `pub`. A struct shown with two of its six fields would describe a l
 will not compile, so one whose private fields were left out says `(private fields not shown)`.
 
 **An exposed declaration with no comment is shown and marked `(undocumented)`.** It is never
-omitted. The mark is keyed on there being no comment **at all**, and on nothing else: a comment
+omitted. The mark is keyed on there being no **`##` line** at all, and on nothing else: a comment
 made only of a worked example is a comment, and calling that undocumented would be the same
 lie as the silence, pointing the other way.
 
@@ -126,6 +127,7 @@ has to know:
 | a run opening with a `# --- banner ---`                         | documents **nothing**, whole run          |
 | a comment at the end of a line of code                          | documents **nothing**                     |
 | a comment whose whole body is a worked example                  | documents it                              |
+| a run whose every line is `#` rather than `##`                  | documents it, and gives a reader nothing  |
 | the first run in the file, above all code, that nothing claimed | is the **module header**                  |
 
 A blank line needs no rule of its own — it emits no token, so the run simply ends further up
@@ -147,34 +149,35 @@ nothing rather than something.
 Here is every one of those rules in one file:
 
 ```zerg
-# tally — counting things, and the comments that document them.
-#
-# This first run belongs to the FILE: no code stands above it and no
-# declaration below it claims it.
+## tally — counting things, and the comments that document them.
+##
+## This first run belongs to the FILE: no code stands above it and no
+## declaration below it claims it.
 
-# LIMIT is the largest tally this module will count to.
+## LIMIT is the largest tally this module will count to.
 pub const LIMIT: int = 64
 
 # --- the counter ----------------------------------------------------------
-# A run that opens with a banner documents nothing, and the whole run goes.
+## A run that opens with a banner documents nothing, and the whole run goes.
 
 pub struct Counter {
     pub n: int
 }
 
-# this comment is cut off from the declaration by a blank line
+## this comment is cut off from the declaration by a blank line
 
 pub fn reset(c: Counter) -> Counter {
     return Counter(0)
 }
 
-# Bumped is a counter already raised, and the decorator does not detach this.
+## Bumped is a counter already raised, and the decorator does not detach this.
 #[derive(Eq)]
 pub struct Bumped {
     pub n: int
 }
 
-# hashy is documented by this comment, and the `#` in the string below is not one.
+## hashy is documented by this comment, and the `#` in the string below is not one.
+# A `#` line is the maintainer's note, and a reader's page leaves it out.
 pub fn hashy() -> str {
     return "# not a comment"
 }
@@ -221,13 +224,43 @@ FUNCTIONS
 ```
 
 `main` is not in it, `Counter` lost its banner, `reset` lost its detached comment, `Bumped`
-kept its comment across the decorator, and the string's `#` was never read as one.
+kept its comment across the decorator, the string's `#` was never read as one, and `hashy`'s
+maintainer note is on no reader's page.
 
 The last rule has a live case rather than a fixture. `json.null`'s whole comment is one worked
 example and its output, so `zerg doc json.null` prints the example and does **not** mark it.
 Under `--brief` it prints the signature and stops: a comment with no sentence in it has no
 summary, and a blank line meaning "documented, but not in a sentence" is a distinction no
 reader can see.
+
+## The reader's text and the maintainer's
+
+A comment is written for two people: whoever calls the declaration, and whoever changes it. **A `##` line is the
+reader's text and a `#` line the maintainer's**, line by line — which is what `GRAMMAR` has always said: `##` begins
+a doc comment, and any other `#` an ordinary line comment. One run may hold both, and which declaration a run
+documents is decided by the rules above, whatever its lines are marked.
+
+| Asked for                    | Prints                                       |
+| ---------------------------- | -------------------------------------------- |
+| `zerg doc`, the default      | the `##` lines of every comment              |
+| `zerg doc --all`             | every comment as written, `#` and `##` alike |
+| `--brief` and the index      | the first sentence of the `##` lines         |
+| `--check`, and a `lsp` hover | the `##` lines, and whether there are any    |
+
+`--all` beside `--brief`, `--check` or no name at all is refused: a listing has nothing of the maintainer's to add,
+and a flag that changes nothing on its page is a question the reader believes was answered.
+
+**A declaration with `#` notes and no `##` line is undocumented.** The page marks it and `--check` names it, and
+that is the only way a `##` forgotten on a whole comment is ever found — the page would otherwise go quietly blank
+under the signature. `--all` still marks it, above its notes, because the mark is about what a reader is given.
+A file header is read the same way: its `##` lines are the header, and one written in `#` alone gives the reader's
+page none, which then opens with the module's name.
+
+**Where a note is taken out, a paragraph ends.** `## a`, `# why`, `## b` prints `a` and `b` a blank line apart
+rather than filled into one sentence nobody wrote. Inside a fence nothing is joined or dropped.
+
+An example marked `##` on some of its lines and `#` on others is a finding of `--check`: the runner reads all of it
+and the reader is shown part.
 
 ## The form of an example
 
@@ -236,21 +269,21 @@ line** in a ` ```zerg ` fence, and what those lines print in an ` ```output ` fe
 Nothing declares the lines and nothing wraps them — the runner puts `print` in front of each line of an expression
 example, in source order, and diffs what came out against the `output` block **line for line**.
 
-**A fence is exactly ` ```zerg `, ` ```output ` or ` ``` `** — the whole comment once `#` and any trailing
+**A fence is exactly ` ```zerg `, ` ```output ` or ` ``` `** — the whole comment once its marker and any trailing
 whitespace are taken off. Any other
 line a Markdown renderer could show as such a fence is reported by `--check` as a fence it does not recognise, never
 skipped: indented, three or more backticks or tildes, a space before the word, the word in any case, `zg`, words
 after the name, or an `output` fence with no example above it. A reader sees an example either way.
 
 ````text
-# ```zerg
-# strings.contains("hello world", "o w")
-# strings.contains("hello", "z")
-# ```
-# ```output
-# true
-# false
-# ```
+## ```zerg
+## strings.contains("hello world", "o w")
+## strings.contains("hello", "z")
+## ```
+## ```output
+## true
+## false
+## ```
 ````
 
 A ` ```zerg ` fence with **no** ` ```output ` fence under it is a **statement example**. Its lines are run as
@@ -259,15 +292,15 @@ expression example that prints the wrong thing. It is the shape a call answering
 its write as one, and the read after it as an ordinary expression example.
 
 ````text
-# ```zerg
-# os.set_env("ZERG_DOC_EXAMPLE", "yes")
-# ```
-# ```zerg
-# os.env("ZERG_DOC_EXAMPLE") ?? "unset"
-# ```
-# ```output
-# yes
-# ```
+## ```zerg
+## os.set_env("ZERG_DOC_EXAMPLE", "yes")
+## ```
+## ```zerg
+## os.env("ZERG_DOC_EXAMPLE") ?? "unset"
+## ```
+## ```output
+## yes
+## ```
 ````
 
 Every example in one module becomes **one program**, so the lines run in source order in a single process and a
@@ -275,8 +308,9 @@ later one sees what an earlier one did. Both fences are carried into the documen
 any other fenced block.
 
 An example is run **wherever it is written**: above a declaration, in the file's header, or in a comment nothing
-claims. Where it sits decides where the document shows it, and has no bearing on whether it is true. It runs from
-outside the module, as a reader's program would, so it reaches only what the module exposes.
+claims — and whichever marker it is written with. Where it sits decides where the document shows it, and has no
+bearing on whether it is true. It runs from outside the module, as a reader's program would, so it reaches only what
+the module exposes.
 
 Two kinds of function are awkward to show, and both are in the standard library today rather than hypothetical:
 
@@ -359,8 +393,9 @@ the type was declared in rather than the one they were written in, because `impl
 flattened into functions carrying a receiver long before this tool sees them.
 
 Prose is **filled to 80 columns**, which is written down rather than asked of the device. A
-fenced block and an indented line are carried through **exactly as written and never
-re-wrapped**: the text inside one is meant to be copied out and run. A word longer than the
+fenced block, an indented line and a line opening with the doctest prompt `>>>` or `...` are
+carried through **exactly as written and never re-wrapped**: the text inside one is meant to be
+copied out and run. A word longer than the
 budget stands on its own line and is never cut, because what is long is a URL, a path or a
 piece of inline code — text that looks right after a break in the middle and does not work.
 
@@ -453,17 +488,11 @@ into the standard library's chapter is added only when the file is in the standa
 Named here rather than left to be discovered, because a documentation tool that overstates
 itself is the one failure it cannot recover from:
 
-| Not built                                                | Issue                                            |
-| -------------------------------------------------------- | ------------------------------------------------ |
-| `##` — the reader's document apart from the maintainer's | [#18](https://github.com/cmj0121/zerg/issues/18) |
-| finding a declaration without naming its module          | [#19](https://github.com/cmj0121/zerg/issues/19) |
-| static HTML pages                                        | [#20](https://github.com/cmj0121/zerg/issues/20) |
-| `--serve`                                                | [#21](https://github.com/cmj0121/zerg/issues/21) |
-
-`##` waits **deliberately**. This codebase's comments are long and largely addressed to
-maintainers, and separating the reader's half from the maintainer's half cannot be automated —
-reading this tool's real output is how you learn where that line falls, so designing the marker
-first would be guessing.
+| Not built                                       | Issue                                            |
+| ----------------------------------------------- | ------------------------------------------------ |
+| finding a declaration without naming its module | [#19](https://github.com/cmj0121/zerg/issues/19) |
+| static HTML pages                               | [#20](https://github.com/cmj0121/zerg/issues/20) |
+| `--serve`                                       | [#21](https://github.com/cmj0121/zerg/issues/21) |
 
 HTML will be a **second rendering of the same extraction**, never a second extractor. That is
 why what a module contains and how it is laid out are already two separate pieces of code, with

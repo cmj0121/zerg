@@ -10,6 +10,12 @@
 #     zerg doc strings.split    one declaration — `log.Logger.level` for a method
 #     zerg doc path/to/file.zg  a file or a directory, documented where it stands
 #
+# Each of them is the READER'S document — the `##` lines of every comment — unless `--all` asks
+# for the maintainer's, which is every comment as written (#18). A listing is the reader's
+# alone, so `--all` beside `--brief`, `--check` or no name at all is refused rather than
+# ignored: a flag that changes nothing on the page it was given to is a question the reader
+# believes was answered.
+#
 # A PATH IS RECOGNISED FIRST, and only when it exists: a name carrying a `/` or ending in `.zg`
 # that names nothing on disk is not a path, it is a mistake, and it falls through to the same
 # refusal every other unknown name gets. Then a whole module, because that is the common
@@ -41,8 +47,9 @@ import (
 pub fn doc_cmd() -> cli.Command {
 	return (
 		cli.command("doc", "read what a module exposes and the comments that document it")
+		.flag("a", "all", "every comment as written, the maintainer's `#` notes beside the reader's `##` text")
 		.flag("b", "brief", "one line for each declaration instead of the whole comment")
-		.flag("c", "check", "name the exposed declarations that carry no comment, run every example, and exit 1 if anything is missing or wrong")
+		.flag("c", "check", "name the exposed declarations that carry no `##` comment, run every example, and exit 1 if anything is missing or wrong")
 		.opt("t", "timeout", "under --check, seconds one module's examples may take to build, and then to run", f"{test.TEST_TIMEOUT}")
 		.add(cli.positional("name", "a module, one of its declarations, or a path to a source"))
 		.run(do_doc)
@@ -50,9 +57,22 @@ pub fn doc_cmd() -> cli.Command {
 }
 
 fn do_doc(c: cli.Ctx) -> int {
+	raise doc_all_alone(c) if c.has("all") and (c.has("brief") or c.has("check") or c.args().len() == 0)
 	return run_doc_check(c.args(), doc_timeout(c.get("timeout"))) if c.has("check")
 
-	return run_doc(c.args(), c.has("brief"))
+	return run_doc(c.args(), doc_render.DocView(c.has("brief"), c.has("all")))
+}
+
+# doc_all_alone is the refusal for `--all` where it would change nothing: every listing — the
+# index, `--brief`, and what `--check` counts — is the reader's `##` text and nothing else.
+fn doc_all_alone(c: cli.Ctx) -> str {
+	mut what := "the index of modules"
+	if c.has("brief") {
+		what = "`--brief`'s summary"
+	} else if c.has("check") {
+		what = "what `--check` counts"
+	}
+	return f"`--all` is the maintainer's page for one module, declaration or path, and has nothing to add to {what}, which reads the `##` text alone"
 }
 
 # run_doc answers the one thing that was asked for, and writes it once.
@@ -64,7 +84,7 @@ fn do_doc(c: cli.Ctx) -> int {
 # The device is asked ONCE, here, and handed down as a value. A renderer that asked for itself
 # would be a function whose answer depends on where the process's output happens to be pointed,
 # which is exactly the function a test cannot ask anything of.
-fn run_doc(args: list[str], brief: bool) -> int {
+fn run_doc(args: list[str], v: doc_render.DocView) -> int {
 	raise "`zerg doc` reads one thing at a time — a module, one of its declarations, or a path" if args.len() > 1
 
 	col := doc_render.doc_colour()
@@ -78,22 +98,26 @@ fn run_doc(args: list[str], brief: bool) -> int {
 		files := doc_path_files(name)
 		raise doc_no_source(name) if files.len() == 0
 
-		io.write(doc_render.render_doc_module(doc_read(doc_path_name(name), files), brief, col))
+		io.write(doc_render.render_doc_module(doc_read(doc_path_name(name), files), v, col))
 		return 0
 	}
 
 	whole := source.module_sources(name, ".", ".")
 	if whole.len() > 0 {
-		io.write(doc_render.render_doc_module(doc_read(source.path_tail(name), whole), brief, col))
+		io.write(doc_render.render_doc_module(doc_read(source.path_tail(name), whole), v, col))
 		return 0
 	}
 
-	return run_doc_decl(name, col)
+	return run_doc_decl(name, v.all, col)
 }
 
 # run_doc_check is `--check`: the document read for what is MISSING from it, rather than for
 # what is in it. Every exposed declaration whose comment is empty is named, at the place it
 # was declared, and the run exits 1 if there were any.
+#
+# EMPTY MEANS NO `##` LINE (#18). A declaration with `#` notes above it and no reader text is
+# undocumented to every reader the page has, and this is where a `##` forgotten on a whole
+# comment is caught — the page would otherwise go quietly blank under the signature.
 #
 # THE MARK ALREADY EXISTED and this is not a second copy of it. `zerg doc strings` renders
 # `(undocumented)` beside such a declaration, which is how a READER meets one — in the middle
@@ -142,7 +166,7 @@ fn run_doc_check(args: list[str], secs: int) -> int {
 		for d in m.decls {
 			total = total + 1
 			if d.doc.len() == 0 {
-				out = out + f"{d.path}:{d.line}: `{doc_check_name(m, d)}` is exposed and carries no comment\n"
+				out = out + f"{d.path}:{d.line}: `{doc_check_name(m, d)}` is exposed and carries no `##` comment\n"
 				undoc = undoc + 1
 			}
 		}
@@ -169,6 +193,7 @@ fn run_doc_check(args: list[str], secs: int) -> int {
 # named as that, and a misspelled fence as one.
 fn doc_stray_says(s: zerg.DocStray) -> str {
 	return f"{s.path}:{s.line}: an output fence with no example above it, so nothing is held to it\n" if s.orphan
+	return f"{s.path}:{s.line}: an example marked `##` on some of its lines and `#` on others, so the reader is shown part of what was run\n" if s.mixed
 
 	return f"{s.path}:{s.line}: `{s.text}` is shaped like an example fence and is not one — a fence is exactly ```zerg or ```output after the `# `, so nothing ran it\n"
 }
@@ -231,7 +256,7 @@ fn doc_check_name(m: zerg.DocModule, d: zerg.DocDecl) -> str {
 #
 # `--brief` is not read here. A single declaration is shown whole, which is what a reader asking
 # for one wants; brief is what shortens a LISTING, and a listing of one is the thing itself.
-fn run_doc_decl(name: str, col: bool) -> int {
+fn run_doc_decl(name: str, all: bool, col: bool) -> int {
 	at := doc_first_of(name, b'.')
 	raise doc_no_such(name) if at < 0
 
@@ -246,7 +271,7 @@ fn run_doc_decl(name: str, col: bool) -> int {
 	hits := zerg.doc_find(m, key)
 	raise doc_no_decl(m, key) if hits.len() == 0
 
-	io.write(doc_render.render_doc_decls(m, hits, col))
+	io.write(doc_render.render_doc_decls(m, hits, all, col))
 	return 0
 }
 

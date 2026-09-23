@@ -5,11 +5,12 @@
 
 ```sh
 zerg doc                      # 每一個讀得到的 module
-zerg doc strings              # 那個 module 的整份文件
+zerg doc strings              # 那個 module 的整份文件，讀者需要的樣子
+zerg doc --all strings        # 同一份，再把每一則維護者的筆記寫在旁邊
 zerg doc --brief strings      # 它露出的表面，一個宣告一行
 zerg doc strings.split        # 單一宣告；方法寫成 log.Logger.level
 zerg doc src/stdlib/log.zg    # 一個檔案、或一個目錄，就地成為文件
-zerg doc --check strings      # 指名沒有註解的宣告、跑每一個範例；任一出錯就以 1 結束
+zerg doc --check strings      # 指名沒有 `##` 文字的宣告、跑每一個範例；任一出錯就以 1 結束
 ```
 
 ## 主張
@@ -50,9 +51,9 @@ zerg doc --check strings      # 指名沒有註解的宣告、跑每一個範例
 是同一趟、同一段程式碼，所以它漏掉的宣告會從讀者看到的第一頁上消失。單一宣告不讀這個旗標：只有一項的列表就是那項東
 西本身，所以 `zerg doc --brief strings.split` 印的是整條。
 
-`--check` 讀的是這份文件**缺了什麼**。每一個註解是空的露出宣告都會在它被宣告的位置被指名，一個沒能 parse 的檔案也
-會被指名——因為一個宣告根本沒進到文件裡的 module，會用「沒有東西可報」來回答「沒有東西缺席」——每一個範例都會被執行，
-其中任何一樣出錯，這一趟就以 **1** 結束。範例怎麼被執行，下面有自己的一節。
+`--check` 讀的是這份文件**缺了什麼**。每一個註解裡沒有 `##` 行的露出宣告都會在它被宣告的位置被指名，一個沒能 parse
+的檔案也會被指名——因為一個宣告根本沒進到文件裡的 module，會用「沒有東西可報」來回答「沒有東西缺席」——每一個範例都會被
+執行，其中任何一樣出錯，這一趟就以 **1** 結束。範例怎麼被執行，下面有自己的一節。
 
 它報的那個標記，就是文件本來就會印的那一個。在它之前不存在的是一個「問得出來」的方式：`(undocumented)` 是在頁面中
 央、一次一個 module 遇到的，沒有位置可以跳過去，而蓋在它上面的 gate 只能釘住**數量**、釘不住那個集合。對總數的相等
@@ -79,7 +80,7 @@ module 層的 `pub mut` 綁定照它寫的樣子顯示——`mut COUNTER := 0`�
 私有宣告不是文件——`main` 不在任何文件裡，沒有 `pub` 的其他東西也一樣。一個六個欄位只顯示兩個的 struct，描述的是一個
 編不過的字面值，所以私有欄位被略去的 struct 會說 `(private fields not shown)`。
 
-**沒有註解的公開宣告照樣顯示，並標上 `(undocumented)`。** 它永遠不會被省略。這個標記的判準是**完全沒有註解**，此外
+**沒有註解的公開宣告照樣顯示，並標上 `(undocumented)`。** 它永遠不會被省略。這個標記的判準是**完全沒有 `##` 行**，此外
 無他：一則只由一個可執行範例構成的註解就是註解，把那個叫做沒有文件，是跟沉默同一種謊，只是方向相反。
 
 **簽名由編譯器自己的型別印表機寫出來**，不是第二個。文件裡的簽名跟診斷裡的簽名不可能對這個語言有不同說法，因為寫出
@@ -104,6 +105,7 @@ server 裡的第二個讀者（[語言伺服器](lsp.zh-TW.md#hover-是宣告的
 | 以 `# --- 橫幅 ---` 開頭的一片註解             | **什麼都不記錄**，而且整片都不算 |
 | 寫在一行程式碼尾巴的註解                       | **什麼都不記錄**                 |
 | 整則內容就是一個可執行範例的註解               | 記錄它                           |
+| 每一行都是 `#` 而不是 `##` 的一片註解          | 記錄它，但什麼都沒交給讀者       |
 | 檔案裡第一片、上方沒有程式碼、沒被任何宣告認領 | 就是 **module 檔頭**             |
 
 空行不需要自己的規則——它不發出任何 token，於是那片註解就只是比上一行更早結束。**橫幅是對檔案下的記號**：它把原始碼
@@ -119,34 +121,35 @@ server 裡的第二個讀者（[語言伺服器](lsp.zh-TW.md#hover-是宣告的
 以下這個檔案一次示範上面每一條規則：
 
 ```zerg
-# tally — counting things, and the comments that document them.
-#
-# This first run belongs to the FILE: no code stands above it and no
-# declaration below it claims it.
+## tally — counting things, and the comments that document them.
+##
+## This first run belongs to the FILE: no code stands above it and no
+## declaration below it claims it.
 
-# LIMIT is the largest tally this module will count to.
+## LIMIT is the largest tally this module will count to.
 pub const LIMIT: int = 64
 
 # --- the counter ----------------------------------------------------------
-# A run that opens with a banner documents nothing, and the whole run goes.
+## A run that opens with a banner documents nothing, and the whole run goes.
 
 pub struct Counter {
     pub n: int
 }
 
-# this comment is cut off from the declaration by a blank line
+## this comment is cut off from the declaration by a blank line
 
 pub fn reset(c: Counter) -> Counter {
     return Counter(0)
 }
 
-# Bumped is a counter already raised, and the decorator does not detach this.
+## Bumped is a counter already raised, and the decorator does not detach this.
 #[derive(Eq)]
 pub struct Bumped {
     pub n: int
 }
 
-# hashy is documented by this comment, and the `#` in the string below is not one.
+## hashy is documented by this comment, and the `#` in the string below is not one.
+# A `#` line is the maintainer's note, and a reader's page leaves it out.
 pub fn hashy() -> str {
     return "# not a comment"
 }
@@ -193,11 +196,37 @@ FUNCTIONS
 ```
 
 `main` 不在裡面，`Counter` 失去了它的橫幅，`reset` 失去了那則被空行隔開的註解，`Bumped` 跨過 decorator 留住了它
-的註解，而字串裡的 `#` 從來沒被當成註解讀。
+的註解，字串裡的 `#` 從來沒被當成註解讀，而 `hashy` 那則維護者的筆記不在任何讀者的頁面上。
 
 最後一條規則有真實的案例，不必靠 fixture。`json.null` 的整則註解就是一個可執行範例與它的輸出，所以
 `zerg doc json.null` 會印出那個範例，而且**不會**標記它。在 `--brief` 之下它印出簽名就停住：一則裡面沒有句子的
 註解沒有摘要可寫，而一個意思是「有文件，但不是一句話」的空行，是沒有讀者看得出來的區別。
+
+## 讀者的文字與維護者的
+
+一則註解是寫給兩個人的：呼叫這個宣告的人，以及修改它的人。**`##` 那一行是讀者的文字，`#` 那一行是維護者的**，逐行區分
+——這正是 `GRAMMAR` 一直以來的說法：`##` 起始一則文件註解，其他任何 `#` 起始一則普通的行註解。一片註解可以兩者都有，
+而它記錄哪一個宣告由上面那些規則決定，不管它的行標成什麼。
+
+| 問的是                         | 印出                               |
+| ------------------------------ | ---------------------------------- |
+| `zerg doc`，預設               | 每一則註解的 `##` 行               |
+| `zerg doc --all`               | 每一則註解的原文，`#` 與 `##` 都印 |
+| `--brief` 與索引               | `##` 行的第一句                    |
+| `--check`，以及 `lsp` 的 hover | `##` 行，以及有沒有這樣的行        |
+
+`--all` 跟 `--brief`、`--check` 放在一起，或是什麼名字都沒給，都會被拒絕：列表沒有任何維護者的東西可以補，而一個在
+它那一頁上什麼都沒改變的旗標，是一個讀者以為已經被回答了的問題。
+
+**只有 `#` 筆記、沒有 `##` 行的宣告就是沒有文件。** 頁面會標記它，`--check` 會指名它，而這是一個在整則註解上忘了寫
+`##` 唯一會被發現的方式——否則那一頁會在簽名底下安靜地變成空白。`--all` 仍然會標記它，標在它的筆記上方，因為這個標記
+講的是讀者拿到了什麼。檔案標頭也這樣讀：它的 `##` 行就是標頭，而一個只用 `#` 寫成的標頭在讀者的頁面上等於沒有，那一頁
+就會以 module 的名字開頭。
+
+**筆記被拿掉的地方，段落就結束。** `## a`、`# why`、`## b` 會把 `a` 與 `b` 隔一個空行印出來，而不是填成一句沒有人寫過
+的話。圍欄裡面什麼都不接、什麼都不丟。
+
+一個有些行標 `##`、有些行標 `#` 的範例是 `--check` 的一項發現：執行它的東西讀的是全部，讀者看到的卻只是一部分。
 
 ## 範例的形狀
 
@@ -205,19 +234,20 @@ FUNCTIONS
 寫在緊鄰的 ` ```output ` 圍欄裡。那些行不必宣告、也不必被包起來——跑它的東西在運算式範例的每一行前面加上 `print`，照
 原始碼順序執行，再把跑出來的結果跟 `output` 區塊**一行對一行**地 diff。
 
-**圍欄就是 ` ```zerg `、` ```output ` 或 ` ``` `，一字不差**——拿掉 `#` 與行尾空白之後的整則註解。其他任何 Markdown 渲染器可能
-顯示成這種圍欄的行，都會被 `--check` 回報為它不認得的圍欄，絕不會被略過：有縮排的、三個以上的反引號或波浪號、字前面有
-空格的、字的大小寫不同的、`zg`、名字後面還有字的、或是上方沒有範例的 `output` 圍欄。讀者看到的都是一個範例。
+**圍欄就是 ` ```zerg `、` ```output ` 或 ` ``` `，一字不差**——拿掉標記與行尾空白之後的整則註解。其他任何 Markdown
+渲染器可能顯示成這種圍欄的行，都會被 `--check` 回報為它不認得的圍欄，絕不會被略過：有縮排的、三個以上的反引號或
+波浪號、字前面有空格的、字的大小寫不同的、`zg`、名字後面還有字的、或是上方沒有範例的 `output` 圍欄。讀者看到的都是
+一個範例。
 
 ````text
-# ```zerg
-# strings.contains("hello world", "o w")
-# strings.contains("hello", "z")
-# ```
-# ```output
-# true
-# false
-# ```
+## ```zerg
+## strings.contains("hello world", "o w")
+## strings.contains("hello", "z")
+## ```
+## ```output
+## true
+## false
+## ```
 ````
 
 底下**沒有** ` ```output ` 圍欄的 ` ```zerg ` 圍欄是一個**敘述範例**。它的行照原樣執行而不是被印出來，並且主張自己
@@ -225,22 +255,23 @@ FUNCTIONS
 `os.set_env` 用它來展示那次寫入，再用一個普通的運算式範例展示之後的讀取。
 
 ````text
-# ```zerg
-# os.set_env("ZERG_DOC_EXAMPLE", "yes")
-# ```
-# ```zerg
-# os.env("ZERG_DOC_EXAMPLE") ?? "unset"
-# ```
-# ```output
-# yes
-# ```
+## ```zerg
+## os.set_env("ZERG_DOC_EXAMPLE", "yes")
+## ```
+## ```zerg
+## os.env("ZERG_DOC_EXAMPLE") ?? "unset"
+## ```
+## ```output
+## yes
+## ```
 ````
 
 同一個 module 裡的所有範例會合成**一支程式**，所以那些行是在同一個行程裡照原始碼順序跑的，後面那行看得到前面那行做
 了什麼。兩個圍欄都原樣帶進文件裡，跟任何其他圍欄區塊一樣。
 
-範例**寫在哪裡就在哪裡被執行**：宣告上方、檔案的標頭、或是沒有任何宣告認領的註解裡。它的位置決定文件在哪裡顯示它，
-跟它是不是真的毫無關係。它是從 module 外面執行的，就像讀者寫的程式一樣，所以它只碰得到 module 露出的東西。
+範例**寫在哪裡就在哪裡被執行**：宣告上方、檔案的標頭、或是沒有任何宣告認領的註解裡——不論它用哪一種標記寫成。
+它的位置決定文件在哪裡顯示它，跟它是不是真的毫無關係。它是從 module 外面執行的，就像讀者寫的程式一樣，所以它只碰得
+到 module 露出的東西。
 
 有兩種函式不好展示，而且兩種在今天的標準函式庫裡都有實例，不是假設：
 
@@ -308,7 +339,8 @@ module 用裸名，其他的則從它旁邊以 `./name` import。那支程式由
 的方法印在**那個型別**底下，是在型別被宣告的那一段，而不是方法被寫在哪一段，因為 `impl T { … }` 早在這個工具看到它
 之前就被攤平成帶接收者的函式了。
 
-散文**填到 80 欄**，這個數字是寫死的，不是去問裝置的。圍欄區塊與縮排行**原樣帶過、永不重新折行**：那裡面的文字是要
+散文**填到 80 欄**，這個數字是寫死的，不是去問裝置的。圍欄區塊、縮排行，以及以 doctest 提示
+`>>>` 或 `...` 開頭的行**原樣帶過、永不重新折行**：那裡面的文字是要
 被複製出去執行的。比預算還長的一個詞會自己佔一行、永遠不會被切斷，因為長的東西是網址、路徑或一段行內程式碼——從中間
 斷開之後看起來沒問題、實際上不能用的那種文字。
 
@@ -381,15 +413,11 @@ listed
 
 寫在這裡而不是留給人去發現，因為一個把自己說得比實際多的文件工具，正是它唯一無法補救的失敗：
 
-| 還沒做                               | issue                                            |
-| ------------------------------------ | ------------------------------------------------ |
-| `##`——把讀者的文件與維護者的筆記分開 | [#18](https://github.com/cmj0121/zerg/issues/18) |
-| 不指名 module 就找到一個宣告         | [#19](https://github.com/cmj0121/zerg/issues/19) |
-| 靜態 HTML 頁面                       | [#20](https://github.com/cmj0121/zerg/issues/20) |
-| `--serve`                            | [#21](https://github.com/cmj0121/zerg/issues/21) |
-
-`##` 是**刻意**在等的。這個 codebase 的註解很長，而且大半是寫給維護者的，把讀者的那一半跟維護者的那一半分開來沒辦法
-自動化——讀這個工具真正的輸出，才是學會那條線落在哪裡的方式，所以先設計那個標記等於在猜。
+| 還沒做                       | issue                                            |
+| ---------------------------- | ------------------------------------------------ |
+| 不指名 module 就找到一個宣告 | [#19](https://github.com/cmj0121/zerg/issues/19) |
+| 靜態 HTML 頁面               | [#20](https://github.com/cmj0121/zerg/issues/20) |
+| `--serve`                    | [#21](https://github.com/cmj0121/zerg/issues/21) |
 
 HTML 會是**同一份抽取的第二種呈現**，絕不會是第二個抽取器。這正是為什麼「一個 module 裝了什麼」與「它怎麼排版」現在
 已經是兩段各自獨立的程式碼，誰都不擁有誰。`--serve` 卡在更大的東西上：這個語言完全沒有網路。

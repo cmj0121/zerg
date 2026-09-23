@@ -11429,11 +11429,14 @@ fn c_gen_is_assoc(mut &em: Emitter, key: str) -> bool {
 # the reader looking for something that is not there.
 fn c_refuse_method_through_type(mut &em: Emitter, tn: str, meth: str) {
 	sp := c_spec_member_of(em, tn, meth)
+	mut why := f"its body uses `this`, so it is reached through an instance (`x.{meth}(…)`) and not through the type (GRAMMAR#impl-decl)"
+	if sp != "" {
+		why = f"it is a member of the spec `{sp}`, and every spec member carries an implicit receiver, so it is reached through an instance (`x.{meth}(…)`) and not through the type (docs/core/specs.md)"
+	} else if parser.p_is_rendering(meth) {
+		why = f"it is a rendering override, which receives the value it renders whatever its body reads, so it is reached through an instance (`x.{meth}()`) and not through the type (docs/runtime/format.md)"
+	}
 
-	raise c_diag(em, rule.Rule.MethodThroughItsType, f"`{meth}` is a METHOD of `{tn}` — it is a member of the spec `{sp}`, and every spec member carries an implicit receiver, so it is reached through an instance (`x.{meth}(…)`) and not through the type (docs/core/specs.md)") if sp != ""
-	raise c_diag(em, rule.Rule.MethodThroughItsType, f"`{meth}` is a METHOD of `{tn}` — it is a rendering override, which receives the value it renders whatever its body reads, so it is reached through an instance (`x.{meth}()`) and not through the type (docs/runtime/format.md)") if parser.p_is_rendering(meth)
-
-	raise c_diag(em, rule.Rule.MethodThroughItsType, f"`{meth}` is a METHOD of `{tn}` — its body uses `this`, so it is reached through an instance (`x.{meth}(…)`) and not through the type (GRAMMAR#impl-decl)")
+	raise c_diag(em, rule.Rule.MethodThroughItsType, f"`{meth}` is a METHOD of `{tn}` — {why}")
 }
 
 # c_spec_member_of is the spec, as its `impl` spells it, one of whose members `tn.meth` is — or

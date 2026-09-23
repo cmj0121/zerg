@@ -108,6 +108,13 @@ Comments are read from the **lexer's token stream**, not by scanning the source 
 is why a `#` inside a string literal is not a comment here, and why a `#[derive(Eq)]` is a
 decorator rather than a note.
 
+**These rules are the editor's too.** A hover in `zerg lsp` is the document of the declaration
+under the cursor, and it is this extraction that answers it rather than a second reader living
+in the server ([the language server](lsp.md#hover-is-the-declarations-document)) — so a comment
+that documents nothing here documents nothing there either. What it asks for is one place and
+not a module, so a private declaration has an answer for a hover while it is still in no
+document.
+
 What a comment is attached to is decided by line geometry, and these are the rules a writer
 has to know:
 

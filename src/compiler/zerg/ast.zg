@@ -1363,6 +1363,58 @@ pub const NK_CONST := 10
 pub const NK_IMPORT := 11
 pub const NK_TPARAM := 12
 
+# nk_word is what a reader calls that kind. It is here, beside the numbers, because nothing
+# else can say what one means: a caller that spelled its own words would be a second list of
+# what this language declares, drifting the day a kind is added.
+#
+# It is not the only place these WORDS appear — `file_symbols` below writes several of them as
+# string literals for the outline, and `DocDecl.kind` writes them again — but those are keyed
+# on the AST and this is keyed on `NK_*`, and no mapping between the two exists to share. What
+# is shared is the vocabulary, not the code, and a rename has to visit each.
+pub fn nk_word(kind: int) -> str {
+	return "fn" if kind == NK_FN
+	return "method" if kind == NK_METHOD
+	return "parameter" if kind == NK_PARAM
+	return "binding" if kind == NK_LOCAL
+	return "field" if kind == NK_FIELD
+	return "variant" if kind == NK_VARIANT
+	return "struct" if kind == NK_STRUCT
+	return "enum" if kind == NK_ENUM
+	return "spec" if kind == NK_SPEC
+	return "type" if kind == NK_TYPE
+	return "const" if kind == NK_CONST
+	return "import" if kind == NK_IMPORT
+	return "type parameter" if kind == NK_TPARAM
+
+	return "name"
+}
+
+# nx_name is what declaration `d` is called, read back out of the one byte list every name is
+# kept in.
+#
+# ITS BYTES RUN TO WHERE THE NEXT NAME STARTS, and not for `d_len`. Every declaration appends
+# its name, so the offsets are contiguous and the last one runs to the end of the list. `d_len`
+# is the name TOKEN's length, which counts the same today only because an identifier is ASCII
+# (E1004) — and which the server REWRITES into UTF-16 units when it converts the index to LSP's
+# positions (`ls_nx_utf16`). Reading a name through a column that already means two things is a
+# rule that is right for a reason it does not state.
+pub fn nx_name(nx: NameIndex, d: int) -> str {
+	return "" if d < 0 or d >= nx.d_off.len()
+
+	lo := nx.d_off[d]
+	mut hi := nx.d_text.len()
+	if d + 1 < nx.d_off.len() {
+		hi = nx.d_off[d + 1]
+	}
+	mut b: list[byte] = []
+	mut i := lo
+	for i < hi {
+		b.append(nx.d_text[i])
+		i = i + 1
+	}
+	return str(b)
+}
+
 fn nx_mod_of(mut &nx: NameIndex, m: str) -> int {
 	mut i := 0
 	for i < nx.mods.len() {

@@ -1654,6 +1654,406 @@ then
 	exit 1
 fi
 
+# --- 9. hover is the document `zerg doc` prints for that declaration ------------------------
+#
+# #192: the index finds the declaration, this prints its document. So the property is not a
+# transcript of what a hover looks like — it is that the two commands say the SAME THING about
+# the same declaration:
+#
+#   the document  for every exposed declaration hovered here, `zerg doc` is asked for the same
+#                 one and the two texts must match — the signature line it prints, and the
+#                 comment under it word for word. THE ENTRY IS FOUND BY THE DECLARED NAME the
+#                 case names, never by the text the hover produced, and it must be the only
+#                 entry of that name: two declarations printing one signature (`log` has
+#                 `Logger.trace` and a free `trace`) would otherwise let a lookup keyed on the
+#                 answer pick the wrong entry and agree with itself.
+#   the structure `zerg doc` wraps its prose to a page and a hover does not, so prose is
+#                 compared PARAGRAPH BY PARAGRAPH with whitespace collapsed — and a fence is
+#                 compared LINE FOR LINE, because a ` ```zerg ` block inside a comment is code
+#                 and its lines are not prose to be reflowed. Collapsing everything would let a
+#                 hover that joined the comment into one line agree about every word while
+#                 destroying every paragraph break and every example in it.
+#   the shape     a declaration NO document covers — a local binding, a parameter, the
+#                 namespace an import bound — says what it is and is NOT marked undocumented;
+#                 an exposed DECLARATION with no comment carries the mark the document prints;
+#                 and a MEMBER with no comment carries nothing, which is how the page prints
+#                 one.
+#   the index     hover answers for exactly the names `definition` answers for, over every
+#                 identifier in the fixture. Hover reads that index and resolves nothing, so a
+#                 name with a declaration has a document and a name without one has no hover.
+#
+# and three answers that are silence: a name nobody declared, a position in a file the client
+# never opened, and a buffer whose check aborted — the index is dropped, and a hover from the
+# program the compiler no longer agrees is this one would be worse than none.
+mkdir -p "$tmp/hover"
+cat >"$tmp/hover/lib.zg" <<'ZG'
+# lib — a module written to be read.
+
+# twice doubles `m`.
+#
+# ```zerg
+# >>> lib.twice(3)
+# 6
+# ```
+pub fn twice(m: int) -> int {
+	return m * 2
+}
+
+# Point is a place on a grid.
+pub struct Point {
+	# x is how far along it is.
+	pub x: int
+
+	pub y: int
+}
+
+pub fn plain(n: int) -> int {
+	return n
+}
+
+# Weighed is what has a weight.
+pub spec Weighed {
+	fn weight() -> int
+}
+ZG
+cat >"$tmp/hover/main.zg" <<'ZG'
+import (
+	"strings"
+
+	"./lib"
+)
+
+# Colour is what a thing can be.
+enum Colour {
+	# Red is the loud one.
+	Red
+
+	Green
+}
+
+# quiet is private, and documented all the same.
+fn quiet(n: int) -> int {
+	return n + 1
+}
+
+spec Sized {
+	fn size() -> int
+}
+
+struct Tin {
+	pub n: int
+}
+
+impl Sized for Tin {
+	fn size() -> int {
+		return this.n
+	}
+}
+
+fn measure[T: Sized](x: T) -> int {
+	return x.size()
+}
+
+fn main() {
+	p := lib.Point(1, 2)
+	total := lib.twice(p.x) + lib.plain(p.y)
+	print total + quiet(1)
+	print strings.has_prefix("ab", "a")
+	print int(Colour.Red)
+	print measure(Tin(4))
+}
+ZG
+if ! "$ZERG" build --emit check "$tmp/hover/main.zg" >/dev/null 2>"$tmp/hover.cc"; then
+	echo 'HOVER     the fixture program does not build, so there is no index to hover from'
+	sed 's/^/  /' "$tmp/hover.cc"
+	exit 1
+fi
+if ! "$PY" - "$ZERG" "$tmp/hover" <<'PYEOF'
+import json, os, re, subprocess, sys
+
+zerg, root = sys.argv[1], sys.argv[2]
+MAIN, LIB = os.path.join(root, "main.zg"), os.path.join(root, "lib.zg")
+src = {MAIN: open(MAIN, encoding="utf-8").read(), LIB: open(LIB, encoding="utf-8").read()}
+
+def uri_of(p):
+    return "file://" + os.path.abspath(p)
+
+def frame(m):
+    b = json.dumps(m).encode()
+    return b"Content-Length: %d\r\n\r\n%s" % (len(b), b)
+
+# ONE SESSION per call: main.zg is opened, optionally changed, and every question is a frame
+# after it — so the index asked is the one that check built.
+def ask(reqs, change=None):
+    msgs = [{"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {"capabilities": {}}},
+            {"jsonrpc": "2.0", "method": "textDocument/didOpen", "params": {"textDocument": {
+                "uri": uri_of(MAIN), "languageId": "zerg", "version": 1, "text": src[MAIN]}}}]
+    if change is not None:
+        msgs.append({"jsonrpc": "2.0", "method": "textDocument/didChange", "params": {
+            "textDocument": {"uri": uri_of(MAIN), "version": 2},
+            "contentChanges": [{"text": change}]}})
+    for k, (method, p, line, ch) in enumerate(reqs):
+        msgs.append({"jsonrpc": "2.0", "id": 100 + k, "method": method, "params": {
+            "textDocument": {"uri": uri_of(p)}, "position": {"line": line, "character": ch}}})
+    msgs += [{"jsonrpc": "2.0", "id": 2, "method": "shutdown"}, {"jsonrpc": "2.0", "method": "exit"}]
+    out = subprocess.run([zerg, "lsp"], input=b"".join(frame(m) for m in msgs),
+                         stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, timeout=300).stdout
+    got, i = {}, 0
+    while i < len(out):
+        j = out.find(b"\r\n\r\n", i)
+        if j < 0:
+            break
+        n = int(re.search(rb"Content-Length:\s*(\d+)", out[i:j], re.I).group(1))
+        f = json.loads(out[j + 4:j + 4 + n].decode("utf-8"))
+        if "id" in f and f["id"] >= 100:
+            got[f["id"] - 100] = f.get("result")
+        i = j + 4 + n
+    return [got.get(k, "no reply") for k in range(len(reqs))]
+
+# at(path, snippet, name, nth) is the place of the nth `name` on the first line holding
+# `snippet`, as LSP spells it. The fixture is ASCII, so a byte column is a UTF-16 one.
+def at(path, snippet, name, nth=0):
+    for ln, text in enumerate(src[path].split("\n")):
+        if snippet in text:
+            cols = [m.start() for m in re.finditer(r"(?<![A-Za-z0-9_])%s(?![A-Za-z0-9_])" % re.escape(name), text)]
+            return (path, ln, cols[nth])
+    raise SystemExit("HOVER     the fixture has no line holding %r" % snippet)
+
+bad = 0
+def check(ok, what, got):
+    global bad
+    if not ok:
+        print("HOVER     %s — got %r" % (what, got))
+        bad += 1
+
+# what a hover carries: the fenced signature, and the prose under it
+def parts(md):
+    lines = md.split("\n")
+    if lines[0] != "```zerg" or "```" not in lines[1:]:
+        return None, None
+    end = lines.index("```", 1)
+    return "\n".join(lines[1:end]), "\n".join(lines[end + 1:]).strip()
+
+# `zerg doc` wraps prose to a page and a hover does not, so what is compared is every word in
+# its order — which a wrap moves between lines and cannot change.
+def norm(s):
+    return " ".join(s.split())
+
+# a comment as STRUCTURE: its blocks in order — a paragraph collapsed to its words, a fence
+# kept LINE FOR LINE. A wrap moves words inside a paragraph and cannot move them across a blank
+# line, and it never touches a fence, so this is everything about the shape that survives
+# rendering — including where the fence sits among the prose.
+def shape(text):
+    out, cur, fence = [], [], None
+    for line in text.split("\n") + [""]:
+        if fence is not None:
+            fence.append(line.strip() if line.strip() == "```" else line)
+            if line.strip() == "```":
+                out.append(("fence", fence))
+                fence = None
+            continue
+        if line.strip().startswith("```"):
+            if cur:
+                out.append(("p", norm(" ".join(cur))))
+                cur = []
+            fence = [line.strip()]
+            continue
+        if line.strip() == "":
+            if cur:
+                out.append(("p", norm(" ".join(cur))))
+                cur = []
+            continue
+        cur.append(line)
+    return out
+
+# what `zerg doc` prints for one name, asked once per name however many cases read it
+DOCS = {}
+def doc_of(name):
+    if name not in DOCS:
+        env = dict(os.environ, NO_COLOR="1")
+        r = subprocess.run([zerg, "doc", name], stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                           env=env, timeout=300)
+        DOCS[name] = r.stdout.decode("utf-8")
+    return DOCS[name]
+
+# the hovers for a table of rows whose second column is a place
+def hovers_at(rows):
+    return ask([("textDocument/hover", r[1][0], r[1][1], r[1][2]) for r in rows])
+
+# the name a signature line DECLARES, or None for a line that is not one. It is how an entry is
+# found below: by the name the case asked about, and never by the text a hover answered with.
+def declared(line):
+    t = line.strip()
+    m = re.match(r"^(?:unsafe )?(?:fn|struct|enum|spec|type)\s+([A-Za-z_][A-Za-z0-9_]*)", t)
+    if m:
+        return m.group(1)
+    m = re.match(r"^(?:const |mut )?([A-Za-z_][A-Za-z0-9_]*)(?=:|\s*:=|\(|$)", t)
+    return m.group(1) if m else None
+
+# the entry `zerg doc` prints for one declared name: its signature line, and the block under it
+# dedented — to the next line indented no further than the signature itself. It is an error for
+# a document to hold two of that name here, rather than a reason to take the first.
+def doc_entry(text, name):
+    lines = text.split("\n")
+    at = [i for i, line in enumerate(lines) if declared(line) == name]
+    if len(at) != 1:
+        return None, None
+    i = at[0]
+    ind = len(lines[i]) - len(lines[i].lstrip())
+    out = []
+    for rest in lines[i + 1:]:
+        if rest.strip() and len(rest) - len(rest.lstrip()) <= ind:
+            break
+        out.append(rest[ind + 4:] if rest.strip() else "")
+    return lines[i].strip(), "\n".join(out).strip()
+
+# (what, where the cursor is, what `zerg doc` is asked, the name the entry is found by, whether
+# the entry is the WHOLE of what the document says about it). A TYPE's entry carries its
+# members and a hover carries the declaration's own comment, so that one is held to the start
+# of the entry rather than to all of it — every other case here is exact.
+NOCOMMENT = "an exposed declaration with no comment"
+CASES = [
+    ("a function another file declares", at(MAIN, "lib.twice(p.x)", "twice"), LIB, "twice", True),
+    ("a field of it", at(MAIN, "lib.twice(p.x)", "x"), LIB, "x", True),
+    ("the type that holds it", at(MAIN, "p := lib.Point", "Point"), LIB, "Point", False),
+    (NOCOMMENT, at(MAIN, "lib.plain(p.y)", "plain"), LIB, "plain", True),
+    ("a standard-library function", at(MAIN, "strings.has_prefix", "has_prefix"), "strings.has_prefix", "has_prefix", True),
+    ("an enum", at(MAIN, "int(Colour.Red)", "Colour"), None, "Colour", True),
+    ("a variant of it", at(MAIN, "int(Colour.Red)", "Red"), None, "Red", True),
+    ("a private function", at(MAIN, "print total + quiet", "quiet"), None, "quiet", True),
+]
+documented = 0
+fenced = 0
+nocomment = None
+for (what, _, key, name, whole), got in zip(CASES, hovers_at(CASES)):
+    if not isinstance(got, dict):
+        check(False, "%s has a hover" % what, got)
+        continue
+    kind = got["contents"].get("kind")
+    check(kind == "markdown", "%s is markdown, which is what carries a fence" % what, kind)
+    hsig, body = parts(got["contents"]["value"])
+    if what == NOCOMMENT:
+        nocomment = body
+    if key is None:
+        # a declaration NO document has: `zerg doc` shows what a module exposes, and a private
+        # function and an enum of the entry file are in nobody's document. The comment above it
+        # in the source is the second opinion, read the coarse way `doc-check` reads a `pub`.
+        lines = src[MAIN].split("\n")
+        decl = [i for i, t in enumerate(lines) if declared(t) == name]
+        check(len(decl) == 1, "the fixture declares `%s` exactly once" % name, decl)
+        if len(decl) != 1:
+            continue
+        ln = decl[0]
+        run = []
+        i = ln - 1
+        while i >= 0 and lines[i].strip().startswith("#"):
+            run.insert(0, lines[i].strip()[1:].strip())
+            i -= 1
+        # as a document prints the head: without the brace that opens a body. There is no
+        # `pub` to take off — a row reaches this branch because no document covers it
+        want_sig = re.sub(r"\s*\{$", "", lines[ln].strip())
+        want = "\n".join(run)
+    else:
+        want_sig, want = doc_entry(doc_of(key), name)
+        check(want_sig is not None, "`zerg doc %s` prints exactly one entry declaring `%s`" % (key, name), want_sig)
+        if want_sig is None:
+            continue
+    check(hsig == want_sig, "%s carries the signature the document prints" % what, hsig)
+
+    # BLOCK FOR BLOCK, IN ORDER: a paragraph by its words, a fence by its lines. A hover that
+    # reflowed a comment, joined it into one line, or moved its example fails here while
+    # agreeing about every word. A TYPE's entry carries its members, so it is held to the
+    # start of the entry — every other case to all of it.
+    hb = shape(body)
+    wb = shape(want)
+    check(hb == (wb if whole else wb[:len(hb)]) and hb != [],
+          "%s says what `zerg doc` says, block for block" % what, hb)
+    if [b for b in hb if b[0] == "fence"]:
+        fenced += 1
+    documented += 1
+check(documented >= 6, "enough declarations were held to their document", documented)
+check(fenced >= 2, "enough of them carry a worked example, which is what a fence protects", fenced)
+
+# THE MARK IS THE DOCUMENT'S. An exposed declaration with no comment is marked, and a local
+# binding is NOT: nobody could have written a comment for it, so the mark would be a complaint
+# about the author rather than a fact about the code.
+MARK = "(undocumented)"
+check(nocomment == MARK, "an exposed declaration with no comment carries the document's mark", nocomment)
+
+# AND A MEMBER WITH NO COMMENT CARRIES NOTHING, which is what the page prints for one. The
+# fixture writes both an uncommented field and an uncommented variant, and both are hovered:
+# a member the gate never asked about is a rule the gate cannot see.
+BARE = [
+    ("a field with no comment", at(MAIN, "lib.plain(p.y)", "y"), "y: int", "as the document prints it", LIB, "y"),
+    ("a spec requirement with no comment", at(MAIN, "return x.size()", "size"), "fn size() -> int", "as the document prints it", None, None),
+    ("a variant with no comment", at(MAIN, "\tGreen", "Green"), "Green", "as the document prints it", None, None),
+    ("a local binding", at(MAIN, "print total + quiet", "total"), "binding total", "and is not marked undocumented", None, None),
+    ("a parameter", at(MAIN, "return n + 1", "n"), "parameter n", "and is not marked undocumented", None, None),
+    ("the namespace an import bound", at(MAIN, "p := lib.Point", "lib"), "import lib", "and is not marked undocumented", None, None),
+]
+for (what, place, sig, why, key, name), got in zip(BARE, hovers_at(BARE)):
+    if not isinstance(got, dict):
+        check(False, "%s has a hover" % what, got)
+        continue
+    hsig, body = parts(got["contents"]["value"])
+    check(hsig == sig, "%s says what it is" % what, hsig)
+    check(body == "", "%s carries nothing under it, %s" % (what, why), body)
+    if key is not None:
+        check(doc_entry(doc_of(key), name)[1] == "", "`zerg doc` prints that member bare too", name)
+
+# --- silence ---
+# THE PAGE PRINTS A REQUIREMENT BARE TOO. The hover side of that rule is `size` above, in the
+# buffer; the page side needs a requirement a document holds, and `lib`'s is one — a renderer
+# that started marking a member would disagree with the hover about this line and about no
+# other, which is the drift `doc_marks_absence` exists to make impossible.
+check(doc_entry(doc_of(LIB), "weight")[1] == "", "`zerg doc` prints a spec's requirement bare", "weight")
+
+SILENT = [
+    ("a built-in conversion, which no reader declared", at(MAIN, "int(Colour.Red)", "int")),
+    ("a position in a file the client never opened", at(LIB, "pub fn twice", "twice")),
+]
+for (what, place), got in zip(SILENT, hovers_at(SILENT)):
+    check(got is None, "%s has no hover" % what, got)
+
+# AN ABORTED CHECK DROPS THE INDEX, and a hover from a program the compiler no longer agrees is
+# this one would be a document for code nobody wrote.
+p, l, c = at(MAIN, "lib.twice(p.x)", "twice")
+broken = src[MAIN].replace("fn main() {", "fn main( {")
+got = ask([("textDocument/hover", p, l, c)], change=broken)[0]
+check(got is None, "a buffer whose check aborted has no hover", got)
+
+# --- the index answers both, or neither ---
+# every identifier token of the buffer, strings and comments blanked so a word inside one is not
+# asked about. Hover reads the index `definition` reads and resolves nothing of its own, so for
+# a name IN THE OPEN BUFFER the two must answer for exactly the same ones. Only the open buffer:
+# a hover is read out of the text the client sent and answers null for a file it never sent,
+# while `definition` answers from the index for any file of the program.
+# the fixture is ASCII throughout, which is what lets a byte offset stand as a UTF-16 one here;
+# the CJK case that holds the conversion itself is section 7's
+toks = []
+for ln, text in enumerate(src[MAIN].split("\n")):
+    code = re.sub(r'"[^"]*"', lambda m: " " * len(m.group(0)), text.split("#")[0])
+    for m in re.finditer(r"[A-Za-z_][A-Za-z0-9_]*", code):
+        toks.append((MAIN, ln, m.start()))
+answers = ask([("textDocument/definition", p, l, c) for p, l, c in toks]
+              + [("textDocument/hover", p, l, c) for p, l, c in toks])
+defs, hovs = answers[:len(toks)], answers[len(toks):]
+both = 0
+for (p, l, c), d, h in zip(toks, defs, hovs):
+    check((d is None) == (h is None), "%s:%d:%d is answered by definition and hover alike"
+          % (os.path.basename(p), l + 1, c + 1), (d, h))
+    if d is not None:
+        both += 1
+check(both >= 20, "enough names in the fixture have both", both)
+
+print("HOVER     %d declarations say what `zerg doc` says (%d with a fence), %d names of the open buffer answer definition and hover alike" % (documented, fenced, both))
+sys.exit(1 if bad else 0)
+PYEOF
+then
+	echo 'lsp-check: a hover is not the document `zerg doc` prints for that declaration'
+	exit 1
+fi
+
 # --- 10. the outline is a view of the program ----------------------------------------------
 #
 # Section 1 asks WHICH declarations the outline names, against the parser's own dump. This asks
@@ -1988,4 +2388,4 @@ then
 	exit 1
 fi
 
-echo "lsp-check: $ran buffers agree with the compiler, $outlined outlines are the parser's own, $members module members are checked against their module, formatting is fmt's answer, every protocol case holds, the dump carries the type parameters the outline cannot show, a check is one walk, a name answers with the declaration the compiler resolved it to, a long session stays in the band of one check, the outline is a view of the program, and an outline of the largest source is not a walk of it"
+echo "lsp-check: $ran buffers agree with the compiler, $outlined outlines are the parser's own, $members module members are checked against their module, formatting is fmt's answer, every protocol case holds, the dump carries the type parameters the outline cannot show, a check is one walk, a name answers with the declaration the compiler resolved it to, a long session stays in the band of one check, a hover is the document zerg doc prints for it, the outline is a view of the program, and an outline of the largest source is not a walk of it"

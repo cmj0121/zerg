@@ -1,4 +1,4 @@
-# The exposed declarations that carry no comment — the pin `scripts/doc-check.sh` §2 holds
+# The exposed declarations that carry no `##` comment — the pin `scripts/doc-check.sh` §2 holds
 # `zerg doc --check` to, one name per line, spelled the way a reader types it back in.
 #
 # IT IS A LIST AND NOT A COUNT, and that is the whole point of the file. The pin here used to
@@ -6,6 +6,6 @@
 # errors cancelling: write the comment for one declaration and add a bare `pub` elsewhere in
 # the same change, and 18 is still 18 while the set underneath has moved twice.
 #
-# IT IS EMPTY. Every `pub` name the standard library exposes carries a comment. A line added
+# IT IS EMPTY. Every `pub` name the standard library exposes carries a `##` comment. A line added
 # here is a declaration somebody shipped without one, and the gate names it until the comment
 # is written or the line is added on purpose.

@@ -232,7 +232,7 @@ done
 : >"$tmp/undoc.names"
 for m in $modules; do
 	"$ZERG" doc --check "$m" 2>/dev/null |
-		sed -nE 's/^.*: `([^`]*)` is exposed and carries no comment$/\1/p' >>"$tmp/undoc.names"
+		sed -nE 's/^.*: `([^`]*)` is exposed and carries no `##` comment$/\1/p' >>"$tmp/undoc.names"
 done
 LC_ALL=C sort -o "$tmp/undoc.names" "$tmp/undoc.names"
 grep -v '^#' "$UNDOC_LIST" | grep -v '^[[:space:]]*$' | LC_ALL=C sort >"$tmp/undoc.pinned"
@@ -276,10 +276,10 @@ fi
 # module has no header at all, which is what this case would then be asserting the absence of.
 mkdir -p "$tmp/unparseable"
 cat >"$tmp/unparseable/mod.zg" <<'ZG'
-# unparseable — a module whose declarations cannot be listed.
-#
-# The header above is trivia and reads without an AST; the line below is not a declaration
-# this or any parser can finish.
+## unparseable — a module whose declarations cannot be listed.
+##
+## The header above is trivia and reads without an AST; the line below is not a declaration
+## this or any parser can finish.
 
 pub fn (
 ZG
@@ -298,39 +298,40 @@ checks=$((checks + 2))
 # a reader meets them, and so the whole set is one parse.
 mkdir -p "$tmp/proj"
 cat >"$tmp/proj/attach.zg" <<'ZG'
-# attach — the module header, which belongs to the MODULE and to no declaration below it.
-#
-# A second paragraph of it, so that a header stolen by the first declaration would be
-# visible as a declaration carrying two paragraphs it never had.
+## attach — the module header, which belongs to the MODULE and to no declaration below it.
+##
+## A second paragraph of it, so that a header stolen by the first declaration would be
+## visible as a declaration carrying two paragraphs it never had.
 
-# MAX is documented by this comment and by nothing above it.
+## MAX is documented by this comment and by nothing above it.
 pub const MAX: int = 64
 
 # --- a section banner, which documents nothing ---------------------------------------
+## after_banner would be documented by this line, were the run not opened by a banner.
 pub fn after_banner() -> int {
 	return 1
 }
 
-# this comment is separated from the declaration by a blank line, so it attaches to nothing
+## this comment is separated from the declaration by a blank line, so it attaches to nothing
 
 pub fn detached() -> int {
 	return 2
 }
 
-# Derived carries a decorator between its comment and its declaration.
+## Derived carries a decorator between its comment and its declaration.
 #[derive(Eq)]
 pub struct Derived {
 	pub n: int
 }
 
 impl Derived {
-	# doubled is documented by a comment indented inside the impl block.
+	## doubled is documented by a comment indented inside the impl block.
 	pub fn doubled() -> int {
 		return this.n * 2
 	}
 }
 
-# adjacent is documented; the declaration under it has no comment of its own.
+## adjacent is documented; the declaration under it has no comment of its own.
 pub fn adjacent() -> int {
 	return 3
 }
@@ -338,38 +339,38 @@ pub fn crowded() -> int {
 	return 4
 }
 
-# hashy is documented by this comment, and the `#` in the string below is not one.
+## hashy is documented by this comment, and the `#` in the string below is not one.
 pub fn hashy() -> str {
 	return "# not a comment"
 }
-# tail_commented is documented by this comment and not by the one at the end of the line
-# above it.
+## tail_commented is documented by this comment and not by the one at the end of the line
+## above it.
 pub fn tail_commented() -> int {
 	return 5
 }
 
-# ```zerg
-# attach.only_example()
-# ```
-# ```output
-# 6
-# ```
+## ```zerg
+## attach.only_example()
+## ```
+## ```output
+## 6
+## ```
 pub fn only_example() -> int {
 	return 6
 }
 
-# tag is the free function, and Widget has a method of the same name.
+## tag is the free function, and Widget has a method of the same name.
 pub fn tag() -> str {
 	return "free"
 }
 
-# Widget is a struct.
+## Widget is a struct.
 pub struct Widget {
 	pub n: int
 }
 
 impl Widget {
-	# tag is the method, whose answer is not the free function's.
+	## tag is the method, whose answer is not the free function's.
 	pub fn tag() -> int {
 		return this.n
 	}
@@ -386,7 +387,7 @@ ZG
 # run below it, and the case measured a rule other than the one it names. Deleting `continue if
 # prev == t.line` from zerg/doc.zg left every check here green, which is this script's own
 # standard turned on itself: a rule with no case is a rule that does not exist.
-sed -i.bak '/^	return "# not a comment"$/{n;s/^}$/}  # this trailing comment documents nothing/;}' \
+sed -i.bak '/^	return "# not a comment"$/{n;s/^}$/}  ## this trailing comment documents nothing/;}' \
 	"$tmp/proj/attach.zg" && rm -f "$tmp/proj/attach.zg.bak"
 
 "$ZERG" doc "$tmp/proj/attach.zg" >"$tmp/attach.out" 2>"$tmp/attach.err" || {
@@ -400,12 +401,14 @@ grep -q '^note: ' "$tmp/attach.out" &&
 
 # doc_of <signature-substring> — the first non-blank line printed UNDER that signature, which
 # is the comment the tool decided documents it. This is the whole question §4 asks, so it is
-# asked once and every rule below is one call.
+# asked once and every rule below is one call. It reads `$doc_out`, which is §4's document
+# until §10 points it at its own.
+doc_out="$tmp/attach.out"
 doc_of() {
 	awk -v want="$1" '
 		index($0, want) && !seen { seen = 1; next }
 		seen && NF { print; exit }
-	' "$tmp/attach.out"
+	' "$doc_out"
 }
 
 # rule <name> <signature> <wanted-substring-of-its-first-doc-line>
@@ -477,37 +480,37 @@ esac
 # is the one whose absence misdirects the CALL SITE, which GRAMMAR#fn-decl requires to hold
 # the receiver in a `mut` binding.
 cat >"$tmp/proj/forms.zg" <<'ZG'
-# forms — the exposed forms the standard library happens not to declare.
+## forms — the exposed forms the standard library happens not to declare.
 
-# LIMIT is a public constant.
+## LIMIT is a public constant.
 pub const LIMIT: int = 64
 
-# Name is a public type.
+## Name is a public type.
 pub type Name = str
 
-# Named is a public spec.
+## Named is a public spec.
 pub spec Named {
-	# label is what a Named answers to.
+	## label is what a Named answers to.
 	fn label() -> str
 }
 
-# Counter is a struct whose method mutates it.
+## Counter is a struct whose method mutates it.
 pub struct Counter {
 	pub n: int
 }
 
 impl Counter {
-	# bump adds one to the receiver, in place.
+	## bump adds one to the receiver, in place.
 	pub mut fn bump() {
 		this.n = this.n + 1
 	}
 }
 
 unsafe {
-	# COUNTER is the one mutable global the language has.
+	## COUNTER is the one mutable global the language has.
 	pub mut COUNTER := 0
 
-	# peek reads a raw address, and is an `unsafe fn` because the group says so.
+	## peek reads a raw address, and is an `unsafe fn` because the group says so.
 	pub fn peek(p: ptr) -> int {
 		return 0
 	}
@@ -649,19 +652,19 @@ fi
 # assertion is that the renderer applied it, and a check that asked the renderer what it
 # thought a column was would be the renderer agreeing with itself.
 cat >"$tmp/proj/width.zg" <<'ZG'
-# width — 一份用中文寫成的 module，它量的是文件的欄寬。
-#
-# 全形字在終端機上佔兩欄。一段以「字數」折行的文字會折到八十個字，印出來卻是一百六十欄，
-# 整份文件因此跑出終端機的右緣；以顯示欄寬折行的則每一行都落在八十欄以內。這一段刻意寫得
-# 夠長，長到只要折行是以字數計算就一定有一行超出。兩個全形字之間不該多出作者沒寫的空格，而
-# zerg doc 這種西文詞前後的空格是作者寫的，得留在原處。
+## width — 一份用中文寫成的 module，它量的是文件的欄寬。
+##
+## 全形字在終端機上佔兩欄。一段以「字數」折行的文字會折到八十個字，印出來卻是一百六十欄，
+## 整份文件因此跑出終端機的右緣；以顯示欄寬折行的則每一行都落在八十欄以內。這一段刻意寫得
+## 夠長，長到只要折行是以字數計算就一定有一行超出。兩個全形字之間不該多出作者沒寫的空格，而
+## zerg doc 這種西文詞前後的空格是作者寫的，得留在原處。
 
-# LIMIT 是這份文件量出來的欄數。
+## LIMIT 是這份文件量出來的欄數。
 pub const LIMIT: int = 80
 
-# label 回答一個標籤。它的說明也是中文的，而且夠長：縮排六欄之後的內文仍然必須折行，折在
-# 哪一個字上才是這道 gate 真正在看的東西，而 terminal 與 column 這類西文詞夾在其中，讓貪
-# 心填字有得選。
+## label 回答一個標籤。它的說明也是中文的，而且夠長：縮排六欄之後的內文仍然必須折行，折在
+## 哪一個字上才是這道 gate 真正在看的東西，而 terminal 與 column 這類西文詞夾在其中，讓貪
+## 心填字有得選。
 pub fn label() -> str {
 	return "寬"
 }
@@ -924,31 +927,31 @@ mkdir -p "$tmp/ex"
 # right: an expression example, a statement example, and one in the file's header — a comment
 # no declaration claims, which is a claim about the code all the same
 cat >"$tmp/ex/right.zg" <<'ZG'
-# right is a fixture, and its header carries an example too.
-#
-# ```zerg
-# right.twice(2)
-# ```
-# ```output
-# 4
-# ```
+## right is a fixture, and its header carries an example too.
+##
+## ```zerg
+## right.twice(2)
+## ```
+## ```output
+## 4
+## ```
 
-# twice doubles its argument.
-#
-# ```zerg
-# right.twice(21)
-# right.twice(-1)
-# ```
-# ```output
-# 42
-# -2
-# ```
-#
-# and a statement example claims to print nothing:
-#
-# ```zerg
-# right.twice(0)
-# ```
+## twice doubles its argument.
+##
+## ```zerg
+## right.twice(21)
+## right.twice(-1)
+## ```
+## ```output
+## 42
+## -2
+## ```
+##
+## and a statement example claims to print nothing:
+##
+## ```zerg
+## right.twice(0)
+## ```
 pub fn twice(n: int) -> int {
 	return n * 2
 }
@@ -986,18 +989,18 @@ ran_check 'right examples, the statement and header ones included' right.zg 0 "$
 # a limit of no seconds is a typo, and read as one it would fail every example for being late
 ran_check 'a `--timeout` below one second' right.zg 1 '`--timeout` is a whole number of seconds, one or more' --timeout 0
 
-sed 's/^# -2$/# -3/; s/right\./wrongout./' "$tmp/ex/right.zg" >"$tmp/ex/wrongout.zg"
+sed 's/^## -2$/## -3/; s/right\./wrongout./' "$tmp/ex/right.zg" >"$tmp/ex/wrongout.zg"
 ran_check 'an ```output line that is not what the example prints' wrongout.zg 1 \
 	"wrongout.zg:12: this example's \`\`\`output is not what it prints — line 2 says \`-3\`, and the example printed \`-2\`"
 
-sed 's/^# 4$/# 5/; s/right\./header./' "$tmp/ex/right.zg" >"$tmp/ex/header.zg"
+sed 's/^## 4$/## 5/; s/right\./header./' "$tmp/ex/right.zg" >"$tmp/ex/header.zg"
 ran_check 'a wrong example in a comment no declaration claims' header.zg 1 \
 	"header.zg:3: this example's \`\`\`output is not what it prints — line 1 says \`5\`, and the example printed \`4\`"
 
-sed 's/^# right\.twice(21)$/# right.nothing(21)/; s/right\./broken./' "$tmp/ex/right.zg" >"$tmp/ex/broken.zg"
+sed 's/^## right\.twice(21)$/## right.nothing(21)/; s/right\./broken./' "$tmp/ex/right.zg" >"$tmp/ex/broken.zg"
 ran_check 'an example that does not compile' broken.zg 1 "broken.zg:3: the examples of \`broken\` do not compile"
 
-sed 's/^# right\.twice(0)$/# print right.twice(0)/; s/right\./chatty./' "$tmp/ex/right.zg" >"$tmp/ex/chatty.zg"
+sed 's/^## right\.twice(0)$/## print right.twice(0)/; s/right\./chatty./' "$tmp/ex/right.zg" >"$tmp/ex/chatty.zg"
 ran_check 'a statement example that prints' chatty.zg 1 \
 	"the examples of \`chatty\` printed more than their \`\`\`output blocks say — \`0\` is claimed by none"
 
@@ -1007,7 +1010,7 @@ ran_check 'a statement example that prints' chatty.zg 1 \
 # line is <fence line>, on line 3, and holds `--check` to the finding it names. Nothing else in
 # the module is an example, so the case builds nothing and asks one question.
 fence_case() {
-	printf '# %s is a fixture with one fence-shaped line.\n#\n# %s\n# %s.one()\n# ```\npub fn one() -> int {\n\treturn 1\n}\n' \
+	printf '## %s is a fixture with one fence-shaped line.\n##\n## %s\n## %s.one()\n## ```\npub fn one() -> int {\n\treturn 1\n}\n' \
 		"$2" "$3" "$2" >"$tmp/ex/$2.zg"
 	ran_check "$1" "$2.zg" 1 "$2.zg:3: $4"
 }
@@ -1034,13 +1037,13 @@ ran_check 'a directory module' pair 0 "$RIGHT_OK"
 # the runner — it read the build's stdout to its end while the build waited to write stderr —
 # and the second hung it with nothing to stop the wait. Both have to be REPORTED.
 {
-	printf '# loud has an example that does not compile, loudly.\n#\n# ```zerg\n'
+	printf '## loud has an example that does not compile, loudly.\n##\n## ```zerg\n'
 	i=0
 	while [ "$i" -lt 1500 ]; do
-		printf '# loud.nothing%d()\n' "$i"
+		printf '## loud.nothing%d()\n' "$i"
 		i=$((i + 1))
 	done
-	printf '# ```\npub fn one() -> int {\n\treturn 1\n}\n'
+	printf '## ```\npub fn one() -> int {\n\treturn 1\n}\n'
 } >"$tmp/ex/loud.zg"
 ran_check 'a build whose diagnostics fill a pipe' loud.zg 1 "loud.zg:3: the examples of \`loud\` do not compile"
 # and the finding carries the head of that report, saying how much it cut — half a megabyte of
@@ -1053,11 +1056,11 @@ else
 fi
 
 cat >"$tmp/ex/spin.zg" <<'ZG'
-# spin never returns.
-#
-# ```zerg
-# spin.spin()
-# ```
+## spin never returns.
+##
+## ```zerg
+## spin.spin()
+## ```
 pub fn spin() {
 	mut i := 0
 	for {
@@ -1087,14 +1090,14 @@ mark="zerg-doc-grandchild-$$"
 cat >"$tmp/ex/nap.zg" <<ZG
 import "os"
 
-# nap starts a child that outlives any sensible limit.
-#
-# \`\`\`zerg
-# nap.nap()
-# \`\`\`
-# \`\`\`output
-# 0
-# \`\`\`
+## nap starts a child that outlives any sensible limit.
+##
+## \`\`\`zerg
+## nap.nap()
+## \`\`\`
+## \`\`\`output
+## 0
+## \`\`\`
 pub fn nap() -> int {
 	return os.run(["sh", "-c", "sleep 30; echo $mark"])
 }
@@ -1121,11 +1124,11 @@ imark="zerg-doc-interrupted-$$"
 cat >"$tmp/int/mod/intr.zg" <<ZG
 import "os"
 
-# intr never returns, and leaves a marked process running while it does not.
-#
-# \`\`\`zerg
-# intr.intr()
-# \`\`\`
+## intr never returns, and leaves a marked process running while it does not.
+##
+## \`\`\`zerg
+## intr.intr()
+## \`\`\`
 pub fn intr() {
 	os.run(["sh", "-c", "while :; do sleep 1; done; : $imark"])
 }
@@ -1168,7 +1171,113 @@ fi
 	cat "$tmp/ex/right.zg"
 	printf '\npub fn bare() -> int {\n\treturn 1\n}\n'
 } | sed 's/right\./bare./' >"$tmp/ex/bare.zg"
-ran_check 'an undocumented `pub fn` beside right examples' bare.zg 1 "\`bare.bare\` is exposed and carries no comment"
+ran_check 'an undocumented `pub fn` beside right examples' bare.zg 1 "\`bare.bare\` is exposed and carries no \`##\` comment"
+
+# --- 10. `##` is the reader's text, and `#` the maintainer's -----------------------------
+#
+# #18: a comment is read twice. The reader's page — the default, and everything a listing,
+# `--check` and a hover read — is the `##` lines; `--all` is every comment as written. The
+# marker is per LINE, so each case below writes both kinds into one run and asks each view
+# which of them it printed. A declaration with `#` notes and no `##` text is undocumented,
+# which is the only way a whole forgotten `##` is ever found.
+cat >"$tmp/proj/marked.zg" <<'ZG'
+## marked — the header's reader text.
+#
+# the header's maintainer note.
+
+## both carries reader text first.
+# both's maintainer note sits between two reader paragraphs.
+## both's second reader paragraph.
+pub fn both() -> int {
+	return 1
+}
+
+# notes_only carries a maintainer note and no reader text.
+pub fn notes_only() -> int {
+	return 2
+}
+
+## Holder is documented.
+pub struct Holder {
+	# a maintainer note on a field.
+	pub n: int
+}
+ZG
+"$ZERG" doc "$tmp/proj/marked.zg" >"$tmp/marked.out" 2>&1
+"$ZERG" doc --all "$tmp/proj/marked.zg" >"$tmp/marked.all" 2>&1
+grep -q '^note: ' "$tmp/marked.out" &&
+	note "the marker fixture does not parse, so every view below was asserted against an empty document: $(grep -m1 '^note: ' "$tmp/marked.out")"
+
+# shows <what> <file> <text> / hides <what> <file> <text>
+shows() {
+	if grep -qF "$3" "$2"; then
+		checks=$((checks + 1))
+		rules=$((rules + 1))
+	else
+		note "$1 — \`$(basename "$2")\` does not print \"$3\""
+	fi
+}
+hides() {
+	if grep -qF "$3" "$2"; then
+		note "$1 — \`$(basename "$2")\` prints \"$3\""
+	else
+		checks=$((checks + 1))
+		rules=$((rules + 1))
+	fi
+}
+
+shows 'the reader page keeps the `##` header' "$tmp/marked.out" "marked — the header's reader text."
+hides 'the reader page drops a `#` line of the header' "$tmp/marked.out" "the header's maintainer note"
+shows 'the reader page keeps both `##` paragraphs' "$tmp/marked.out" "both's second reader paragraph."
+hides 'the reader page drops a `#` line between two `##` ones' "$tmp/marked.out" "both's maintainer note"
+hides "the reader page drops a field's \`#\` note" "$tmp/marked.out" 'a maintainer note on a field'
+
+doc_out="$tmp/marked.out"
+rule 'a declaration with `#` notes and no `##` text is undocumented' \
+	'fn notes_only()' '(undocumented)'
+doc_out="$tmp/marked.all"
+rule '`--all` still marks a declaration whose only comment is a `#` note' \
+	'fn notes_only()' '(undocumented)'
+
+# THE NOTE BETWEEN TWO READER PARAGRAPHS ENDS THE FIRST. Filled together they would be one
+# sentence nobody wrote; the reader page holds them a blank line apart.
+if awk '/both carries reader text first\./ { f = 1; next } f { print; exit }' "$tmp/marked.out" | grep -q '^$'; then
+	checks=$((checks + 1))
+	rules=$((rules + 1))
+else
+	note 'the two `##` paragraphs of `both` are filled into one where a `#` note stood between them'
+fi
+
+shows "\`--all\` prints the header's \`#\` note" "$tmp/marked.all" "the header's maintainer note"
+shows '`--all` prints a `#` line between two `##` ones' "$tmp/marked.all" "both's maintainer note"
+shows "\`--all\` prints a declaration's only note" "$tmp/marked.all" 'notes_only carries a maintainer note'
+shows "\`--all\` prints a field's \`#\` note" "$tmp/marked.all" 'a maintainer note on a field'
+
+# `--check` NAMES IT, which is how a forgotten `##` on a whole comment is found
+cp "$tmp/proj/marked.zg" "$tmp/ex/marked.zg"
+ran_check 'a declaration with only `#` notes is named by `--check`' marked.zg 1 \
+	"\`marked.notes_only\` is exposed and carries no \`##\` comment"
+
+# AN EXAMPLE MARKED BOTH WAYS IS A FINDING. The runner reads every line and the reader page
+# shows only the `##` ones, so the example that was run is not the one a reader is shown.
+printf '## mixed has an example with a `#` line in it.\n##\n## ```zerg\n# mixed.one()\n## ```\npub fn one() -> int {\n\treturn 1\n}\n' >"$tmp/ex/mixed.zg"
+ran_check 'an example marked `##` on some lines and `#` on others' mixed.zg 1 \
+	'mixed.zg:3: an example marked `##` on some of its lines and `#` on others'
+
+# `--all` WHERE IT WOULD CHANGE NOTHING IS REFUSED. Every listing reads the `##` text alone,
+# so the flag beside one is a question the reader believes was answered.
+for args in '--all --brief' '--all --check' '--all'; do
+	target="$tmp/proj/marked.zg"
+	[ "$args" = '--all' ] && target=''
+	# shellcheck disable=SC2086
+	if "$ZERG" doc $args $target >"$tmp/allref.out" 2>&1; then
+		note "\`zerg doc $args\` exited 0, and \`--all\` beside a listing is refused"
+	elif grep -qF "\`--all\` is the maintainer's page" "$tmp/allref.out"; then
+		checks=$((checks + 1))
+	else
+		note "\`zerg doc $args\` was refused with \"$(head -1 "$tmp/allref.out")\""
+	fi
+done
 
 # --- the module list, and the floors ----------------------------------------------------
 #
@@ -1191,8 +1300,8 @@ checks=$((checks + 1))
 # one. A guard that stopped guarding is worse than no guard: the number would have gone on
 # passing at 15 while the walk answered nothing.
 mkdir -p "$tmp/proj/greet"
-printf '# A module because it holds this file.\n\nimport pub "./hello"\n' >"$tmp/proj/greet/mod.zg"
-printf '# hello is the one name on the surface.\npub fn hello() -> str {\n\treturn "hi"\n}\n' >"$tmp/proj/greet/hello.zg"
+printf '## A module because it holds this file.\n\nimport pub "./hello"\n' >"$tmp/proj/greet/mod.zg"
+printf '## hello is the one name on the surface.\npub fn hello() -> str {\n\treturn "hi"\n}\n' >"$tmp/proj/greet/hello.zg"
 printf 'fn main() {\n\tnop\n}\n' >"$tmp/proj/main.zg"
 (cd "$tmp/proj" && "$ZERG_ABS" doc >"$tmp/local.out" 2>&1) || true
 grep -qE "^  greet( |$)" "$tmp/local.out" ||

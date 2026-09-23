@@ -74,7 +74,7 @@
 #
 # THIS ONE IS NOT ANSWERED HERE, and it is the only one that is not. Everything above comes
 # from the parsed File; a literal's adopted type is a fact about TYPES, so the LOWERING WALK
-# records it and lint_conversions (emit.zg) hands it back. lint_program asks both and hands
+# records it and lint_conversions_of (emit.zg) hands it back. lint_program asks both and hands
 # back one list.
 #
 # `L6xx` is SHIPPING: what the binary carries that the source suggests was not meant to be in
@@ -174,7 +174,7 @@ pub fn lint_program(srcs: list[str], paths: list[str], ms: emit.Mods) -> list[Fi
 # findings land in `diags`, and what comes back is what lint_program reports.
 #
 # It is the language server's question. Asked as those two calls, one check merged the
-# program three times and lowered it twice — the second walk inside lint_conversions, asking
+# program three times and lowered it twice — the second walk inside lint_conversions_of, asking
 # again what the first had just computed — and on this compiler's own program that second
 # walk was about half of the check's seconds.
 #
@@ -189,10 +189,14 @@ pub fn check_and_lint(srcs: list[str], paths: list[str], ms: emit.Mods, mut &dia
 
 # check_lint_index is check_and_lint that also answers the NAME INDEX (#24) in `nx`, out of the
 # same one walk. An abort raises out of it before `nx` is written.
-pub fn check_lint_index(srcs: list[str], paths: list[str], ms: emit.Mods, mut &diags: list[ast.Diag], mut &nx: ast.NameIndex) -> list[Finding] {
+#
+# AND THE WALK'S L5xx NOTES AS IT RAISED THEM, in `notes`: before a `#[allow(…)]` is applied and
+# before a note becomes a `Finding`, which has no room for the `fix` a note carries. They are the
+# language server's quick fixes (#204), and asking for them apart was the same walk a second time.
+pub fn check_lint_index(srcs: list[str], paths: list[str], ms: emit.Mods, mut &diags: list[ast.Diag], mut &nx: ast.NameIndex, mut &notes: list[ast.Diag]) -> list[Finding] {
 	prog := emit.merge_files_at(srcs, paths)
-	convs := emit.lint_index_of(prog, ms, diags, nx)
-	return lint_after(srcs, paths, ms, prog, convs)
+	notes = emit.lint_index_of(prog, ms, diags, nx)
+	return lint_after(srcs, paths, ms, prog, notes)
 }
 
 fn lint_after(srcs: list[str], paths: list[str], ms: emit.Mods, prog: ast.File, convs: list[ast.Diag]) -> list[Finding] {

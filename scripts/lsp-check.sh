@@ -3097,4 +3097,238 @@ elif [ "$probe_rc" -ne 0 ]; then
 	echo "lsp-check: a keystroke asks its question once per buffer instead of once per program"
 	exit 1
 fi
-echo "lsp-check: $ran buffers agree with the compiler, $outlined outlines are the parser's own, $members module members are checked against their module, formatting is fmt's answer, every protocol case holds, the dump carries the type parameters the outline cannot show, a check is one walk, a name answers with the declaration the compiler resolved it to, a long session stays in the band of one check, a hover is the document zerg doc prints for it, the outline is a view of the program, an outline of the largest source is not a walk of it, and every open buffer is the program the editor holds"
+# --- 13. a quick fix is the check's answer, not a second walk -------------------------------
+#
+# `textDocument/codeAction` used to answer from a lowering walk of its own — over the program the
+# check that published the same buffer had just walked — so a request for the menu cost half a
+# check, and a request that offered nothing cost the same (#204). It answers now from the fixes
+# that check found, kept with the buffer.
+#
+# TWO QUESTIONS, and the first is WHAT it offers, which has to be the set the walk offered. The
+# set is asserted against the compiler rather than against a list written here: it is the L502
+# findings `zerg lint` places in `lib.zg`, minus the negated literal, whose finding carries no
+# fix (chk_fix_unless) — so a server that offered every finding, or dropped the fix of one, reads
+# differently. Several carry one, two of them on one line. The same set is asked three ways: of
+# `lib.zg` checked as its own program; of `lib.zg` spoken for by the check of `main.zg`, the
+# program beside it that imports it, after a keystroke there; and of `lib.zg` after its own `1`
+# is written `1.0`, where the kept set has to be the new text's and not the one before it. None of
+# it names the path an answer took, so the walk that answered on main passes it too — which is
+# what says the kept set is the one the walk offered.
+#
+# The second is what it COSTS, measured from outside the process as section 6 measures a check:
+# a session that opens a program and then asks for code actions A times, against the same session
+# asking none. A walk per request makes the difference A walks; an answer from the check makes it
+# the cost of A replies. The program is one whose WALK is its cost — many small functions, each a
+# lowering and each holding two fixable literals — so the check the difference is judged against
+# is well above the process's start-up. And the probe refuses to judge — it fails, loudly — when
+# that check costs under FLOOR times a session that opens nothing, because on a runner timing in
+# CPU seconds a ratio over a check the timer cannot see is no answer either way.
+#
+# K IS NAMED HERE: A requests cost under K checks together. A walk per request reads about A/2 —
+# a check is a walk and the tree rules — and an answer from the check reads near 0.
+LSP_CA_ASKS=8
+LSP_CA_K=0.5
+LSP_CA_FLOOR=4
+mkdir -p "$tmp/ca" "$tmp/cacost"
+cat >"$tmp/ca/lib.zg" <<'ZG'
+pub fn half() -> float {
+	x: float = 1 / 2
+	return x
+}
+
+pub fn shifted() -> float {
+	y: float = -3
+	return y + 4
+}
+ZG
+cat >"$tmp/ca/main.zg" <<'ZG'
+import "./lib"
+
+fn main() {
+	print lib.half() + lib.shifted()
+}
+ZG
+ca_rc=0
+"$PY" - "$ZERG" "$tmp/ca" "$tmp/cacost" "$LSP_CA_ASKS" "$LSP_CA_K" "$LSP_CA_FLOOR" <<'PYEOF' || ca_rc=$?
+import json, os, re, resource, subprocess, sys
+
+zerg, ca, cost_dir = sys.argv[1], sys.argv[2], sys.argv[3]
+asks, k, floor = int(sys.argv[4]), float(sys.argv[5]), float(sys.argv[6])
+lib, main = os.path.join(ca, "lib.zg"), os.path.join(ca, "main.zg")
+
+
+def uri_of(p):
+    return "file://" + os.path.abspath(p)
+
+
+def opened(p):
+    return {"jsonrpc": "2.0", "method": "textDocument/didOpen", "params": {"textDocument": {
+        "uri": uri_of(p), "languageId": "zerg", "version": 1, "text": open(p, encoding="utf-8").read()}}}
+
+
+def asked(i, p):
+    return {"jsonrpc": "2.0", "id": i, "method": "textDocument/codeAction", "params": {
+        "textDocument": {"uri": uri_of(p)},
+        "range": {"start": {"line": 0, "character": 0}, "end": {"line": 100000, "character": 0}},
+        "context": {"diagnostics": []}}}
+
+
+INIT = {"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {"capabilities": {}}}
+DOWN = [{"jsonrpc": "2.0", "id": 2, "method": "shutdown"}, {"jsonrpc": "2.0", "method": "exit"}]
+
+
+def wire(msgs):
+    return b"".join(b"Content-Length: %d\r\n\r\n%s" % (len(b), b) for b in (json.dumps(m).encode() for m in msgs))
+
+
+def frames(out):
+    got, i = [], 0
+    while i < len(out):
+        j = out.find(b"\r\n\r\n", i)
+        if j < 0:
+            break
+        n = int(re.search(rb"Content-Length:\s*(\d+)", out[i:j], re.I).group(1))
+        got.append(json.loads(out[j + 4:j + 4 + n].decode("utf-8")))
+        i = j + 4 + n
+    return got
+
+
+def offered(fr, i, p):
+    got = [f for f in fr if f.get("id") == i]
+    if not got or not isinstance(got[0].get("result"), list):
+        return None
+    out = set()
+    for a in got[0]["result"]:
+        for e in a["edit"]["changes"][uri_of(p)]:
+            r = e["range"]
+            out.add((a["title"], e["newText"], r["start"]["line"], r["start"]["character"],
+                     r["end"]["line"], r["end"]["character"]))
+    return out
+
+
+def published(fr, p):
+    ds = [f["params"]["diagnostics"] for f in fr if f.get("method") == "textDocument/publishDiagnostics"
+          and f["params"]["uri"] == uri_of(p)]
+    return ds[-1] if ds else None
+
+
+bad = 0
+
+# --- what it offers ---
+run = lambda msgs: frames(subprocess.run([zerg, "lsp"], input=wire(msgs), stdout=subprocess.PIPE,
+                                         stderr=subprocess.DEVNULL, timeout=600).stdout)
+
+
+def changed(p, text):
+    return {"jsonrpc": "2.0", "method": "textDocument/didChange", "params": {
+        "textDocument": {"uri": uri_of(p), "version": 2}, "contentChanges": [{"text": text}]}}
+
+
+# what `zerg lint` places — 1-based byte columns, and the fixture is ASCII — minus the negated one
+lint = subprocess.run([zerg, "lint", lib], stdout=subprocess.PIPE, stderr=subprocess.STDOUT).stdout.decode()
+want, negated = set(), 0
+for line, col, lit in re.findall(r"lib\.zg:(\d+):(\d+): L502 the literal `(-?\d+)`", lint):
+    if lit.startswith("-"):
+        negated += 1
+    else:
+        want.add((int(line) - 1, int(col) - 1))
+if len(want) < 3 or negated < 1:
+    print("QUICKFIX  `zerg lint` placed %d fixable and %d negated literals in lib.zg, under the fixture's 3 and 1:\n%s"
+          % (len(want), negated, lint))
+    sys.exit(1)
+
+own = offered(run([INIT, opened(lib), asked(7, lib)] + DOWN), 7, lib)
+main_text = open(main, encoding="utf-8").read()
+via = offered(run([INIT, opened(lib), opened(main), changed(main, main_text + "\n"), asked(7, lib)] + DOWN), 7, lib)
+for what, got in (("checked as its own program", own), ("spoken for by main.zg's check", via)):
+    at = got and set((a[2], a[3]) for a in got)
+    if at != want:
+        print("QUICKFIX  lib.zg %s offers fixes at %r, and the fixable literals are at %r"
+              % (what, got and sorted(at), sorted(want)))
+        bad += 1
+if own and via and own != via:
+    print("QUICKFIX  lib.zg offers %r as its own program and %r from main.zg's" % (sorted(own), sorted(via)))
+    bad += 1
+
+# a changed buffer is answered from ITS check, not the one before it
+edited = open(lib, encoding="utf-8").read().replace("1 / 2", "1.0 / 2")
+now = offered(run([INIT, opened(lib), changed(lib, edited), asked(7, lib)] + DOWN), 7, lib)
+if now is None or len(now) != len(want) - 1 or any(a[1] == "1.0" for a in now):
+    print("QUICKFIX  after the `1` was written `1.0`, a code action offers %r" % (now and sorted(now)))
+    bad += 1
+if bad:
+    sys.exit(1)
+print("QUICKFIX  %d quick fixes in lib.zg, the ones `zerg lint` places, from either check" % len(want))
+
+# --- what it costs ---
+prog = os.path.join(cost_dir, "many.zg")
+with open(prog, "w", encoding="utf-8") as f:
+    for i in range(2000):
+        f.write("fn f%d() -> float {\n\tx: float = 1 / 2\n\treturn x\n}\n\n" % i)
+    f.write("fn main() {\n\tprint f0() + f1999()\n}\n")
+ref = subprocess.run([zerg, "build", "--emit", "check", prog], stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+if ref.returncode != 0:
+    print("QUICKFIX  the cost fixture does not check: %s" % ref.stderr.decode("utf-8", "replace").strip())
+    sys.exit(1)
+
+TIMER = ["/usr/bin/time", "-l"]
+try:
+    probe = subprocess.run(TIMER + ["true"], stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
+    counts = probe.returncode == 0 and b"instructions retired" in probe.stderr
+except OSError:
+    counts = False
+unit = "instructions" if counts else "CPU seconds"
+
+
+def cost(msgs):
+    run = lambda c: subprocess.run(c, input=wire(msgs), stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=1800)
+    if counts:
+        p = run(TIMER + [zerg, "lsp"])
+        m = re.search(rb"(\d+)\s+instructions retired", p.stderr)
+        if not m:
+            print("QUICKFIX  `time -l` counted no instructions for a session")
+            sys.exit(1)
+        return p, float(m.group(1))
+    before = resource.getrusage(resource.RUSAGE_CHILDREN)
+    p = run([zerg, "lsp"])
+    after = resource.getrusage(resource.RUSAGE_CHILDREN)
+    return p, (after.ru_utime + after.ru_stime) - (before.ru_utime + before.ru_stime)
+
+
+# the cursor on the first function's `1`, which offers exactly one fix
+def ask_at(i):
+    return {"jsonrpc": "2.0", "id": i, "method": "textDocument/codeAction", "params": {
+        "textDocument": {"uri": uri_of(prog)},
+        "range": {"start": {"line": 1, "character": 12}, "end": {"line": 1, "character": 12}},
+        "context": {"diagnostics": []}}}
+
+
+_, bare = cost([INIT] + DOWN)
+p0, none = cost([INIT, opened(prog)] + DOWN)
+pa, some = cost([INIT, opened(prog)] + [ask_at(10 + i) for i in range(asks)] + DOWN)
+fr = frames(pa.stdout)
+answers = [offered(fr, 10 + i, prog) for i in range(asks)]
+if published(frames(p0.stdout), prog) is None or any(a is None or len(a) != 1 for a in answers):
+    print("QUICKFIX  a session did not check the program or answer every request with its one fix: %r" % answers)
+    sys.exit(1)
+
+check = none - bare
+if check < floor * bare:
+    print("QUICKFIX  a check costs %.4g %s against %.4g for a session that opens nothing, under the floor of "
+          "%.2g times it: the measurement cannot see a walk, so it does not judge one" % (check, unit, bare, floor))
+    sys.exit(2)
+ratio = (some - none) / check
+print("QUICKFIX  %d code actions on an unchanged buffer cost %.2f checks (%s: check %.4g, the requests %.4g)"
+      % (asks, ratio, unit, check, some - none))
+if ratio >= k:
+    print("QUICKFIX  a code action on an unchanged buffer walks the program")
+    sys.exit(1)
+PYEOF
+if [ "$ca_rc" -eq 2 ]; then
+	echo "lsp-check: a check is too small a part of its session to be measured, so a code action's cost was not judged"
+	exit 1
+elif [ "$ca_rc" -ne 0 ]; then
+	echo "lsp-check: a quick fix is not the check's answer, or costs a walk of its own"
+	exit 1
+fi
+echo "lsp-check: $ran buffers agree with the compiler, $outlined outlines are the parser's own, $members module members are checked against their module, formatting is fmt's answer, every protocol case holds, the dump carries the type parameters the outline cannot show, a check is one walk, a name answers with the declaration the compiler resolved it to, a long session stays in the band of one check, a hover is the document zerg doc prints for it, the outline is a view of the program, an outline of the largest source is not a walk of it, every open buffer is the program the editor holds, and a quick fix is the check's answer and costs no walk of its own"

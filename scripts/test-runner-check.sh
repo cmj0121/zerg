@@ -62,6 +62,9 @@
 #     returns   a `#[test]` declaring `-> T`      refused with a place, and nothing in its
 #                                                 package runs: the value would be dropped,
 #                                                 and it was reported `ok`
+#     stdlib    a project's own `stdlib/`         is the project's, however the path is
+#                                                 spelled: the standard library is a
+#                                                 directory, not a name
 #
 # The fixtures live here rather than in the tree for the reason refuse-check's cases do: a
 # package checked into the repository is a package every other gate then has to know about —
@@ -1385,11 +1388,43 @@ say "a run under a symlink pointing at an ancestor did not end" $?
 [ "$(printf '%s\n' "$link" | grep -c '^  ok    test_reached_once$')" -eq 1 ]
 say "the test under a symlinked ancestor was reached more than once" $?
 
+# --- a project's own `stdlib/` --------------------------------------------------------------
+#
+# THE STANDARD LIBRARY IS A DIRECTORY, NOT A NAME. A package is the stdlib's by being in the
+# stdlib's tree, and whether it is was decided by asking if the stdlib's absolute path ENDED
+# WITH the argument as typed — so a project's own `stdlib/`, named relatively, passed, its
+# `ascii` took the identity `stdlib:ascii`, and the real `strings` imported it in place of the
+# real `ascii`: E3084 in a file the user never wrote. Spelled absolutely, the same tree passed.
+#
+# The three spellings of one directory are the case, from the project's root: relative, `.`,
+# and absolute. The test imports `strings`, whose own `import "ascii"` is what goes wrong.
+mkdir -p "$tmp/proj/stdlib"
+cat >"$tmp/proj/stdlib/ascii.zg" <<'EOF'
+pub fn twice(n: int) -> int {
+	return n * 2
+}
+EOF
+cat >"$tmp/proj/stdlib/ascii_test.zg" <<'EOF'
+import "strings"
+
+#[test]
+fn test_twice() {
+	assert twice(2) == 4
+	assert strings.contains("abc", "b")
+}
+EOF
+zabs="$(cd "$(dirname "$ZERG")" && pwd)/$(basename "$ZERG")"
+for spelled in stdlib . "$tmp/proj/stdlib"; do
+	own=$(cd "$tmp/proj" && "$zabs" test "$spelled" 2>&1)
+	printf '%s\n' "$own" | grep -q '^1 passed, 0 failed, 0 skipped, 0 timed out$'
+	say "a project's own stdlib/, spelled \`$spelled\`, was taken for the standard library: $own" $?
+done
+
 # --- the floor -----------------------------------------------------------------------------
 #
-# 103 assertions today. The floor is what keeps this from reporting success after a rewrite
+# 106 assertions today. The floor is what keeps this from reporting success after a rewrite
 # that stops asserting — the failure every gate here is written against, one level up.
-MIN_ASSERTS=${MIN_ASSERTS:-103}
+MIN_ASSERTS=${MIN_ASSERTS:-106}
 total=$((pass + fail))
 if [ "$total" -lt "$MIN_ASSERTS" ]; then
 	printf 'test-runner-check: %s assertions were made, below the floor of %s — the gate did not run itself\n' \
@@ -1403,4 +1438,4 @@ if [ "$fail" -ne 0 ]; then
 	exit 1
 fi
 
-printf 'test-runner-check: %s assertions — both paths, a failure, a skip, a crash, an early exit and an empty tree that says so in its status, a run pointed at one file, a module named after its own directory, a `#[test]` written outside a `*_test.zg` and one declaring a return type, and a fixture built once, chained, torn down in reverse, broken, unnamed and circular\n' "$total"
+printf 'test-runner-check: %s assertions — both paths, a failure, a skip, a crash, an early exit and an empty tree that says so in its status, a run pointed at one file, a module named after its own directory, a user `stdlib/` directory however it is spelled, a `#[test]` written outside a `*_test.zg` and one declaring a return type, and a fixture built once, chained, torn down in reverse, broken, unnamed and circular\n' "$total"

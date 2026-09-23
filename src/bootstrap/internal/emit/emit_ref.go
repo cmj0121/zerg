@@ -407,6 +407,7 @@ var sysFloorIntrinsics = map[string]bool{
 	"__zrt_exec":       true,
 	"__zrt_listdir":    true,
 	"__zrt_path_kind":  true,
+	"__zrt_real_path":  true,
 	"__zrt_mkdir":      true,
 	"__zrt_proc_spawn": true,
 	"__zrt_proc_open3": true,
@@ -426,10 +427,11 @@ var schedFloorIntrinsics = map[string]bool{
 // (sys.c's sys_str_cell) — the os `env`/`platform`/`arch` leaves. Lowering one makes the
 // program's str management active, so the cell is retained/released instead of leaked.
 var strProducingIntrinsics = map[string]bool{
-	"__zrt_getenv":   true,
-	"__zrt_platform": true,
-	"__zrt_arch":     true,
-	"__zrt_exe_path": true,
+	"__zrt_getenv":    true,
+	"__zrt_platform":  true,
+	"__zrt_arch":      true,
+	"__zrt_exe_path":  true,
+	"__zrt_real_path": true,
 }
 
 // programCallsIntrinsic reports whether the program lowers any intrinsic whose spelling
@@ -777,6 +779,8 @@ func (e *emitter) fileIntrinsicEmit(n *ast.Call) (string, bool) {
 		return fmt.Sprintf("zrt_listdir(%s)", arg), true
 	case "__zrt_path_kind":
 		return fmt.Sprintf("zrt_path_kind(%s)", arg), true
+	case "__zrt_real_path":
+		return fmt.Sprintf("zrt_real_path(%s)", arg), true
 	case "__zrt_mkdir":
 		return fmt.Sprintf("zrt_mkdir(%s)", arg), true
 	case "__zrt_proc_spawn":

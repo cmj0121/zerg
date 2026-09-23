@@ -15055,6 +15055,7 @@ fn c_intrinsic_ret(name: str) -> ast.Ty {
 	return ast.Ty.TInt if name == "__zrt_trunc"
 	return ast.Ty.TInt if name == "__zrt_atomic_load" or name == "__zrt_atomic_store" or name == "__zrt_atomic_swap" or name == "__zrt_atomic_add"
 	return ast.Ty.TStr if name == "__zrt_getenv" or name == "__zrt_arch" or name == "__zrt_platform" or name == "__zrt_exe_path"
+	return ast.Ty.TStr if name == "__zrt_real_path"
 	return ast.Ty.TBool if name == "__zrt_has_env" or name == "__zrt_exists" or name == "__zrt_mkdir" or name == "__zrt_atomic_cas"
 	return ast.Ty.TBool if name == "__zrt_isatty" or name == "__zrt_del_env"
 

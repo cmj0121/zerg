@@ -6248,6 +6248,159 @@ pub fn tag_of(s: str) -> str {
 }
 EOF
 
+# A VARIANT NAMES ITS ENUM, and so does a construction through one: `s.P.Pv` spells the type
+# `P` as surely as `x: s.P` does, and only the type position refused a private one — the
+# variant read built and printed `P.Pv` (#206). The qualifier is dropped in one place for
+# every value form (c_ns_unqualify), so that is where the question is asked.
+reject a-module-private-enum-variant-read-through-its-namespace E5008 <<'EOF'
+import "./mid/sink" as s
+
+fn main() {
+	v := s.P.Pv
+	print v
+	print s.first()
+}
+--- mid/sink/mod.zg
+enum P {
+	Pv
+	Pw
+}
+
+pub fn first() -> int {
+	return 1
+}
+EOF
+
+# THE VARIANT WITH A PAYLOAD, which is a CALL one node up from the read above and lowered by
+# the other door (c_ns_unqualify_meth); it printed `R.Box(4)`.
+reject a-module-private-enum-variant-constructed-through-its-namespace E5008 <<'EOF'
+import "./mid/sink" as s
+
+fn main() {
+	b := s.R.Box(4)
+	print b
+	print s.first()
+}
+--- mid/sink/mod.zg
+enum R {
+	Box(int)
+	None
+}
+
+pub fn first() -> int {
+	return 1
+}
+EOF
+
+# AND BARE. Every module flattens into one program here, so `P.Pv` with no qualifier found the
+# other module's private enum too, and built — where the bare TYPE position `x: P` was
+# E5008 already. A file's own private enum is its own and stays nameable; that is every
+# program that writes one.
+reject a-module-private-enum-variant-read-bare E5008 <<'EOF'
+import "./mid/sink" as s
+
+fn main() {
+	print P.Pv
+	print s.first()
+}
+--- mid/sink/mod.zg
+enum P {
+	Pv
+	Pw
+}
+
+pub fn first() -> int {
+	return 1
+}
+EOF
+
+reject a-module-private-enum-variant-constructed-bare E5008 <<'EOF'
+import "./mid/sink" as s
+
+fn main() {
+	print R.Box(4)
+	print s.first()
+}
+--- mid/sink/mod.zg
+enum R {
+	Box(int)
+	None
+}
+
+pub fn first() -> int {
+	return 1
+}
+EOF
+
+# A GENERIC ONE IS A TEMPLATE, which the privacy question read as `pub` with no file — the
+# hole a generic struct had and lost (`a-module-private-generic-type`) — and this one went to
+# cc: the construction was lowered and its binding typed as something else.
+reject a-module-private-generic-enum-constructed-bare E5008 <<'EOF'
+import "./mid/sink" as s
+
+fn main() {
+	x := Opt.Some(1)
+	print s.first()
+}
+--- mid/sink/mod.zg
+enum Opt[T] {
+	Some(T)
+	Nothing
+}
+
+pub fn first() -> int {
+	return 1
+}
+EOF
+
+# THE SAME DOOR ON A `type`: `s.T(3)` is a conversion into it, and it went to cc.
+reject a-module-private-type-converted-into-through-its-namespace E5008 <<'EOF'
+import "./mid/sink" as s
+
+fn main() {
+	print int(s.T(3))
+	print s.first()
+}
+--- mid/sink/mod.zg
+type T = int
+
+pub fn first() -> int {
+	return 1
+}
+EOF
+
+# AND A PRIVATE TYPE THAT GOT A NAME OF ITS OWN. The importer declares a `P` too, so the
+# module's is kept under a name no source can spell (c_file_types) and `s.P` no longer matches
+# it by name — which answered E3084, _module `s` has no `P`_, false about a module that
+# declares one. The finding is the privacy one, spoken with the name the file wrote.
+reject a-module-private-enum-beside-the-importers-own-through-its-namespace E5008 '`P` is not a public type' <<'EOF'
+import "./mid/sink" as s
+
+enum P {
+	A
+	B
+}
+
+fn own() -> P {
+	return P.A
+}
+
+fn main() {
+	print own()
+	print s.P.Pv
+	print s.first()
+}
+--- mid/sink/mod.zg
+enum P {
+	Pv
+	Pw
+}
+
+pub fn first() -> int {
+	return 1
+}
+EOF
+
 # A `pub` DECLARATION MAY NOT NAME A PRIVATE TYPE — "a declaration can never be more visible
 # than the types it names". It is a finding in the DECLARING module, on a program that has no
 # second module at all, because the mistake is the export and not any use of it.

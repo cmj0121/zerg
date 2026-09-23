@@ -6150,10 +6150,10 @@ pub fn c_ty_mod(mut &em: Emitter, nm: str) -> str {
 #
 # A template is still a name a module EXPOSES, which is the question that rule asks.
 fn c_gen_struct_mod(mut &em: Emitter, nm: str) -> str {
-	r := c_gen_struct_row(em, nm)
-	return "" if r < 0
+	path := c_gen_struct_path(em, nm)
+	return "" if path == ""
 
-	return check.c_mod_of(em, em.gen_structs[r].path)
+	return check.c_mod_of(em, path)
 }
 
 # AND ITS FILE AND ITS MARKER, for the same reason and read the same way. A template that
@@ -6162,16 +6162,29 @@ fn c_gen_struct_mod(mut &em: Emitter, nm: str) -> str {
 # `struct Hidden[T]` was constructible from another module while the plain `struct Secret`
 # beside it was refused, which is the rule this compiler lost once before on the way to
 # self-hosting.
+#
+# A GENERIC ENUM IS A TEMPLATE TOO, and answered "no row" the same way: `Opt.Some(1)` on
+# another module's private `enum Opt[T]` was asked whether `Opt` is `pub` and heard yes (#206).
 fn c_gen_struct_path(mut &em: Emitter, nm: str) -> str {
 	r := c_gen_struct_row(em, nm)
-	return "" if r < 0
+	if r < 0 {
+		e := c_gen_enum_row(em, nm)
+		return "" if e < 0
+
+		return em.gen_enums[e].path
+	}
 
 	return em.gen_structs[r].path
 }
 
 fn c_gen_struct_pub(mut &em: Emitter, nm: str) -> bool {
 	r := c_gen_struct_row(em, nm)
-	return true if r < 0
+	if r < 0 {
+		e := c_gen_enum_row(em, nm)
+		return true if e < 0
+
+		return em.gen_enums[e].is_pub
+	}
 
 	return em.gen_structs[r].is_pub
 }
@@ -7880,13 +7893,17 @@ fn c_ns_unqualify_field(mut &em: Emitter, t: ast.Expr, f: str, l: int, c: int) -
 	if em.want_index {
 		c_nx_ns_target(em, t)
 	}
-	if c_ns_names_type(em, t, f) {
+	ty := c_ns_type_named(em, t, f)
+	if ty != "" {
 		# THE QUALIFIER IS ABOUT TO BE DROPPED, so this is the last point that knows one was
 		# written. `lib.Colour.Red` names a real module and a real type, and whether THIS
 		# module may write that name is a separate question from whether the name resolves —
-		# the same pairing the call and the member-read paths already ask.
+		# the same pairing the call and the member-read paths already ask. So is whether the
+		# type is `pub`: the variant read `lib.Colour.Red` names the type as surely as a type
+		# position does, and without this only the type position refused a private one (#206).
 		check.chk_ns_bound(em, c_ns_root(t))
-		return ast.Expr.EIdent(f, l, c)
+		check.chk_ty_visible(em, ty)
+		return ast.Expr.EIdent(ty, l, c)
 	}
 
 	return ast.Expr.EField(c_ns_unqualify(em, t), f, l, c)
@@ -7898,31 +7915,50 @@ fn c_ns_unqualify_meth(mut &em: Emitter, t: ast.Expr, m: str, args: list[ast.Exp
 	if em.want_index {
 		c_nx_ns_target(em, t)
 	}
-	if c_ns_names_type(em, t, m) {
-		# `lib.Counter("a")` — a CONSTRUCTION through a namespace, the field path's question
+	ty := c_ns_type_named(em, t, m)
+	if ty != "" {
+		# `lib.Counter("a")` — a CONSTRUCTION through a namespace, the field path's questions
 		# one node up
 		check.chk_ns_bound(em, c_ns_root(t))
+		check.chk_ty_visible(em, ty)
 		mut none: list[ast.Ty] = []
-		return ast.Expr.ECall(m, args, none, l, c)
+		return ast.Expr.ECall(ty, args, none, l, c)
 	}
 
 	return ast.Expr.EMethod(c_ns_unqualify(em, t), m, args, l, c)
 }
 
-# c_ns_names_type is the pair this rule is about: a MODULE qualifier, and a segment that
-# names a type the program declares. Both halves are required. Without the first an invented
-# prefix would resolve — `bogus.Point(1, 2)` is an undefined name and stays one — and
-# without the second a genuine missing member would stop being reported, which is the rule
-# E3084 is for.
-fn c_ns_names_type(mut &em: Emitter, t: ast.Expr, member: str) -> bool {
-	return false if c_ns_kind(em, t) != NsKind.NsModule
-	return false if not c_is_struct_name(em, member) and not c_is_enum_name(em, member) and not c_is_typedef(em, member)
+# c_ns_type_named is the pair this rule is about: a MODULE qualifier, and a segment that
+# names a type the program declares — answered with the name the type is kept under, or ""
+# when the pair is not one. Both halves are required. Without the first an invented prefix
+# would resolve — `bogus.Point(1, 2)` is an undefined name and stays one — and without the
+# second a genuine missing member would stop being reported, which is the rule E3084 is for.
+fn c_ns_type_named(mut &em: Emitter, t: ast.Expr, member: str) -> str {
+	return "" if c_ns_kind(em, t) != NsKind.NsModule
 
-	# AND THE MODULE THAT DECLARES IT IS THE ONE THE PREFIX NAMES, which is the same rule the
-	# call and the constant paths ask — `b.Box(1)` resolved a `Box` module `a` declared and
-	# constructed it. Answering false here hands the pair back to the ordinary field path,
-	# which reports it as the member `b` has not got.
-	return c_ns_names_mod(em, c_ns_root(t), c_ty_mod(em, member))
+	return member if c_ns_names_ty(em, t, member)
+
+	# OR A PRIVATE TYPE THAT GOT A NAME OF ITS OWN (c_file_types). The module does declare
+	# `member`, under a name no source can spell, because another file declares one too; the
+	# pair still names it, and answering "" would tell the reader the module has no such
+	# member — a false sentence in place of the privacy finding the caller owes. Only a
+	# private type is renamed, so every name found here is one the caller refuses.
+	mut i := 0
+	for i < em.ft_name.len() {
+		return em.ft_to[i] if em.ft_name[i] == member and c_ns_names_ty(em, t, em.ft_to[i])
+		i = i + 1
+	}
+	return ""
+}
+
+# c_ns_names_ty is one candidate asked: a declared type, and the module that declares it is
+# the one the prefix names — the same rule the call and the constant paths ask, since
+# `b.Box(1)` once resolved a `Box` module `a` declared and constructed it. Answering false
+# hands the pair back to the ordinary field path, which reports the member `b` has not got.
+fn c_ns_names_ty(mut &em: Emitter, t: ast.Expr, nm: str) -> bool {
+	return false if not c_is_struct_name(em, nm) and not c_is_enum_name(em, nm) and not c_is_typedef(em, nm)
+
+	return c_ns_names_mod(em, c_ns_root(t), c_ty_mod(em, nm))
 }
 
 # c_undefined_name is THE report of a name nothing in the program bound, and it is one
@@ -11174,6 +11210,9 @@ fn c_method(mut &em: Emitter, target: ast.Expr, meth: str, args: list[ast.Expr],
 			c_nx_type_name(em, target, en)
 			c_nx_use(em, l, c, meth, c_nx_var_in(em, en, meth))
 		}
+
+		# `Shape.Line(5)` and `Shape.of(n)` name the type, c_fieldref's question for `Color.Red`
+		check.chk_ty_visible(em, en)
 		return c_enum_of(em, en, meth, args, sb)
 	}
 
@@ -11189,6 +11228,7 @@ fn c_method(mut &em: Emitter, target: ast.Expr, meth: str, args: list[ast.Expr],
 			c_nx_type_name(em, target, en)
 			c_nx_gen_variant(em, en, meth, l, c)
 		}
+		check.chk_ty_visible(em, en)
 		ap := c_gen_enum_solved(em, en, meth, args)
 		return c_variant_ctor(em, ap, meth, args, sb) if ap != ""
 
@@ -19558,6 +19598,11 @@ fn c_fieldref(mut &em: Emitter, target: ast.Expr, fld: str, l: int, c: int, sb: 
 			c_nx_type_name(em, target, en)
 			c_nx_use(em, l, c, fld, c_nx_var_in(em, en, fld))
 		}
+
+		# `Color.Red` NAMES THE TYPE `Color`, so it asks what a type position asks: a private
+		# enum another module declared is not this file's to spell, bare any more than through
+		# its namespace — which arrives here too, with the qualifier already dropped (#206).
+		check.chk_ty_visible(em, en)
 		return "(" + c_ty_cname(en) + "){.tag = " + strconv.to_string(c_variant_tag_in(em, en, fld), 10) + "}"
 	}
 
@@ -19572,6 +19617,7 @@ fn c_fieldref(mut &em: Emitter, target: ast.Expr, fld: str, l: int, c: int, sb: 
 			c_nx_type_name(em, target, gb)
 			c_nx_gen_variant(em, gb, fld, l, c)
 		}
+		check.chk_ty_visible(em, gb)
 		ap := c_gen_enum_solved(em, gb, fld, noargs)
 		return "(" + c_ty_cname(ap) + "){.tag = " + strconv.to_string(c_variant_tag_in(em, ap, fld), 10) + "}" if ap != ""
 

@@ -238,36 +238,72 @@ pub fn render_doc_decls(m: zerg.DocModule, hits: list[int], all: bool, col: bool
 
 # render_doc_list is the index: every module that can be read, one row each, with the first
 # sentence of its header beside it — and nothing beside it when no file of it speaks for the
-# module as a whole.
-#
-# The name column is padded to the longest name, so the descriptions line up and the eye can
-# run down either column. A description too long for what is left of the line is filled to the
-# same column its first line started at — a hanging indent, which is what keeps the two columns
-# readable as columns rather than as one ragged block.
+# module as a whole. The layout is `doc_table`'s, which a search's list shares.
 pub fn render_doc_list(mods: list[zerg.DocModule], col: bool) -> str {
+	mut names: list[str] = []
+	mut says: list[str] = []
+	mut marks: list[bool] = []
+	for m in mods {
+		names.append(m.name)
+		says.append(doc_tagline(m))
+		marks.append(false)
+	}
+	return doc_table("MODULES", names, says, marks, col)
+}
+
+# render_doc_hits is what `zerg doc -s` found (#19): one row per declaration, its name as a
+# reader types it back and the first sentence of its `##` text beside it — the index's layout,
+# one level down, and the same summary `--brief` prints. A declaration with no `##` text is
+# marked, as it is on every other page; one whose comment is only an example is its name alone,
+# as its brief entry is its signature alone.
+pub fn render_doc_hits(mods: list[zerg.DocModule], hits: list[zerg.DocName], col: bool) -> str {
+	mut names: list[str] = []
+	mut says: list[str] = []
+	mut marks: list[bool] = []
+	for h in hits {
+		doc := mods[h.in_module].decls[h.decl].doc
+		names.append(h.name)
+		says.append(zerg.doc_first_sentence(doc))
+		marks.append(zerg.doc_marks_absence(false, doc))
+	}
+	return doc_table("DECLARATIONS", names, says, marks, col)
+}
+
+# doc_table is a listing under one heading: a column of names, padded to the longest so the
+# descriptions line up, and a description filled to the same column its first line started at
+# — a hanging indent, which keeps the two columns readable as columns rather than as one ragged
+# block. `names`, `says` and `marks` are row for row; a marked row says `(undocumented)` in
+# place of a description, in the mark's colour.
+fn doc_table(title: str, names: list[str], says: list[str], marks: list[bool], col: bool) -> str {
 	mut out: list[str] = []
-	doc_heading(out, "MODULES", col)
+	doc_heading(out, title, col)
 
 	mut w := 0
-	for m in mods {
-		n := doc_width(m.name)
-		if n > w {
-			w = n
+	for n in names {
+		nw := doc_width(n)
+		if nw > w {
+			w = nw
 		}
 	}
 
 	at := 2 + w + 3
-	for m in mods {
-		rows := doc_fill(doc_tagline(m), DOC_WIDTH - at)
+	mut i := 0
+	for i < names.len() {
+		name := names[i]
+		mut rows: list[str] = [doc_mark(col)]
+		if not marks[i] {
+			rows = doc_fill(says[i], DOC_WIDTH - at)
+		}
+		i = i + 1
 
-		# a module nothing describes is its name alone: padding it out to a description that
-		# is not there would write trailing whitespace, which this document does not do
+		# a row nothing describes is its name alone: padding it out to a description that is
+		# not there would write trailing whitespace, which this document does not do
 		if rows.len() == 0 {
-			out.append(diag.blanks(2) + doc_bold(m.name, col))
+			out.append(diag.blanks(2) + doc_bold(name, col))
 			continue
 		}
 
-		out.append(diag.blanks(2) + doc_bold(m.name, col) + diag.blanks(at - 2 - doc_width(m.name)) + rows[0])
+		out.append(diag.blanks(2) + doc_bold(name, col) + diag.blanks(at - 2 - doc_width(name)) + rows[0])
 		mut k := 1
 		for k < rows.len() {
 			out.append(diag.blanks(at) + rows[k])

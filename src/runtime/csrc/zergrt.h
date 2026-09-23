@@ -886,6 +886,11 @@ zrt_list zrt_listdir(const char *path);
  * which is the question a walk must ask before it descends. */
 int64_t zrt_path_kind(const char *path);
 
+/* zrt_real_path is the absolute, canonical path of an existing file or directory (links
+ * followed, no `.` or `..`) as a fresh str cell, or "" when there is none — how a caller tells
+ * whether two spellings name the same directory. */
+const char *zrt_real_path(const char *path);
+
 /* --- minimal sys surface (sys.c) ----------------------------------------- */
 
 /* zrt_report writes one diagnostic line to stderr: `kind: msg`, or `msg` alone when kind

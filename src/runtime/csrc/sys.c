@@ -618,6 +618,26 @@ int64_t zrt_path_kind(const char *path) {
 	return 1;
 }
 
+/* zrt_real_path answers the ABSOLUTE, CANONICAL path of an existing file or directory — no
+ * `.` or `..`, no doubled slash, every symbolic link followed — or "" when there is none.
+ *
+ * It is how a caller asks whether two spellings are THE SAME DIRECTORY. `stdlib`, `./stdlib`,
+ * `../proj/stdlib` and `/tmp/proj/stdlib` are one directory or several depending on where the
+ * process stands and what the links say, and none of that is in the strings. A suffix test on
+ * them made a project's own `stdlib/` the standard library's.
+ *
+ * A missing path is an ANSWER, not an abort, for the reason zrt_path_kind's 0 is one: the
+ * caller is probing, and a directory that is not there is not the one it asked about. */
+const char *zrt_real_path(const char *path) {
+	char *real = realpath(path, NULL);
+	if (real == NULL) {
+		return sys_str_cell("");
+	}
+	const char *out = sys_str_cell(real);
+	free(real);
+	return out;
+}
+
 /* zrt_listdir returns the entry NAMES directly under path (no "." or "..", no recursion,
  * not path-prefixed) as a list[str], or an empty list when path is not a readable
  * directory — a missing directory is an answer here, not an abort, since the caller is

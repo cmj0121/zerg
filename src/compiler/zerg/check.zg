@@ -1904,11 +1904,11 @@ fn chk_into_builtin(want: ast.Ty, got: ast.Ty) -> bool {
 # chk_intrinsic_params IS THE SET of compiler primitives, spelled as what each one TAKES. It
 # answers all three questions asked of that set — whether a `__zrt_…` name is one at all, how
 # many operands it takes, and what type each operand is — because an arity is this list's LENGTH
-# and two lists of the same 31 names is the drift this file refuses everywhere else.
+# and two lists of the same names is the drift this file refuses everywhere else.
 #
 # THE FIVE NULLARY PRIMITIVES CANNOT BE TOLD FROM A NON-PRIMITIVE BY THIS LIST, since both take
 # nothing. They are named in chk_intrinsic_nullary and nowhere else, which is five names rather
-# than a second copy of twenty-eight.
+# than a second copy of the rest.
 #
 # `TUnknown` IS AN OPERAND WITH NO CONSTRAINT, and it is written where this compiler cannot
 # state one rather than where none exists. The atomics take a `Ref[int]` cell first, and `zerg`
@@ -1936,7 +1936,7 @@ fn chk_intrinsic_params(name: str) -> list[ast.Ty] {
 	return [ast.Ty.TStr] if name == "__zrt_open" or name == "__zrt_open_write"
 	return [ast.Ty.TStr] if name == "__zrt_getenv" or name == "__zrt_has_env" or name == "__zrt_del_env"
 	return [ast.Ty.TStr] if name == "__zrt_exists" or name == "__zrt_remove" or name == "__zrt_listdir" or name == "__zrt_mkdir"
-	return [ast.Ty.TStr] if name == "__zrt_path_kind"
+	return [ast.Ty.TStr] if name == "__zrt_path_kind" or name == "__zrt_real_path"
 
 	return [ast.Ty.TInt] if name == "__zrt_read" or name == "__zrt_close" or name == "__zrt_isatty"
 	return [ast.Ty.TInt] if name == "__zrt_sleep_ns" or name == "__zrt_exit" or name == "__zrt_proc_wait"

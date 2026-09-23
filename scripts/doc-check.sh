@@ -74,6 +74,11 @@
 # fixture asks the matching rule's edges, and a private name that matches is the case that has to
 # stay out.
 #
+# §12 is the HTML (#20). Each module's page is held to its terminal page — the same text with
+# the markup and the whitespace off, one element per declaration — the index to the index, the
+# search's names to `-s`'s, its matching rule to `-s`'s answers where `node` can run it, and a
+# fixture holds the escaping of every character a page has to escape.
+#
 # It needs no corpus: the standard library ships in this repository and the fixture is
 # written by the script, so it runs the same everywhere.
 set -uo pipefail
@@ -104,8 +109,12 @@ ZERG="${ZERG:-./bin/zerg}"
 MIN_DECLS="${MIN_DECLS:-183}"
 MIN_MODULES="${MIN_MODULES:-15}"
 UNDOC_LIST="${UNDOC_LIST:-scripts/doc-undocumented}"
-MIN_CHECKS="${MIN_CHECKS:-92}"
+MIN_CHECKS="${MIN_CHECKS:-137}"
 MIN_RULES="${MIN_RULES:-26}"
+
+# `MIN_TERMS` is §12's: the terms the page's search and `zerg doc -s` are both asked, which are
+# derived from the names — a list that came out short means the derivation stopped matching.
+MIN_TERMS="${MIN_TERMS:-158}"
 
 # The column budget the document is filled to — `DOC_WIDTH` in cmd/doc_render.zg, written
 # again here because §7 is the second opinion about it and a second opinion that read the
@@ -1430,6 +1439,248 @@ fi
 # the scope left out is the index, standard library included
 finds 'with no name beside it, a search reads the standard library too' strings.spl '' 'strings.split'
 
+# --- 12. `--html` is the same document, and its search finds what `-s` finds -----------------
+#
+# #20: the pages are a second RENDERING of the one extraction. Every assertion here compares a
+# page with the terminal's answer to the same question rather than with a copy of it kept here:
+#
+#   - each module's `<main>`, with the markup, the backticks and the whitespace taken off, IS
+#     its terminal page with the fence lines, the backticks and the whitespace taken off — a
+#     sentence a page dropped, moved to another declaration or invented is a difference;
+#   - each exposed declaration is ONE element of its page, named as `-s` names it, and the
+#     names are the page's names;
+#   - the index is the terminal's index, the same way;
+#   - the search's names are `-s`'s, module for module, and — where `node` can run the script —
+#     its matching rule answers every term the way `zerg doc -s` does;
+#   - source text is escaped, and two runs write the same bytes.
+
+# html_main <page> — the text of a page's `<main>`, as the terminal comparison reads it
+html_main() {
+	sed -n '/^<main/,/^<\/main>/p' "$1" | sed -E 's/<[^>]*>//g' |
+		sed -e 's/&lt;/</g' -e 's/&gt;/>/g' -e 's/&quot;/"/g' -e "s/&#39;/'/g" -e 's/&amp;/\&/g' |
+		tr -d ' \t\n`'
+}
+
+# term_main <terminal page> — the same text off the terminal: a fence line is the page's
+# `<pre>` frame and not text, so it goes
+term_main() {
+	grep -vE '^ *```' "$1" | tr -d ' \t\n`'
+}
+
+site="$tmp/site"
+"$ZERG" doc --html "$site" >"$tmp/html.out" 2>&1 || note "\`zerg doc --html\` failed: $(head -1 "$tmp/html.out")"
+"$ZERG" doc --html "$tmp/site2" >/dev/null 2>&1
+if diff -r "$site" "$tmp/site2" >"$tmp/diff" 2>&1; then
+	checks=$((checks + 1))
+else
+	note "two runs of \`zerg doc --html\` wrote different pages: $(head -3 "$tmp/diff" | tr '\n' ' ')"
+fi
+
+pages=0
+for m in $modules atomic; do
+	page="$site/$m.html"
+	[ -f "$page" ] || {
+		note "\`zerg doc --html\` wrote no page for \`$m\`"
+		continue
+	}
+	"$ZERG" doc "$m" >"$tmp/full.out" 2>/dev/null
+	if [ "$(html_main "$page")" = "$(term_main "$tmp/full.out")" ]; then
+		checks=$((checks + 1))
+	else
+		html_main "$page" | fold -w 100 >"$tmp/h.txt"
+		term_main "$tmp/full.out" | fold -w 100 >"$tmp/t.txt"
+		note "the page of \`$m\` does not say what its terminal page says (- terminal, + page): $(diff "$tmp/t.txt" "$tmp/h.txt" | sed -n '2,5p' | tr '\n' ' ')"
+	fi
+
+	# ONE ELEMENT PER DECLARATION: the page's names with their repeats kept, against the names
+	# `-s` finds in the module — which §1 holds to the terminal page — so a declaration printed
+	# twice is a repeat and one left out is a gap
+	sed -nE 's/.*<section class="decl[^"]*" id="[^"]*" data-name="([^"]*)".*/\1/p' "$page" |
+		LC_ALL=C sort >"$tmp/html.names"
+	"$ZERG" doc -s "$m." "$m" 2>/dev/null | sed -nE 's/^  ([^ ]+).*/\1/p' | LC_ALL=C sort >"$tmp/page.names"
+	if [ -s "$tmp/page.names" ] && diff -u "$tmp/page.names" "$tmp/html.names" >"$tmp/diff"; then
+		checks=$((checks + 1))
+	else
+		note "the page of \`$m\` is not one element per name \`zerg doc -s $m.\` finds (- search, + page)"
+		sed '1,2d;s/^/          /' "$tmp/diff" >&2
+	fi
+	pages=$((pages + 1))
+done
+
+"$ZERG" doc >"$tmp/list.out" 2>&1
+if [ "$(html_main "$site/index.html")" = "$(term_main "$tmp/list.out")" ]; then
+	checks=$((checks + 1))
+else
+	note "the index page does not say what \`zerg doc\` says"
+fi
+
+# THE SEARCH'S NAMES ARE `-s`'s, in `-s`'s order: every module's `-s <module>.`, in the order
+# the index lists the modules, is the list the page searches
+: >"$tmp/s.names"
+for m in $(sed -nE 's/^  ([A-Za-z_][A-Za-z0-9_]*).*/\1/p' "$tmp/list.out"); do
+	"$ZERG" doc -s "$m." "$m" 2>/dev/null | sed -nE 's/^  ([^ ]+).*/\1/p' >>"$tmp/s.names"
+done
+sed -nE 's/^\["([^"]*)".*/\1/p' "$site/search.js" >"$tmp/js.names"
+if [ -s "$tmp/s.names" ] && diff -u "$tmp/s.names" "$tmp/js.names" >"$tmp/diff"; then
+	checks=$((checks + 1))
+else
+	note "the search's names are not \`zerg doc -s\`'s (- -s, + search.js)"
+	sed '1,2d;s/^/          /' "$tmp/diff" >&2
+fi
+
+# THE RULE, RUN. `zergDocMatches` is `doc_name_matches` written again for the browser, so the
+# two are asked the same terms and must answer the same names: the first three letters of
+# every last segment, every module with its `.`, a method by its type's name, and the edges §11
+# asks — the module's own segment, the wrong case, a term nothing begins. A term `-s` refuses
+# is an empty answer on both sides.
+#
+# `node` runs the script. A host without it is TOLD, and `REQUIRE_NODE=1` — which CI sets —
+# makes that a failure rather than a skip.
+search_terms() {
+	sed -nE 's/.*\.([A-Za-z_][A-Za-z0-9_]?[A-Za-z0-9_]?)[A-Za-z0-9_]*$/\1/p' "$tmp/js.names"
+	sed -nE 's/^([A-Za-z_][A-Za-z0-9_]*)\..*/\1./p' "$tmp/js.names"
+	printf '%s\n' Logger.l strings.sp log strings SPLIT zzz_nothing lev Logger
+}
+# js_answers <search.js> <dir> — each term, a tab, and the names the script finds
+js_answers() {
+	node -e '
+		const fs = require("fs");
+		const find = new Function(fs.readFileSync(process.argv[1], "utf8") + "; return zergDocSearch;")();
+		for (const t of fs.readFileSync(0, "utf8").split("\n")) {
+			if (t !== "") console.log(t + "\t" + find(t).map(function (h) { return h[0]; }).join(" "));
+		}
+	' "$1" <"$tmp/terms"
+}
+# zerg_answers <dir> — the same, asked of `zerg doc -s` from that directory
+zerg_answers() {
+	while IFS= read -r t; do
+		printf '%s\t%s\n' "$t" "$(cd "$1" && "$ZERG_ABS" doc -s "$t" 2>/dev/null | sed -nE 's/^  ([^ ]+).*/\1/p' | tr '\n' ' ' | sed 's/ $//')"
+	done <"$tmp/terms"
+}
+
+terms=0
+if command -v node >/dev/null 2>&1; then
+	search_terms | LC_ALL=C sort -u >"$tmp/terms"
+	terms=$(wc -l <"$tmp/terms" | tr -d ' ')
+	js_answers "$site/search.js" >"$tmp/js.ans"
+	zerg_answers "$ROOT" >"$tmp/zg.ans"
+	if [ "$terms" -ge "$MIN_TERMS" ] && diff -u "$tmp/zg.ans" "$tmp/js.ans" >"$tmp/diff"; then
+		checks=$((checks + 1))
+	else
+		note "the page's search and \`zerg doc -s\` answer $terms terms differently (- -s, + search.js), or fewer than $MIN_TERMS were asked"
+		sed '1,2d;s/^/          /' "$tmp/diff" | head -20 >&2
+	fi
+
+	# and where a private name matches: §11's fixture, its site written from its own directory
+	(cd "$tmp/proj" && "$ZERG_ABS" doc --html "$tmp/fsite" finder.zg >/dev/null 2>&1)
+	printf '%s\n' find_ find_h find_p Finder.f finder.Fi finder FIND_ >"$tmp/terms"
+	js_answers "$tmp/fsite/search.js" >"$tmp/js.ans"
+	: >"$tmp/zg.ans"
+	while IFS= read -r t; do
+		printf '%s\t%s\n' "$t" "$(cd "$tmp/proj" && "$ZERG_ABS" doc -s "$t" finder.zg 2>/dev/null | sed -nE 's/^  ([^ ]+).*/\1/p' | tr '\n' ' ' | sed 's/ $//')" >>"$tmp/zg.ans"
+	done <"$tmp/terms"
+	if diff -u "$tmp/zg.ans" "$tmp/js.ans" >"$tmp/diff"; then
+		checks=$((checks + 1))
+	else
+		note "on a module with private names, the page's search and \`zerg doc -s\` differ (- -s, + search.js)"
+		sed '1,2d;s/^/          /' "$tmp/diff" >&2
+	fi
+elif [ "${REQUIRE_NODE:-0}" = 1 ]; then
+	note "node is not installed and REQUIRE_NODE=1 — the page's search was not run against \`zerg doc -s\`"
+else
+	printf 'doc-check: node is not installed — the page search was not run against `zerg doc -s` (REQUIRE_NODE=1 makes this a failure)\n' >&2
+fi
+
+# ESCAPING. The fixture puts `<`, `&` and both quotes in a header, a comment, a field's
+# comment, a signature's default and a summary, and declares one name twice — a struct and a
+# function — whose two anchors must differ. No `<` of the source may reach the page as a tag,
+# and the text still has to read as the source's once unescaped, which the comparison above
+# asks of it.
+mkdir -p "$tmp/esc"
+cat >"$tmp/esc/esc.zg" <<'ZG'
+## esc — a header that says <b>bold</b> & "quoted" 'text'.
+
+## Pair holds <T> & "both", and a `<code>` span with a & in it.
+pub struct Pair {
+	## first is < second & "so".
+	pub first: int
+}
+
+## Pair is also a function, and <i>its</i> anchor is not the struct's.
+pub fn Pair() -> int {
+	return 1
+}
+
+## less answers whether a < b && 'why' — its default holds every character a page escapes.
+pub fn less(a: int, b: int, why: str = "<&'>") -> bool {
+	return a < b
+}
+ZG
+"$ZERG" doc --html "$tmp/esite" "$tmp/esc/esc.zg" >/dev/null 2>&1
+"$ZERG" doc "$tmp/esc/esc.zg" >"$tmp/esc.out" 2>&1
+epage="$tmp/esite/esc.html"
+if [ ! -f "$epage" ]; then
+	note "\`zerg doc --html\` wrote no page for the escaping fixture"
+else
+	# the only tags inside <main> are the page's own, and none of the source's
+	if sed -n '/^<main/,/^<\/main>/p' "$epage" | grep -qE '<(T|b&gt;|b>bold|i&gt;|i>its|&)'; then
+		note "a \`<\`, \`&\` or quote of the source reached the page unescaped: $(sed -n '/^<main/,/^<\/main>/p' "$epage" | grep -m1 -E '<(T|b&gt;|b>bold|i&gt;|i>its|&)')"
+	elif ! grep -qF '&lt;b&gt;bold&lt;/b&gt; &amp; &quot;quoted&quot; &#39;text&#39;' "$epage" ||
+		! grep -qF 'why: str = &quot;&lt;&amp;&#39;&gt;&quot;' "$epage" ||
+		! grep -qF '<code>&lt;code&gt;</code>' "$epage"; then
+		note "the escaping fixture's header, signature or code span is not on its page escaped: $(grep -m1 'esc —' "$epage")"
+	elif [ "$(html_main "$epage")" != "$(term_main "$tmp/esc.out")" ]; then
+		note "the escaping fixture's page, unescaped, does not say what its terminal page says"
+	else
+		checks=$((checks + 1))
+	fi
+	dups=$(sed -nE 's/.* id="([^"]*)".*/\1/p' "$epage" | LC_ALL=C sort | uniq -d)
+	if [ -z "$dups" ] && grep -qF 'id="Pair-2"' "$epage"; then
+		checks=$((checks + 1))
+	else
+		note "a name declared twice does not have two anchors on its page: [$dups]"
+	fi
+	grep -qF 'Pair holds \u003cT> & \"both\"' "$tmp/esite/search.js" ||
+		note "a summary is not a JavaScript string holding the source's text: $(grep -m1 'esc.Pair' "$tmp/esite/search.js")"
+	checks=$((checks + 1))
+fi
+
+# NOTHING ON A PAGE IS FETCHED FROM ANYWHERE: every `src` and `href` is a file beside it or an
+# anchor, and the style sheet and the script name no other place
+if grep -hoE '(src|href)="[^"]*"' "$site"/*.html | grep -vE '="(#|[A-Za-z0-9_.%~-]+\.(html|css|js)(#[^"]*)?")' >"$tmp/far"; then
+	note "a page links off the machine: $(head -1 "$tmp/far")"
+elif grep -qE 'https?:|@import|url\(' "$site/style.css" "$site/search.js"; then
+	note "the style sheet or the search names a place off the machine"
+else
+	checks=$((checks + 1))
+fi
+
+# THE REFUSALS: a listing flag beside `--html`, a declaration, and two names
+for args in '--brief' '--check' '--all' '-s spl'; do
+	# shellcheck disable=SC2086
+	if "$ZERG" doc --html "$tmp/rsite" $args strings >"$tmp/ref.out" 2>&1; then
+		note "\`zerg doc --html DIR $args strings\` exited 0, and \`--html\` takes no listing flag"
+	elif grep -qF "\`--html\` writes the reader's whole pages" "$tmp/ref.out"; then
+		checks=$((checks + 1))
+	else
+		note "\`zerg doc --html DIR $args\` was refused with \"$(head -1 "$tmp/ref.out")\""
+	fi
+done
+for args in 'strings.split' 'strings log'; do
+	# shellcheck disable=SC2086
+	if "$ZERG" doc --html "$tmp/rsite" $args >"$tmp/ref.out" 2>&1; then
+		note "\`zerg doc --html DIR $args\` exited 0, and a page is one module's"
+	elif grep -qE "is a declaration's name|one at most" "$tmp/ref.out"; then
+		checks=$((checks + 1))
+	else
+		note "\`zerg doc --html DIR $args\` was refused with \"$(head -1 "$tmp/ref.out")\""
+	fi
+done
+
+if [ "$pages" -lt "$MIN_MODULES" ]; then
+	note "$pages module pages were compared with their terminal pages and the floor is $MIN_MODULES"
+fi
+
 # --- the module list, and the floors ----------------------------------------------------
 #
 # `zerg doc` with no argument is the first page a reader sees, and the only claim made about
@@ -1477,5 +1728,5 @@ fi
 	exit 1
 }
 
-printf 'doc-check: %s exposed declarations across %s modules are each in the document, %s of them marked undocumented, %s attachment and form rules have a case of their own, colour follows the terminal while the shape does not, and a comment in Chinese lays out inside %s columns with no space its source does not have — %s checks\n' \
-	"$decls" "$listed" "$undoc" "$rules" "$DOC_COLUMNS" "$checks"
+printf 'doc-check: %s exposed declarations across %s modules are each in the document, %s of them marked undocumented, %s attachment and form rules have a case of their own, colour follows the terminal while the shape does not, and a comment in Chinese lays out inside %s columns with no space its source does not have, and %s HTML pages say what their terminal pages say, searched as -s searches over %s terms — %s checks\n' \
+	"$decls" "$listed" "$undoc" "$rules" "$DOC_COLUMNS" "$pages" "$terms" "$checks"

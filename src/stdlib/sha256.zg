@@ -1,7 +1,7 @@
-# sha256 — SHA-256 as specified by FIPS 180-4 (pure-Zerg stdlib).
-#
-# Bundled into a program that writes `import "sha256"`; members are reached through the
-# namespace, as `sha256.hex(bytearray(s))`.
+## sha256 — SHA-256 as specified by FIPS 180-4 (pure-Zerg stdlib).
+##
+## Bundled into a program that writes `import "sha256"`; members are reached through the
+## namespace, as `sha256.hex(bytearray(s))`.
 #
 # PURE ZERG, like every other module here — no libcrypto, no OpenSSL, no runtime leaf. The
 # algorithm needs 32-bit unsigned arithmetic and five bitwise operators, and `uint` with
@@ -13,10 +13,10 @@
 # is the WORD SIZE, and dropping one is how a hash quietly stops being SHA-256 while still
 # looking like a hash.
 #
-# It is not constant-time and makes no claim to be. The use this exists for is a build
-# cache key (`zerg build`), where the property wanted is "two different inputs do not
-# collide" and not "an attacker learns nothing from the timing". Do not reach for this to
-# check a password.
+## It is not constant-time and makes no claim to be. The use this exists for is a build
+## cache key (`zerg build`), where the property wanted is "two different inputs do not
+## collide" and not "an attacker learns nothing from the timing". Do not reach for this to
+## check a password.
 
 # MASK32 is the word. Every add, rotate and shift below is masked back through it, because
 # a 32-bit algorithm written in 64-bit registers is only 32-bit where it says so.
@@ -241,7 +241,7 @@ fn compress(h: list[uint], w: list[uint], k: list[uint]) -> list[uint] {
 	]
 }
 
-# sum answers the 32-byte digest of `data`.
+## sum answers the 32-byte digest of `data`.
 pub fn sum(data: list[byte]) -> list[byte] {
 	k := k_table()
 
@@ -278,8 +278,8 @@ pub fn sum(data: list[byte]) -> list[byte] {
 	return out
 }
 
-# hex answers the digest of `data` as 64 lowercase hex characters — the spelling every
-# other tool prints, so an answer from here can be compared with one from anywhere else.
+## hex answers the digest of `data` as 64 lowercase hex characters — the spelling every
+## other tool prints, so an answer from here can be compared with one from anywhere else.
 pub fn hex(data: list[byte]) -> str {
 	digits := "0123456789abcdef"
 	dg := bytearray(digits)

@@ -1,8 +1,8 @@
-# json — reading and writing JSON (pure-Zerg stdlib).
-#
-# Bundled into a program that writes `import "json"`; members are reached through the
-# namespace, as `json.encode(v)` or `json.decode(line)`. It works at the byte level over
-# `bytearray(s)` / `str(bs)` and binds nothing foreign, like every other module here.
+## json — reading and writing JSON (pure-Zerg stdlib).
+##
+## Bundled into a program that writes `import "json"`; members are reached through the
+## namespace, as `json.encode(v)` or `json.decode(line)`. It works at the byte level over
+## `bytearray(s)` / `str(bs)` and binds nothing foreign, like every other module here.
 #
 # IT WAS WRITTEN FOR THE LANGUAGE SERVER and lived at src/compiler/lsp/json.zg, with a
 # header saying a stdlib module is a promise about a surface and that promising this one
@@ -12,13 +12,13 @@
 # So the promise is made, and the surface was renamed on the way in: `jput_str` had a `j`
 # because there was no namespace to put it in, and now there is.
 #
-# THE ONE THING A CALLER MUST BE TOLD: **numbers are integers**. `Val` has no float variant,
-# so `decode("1.5")` answers `Int(1)` — the fraction and any exponent are consumed and
-# DROPPED, not refused. It is the shape the language server needed (positions, counts and
-# ids are all whole numbers) and refusing instead would have dropped a session over a field
-# nobody read. It stays that way here rather than growing a `Float` variant silently, and it
-# is stated in the module header, at `decode`, and in docs/runtime/stdlib.md, because a
-# reader who is not told will find out from a wrong answer.
+## THE ONE THING A CALLER MUST BE TOLD: **numbers are integers**. `Val` has no float variant,
+## so `decode("1.5")` answers `Int(1)` — the fraction and any exponent are consumed and
+## DROPPED, not refused. It is the shape the language server needed (positions, counts and
+## ids are all whole numbers) and refusing instead would have dropped a session over a field
+## nobody read. It stays that way here rather than growing a `Float` variant silently, and it
+## is stated in the module header, at `decode`, and in docs/runtime/stdlib.md, because a
+## reader who is not told will find out from a wrong answer.
 #
 # A value is one enum and an object is a LIST OF FIELDS rather than a `map[str, Val]`.
 # Two reasons, and the second is the one that decided it: the objects this is used on are a
@@ -28,9 +28,9 @@
 # log line somebody greps.
 import "strconv"
 
-# Val is a JSON value. Its variants are NOT public and cannot be: a caller outside this
-# module cannot construct an enum's variants (a bootstrap limitation this compiler still
-# carries), so the way in is the constructors below and the way out is the accessors.
+## Val is a JSON value. Its variants are NOT public and cannot be: a caller outside this
+## module cannot construct an enum's variants (a bootstrap limitation this compiler still
+## carries), so the way in is the constructors below and the way out is the accessors.
 pub enum Val {
 	Null
 	Bool(bool)
@@ -40,8 +40,8 @@ pub enum Val {
 	Obj(list[Field])
 }
 
-# Field is one key and its value. A caller builds an object as a `list[Field]` — declared
-# `mut fs: list[json.Field] = []` — and hands it to `of_obj`.
+## Field is one key and its value. A caller builds an object as a `list[Field]` — declared
+## `mut fs: list[json.Field] = []` — and hands it to `of_obj`.
 pub struct Field {
 	pub key: str
 	pub val: Val
@@ -55,15 +55,15 @@ pub struct Field {
 # default and a reply, not an abort that takes the session with it. Where a missing field
 # is genuinely fatal, the caller asks `has` and says so itself.
 
-# get is the value at `key`, or `Null`.
-# ```zerg
-# json.as_int(json.get(json.decode("{\"n\": 42}"), "n"))
-# json.as_str(json.get(json.decode("{\"n\": 42}"), "missing"))
-# ```
-# ```output
-# 42
-#
-# ```
+## get is the value at `key`, or `Null`.
+## ```zerg
+## json.as_int(json.get(json.decode("{\"n\": 42}"), "n"))
+## json.as_str(json.get(json.decode("{\"n\": 42}"), "missing"))
+## ```
+## ```output
+## 42
+##
+## ```
 pub fn get(v: Val, key: str) -> Val {
 	return match v {
 		Val.Obj(fs) => jfield(fs, key)
@@ -78,46 +78,46 @@ fn jfield(fs: list[Field], key: str) -> Val {
 	return Val.Null
 }
 
-# walk follows a path of keys — `walk3(msg, "params", "textDocument", "uri")` — which is
-# what a nested request needs and what three chained `get`s per caller would otherwise be.
-#
+## walk follows a path of keys — `walk3(msg, "params", "textDocument", "uri")` — which is
+## what a nested request needs and what three chained `get`s per caller would otherwise be.
+##
 # IT IS NOT NAMED `at`. `E9081` refuses two modules a shared name when either is `pub`, and the
 # compiler's own lexer has a module-private `at` — so the name was not available, and `walk`
 # says what it does anyway.
-# ```zerg
-# json.as_str(json.walk(json.decode("{\"a\": {\"b\": \"z\"}}"), "a", "b"))
-# ```
-# ```output
-# z
-# ```
+## ```zerg
+## json.as_str(json.walk(json.decode("{\"a\": {\"b\": \"z\"}}"), "a", "b"))
+## ```
+## ```output
+## z
+## ```
 pub fn walk(v: Val, a: str, b: str) -> Val {
 	return get(get(v, a), b)
 }
 
-# walk3 is the same for a three-key path.
-#
-# ```zerg
-# json.as_str(json.walk3(json.decode("{\"a\": {\"b\": {\"c\": \"z\"}}}"), "a", "b", "c"))
-# ```
-# ```output
-# z
-# ```
+## walk3 is the same for a three-key path.
+##
+## ```zerg
+## json.as_str(json.walk3(json.decode("{\"a\": {\"b\": {\"c\": \"z\"}}}"), "a", "b", "c"))
+## ```
+## ```output
+## z
+## ```
 pub fn walk3(v: Val, a: str, b: str, c: str) -> Val {
 	return get(walk(v, a, b), c)
 }
 
-# has reports whether `key` is present with a value that is not `null`.
-#
-# ```zerg
-# json.has(json.decode("{\"a\": 1}"), "a")
-# json.has(json.decode("{\"a\": 1}"), "b")
-# json.has(json.decode("{\"a\": null}"), "a")
-# ```
-# ```output
-# true
-# false
-# false
-# ```
+## has reports whether `key` is present with a value that is not `null`.
+##
+## ```zerg
+## json.has(json.decode("{\"a\": 1}"), "a")
+## json.has(json.decode("{\"a\": 1}"), "b")
+## json.has(json.decode("{\"a\": null}"), "a")
+## ```
+## ```output
+## true
+## false
+## false
+## ```
 pub fn has(v: Val, key: str) -> bool {
 	return match get(v, key) {
 		Val.Null => false
@@ -125,16 +125,16 @@ pub fn has(v: Val, key: str) -> bool {
 	}
 }
 
-# as_str is the string a `Str` carries, and "" for anything else.
-#
-# ```zerg
-# json.as_str(json.decode("\"hi\""))
-# json.as_str(json.decode("7"))
-# ```
-# ```output
-# hi
-#
-# ```
+## as_str is the string a `Str` carries, and "" for anything else.
+##
+## ```zerg
+## json.as_str(json.decode("\"hi\""))
+## json.as_str(json.decode("7"))
+## ```
+## ```output
+## hi
+##
+## ```
 pub fn as_str(v: Val) -> str {
 	return match v {
 		Val.Str(s) => s
@@ -142,16 +142,16 @@ pub fn as_str(v: Val) -> str {
 	}
 }
 
-# as_int is the number an `Int` carries, and 0 for anything else.
-#
-# ```zerg
-# json.as_int(json.decode("-7"))
-# json.as_int(json.decode("\"7\""))
-# ```
-# ```output
-# -7
-# 0
-# ```
+## as_int is the number an `Int` carries, and 0 for anything else.
+##
+## ```zerg
+## json.as_int(json.decode("-7"))
+## json.as_int(json.decode("\"7\""))
+## ```
+## ```output
+## -7
+## 0
+## ```
 pub fn as_int(v: Val) -> int {
 	return match v {
 		Val.Int(n) => n
@@ -159,16 +159,16 @@ pub fn as_int(v: Val) -> int {
 	}
 }
 
-# as_list is the elements an `Arr` carries, and an empty list for anything else.
-#
-# ```zerg
-# json.as_list(json.decode("[1, 2, 3]")).len()
-# json.as_list(json.decode("4")).len()
-# ```
-# ```output
-# 3
-# 0
-# ```
+## as_list is the elements an `Arr` carries, and an empty list for anything else.
+##
+## ```zerg
+## json.as_list(json.decode("[1, 2, 3]")).len()
+## json.as_list(json.decode("4")).len()
+## ```
+## ```output
+## 3
+## 0
+## ```
 pub fn as_list(v: Val) -> list[Val] {
 	return match v {
 		Val.Arr(xs) => xs
@@ -176,19 +176,19 @@ pub fn as_list(v: Val) -> list[Val] {
 	}
 }
 
-# is_null reports whether this value is JSON `null` — which is also what a missing key
-# answers, since `get` is total.
-#
-# ```zerg
-# json.is_null(json.decode("null"))
-# json.is_null(json.get(json.decode("{}"), "nobody"))
-# json.is_null(json.decode("0"))
-# ```
-# ```output
-# true
-# true
-# false
-# ```
+## is_null reports whether this value is JSON `null` — which is also what a missing key
+## answers, since `get` is total.
+##
+## ```zerg
+## json.is_null(json.decode("null"))
+## json.is_null(json.get(json.decode("{}"), "nobody"))
+## json.is_null(json.decode("0"))
+## ```
+## ```output
+## true
+## true
+## false
+## ```
 pub fn is_null(v: Val) -> bool {
 	return match v {
 		Val.Null => true
@@ -210,52 +210,52 @@ pub fn is_null(v: Val) -> bool {
 # (It would also be `json.fields`, which `strings.fields` already is; `E9081` refuses two
 # modules a `pub` name, so the surface that needed no function could not have had one.)
 
-# ```zerg
-# json.encode(json.null())
-# ```
-# ```output
-# null
-# ```
+## ```zerg
+## json.encode(json.null())
+## ```
+## ```output
+## null
+## ```
 pub fn null() -> Val {
 	return Val.Null
 }
 
-# ```zerg
-# json.encode(json.of_str("a\tb"))
-# ```
-# ```output
-# "a\tb"
-# ```
+## ```zerg
+## json.encode(json.of_str("a\tb"))
+## ```
+## ```output
+## "a\tb"
+## ```
 pub fn of_str(s: str) -> Val {
 	return Val.Str(s)
 }
 
-# ```zerg
-# json.encode(json.of_list([json.of_str("a"), json.null()]))
-# ```
-# ```output
-# ["a",null]
-# ```
+## ```zerg
+## json.encode(json.of_list([json.of_str("a"), json.null()]))
+## ```
+## ```output
+## ["a",null]
+## ```
 pub fn of_list(xs: list[Val]) -> Val {
 	return Val.Arr(xs)
 }
 
-# of_obj closes a field list into an object — the last step of the `mut fs: list[json.Field]
-# = []` idiom the section above describes, and the only way to build the `Obj` variant.
-#
-# ```zerg
-# json.encode(json.of_obj([json.Field("k", json.of_str("v"))]))
-# ```
-# ```output
-# {"k":"v"}
-# ```
+## of_obj closes a field list into an object — the last step of the `mut fs: list[json.Field]
+## = []` idiom `Field` describes, and the only way to build the `Obj` variant.
+##
+## ```zerg
+## json.encode(json.of_obj([json.Field("k", json.of_str("v"))]))
+## ```
+## ```output
+## {"k":"v"}
+## ```
 pub fn of_obj(fs: list[Field]) -> Val {
 	return Val.Obj(fs)
 }
 
-# put appends one field to a list a caller is building. It is the general form the three
-# typed helpers below are written on, and the one to reach for when the value is already a
-# `Val` — a nested object, an array, or a `null`.
+## put appends one field to a list a caller is building. It is the general form the three
+## typed helpers below are written on, and the one to reach for when the value is already a
+## `Val` — a nested object, an array, or a `null`.
 #
 # THE LIST IS TAKEN `mut &` and appended to rather than answered fresh, because building an
 # object is a sequence of puts and a version that returned a new list would copy the whole
@@ -264,36 +264,38 @@ pub fn put(mut &fs: list[Field], key: str, v: Val) {
 	fs.append(Field(key, v))
 }
 
-# put_str appends a string field. It is `put` with the `Val.Str` written for you, which is
-# what keeps a caller's object-building readable — the reason the section above gives.
+## put_str appends a string field. It is `put` with the `Val.Str` written for you, which is
+## what keeps a caller's object-building readable.
 pub fn put_str(mut &fs: list[Field], key: str, s: str) {
 	fs.append(Field(key, Val.Str(s)))
 }
 
-# put_int appends an integer field. Integer is the only number this module has — see the
-# header on why `Val` carries no float variant.
+## put_int appends an integer field. Integer is the only number this module has — see the
+## header on why `Val` carries no float variant.
 pub fn put_int(mut &fs: list[Field], key: str, n: int) {
 	fs.append(Field(key, Val.Int(n)))
 }
 
-# put_bool appends a boolean field, rendered `true` or `false` and never quoted.
+## put_bool appends a boolean field, rendered `true` or `false` and never quoted.
 pub fn put_bool(mut &fs: list[Field], key: str, b: bool) {
 	fs.append(Field(key, Val.Bool(b)))
 }
 
 # --- writing ------------------------------------------------------------------------------
 
-# encode renders a value as JSON text — one line, no spaces, fields in the order they were
-# put. See `jw_str` below for exactly what is escaped and what is not.
+## encode renders a value as JSON text — one line, no spaces, fields in the order they were
+## put.
 #
-# ```zerg
-# json.encode(json.of_str("say \"hi\"\nthen go"))
-# json.encode(json.decode("[1, {\"k\": true}]"))
-# ```
-# ```output
-# "say \"hi\"\nthen go"
-# [1,{"k":true}]
-# ```
+# See `jw_str` below for exactly what is escaped and what is not.
+##
+## ```zerg
+## json.encode(json.of_str("say \"hi\"\nthen go"))
+## json.encode(json.decode("[1, {\"k\": true}]"))
+## ```
+## ```output
+## "say \"hi\"\nthen go"
+## [1,{"k":true}]
+## ```
 pub fn encode(v: Val) -> str {
 	mut out: list[byte] = []
 	jw(v, out)
@@ -404,24 +406,24 @@ fn jw_hex(n: int) -> byte {
 # does not parse is not a request that can be answered — there is no id to answer it with —
 # so the server catches the abort, logs it, and reads the next frame.
 
-# decode reads JSON text. It RAISES on malformed input rather than answering a partial
-# value, so a caller that can carry on writes `guard`.
-#
-# A NUMBER COMES BACK AS AN INTEGER and a fraction is dropped — `decode("1.5")` is `Int(1)`.
-# See the header. Escapes are decoded, which means a round trip is not byte-identical: the
-# text `"\u00e9"` decodes to the character and re-encodes as the UTF-8 bytes, because this
-# encoder escapes only what JSON requires.
-#
-# ```zerg
-# json.as_int(json.get(json.decode(" { \"n\" : -12 } "), "n"))
-# json.encode(json.decode("\"\\u00e9\\ud83d\\ude00\""))
-# guard { json.as_int(json.decode("{oops}")) } ?? -1
-# ```
-# ```output
-# -12
-# "é😀"
-# -1
-# ```
+## decode reads JSON text. It RAISES on malformed input rather than answering a partial
+## value, so a caller that can carry on writes `guard`.
+##
+## A NUMBER COMES BACK AS AN INTEGER and a fraction is dropped — `decode("1.5")` is `Int(1)`.
+## See the header. Escapes are decoded, which means a round trip is not byte-identical: the
+## text `"\u00e9"` decodes to the character and re-encodes as the UTF-8 bytes, because this
+## encoder escapes only what JSON requires.
+##
+## ```zerg
+## json.as_int(json.get(json.decode(" { \"n\" : -12 } "), "n"))
+## json.encode(json.decode("\"\\u00e9\\ud83d\\ude00\""))
+## guard { json.as_int(json.decode("{oops}")) } ?? -1
+## ```
+## ```output
+## -12
+## "é😀"
+## -1
+## ```
 pub fn decode(s: str) -> Val {
 	b := bytearray(s)
 	mut pos: list[int] = []

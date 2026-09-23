@@ -1,10 +1,10 @@
-# io — minimal standard-stream output (Phase 1f, bundle MVP).
-#
-# Bundled into a program that writes `import "io"`; its members are reached
-# through the namespace, as `io.println(...)`. Each writer returns `Result[nil]`
-# per docs/runtime/io.md — a write failure is a value, not an abort — though this minimal
-# surface writes best-effort over the runtime's `zrt_write` and never yields an
-# Err yet (structured write failures land with the full Writer spec later).
+## io — minimal standard-stream output (Phase 1f, bundle MVP).
+##
+## Bundled into a program that writes `import "io"`; its members are reached
+## through the namespace, as `io.println(...)`. Each writer returns `Result[nil]`
+## per docs/runtime/io.md — a write failure is a value, not an abort — though this minimal
+## surface writes best-effort over the runtime's `zrt_write` and never yields an
+## Err yet (structured write failures land with the full Writer spec later).
 #
 # Zerg is zero-external-dependency like Go: the stdlib reaches the OS through the
 # self runtime's own primitives, never an FFI binding onto a third-party library.
@@ -13,40 +13,41 @@
 # runtime, reached through the thin compiler primitives `__zrt_write` (write a str to
 # an fd) and the whole-file read floor `__zrt_open` / `__zrt_read` / `__zrt_close`.
 
-# write writes s to standard output (fd 1) with no trailing newline. (`print` is a
-# reserved keyword — the ambient no-import shortcut — so the module's newline-free
-# writer is named `write`, matching the `write`/`write_str` verbs in docs/runtime/io.md.)
+## write writes s to standard output (fd 1) with no trailing newline. (`print` is a
+## reserved keyword — the ambient no-import shortcut — so the module's newline-free
+## writer is named `write`, matching the `write`/`write_str` verbs in docs/runtime/io.md.)
 pub fn write(s: str) -> Result[nil] {
 	__zrt_write(1, s)
 	return nil
 }
 
-# println writes s to standard output (fd 1) followed by a newline.
+## println writes s to standard output (fd 1) followed by a newline.
 pub fn println(s: str) -> Result[nil] {
 	__zrt_write(1, s)
 	__zrt_write(1, "\n")
 	return nil
 }
 
-# ewrite writes s to standard error (fd 2), no trailing newline — the error-stream
-# counterpart of write, so diagnostics stay off stdout.
+## ewrite writes s to standard error (fd 2), no trailing newline — the error-stream
+## counterpart of write, so diagnostics stay off stdout.
 pub fn ewrite(s: str) -> Result[nil] {
 	__zrt_write(2, s)
 	return nil
 }
 
-# eprintln writes s to standard error (fd 2) followed by a newline — the error-stream
-# counterpart of println, the line a tool uses for a warning or error message.
+## eprintln writes s to standard error (fd 2) followed by a newline — the error-stream
+## counterpart of println, the line a tool uses for a warning or error message.
 pub fn eprintln(s: str) -> Result[nil] {
 	__zrt_write(2, s)
 	__zrt_write(2, "\n")
 	return nil
 }
 
-# write_int writes the decimal text of n to standard output (fd 1). The conversion is
-# pure Zerg: digits are peeled off with `% 10` / `/ 10` — the single digit is negated,
-# never the whole value, so INT_MIN never overflows — collected least-significant-first,
-# then reversed into a str and written through the `write` leaf.
+## write_int writes the decimal text of n to standard output (fd 1).
+#
+# The conversion is pure Zerg: digits are peeled off with `% 10` / `/ 10` — the single digit
+# is negated, never the whole value, so INT_MIN never overflows — collected
+# least-significant-first, then reversed into a str and written through the `write` leaf.
 pub fn write_int(n: int) -> Result[nil] {
 	mut digits: list[byte] = []
 	mut v := n
@@ -85,11 +86,11 @@ pub fn write_int(n: int) -> Result[nil] {
 	return write(str(out))
 }
 
-# read_file reads the whole file at path into a list[byte] — pure-Zerg orchestration
-# over the runtime's open/read/close floor. It opens the file (a missing or unreadable
-# file raises IOError in the floor, which `guard { io.read_file(p) }` demotes to a
-# Result), loops the read leaf appending each chunk until end of input, then closes the
-# fd. Decode the bytes with `str(...)` when the contents are text.
+## read_file reads the whole file at path into a list[byte] — pure-Zerg orchestration
+## over the runtime's open/read/close floor. It opens the file (a missing or unreadable
+## file raises IOError in the floor, which `guard { io.read_file(p) }` demotes to a
+## Result), loops the read leaf appending each chunk until end of input, then closes the
+## fd. Decode the bytes with `str(...)` when the contents are text.
 pub fn read_file(path: str) -> list[byte] {
 	fd := __zrt_open(path)
 	mut out: list[byte] = []
@@ -104,10 +105,10 @@ pub fn read_file(path: str) -> list[byte] {
 	return out
 }
 
-# read_stdin reads all of standard input (fd 0) to end of input into a list[byte] — the
-# same read loop as read_file, but over the already-open stdin fd, so there is no open or
-# close. It blocks until the stream reaches EOF, so it is the whole-input read a filter
-# uses; decode the bytes with `str(...)` for text. Returns an empty list on empty input.
+## read_stdin reads all of standard input (fd 0) to end of input into a list[byte] — the
+## same read loop as read_file, but over the already-open stdin fd, so there is no open or
+## close. It blocks until the stream reaches EOF, so it is the whole-input read a filter
+## uses; decode the bytes with `str(...)` for text. Returns an empty list on empty input.
 pub fn read_stdin() -> list[byte] {
 	mut out: list[byte] = []
 	for {
@@ -120,10 +121,10 @@ pub fn read_stdin() -> list[byte] {
 	return out
 }
 
-# write_file writes data to the file at path, creating it or truncating an existing one —
-# pure-Zerg orchestration over the runtime's open-write/write/close floor, symmetric with
-# read_file. A failure to open or write raises IOError, which `guard { io.write_file(p, d) }`
-# demotes to a Result. Encode text with `bytearray(s)` first.
+## write_file writes data to the file at path, creating it or truncating an existing one —
+## pure-Zerg orchestration over the runtime's open-write/write/close floor, symmetric with
+## read_file. A failure to open or write raises IOError, which `guard { io.write_file(p, d) }`
+## demotes to a Result. Encode text with `bytearray(s)` first.
 pub fn write_file(path: str, data: list[byte]) {
 	fd := __zrt_open_write(path)
 	__zrt_write_bytes(fd, data)
@@ -140,12 +141,12 @@ pub fn write_file(path: str, data: list[byte]) {
 # and `chunks(n)` are defaults over a protocol `for … in` does not walk yet, so they are not
 # written: a default that cannot be called is a promise, and the ones below are methods.
 
-# Reader is a source of bytes: one required leaf, and the whole-input reads over it.
+## Reader is a source of bytes: one required leaf, and the whole-input reads over it.
 pub spec Reader {
 	fn read_bytes(n: uint) -> Result[list[byte]]
 
-	# read_all drains the stream to end of input. It is the whole-input read, over the
-	# required leaf, which is exactly what a provided default is for.
+	## read_all drains the stream to end of input. It is the whole-input read, over the
+	## required leaf, which is exactly what a provided default is for.
 	fn read_all() -> Result[list[byte]] {
 		mut out: list[byte] = []
 		for {
@@ -159,14 +160,14 @@ pub spec Reader {
 		return out
 	}
 
-	# read_text is read_all decoded, for a stream a reader knows is text. A stream that is
-	# not valid UTF-8 raises where the decode happens, which `guard` demotes.
+	## read_text is read_all decoded, for a stream a reader knows is text. A stream that is
+	## not valid UTF-8 raises where the decode happens, which `guard` demotes.
 	fn read_text() -> Result[str] {
 		return str(this.read_all()?)
 	}
 }
 
-# Writer is a destination for bytes: one required leaf, and the str convenience over it.
+## Writer is a destination for bytes: one required leaf, and the str convenience over it.
 pub spec Writer {
 	fn write(bytes: list[byte]) -> Result[uint]
 
@@ -175,12 +176,12 @@ pub spec Writer {
 	}
 }
 
-# Fd is a raw file descriptor as a stream. It is the one concrete Reader and Writer this
-# phase has, and it is what a child process's three ends are.
-#
-# IT DOES NOT CLOSE ITSELF. The chapter's `File` is a `Ref[handle]` closed exactly once at
-# the last holder's scope exit, and that is the foreign-handle pattern this type is not: an
-# `Fd` is owned by whoever opened it — for a child's streams, the `Proc` that holds them.
+## Fd is a raw file descriptor as a stream. It is the one concrete Reader and Writer this
+## phase has, and it is what a child process's three ends are.
+##
+## IT DOES NOT CLOSE ITSELF. The chapter's `File` is a `Ref[handle]` closed exactly once at
+## the last holder's scope exit, and that is the foreign-handle pattern this type is not: an
+## `Fd` is owned by whoever opened it — for a child's streams, the `Proc` that holds them.
 pub struct Fd {
 	pub fd: int
 }
@@ -202,7 +203,7 @@ impl Writer for Fd {
 # closing is not something every stream answers — a `Reader` may be a buffer — and it is not
 # spelled `close`, which is a reserved word (a channel's own closing).
 impl Fd {
-	# release gives the descriptor back to the OS. Whoever opened it owns it.
+	## release gives the descriptor back to the OS. Whoever opened it owns it.
 	pub fn release() {
 		__zrt_close(this.fd)
 	}

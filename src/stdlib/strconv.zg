@@ -1,16 +1,16 @@
-# strconv — numeric text conversion in an arbitrary base (pure-Zerg stdlib).
-#
-# Bundled into a program that writes `import "strconv"`; members are reached through the
-# namespace, as `strconv.parse_int(tok, 16)` or `strconv.to_string(n, 2)`. This is the
-# base-aware layer the built-in conversions do NOT cover: `int(s)` / `uint(s)` /
-# `float(s)` parse decimal only, and `str(n)` formats decimal only. Here `base` is any
-# radix 2..36, with digits '0'..'9' then 'a'..'z' (case-insensitive on input) — enough to
-# read a `0x…` / `0b…` literal by hand or render a hex dump.
-#
-# A malformed string, a digit outside the base, or a base outside 2..36 raises
-# ValueError, which `guard { strconv.parse_int(s, b) }` demotes to a Result. Overflow of
-# the target type is NOT separately diagnosed this phase (a value past the type's range
-# wraps, or traps under the sanitiser); parse trusted or bounded text.
+## strconv — numeric text conversion in an arbitrary base (pure-Zerg stdlib).
+##
+## Bundled into a program that writes `import "strconv"`; members are reached through the
+## namespace, as `strconv.parse_int(tok, 16)` or `strconv.to_string(n, 2)`. This is the
+## base-aware layer the built-in conversions do NOT cover: `int(s)` / `uint(s)` /
+## `float(s)` parse decimal only, and `str(n)` formats decimal only. Here `base` is any
+## radix 2..36, with digits '0'..'9' then 'a'..'z' (case-insensitive on input) — enough to
+## read a `0x…` / `0b…` literal by hand or render a hex dump.
+##
+## A malformed string, a digit outside the base, or a base outside 2..36 raises
+## ValueError, which `guard { strconv.parse_int(s, b) }` demotes to a Result. Overflow of
+## the target type is NOT separately diagnosed this phase (a value past the type's range
+## wraps, or traps under the sanitiser); parse trusted or bounded text.
 
 # digit_for maps an ASCII alphanumeric byte to its base value 0..35, or -1 when it is not
 # an alphanumeric — '0'..'9' -> 0..9, 'a'..'z' / 'A'..'Z' -> 10..35. Module-private.
@@ -35,9 +35,9 @@ fn check_base(base: int) {
 	raise ValueError("strconv: base out of range (2..36)") if base < 2 or base > 36
 }
 
-# parse_int parses a signed integer written in the given base, with an optional leading
-# '+' or '-'. It raises ValueError on an empty string, a missing digit, or a digit that
-# is not valid for the base, and OverflowError on a value outside `int`'s range.
+## parse_int parses a signed integer written in the given base, with an optional leading
+## '+' or '-'. It raises ValueError on an empty string, a missing digit, or a digit that
+## is not valid for the base, and OverflowError on a value outside `int`'s range.
 #
 # The accumulator runs NEGATIVE. The negative side of two's complement is one wider than
 # the positive, so building the magnitude up and negating it at the end cannot represent
@@ -69,11 +69,11 @@ pub fn parse_int(s: str, base: int) -> int {
 	return -val
 }
 
-# parse_uint parses an unsigned integer written in the given base, with an optional
-# leading '+'. It raises ValueError on an empty string, a missing digit, a leading '-', or
-# a digit that is not valid for the base, and OverflowError on a value past the range —
-# which used to wrap into a different number in silence. Use this (not parse_int) for a
-# value that fills the top bit, e.g. a 64-bit hex mask.
+## parse_uint parses an unsigned integer written in the given base, with an optional
+## leading '+'. It raises ValueError on an empty string, a missing digit, a leading '-', or
+## a digit that is not valid for the base, and OverflowError on a value past the range —
+## which used to wrap into a different number in silence. Use this (not parse_int) for a
+## value that fills the top bit, e.g. a 64-bit hex mask.
 pub fn parse_uint(s: str, base: int) -> uint {
 	check_base(base)
 	b := bytearray(s)
@@ -95,9 +95,9 @@ pub fn parse_uint(s: str, base: int) -> uint {
 	return val
 }
 
-# to_string renders n in the given base, lowercase, with a leading '-' for a negative
-# value. Digits are peeled off with `% base` / `/ base` — the whole value is never
-# negated, so INT_MIN renders like any other — and reversed into the result.
+## to_string renders n in the given base, lowercase, with a leading '-' for a negative
+## value. Digits are peeled off with `% base` / `/ base` — the whole value is never
+## negated, so INT_MIN renders like any other — and reversed into the result.
 pub fn to_string(n: int, base: int) -> str {
 	check_base(base)
 
@@ -134,8 +134,8 @@ pub fn to_string(n: int, base: int) -> str {
 	return str(out)
 }
 
-# parse_bool parses the literal `"true"` or `"false"`; any other string raises
-# ValueError.
+## parse_bool parses the literal `"true"` or `"false"`; any other string raises
+## ValueError.
 pub fn parse_bool(s: str) -> bool {
 	return true if s == "true"
 	return false if s == "false"

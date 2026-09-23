@@ -23,9 +23,9 @@ pub fn lsp_cmd() -> cli.Command {
 	)
 }
 
-# do_lsp hands the server the one thing it cannot do for itself: turn a path and an unsaved
-# buffer into the whole program that buffer belongs to. Resolving an import is 60 lines of
-# environment variables, an installation root and a checkout layout — `source.zg` and
+# do_lsp hands the server the one thing it cannot do for itself: turn a path and the buffers
+# an editor is holding into the whole program that path belongs to. Resolving an import is 60
+# lines of environment variables, an installation root and a checkout layout — `source.zg` and
 # `layout.zg` beside this file — and none of it the protocol's business.
 fn do_lsp(c: cli.Ctx) -> int {
 	return server.serve(lsp_program)
@@ -35,11 +35,14 @@ fn do_lsp(c: cli.Ctx) -> int {
 # program a file belongs to is the same question `module_files` answers one import at a time
 # — and a copy of it here would be the server's own opinion about what a module is, which is
 # the one thing this split exists to prevent.
-fn lsp_program(path: str, text: str) -> server.Program {
+#
+# EVERY open buffer travels, not only the one asked about: the program is what the editor
+# holds, and which of its files are unsaved is the server's to know and the loader's to obey.
+fn lsp_program(path: str, bpaths: list[str], btexts: list[str]) -> server.Program {
 	mut srcs: list[str] = []
 	mut paths: list[str] = []
 	mut mods: list[str] = []
 	mut res := source.res_new()
-	source.load_buffer(path, text, srcs, paths, mods, res)
+	source.load_buffer(path, bpaths, btexts, srcs, paths, mods, res)
 	return server.program(paths, srcs, mods, res.at, res.path, res.mod)
 }

@@ -49,8 +49,9 @@ out later.
 
 **It does not resolve `import`.** The driver already knows where a module lives — an environment
 variable, then an installation root, then the checkout — so `serve` takes a **function**: hand it a
-path and the text of a buffer, get back the whole program with that buffer standing in for what is
-on disk. The module owns the protocol; the driver owns the filesystem.
+path and the buffers the editor is holding, get back the whole program that path belongs to, with
+those texts standing in for what is on disk. The module owns the protocol; the driver owns the
+filesystem.
 
 ## What is built
 
@@ -104,6 +105,60 @@ That search is why "the buffer's directory is a module" is not the rule, temptin
 local to a directory says whether it is one: `src/stdlib/` is a directory of `.zg` files where each
 file is a module of its own, and `examples/` is a directory of twenty separate programs. A directory
 is a module when something imports it, and only a walk from an entry knows that.
+
+**And every open buffer is that program**, not only the one that was typed in. What `serve` is
+handed is the whole document store, and each of those texts stands in for its file wherever the walk
+reaches it; only a file nobody has open is read from disk. An unsaved change in `a.zg` is part of
+the program an open `b.zg` is checked against, and a server that read `a.zg` from disk would be
+checking `b.zg` against a program nobody has.
+
+**A change reaches the buffers that import it**, and one check is what answers for all of them. The
+walk already holds a finding for every file of the program, so the open buffers that program
+**contains** are published by partitioning what it said by path — at the cost of nothing beyond the
+check that was happening anyway. A keystroke in a session of buffers of one program is one check,
+and a publish per buffer.
+
+An open buffer that program does **not** contain is asked the other question — does **its** program
+contain the file that changed — of the loader's import graph rather than of a spelling, and is
+checked only when the answer is yes. That is not a patch over a corner of the search above. The
+search answers with **one** program, the first candidate that reaches the buffer, while "which open
+buffers are stale now that this file changed" has as many answers as there are programs containing
+it: two entries importing one module is the general shape, and `lib.zg` with the `main.zg` beside it
+— where `lib.zg`'s own program is `lib.zg` alone, the buffer's own directory never being searched —
+is the smallest one. The program that answered the question is the one that gets checked, so a
+dependant costs one load and one check rather than two loads.
+
+**That question is asked once per program, not once per buffer.** A load is the import walk plus a
+parse of every file in it, and the buffers of one program share the answer: they are in it, so it is
+their program too. Asked per buffer, four buffers of one other program cost four full loads of it on
+every keystroke — which `make lsp` measures as a ratio against a session with one such buffer open.
+
+**A buffer is published at most once per round, and the round's subject decides which check speaks
+for it.** A file can belong to two programs — `shared/mod.zg` imported by `one.zg` and by `two.zg` —
+and a round that checks both would otherwise publish that file twice, leaving the editor showing
+whichever landed last. A buffer the subject's program contains is answered from that program; any
+other is answered from its own.
+
+**Closing** a buffer publishes the same way, because a closed file is the disk again — the staleness
+a change causes, arriving the other way round.
+
+**A buffer that does not lex is a finding, not a hole.** A source that does not tokenize is not a
+program, so the load refuses rather than walking on without that file — as it already did for one
+that does not parse. The lexical finding is published in **that** buffer, and the buffers whose
+program it is in are left exactly as they were: checked against a program with a file missing from
+it, an open `main.zg` was told `` E3084 module `lib` has no `greet` `` for as long as a quote in
+`lib.zg` stood unclosed, which is a sentence about correct code. Their diagnostics are a moment old
+rather than wrong, and the next keystroke after the quote is closed brings them up to date.
+
+**Two things the editor is shown less of than the command line.** A finding about a file **nobody
+has open** is not published anywhere — the protocol addresses diagnostics to a document, and there
+is no document; `zerg build` prints it and the editor does not. And a finding the compiler raised in
+a tree it **wrote itself** — a `#[derive]` expansion is walked at `<derive:FILE>` — is published in
+FILE's buffer at the top of the file rather than at its own line and column, because those name a
+line in a tree nobody has on screen.
+
+Every check in a round is therefore a check of a program the changed buffer is in, which is what
+keeps [the name index](#a-name-answers-from-one-index) an index that still answers for it.
 
 **Four severities, from two places.** An **error** — LSP severity 1 — is what the check walk
 reports and `zerg build` refuses over, and it is the only severity the compiler's own diagnostics
@@ -579,8 +634,8 @@ put it (0.154 against 0.156) — and what a finer measurement does find there, a
 leaves as much of as a hover: it is the request path's residue, not this answer's.
 
 **The source is the loader's.** The declaration is routinely in another file — a standard library
-function, a sibling of the module — so the whole program is loaded the way a check loads it, with the
-unsaved buffer standing in for what is on disk. A hover therefore answers about the text as it is
+function, a sibling of the module — so the whole program is loaded the way a check loads it, with every
+open buffer standing in for what is on disk. A hover therefore answers about the text as it is
 being typed, and a load that raises answers with what the index knows and nothing more. It answers
 only for a buffer the client has **open**, because that buffer is what the document is read from.
 

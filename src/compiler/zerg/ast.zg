@@ -784,6 +784,33 @@ pub fn place_line(path: str, line: int, col: int) -> str {
 	return f"  --> {path}:{l}:{c}"
 }
 
+# derive_origin is the FILE a compiler-written path came from: `<derive:FILE>` is the tree a
+# decorator expanded out of a declaration in FILE, and everything else is its own file.
+#
+# It is the spelling half of `check.c_origin_path`, and it lives here so it has ONE reader's
+# rule and two askers. The emitter asks through that function, which first checks the path is
+# not a real file somebody named with a bracket; the language server asks this one directly,
+# having no emitter to ask with — and a finding it fails to map is a finding an editor drops on
+# the floor while `zerg build` prints it.
+pub fn derive_origin(path: str) -> str {
+	b := bytearray(path)
+	pre := bytearray("<derive:")
+	return path if b.len() <= pre.len() or b[b.len() - 1] != b'>'
+
+	mut i := 0
+	for i < pre.len() {
+		return path if b[i] != pre[i]
+		i = i + 1
+	}
+
+	mut out: list[byte] = []
+	for i < b.len() - 1 {
+		out.append(b[i])
+		i = i + 1
+	}
+	return str(out)
+}
+
 # FieldDef is one struct field: its name, its declared type, and the two things GRAMMAR's
 # FIELD VISIBILITY & DEFAULTS note gives it a tail for.
 #

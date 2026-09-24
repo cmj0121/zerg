@@ -1,6 +1,7 @@
 # `zerg lint`. The rules are `zerg/lint.zg`'s and the loader is `source.zg`'s; what is here
 # is the command, how a finding is printed, and what a run of them exits with.
 
+import "./diag"
 import "./source"
 import "./walkdir"
 import (
@@ -38,15 +39,27 @@ fn do_lint(c: cli.Ctx) -> int {
 # reports is legal — a `#[test]` that ships is a decision somebody may have made on purpose —
 # and `strict` is what turns those into failures for a caller that has decided otherwise.
 # `make lint`, over this project's own source, is that caller. INFO never fails anything.
+#
+# AND A PROGRAM THE COMPILER REFUSES FAILS, in the compiler's own words (#238). The rules run
+# on the walk `zerg build --emit check` runs, so its findings are this run's to report — they
+# used to be dropped and an abort swallowed, and a program that does not build linted clean
+# and exited 0. They print as that check prints them, because they take its path: the ones the
+# walk COLLECTED through `report_diags`, after the lint findings the tree rules still have to
+# say about the program; an ABORT is not guarded here at all, so it raises out of the run
+# exactly as it raises out of the check — its sentence, exit 1, and nothing beside it, since
+# the walk that raised it never reached the rules.
 fn run_lint(files: list[str], strict: bool) -> int {
 	mut paths: list[str] = []
 	mut mods: list[str] = []
 	mut res := source.res_new()
 	srcs := source.load_sources_at(files, paths, mods, res)
 
+	mut diags: list[zerg.Diag] = []
+	found := zerg.check_and_lint(srcs, paths, zerg.mods_of(paths, mods, res.at, res.path, res.mod), diags)
+
 	mut bad := 0
 	mut warned := 0
-	for f in zerg.lint_program(srcs, paths, zerg.mods_of(paths, mods, res.at, res.path, res.mod)) {
+	for f in found {
 		io.write(f"{f.path}:{f.line}:{f.col}: {lint_sev(f)}{f.code} {f.msg}\n")
 		if f.sev == "" {
 			bad = bad + 1
@@ -54,6 +67,8 @@ fn run_lint(files: list[str], strict: bool) -> int {
 			warned = warned + 1
 		}
 	}
+
+	diag.report_diags(diags, srcs, paths)
 
 	return 1 if bad > 0
 	return 1 if strict and warned > 0

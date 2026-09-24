@@ -403,7 +403,14 @@ LINUX_IMAGE ?= golang:1.26-bookworm
 # There is no exclusion list any more. If one is ever needed again it owes the shape
 # CORPUS_SKIP now has: a name is a claim, and the gate checks the claim rather than
 # remembering it.
-LINT_ENTRIES := $(ZERG_ENTRY) $(wildcard src/compiler/zerg/*_test.zg) $(wildcard src/stdlib/*.zg) $(wildcard $(EXAMPLE_SRCS))
+#
+# THE COMPILER'S SUITES ARE NOT ENTRIES, since `zerg lint` reports what the compiler refuses
+# (#238). Each is white-box beside one file of a library (`parser_test.zg` calls `parse_at`
+# unqualified), so handed over alone it is a program the compiler refuses — an undefined
+# function, a walk abort before any rule has run. It used to lint clean only because the refusal
+# was swallowed. A suite is a program only as the package `zerg test` builds, and `zerg lint`
+# has no such entry yet; a stdlib suite is not held out, because each one builds by itself.
+LINT_ENTRIES := $(ZERG_ENTRY) $(wildcard src/stdlib/*.zg) $(wildcard $(EXAMPLE_SRCS))
 
 # A FLOOR under how many entries were linted, of the kind `corpus`, `examples` and `fmt-corpus`
 # carry. The one glob above reaches a directory, and a glob that matches nothing leaves a loop
@@ -422,11 +429,21 @@ LINT_MIN ?= 50
 #
 # EVERY ENTRY IS LINTED BEFORE THE GATE FAILS, rather than the loop stopping at the first —
 # a board that reports one finding per run makes a reader run it once per finding.
+#
+# A REFUSED EXAMPLE IS ASKED FOR ITS LINT FINDINGS ALONE. `zerg lint` fails it — the compiler
+# refuses it, and on purpose — and prints the refusal on stderr, where `make examples` already
+# holds it to its sentence. What is left to ask here is stdout, the rules' half, and it must be
+# empty as it is for every other entry.
 lint:                           # lint the compiler, the stdlib, the suites and the examples
 	$(MAKE) build
 	@fail=0; n=0; \
-	for f in $(LINT_ENTRIES); do \
+	for f in $(filter-out $(EXAMPLE_REFUSED),$(LINT_ENTRIES)); do \
 		./bin/zerg lint --strict $$f || fail=1; \
+		n=$$((n+1)); \
+	done; \
+	for f in $(filter $(EXAMPLE_REFUSED),$(LINT_ENTRIES)); do \
+		out=$$(./bin/zerg lint --strict $$f 2>/dev/null); \
+		[ -z "$$out" ] || { printf '%s\n' "$$out"; fail=1; }; \
 		n=$$((n+1)); \
 	done; \
 	[ $$fail -eq 0 ] || { echo "lint: a source this project writes has a finding"; exit 1; }; \

@@ -451,6 +451,11 @@ EOF
 
 # --- L2xx — null safety -----------------------------------------------------------
 
+# NOT A WELL FORMED PROGRAM, and no `?? nil` is: the compiler refuses every one with E3036, so
+# this rule fires only beside that refusal and exits 1 for it either way. The program used to be
+# one whose walk ABORTED (E3122 on `v ?? 0`, `v` being an `int`), which prints the abort alone —
+# it passed only while `zerg lint` swallowed the refusal (#238). What is left to pin is that the
+# rule still speaks where the walk collects and goes on.
 lint L201 '`?? nil`' <<'EOF'
 fn find(n: int) -> int? {
 	return nil if n < 0
@@ -458,7 +463,7 @@ fn find(n: int) -> int? {
 }
 
 fn main() {
-	v := find(1) ?? nil
+	v: int? = find(1) ?? nil
 	print v ?? 0
 }
 EOF
@@ -905,6 +910,125 @@ case $sib_out in
 	;;
 *)
 	echo "QUIET     l101-is-the-file's — b.zg imports \`strings\` and never writes it, and only its SIBLING does: $sib_out"
+	fail=$((fail + 1))
+	;;
+esac
+
+# --- a program the compiler refuses ------------------------------------------------------
+#
+# The rules run on the compiler's own walk, so what that walk refuses is this tool's to report:
+# lint's exit status says whether the program is fit to ship, and one that does not build is
+# not (#238). It used to drop the walk's findings and swallow its abort, and every program
+# below linted clean and exited 0. Loader and parse errors never had the hole; a refusal the
+# TYPE WALK makes, collected or raised, did.
+#
+# refused <code> <dir> <entry> — the program is already written under $tmp/<dir>. Three
+# assertions: the check refuses it with <code> (or the case proves nothing); `zerg lint` prints
+# on stderr EXACTLY what `zerg build --emit check` prints, the same lines through the same
+# renderer; and it exits 1.
+refused() {
+	local code=$1 dir=$2 entry=$3
+	local src="$tmp/$dir/$entry"
+	"$ZERG" build --emit check "$src" >/dev/null 2>"$tmp/$dir.check"
+	case $(cat "$tmp/$dir.check") in
+	*"$code"*) ;;
+	*)
+		echo "NEEDLESS  refused-$dir — \`zerg build --emit check\` does not refuse it with $code: $(head -1 "$tmp/$dir.check")"
+		fail=$((fail + 1))
+		return
+		;;
+	esac
+
+	local status
+	"$ZERG" lint "$src" >/dev/null 2>"$tmp/$dir.lint"
+	status=$?
+	if ! cmp -s "$tmp/$dir.check" "$tmp/$dir.lint"; then
+		echo "UNSAID    refused-$dir — \`zerg lint\` did not print what the check prints ($code): $(head -1 "$tmp/$dir.lint")"
+		fail=$((fail + 1))
+		return
+	fi
+	if [ "$status" -ne 1 ]; then
+		echo "STATUS    refused-$dir — wanted exit 1 on a program the compiler refuses, got $status"
+		fail=$((fail + 1))
+		return
+	fi
+	pass=$((pass + 1))
+}
+
+# a generic in ANOTHER FILE that grows its own type argument: an abort the walk RAISES, about a
+# place in the imported file
+mkdir -p "$tmp/e4008"
+cat >"$tmp/e4008/lib.zg" <<'EOF'
+pub fn grow[T](x: T) -> int {
+	return grow([x])
+}
+EOF
+cat >"$tmp/e4008/main.zg" <<'EOF'
+import "./lib"
+
+fn main() {
+	print lib.grow(1)
+}
+EOF
+refused E4008 e4008 main.zg
+
+# a plain type error: a finding the walk COLLECTS and goes on past
+mkdir -p "$tmp/e3033"
+cat >"$tmp/e3033/main.zg" <<'EOF'
+fn main() {
+	y: int = "s"
+	print y
+}
+EOF
+refused E3033 e3033 main.zg
+
+# two files of one module defining one name: the collision no module tag can separate
+mkdir -p "$tmp/e4077/one"
+cat >"$tmp/e4077/one/a.zg" <<'EOF'
+fn helper() -> int {
+	return 1
+}
+EOF
+cat >"$tmp/e4077/one/b.zg" <<'EOF'
+fn helper() -> int {
+	return 2
+}
+EOF
+cat >"$tmp/e4077/one/mod.zg" <<'EOF'
+pub fn first() -> int {
+	return helper()
+}
+EOF
+cat >"$tmp/e4077/main.zg" <<'EOF'
+import "./one"
+
+fn main() {
+	print one.first()
+}
+EOF
+refused E4077 e4077 main.zg
+
+# AND THE LINT FINDINGS STILL PRINT BESIDE COLLECTED ONES, on stdout where they always go: the
+# tree rules are true of a program the walk refused, which is what the language server shows
+# too. A WARNING is the finding asked for, so the exit status is the refusal's alone.
+mkdir -p "$tmp/beside"
+cat >"$tmp/beside/main.zg" <<'EOF'
+#[test]
+fn ships() {
+	print 1
+}
+
+fn main() {
+	y: int = "s"
+	print y
+}
+EOF
+refused E3033 beside main.zg
+beside_out=$("$ZERG" lint "$tmp/beside/main.zg" 2>/dev/null)
+case $beside_out in
+*"warning: L601"*) pass=$((pass + 1)) ;;
+*)
+	echo "BESIDE    a refused program's lint findings are no longer printed beside the compiler's: $beside_out"
 	fail=$((fail + 1))
 	;;
 esac

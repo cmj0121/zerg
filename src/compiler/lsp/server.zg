@@ -745,7 +745,7 @@ fn ls_check_program(mut &s: Server, uri: str, prog: Program, said: list[str], su
 	# use for. A long session was SIGKILLed on the third or fourth keystroke batch.
 	#
 	# AND ONE WALK FOR BOTH HALVES: `check_and_lint` asks `check_files_diag`'s question and
-	# `lint_program`'s of a single lowering walk (lint.zg says why). The errors land in `ds`
+	# `zerg lint`'s of a single lowering walk (lint.zg says why). The errors land in `ds`
 	# and the lint findings come back.
 	#
 	# The block ends in `ds.len()` because a `guard` carries a value and this call answers
@@ -790,7 +790,7 @@ fn ls_check_program(mut &s: Server, uri: str, prog: Program, said: list[str], su
 	# L5xx family alone — which meant the server had a private answer to "what does the
 	# linter say about this file": every rule `lint_merged` runs over the tree was missing,
 	# and so was `#[allow(…)]`, which lives in the linter and would otherwise have had to be
-	# applied a second time here. `check_and_lint` answers with the rules `lint_program` runs,
+	# applied a second time here. `check_lint_index` answers with the rules `zerg lint` runs,
 	# and guards the tree rules itself, so a raise among them costs the lint half and not the
 	# check.
 	#

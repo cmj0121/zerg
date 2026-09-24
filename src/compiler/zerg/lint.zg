@@ -74,7 +74,7 @@
 #
 # THIS ONE IS NOT ANSWERED HERE, and it is the only one that is not. Everything above comes
 # from the parsed File; a literal's adopted type is a fact about TYPES, so the LOWERING WALK
-# records it and lint_conversions_of (emit.zg) hands it back. lint_program asks both and hands
+# records it and lint_conversions_of (emit.zg) hands it back. check_and_lint asks both and hands
 # back one list.
 #
 # `L6xx` is SHIPPING: what the binary carries that the source suggests was not meant to be in
@@ -144,51 +144,29 @@ pub struct Finding {
 	pub msg: str
 }
 
-# lint_program reports every finding across a loaded program (the entry file plus the modules
-# it imports, as the driver resolved them), with the `#[allow(…)]` suppressions applied and
-# the two things worth saying about a suppression itself.
-pub fn lint_program(srcs: list[str], paths: list[str], ms: emit.Mods) -> list[Finding] {
-	# THE L5xx FAMILY IS ASKED HERE rather than by the driver. It used to be a second call the
-	# driver made and a second loop it printed, which meant the suppression in lint_merged
-	# would have had to be applied twice, in two places, by whoever remembered — and
-	# `#[allow(L502)]` is exactly the suppression a reader reaches for first.
-	#
-	# GUARDED, because lowering a program is the one thing here that can refuse. Its own rule
-	# is already "a program that does not compile answers nothing" — it returns [] when the
-	# walk collected diagnostics — but a form the emitter turns away by RAISING never reaches
-	# that line, and the raise took the whole run with it. Everything else lint_merged reports
-	# comes from the parsed tree and is true of a program the emitter cannot lower, so the
-	# honest answer is no conversions rather than no lint.
-	#
-	# MERGED ONCE, for the walk and the tree rules both.
-	prog := emit.merge_files_at(srcs, paths)
-	mut diags: list[ast.Diag] = []
-	mut convs: list[ast.Diag] = []
-	guard {
-		convs = emit.lint_conversions_of(prog, ms, diags)
-	}
-	return lint_merged(srcs, paths, ms, prog, convs)
-}
-
-# check_and_lint is check_files_diag and lint_program in ONE lowering walk: the compiler's
-# findings land in `diags`, and what comes back is what lint_program reports.
+# check_and_lint is check_files_diag and the linter in ONE lowering walk: the compiler's
+# findings land in `diags`, and what comes back is every lint finding across the loaded program
+# (the entry file plus the modules it imports, as the driver resolved them), with the
+# `#[allow(…)]` suppressions applied and the two things worth saying about a suppression itself.
 #
-# It is the language server's question. Asked as those two calls, one check merged the
-# program three times and lowered it twice — the second walk inside lint_conversions_of, asking
-# again what the first had just computed — and on this compiler's own program that second
-# walk was about half of the check's seconds.
+# It is `zerg lint`'s question, and the language server's through check_lint_index. Asked as
+# two calls, one check merged the program three times and lowered it twice — the second walk
+# inside lint_conversions_of, asking again what the first had just computed — and on this
+# compiler's own program that second walk was about half of the check's seconds.
 #
-# THE WALK IS NOT GUARDED: an abort there is the caller's finding, the refusal `zerg build`
-# would print. The tree rules are, as they were behind the separate call — a raise among them
-# costs the lint half and not the check.
+# NOTHING HERE IS GUARDED: an abort in the walk is the caller's finding, the refusal `zerg build`
+# would print, and a raise among the tree rules is the caller's to report too. There used to be
+# a `lint_program` that guarded the walk and dropped `diags`, and a program the compiler refuses
+# linted clean and exited 0 (#238). The language server is the caller that guards the tree
+# rules (check_lint_index): an editor would rather keep the check than lose it to the lint half.
 pub fn check_and_lint(srcs: list[str], paths: list[str], ms: emit.Mods, mut &diags: list[ast.Diag]) -> list[Finding] {
 	prog := emit.merge_files_at(srcs, paths)
 	convs := emit.lint_conversions_of(prog, ms, diags)
-	return lint_after(srcs, paths, ms, prog, convs)
+	return lint_merged(srcs, paths, ms, prog, convs)
 }
 
 # check_lint_index is check_and_lint that also answers the NAME INDEX (#24) in `nx`, out of the
-# same one walk. An abort raises out of it before `nx` is written.
+# same one walk, and guards the tree rules. An abort raises out of it before `nx` is written.
 #
 # AND THE WALK'S L5xx NOTES AS IT RAISED THEM, in `notes`: before a `#[allow(…)]` is applied and
 # before a note becomes a `Finding`, which has no room for the `fix` a note carries. They are the

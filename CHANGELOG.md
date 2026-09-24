@@ -7,6 +7,32 @@ The full account of a release, broken out by area and with its gaps named, lives
 The number a build reports comes from [`VERSION`](VERSION), the single source both compilers are generated from.
 **A release's date is its tag's**, so no entry here writes one down.
 
+## 0.6.0
+
+The release in which the **tools say what the compiler says**. →
+[full notes](notes/0.6/0.6.0_CHANGELOG.md)
+
+> **0.5.0 stopped the language saying no. 0.6.0 makes the tools say what the compiler says.**
+
+- **`zerg lsp` publishes the check's own findings**, at the place the compiler named — a decorator's
+  expansion at the decorator — on the program the editor holds: every open buffer stands in for its
+  file, and a change reaches the files that import it.
+- **A name has a declaration.** Definition and references answer from one index the checking walk
+  builds, and hover is the document `zerg doc` prints. The outline is a view of the program.
+- **A check is one walk**, a quick fix is a lookup, and a long session stays in the band of one check.
+- **`zerg doc` runs the fences** (`--check`), reads `##` as the reader's text and `#` as the
+  maintainer's (`--all`), finds a declaration by prefix (`-s`), and writes static HTML (`--html`).
+- **Eleven leftovers close**, [#166](https://github.com/cmj0121/zerg/issues/166) among them. Two were
+  silent wrong answers: a caller's local answered a default's names, and a call through the second of
+  two same-named imports took the first one's defaults.
+- **A select reads a channel in the order it was sent.** Under several workers a value could overtake
+  ones already buffered — a silent wrong answer, seen once on CI
+  ([#260](https://github.com/cmj0121/zerg/issues/260)).
+- **63 gates**, up from 62. The new name is `compiler-test`.
+
+**One leftover of 0.4.0 ships unfixed** — [#165](https://github.com/cmj0121/zerg/issues/165), closed and
+re-measured: `E3079` still names a spelling `E3069` refuses. It is loud; it does not miscompile.
+
 ## 0.5.0
 
 The release in which the language **stops saying no** while a user writes a library. →

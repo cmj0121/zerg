@@ -738,18 +738,32 @@ fn lint_captures(f: ast.File, mut &out: list[Finding]) {
 # lint_ref_params is `name#idx` for every `mut &` parameter in the program. A call is a
 # WRITE to the variable it passes only in those slots, and the declaration is the only
 # place that says which — without it, `show(k)` (a read) was reported as a write.
+#
+# A `mut fn`'s receiver is one of those slots: `this` is parameter 0 of every method, held
+# `mut &` exactly when the method is a `mut fn`, so `bump#0` names a method that writes
+# through its receiver. A spec's requirements and defaults are declarations too — `this.twice()`
+# may reach a `mut fn` no `impl` spells out — so they are read as well.
 fn lint_ref_params(f: ast.File) -> list[str] {
 	mut refs: list[str] = []
 	for fd in f.fns {
-		mut j := 0
-		for j < fd.params.len() {
-			if fd.params[j].is_ref {
-				refs.append(f"{fd.name}#{strconv.to_string(j, 10)}")
-			}
-			j = j + 1
+		lint_ref_slots(fd, refs)
+	}
+	for sp in f.specs {
+		for r in sp.reqs {
+			lint_ref_slots(r, refs)
 		}
 	}
 	return refs
+}
+
+fn lint_ref_slots(fd: ast.FnDecl, mut &refs: list[str]) {
+	mut j := 0
+	for j < fd.params.len() {
+		if fd.params[j].is_ref {
+			refs.append(f"{fd.name}#{strconv.to_string(j, 10)}")
+		}
+		j = j + 1
+	}
 }
 
 # `muts` is INHERITED by a nested block rather than reset in it. Resetting made the rule
@@ -893,12 +907,18 @@ fn assigns_to(s: ast.Stmt, n: str, refs: list[str]) -> bool {
 # assignment and both are writes — but neither is EVERY call, which is what the first
 # version of this said. `show(k)` is a read, and it was reported.
 #
-# `c_meth_mutates` is the emitter's one statement of which methods write through their
-# receiver, and `refs` is read off the declarations. Both facts are asked of their owner
-# rather than guessed at here, so a method or a signature added later is seen for free.
+# `c_meth_mutates` is the emitter's one statement of which BUILT-IN methods write through
+# their receiver, and `refs` is read off the declarations — the program's own `mut fn`
+# methods among them, as receiver slot `#0`. Both facts are asked of their owner rather than
+# guessed at here, so a method or a signature added later is seen for free. Leaving the
+# program's methods out made `this.bump()` a read, and L402 told a `mut fn` whose only write
+# is that call to become a plain `fn` — advice the compiler then refuses with E3023.
+#
+# The ROOT is what is written, so `this.inner.bump()` writes `this` as surely as
+# `this.inner.n = 1` does: the field is updated in place, and E3023 asks the same of both.
 fn mutates_expr(e: ast.Expr, n: str, refs: list[str]) -> bool {
 	return match e {
-		Expr.EMethod(t, m, args, _, _) => emit.c_meth_mutates(m) and check.chk_root_name(t) == n
+		Expr.EMethod(t, m, args, _, _) => (emit.c_meth_mutates(m) or has_str(refs, f"{m}#0")) and check.chk_root_name(t) == n
 		Expr.ECall(nm, args, _, _, _) => ref_arg(nm, args, n, refs)
 		_ => false
 	}

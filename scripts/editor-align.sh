@@ -16,6 +16,8 @@
 #     actually writes;
 #   * the indent WIDTH they configure is the one `F403` measures a tab as;
 #   * the RULER the ftplugin draws is one past the column `F403` wraps at.
+#   * the example FENCE the syntax file colours as Zerg is the one `zerg doc --check` runs,
+#     and the fence that holds what an example prints is not coloured as code.
 #
 # Neither is hypothetical. `zerg.vim`'s own comment records `close` having been missing from
 # the list "entirely — the statement that ends a stream has never been coloured", found by
@@ -300,8 +302,27 @@ else
 	fi
 fi
 
+# --- 6. the example fence -----------------------------------------------------------------
+#
+# A worked example in a comment is a fence `zerg doc --check` runs, and the syntax file
+# colours the inside of that fence as Zerg. The fence's WORD is the whole marker — the one
+# beside it holds what the example prints and stays a comment — so the word is a fact both
+# files state, and the runner's is the one that counts. Renaming it in `doc.zg` alone would
+# leave the editor colouring a fence nothing runs and leaving the real one grey. The syntax
+# file must colour that fence and no other, which is what keeps ```output a comment.
+DOC=${DOC:-src/compiler/zerg/doc.zg}
+code_word=$(grep -oE 'r\.lines\[i\] != "```[a-z]+"' "$DOC" | sed -E 's/.*```([a-z]+)"/\1/' | sort -u)
+fences=$(grep -oE 'start="[^"]*```[a-z]+' "$SYNTAX" | sed -E 's/.*```//' | sort -u)
+if [ -z "$code_word" ] || [ -z "$fences" ]; then
+	echo "EMPTY       the example fence could not be read from $DOC and $SYNTAX — this check is measuring nothing"
+	fail=$((fail + 1))
+elif [ "$fences" != "$code_word" ]; then
+	echo "FENCE       $DOC runs a \`\`\`$code_word fence and $SYNTAX colours: $(echo $fences)"
+	fail=$((fail + 1))
+fi
+
 if [ $fail -ne 0 ]; then
 	echo "editor-align: $fail fact(s) an editor file states that the compiler does not"
 	exit 1
 fi
-echo "editor-align: $n reserved words are coloured; the ftplugin and .editorconfig indent the way fmt writes, ${want_width:-?} wide, ruled at ${want_ruler:-?}"
+echo "editor-align: $n reserved words are coloured; the ftplugin and .editorconfig indent the way fmt writes, ${want_width:-?} wide, ruled at ${want_ruler:-?}; the \`\`\`${code_word:-?} fence is Zerg"

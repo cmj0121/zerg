@@ -651,7 +651,7 @@ fn ls_check(mut &s: Server, uri: str, load: fn (str, list[str], list[str]) -> Pr
 	}
 	lerr := match res {
 		Either.Left(_)  => ""
-		Either.Right(e) => e.message()
+		Either.Right(e) => ls_raised(e)
 	}
 	return ls_aborted(s, uri, lerr, "") if lerr != ""
 
@@ -715,6 +715,17 @@ fn ls_abort_for(ds: list[zerg.Diag], msg: str) -> str {
 	return ""
 }
 
+# ls_raised is a caught raise as this server reads it, and it is NEVER EMPTY. Each guard here
+# answers `""` for a call that returned, so a raise whose text came back empty read as one that
+# did not happen: a refusal from the lowering walk reached the server with no text (#237), the
+# walk was taken as finished, and the buffer was published clean — its lint findings dropped
+# with it. Whatever the text, a raise is an abort, and one with nothing to say still says so.
+fn ls_raised(e: Err) -> str {
+	why := e.message()
+	return why if why != ""
+	return "the check stopped on an error that carries no message"
+}
+
 # ls_check_program is that check from the program onwards, and it is a function of its own
 # because the answer to "is this buffer stale" IS a loaded program: a dependant is found by
 # loading it, and walking it again to check it would be paying the loader twice for one
@@ -755,7 +766,7 @@ fn ls_check_program(mut &s: Server, uri: str, prog: Program, said: list[str], su
 		ds.len()
 	} {
 		Either.Left(_)  => ""
-		Either.Right(e) => e.message()
+		Either.Right(e) => ls_raised(e)
 	}
 
 	# An ABORT is a refusal or a parse error, raised as a sentence naming a place, and it is
@@ -1561,7 +1572,7 @@ fn ls_document_symbol_reply(s: Server, id: json.Val, uri: str) {
 		syms.len()
 	} {
 		Either.Left(_)  => ""
-		Either.Right(e) => e.message()
+		Either.Right(e) => ls_raised(e)
 	}
 	if err != "" {
 		ls_error_reply(id, -32803, err)

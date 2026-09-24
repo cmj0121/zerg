@@ -100,6 +100,9 @@ L104 `_ :=` in `main` — the expression is already a statement, so the binder s
 運算式），模組層級 `const` 的初始式、struct 欄位的預設值、參數的預設值也都是。這些都是屬於宣告而
 不屬於本體的程式碼。
 
+**當作值指名**的函式，不必呼叫就算用到。對 associated fn 來說算的是那一對 `Bag.wrap`——經過
+namespace 也算，泛型型別則寫裸名——所以對某個值讀欄位 `c.wrap`，不會讓任何叫 `wrap` 的函式活下來。
+
 供應一個 **`spec`** 的 import 是有被用到的，而且那是唯一一種完全不帶 namespace 的使用處：
 `impl Tag for A` 以一個裸名字指名那個介面，而 import 正是把宣告它的 module 放進這支程式的那一行。
 `L101` 是去問 loader「每個 import 解析到哪個 module」與「每個檔案是以哪個 module 讀進來的」，而不是

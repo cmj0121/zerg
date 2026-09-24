@@ -745,10 +745,10 @@ pub fn doc_joined(para: list[str]) -> str {
 }
 
 # doc_is_prompt reports whether a line carries the doctest prompt — `>>>` opening an item, `...`
-# continuing one — which is how a comment marks an example it does not run
-# (docs/tooling/fmt.md, "Examples in comments"). Its columns are the example's, so it is
-# carried through like an indented line: filled, `cli`'s whole front end ran together into one
-# paragraph of prose.
+# continuing one — the form a comment wrote an example in before examples became fences that
+# `--check` runs (docs/tooling/doc.md, "The shape of a document"). Its columns are the example's,
+# so it is carried through like an indented line: filled, `cli`'s whole front end ran together
+# into one paragraph of prose.
 fn doc_is_prompt(line: str) -> bool {
 	return test.has_prefix(line, ">>>") or line == "..." or test.has_prefix(line, "... ")
 }

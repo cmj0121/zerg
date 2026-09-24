@@ -259,36 +259,35 @@ rewritten a working arm into a parse error.
 
 ## Examples in comments
 
-A code example inside a comment is marked with a **doctest prompt** — `>>>` opens a
-top-level item, `...` continues it:
+A worked example is written the way [`zerg doc`](doc.md#the-form-of-an-example) reads one: fenced blocks in a
+`##` comment — a ` ```zerg ` fence, and what it prints in an ` ```output ` fence directly under it — which
+`zerg doc --check` runs and holds to that output.
 
-```zerg
-# Example — greeting someone:
-#
-# >>> fn main() {
-# ...     print greet("world")
-# ... }
-#
-# and it prints:
-#
-#     hello, world
-```
+````text
+## greet answers a greeting for `who`.
+##
+## ```zerg
+## greet("world")
+## ```
+## ```output
+## hello, world
+## ```
+fn greet(who: str) -> str {
+    return "hello, " + who
+}
+````
 
-`F301` keeps all of it exactly as written; the prompt is a convention the formatter
-reads nothing into. Which prompt a line carries is likewise an authoring convention —
-both mean "the rest of this line is Zerg".
+`F301` is all the formatter does to it. Everything after a comment's marker is kept exactly as written: the fence
+lines, the code inside a fence with its own indentation and spacing, a blank `##` line, trailing whitespace. The
+only thing that moves is the whitespace **before** the marker — a comment on a line of its own is indented to the
+depth of the block it sits in. So the code in a fence is never formatted: the runner compiles it as written, and
+`zerg fmt` does not reach it.
 
-The marker is **explicit**, and that is the load-bearing decision. A comment carries two
-kinds of indented block: source, and a sample of what the program **prints**. Inferring
-from layout alone would highlight the second as if it were the first — in `cli`'s own
-header a pasted help screen would light up `Options:` as a field name, `--output` as
-operators and `VALUE` as a type. Wrong highlighting is worse than none, so the author says
-which is which.
-
-It is a prompt rather than a ` ``` ` fence because comments are to become documentation,
-and that generator emits markdown — so ` ``` ` is the **output** syntax. Spelling the input
-the same way would leave a generator that must pass one through while producing the other
-with no way to tell them apart by looking.
+The fence names what its lines are, and an editor reads that name. A comment carries two kinds of block — source,
+and a sample of what the program **prints** — and inferring from layout alone would highlight the second as if it
+were the first: in `cli`'s own header a help screen would light up `Options:` as a field name, `--output` as
+operators and `VALUE` as a type. So only a ` ```zerg ` fence is highlighted as Zerg; an ` ```output ` fence and an
+indented illustration stay comment.
 
 ## F4xx — rewrites
 

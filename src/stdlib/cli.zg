@@ -21,50 +21,67 @@
 ## what its user typed, so it raises where it is written rather than failing later on a
 ## command line that happens to reach it.
 ##
-## Example — a tool with two sub-commands, whole front end:
+## Example — a tool with a sub-command, whole front end. A multi-line chain is wrapped in
+## parentheses: a line break after `)` would otherwise end the statement.
 ##
-## >>> import "cli"
-## >>> import "io"
-## >>>
-## >>> fn main(argv: list[str]) {
-## ...     root := (cli.command("wc", "count what is in a file")
-## ...         .version("wc 1.0.0")
-## ...         .sub(count_cmd())
-## ...         .sub(check_cmd()))
-## ...     __zrt_exit(root.exec(argv))
-## ... }
-## >>>
-## >>> fn count_cmd() -> cli.Command {
-## ...     # a multi-line chain is wrapped in parentheses: a line break after ')' would
-## ...     # otherwise end the statement
-## ...     return (cli.command("count", "count lines or bytes")
-## ...         .opt("o", "output", "write the count here")
-## ...         .flag("l", "lines", "count lines instead of bytes")
-## ...         .required("f", "format", "how to print the count", "plain")
-## ...         .add(cli.positional("file", "the file to read").required().repeated())
-## ...         .run(do_count))
-## ... }
-## >>>
-## >>> fn do_count(c: cli.Ctx) -> int {
-## ...     for f in c.args() {
-## ...         io.println(f + ": " + count_one(f, c.has("lines")))
-## ...     }
-## ...     return 0
-## ... }
+## ```zerg
+## count := (cli.command("count", "count lines or bytes")
+##     .opt("o", "output", "write the count here")
+##     .flag("l", "lines", "count lines instead of bytes")
+##     .required("f", "format", "how to print the count", "plain")
+##     .add(cli.positional("file", "the file to read").required().repeated())
+##     .run(fn(c: cli.Ctx) -> int {
+##         n := c.args().len()
+##         lines := c.has("lines")
+##         format := c.get("format")
+##         print f"{n} file(s), lines: {lines}, format: {format}"
+##         return 0
+##     }))
+## root := cli.command("wc", "count what is in a file").version("wc 1.0.0").sub(count)
+## ```
+##
+## A program's `main` hands its arguments to `root.exec` and exits with the status it
+## answers. The command runs the function it declared:
+##
+## ```zerg
+## root.exec(["count", "-l", "a.txt", "b.txt"])
+## ```
+## ```output
+## 2 file(s), lines: true, format: plain
+## 0
+## ```
 ##
 ## `wc count --help` prints this, with no help text written by hand:
 ##
-##     count — count lines or bytes
+## ```zerg
+## root.exec(["count", "--help"])
+## ```
+## ```output
+## count — count lines or bytes
 ##
-##     usage: wc count [options] <file>...
+## usage: wc count [options] <file>...
 ##
-##     Options:
-##       -o, --output VALUE    write the count here
-##       -l, --lines           count lines instead of bytes
-##       -f, --format VALUE    how to print the count (default: plain)
-##       -h, --help            show this help message and exit
+## Arguments:
+##       <file>            the file to read
 ##
-## and `wc count --oops` prints `wc count: unknown option --oops` on stderr and exits 2.
+## Options:
+##   -o, --output VALUE    write the count here
+##   -l, --lines           count lines instead of bytes
+##   -f, --format VALUE    how to print the count (default: plain)
+##   -h, --help            show this help message and exit
+## 0
+## ```
+##
+## and a command line it does not accept is refused on stderr with status 2:
+##
+## ```zerg
+## root.exec(["count", "--oops"])
+## ```
+## ```output
+## wc count: unknown option --oops
+## try `wc count --help` for the options
+## 2
+## ```
 import (
 	"io"
 	"strconv"

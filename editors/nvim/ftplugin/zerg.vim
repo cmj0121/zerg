@@ -147,10 +147,11 @@ endfunction
 " A COMMENT LINE continues nothing, and that is checked first and by TEXT. Zerg's comment
 " runs to the end of the line and there is no block form, so a line whose first non-blank
 " character is '#' is a comment all the way across, whatever is written in it — including a
-" doctest, which holds Zerg source on purpose. Asking the syntax engine instead did not
-" answer this: the prompt in `# >>>` is `zergDocPrompt`, which resolves to `Special` and not
-" to anything spelled "comment", so a bare prompt line read as code ending in `>` and put the
-" example under it one level in. This repo's own `cli.zg` is where that showed.
+" ```zerg fence, which holds Zerg source on purpose. Asking the syntax engine instead does not
+" answer this: a line inside the fence is coloured as the Zerg it holds and not as anything
+" spelled "comment", so `## total +` reads as code ending in an operator. It showed first in
+" this repo's own `cli.zg`, when its example was a `# >>>` prompt: a bare prompt line read as
+" code ending in `>` and put the example under it one level in.
 "
 " A trailing comment on a code line is still scanned past rather than cut at the first '#',
 " because a '#' inside a string is not one — the same distinction the delimiter scan makes,

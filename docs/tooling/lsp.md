@@ -291,7 +291,8 @@ so `<CR>` after `fn f() {` put the cursor in column 1 and every level was a tab 
 with the formatter tidying it on the next write, which meant the file only ever looked right after a
 tool had run over it. The check that it is now right is `gg=G` over this repository: re-indenting
 every source the formatter wrote must change nothing, and finding the two cases where it did — a
-wrapped `+`-chain and a doctest comment ending in `# >>>` — is what the rule is shaped by.
+wrapped `+`-chain, and a comment line of example code that reads as code ending in an operator (a bare
+`# >>>` prompt then, a line in a ` ```zerg ` fence now) — is what the rule is shaped by.
 
 **`:make` is the compiler in the quickfix list**, and it is worth having beside a language server
 because the two fail differently: when a program aborts in a file other than the buffer, the server

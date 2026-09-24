@@ -1032,6 +1032,159 @@ case $beside_out in
 	fail=$((fail + 1))
 	;;
 esac
+# --- a private function is the FILE's, not the program's --------------------------------
+#
+# The file is the unit of privacy (#57, #201): two files that each declare a private `helper`
+# declare two functions, and two private types `P` each with a method `hid` declare two
+# methods. `y` calls its own of each and `x` calls neither, so L102 owes `x` both findings and
+# `y` none. Judged by name across the program, `y`'s calls were counted for `x` and it was
+# silent.
+mkdir -p "$tmp/own/x" "$tmp/own/y"
+cat >"$tmp/own/x/mod.zg" <<'EOF'
+fn helper() -> int {
+	return 1
+}
+
+struct P {
+	pub n: int
+}
+
+impl P {
+	fn hid() -> int {
+		return this.n
+	}
+}
+
+pub fn a() -> int {
+	return P(2).n
+}
+EOF
+cat >"$tmp/own/y/mod.zg" <<'EOF'
+fn helper() -> int {
+	return 3
+}
+
+struct P {
+	pub n: int
+}
+
+impl P {
+	fn hid() -> int {
+		return this.n
+	}
+}
+
+pub fn b() -> int {
+	return helper() + P(4).hid()
+}
+EOF
+cat >"$tmp/own/main.zg" <<'EOF'
+import "./x"
+import "./y"
+
+fn main() {
+	print x.a() + y.b()
+}
+EOF
+
+own_out=$("$ZERG" lint "$tmp/own/main.zg" 2>&1)
+seen="$seen L102"
+for want in helper hid; do
+	if echo "$own_out" | grep -q "/own/x/mod\.zg:[0-9]*:[0-9]*: L102 private function \`$want\`"; then
+		pass=$((pass + 1))
+	else
+		echo "QUIET     l102-is-the-file's — x/mod.zg never calls its own \`$want\`, and only y/mod.zg's is called: $(echo "$own_out" | head -1)"
+		fail=$((fail + 1))
+	fi
+done
+if echo "$own_out" | grep -q "/own/y/mod\.zg:.*L102"; then
+	echo "SPOKE     l102-is-the-file's — L102 fired on y/mod.zg, which calls its own: $(echo "$own_out" | grep '/own/y/mod\.zg' | head -1)"
+	fail=$((fail + 1))
+else
+	pass=$((pass + 1))
+fi
+
+# A PRIVATE METHOD OF A `pub` TYPE is still judged across the program, because the compiler
+# lets another module call it: `b.hid()` below builds. Reporting `hid` would tell the author to
+# delete a method the build needs.
+mkdir -p "$tmp/l102-pub-type/s"
+cat >"$tmp/l102-pub-type/s/mod.zg" <<'EOF'
+pub struct Bag {
+	pub n: int
+}
+
+impl Bag {
+	fn hid() -> int {
+		return this.n
+	}
+}
+EOF
+quiet L102 'l102-pub-type/main' 'a private method of a `pub` type called from another module' <<'EOF'
+import "./s"
+
+fn main() {
+	b := s.Bag(3)
+	print b.hid()
+}
+EOF
+
+# AN ASSOCIATED FN NAMED AS A VALUE IS A USE IN THE FILE THAT NAMES IT, like a call. Two files
+# each declare a private `P` with a method `wrap`: `y` takes its own as a value (`P.wrap`), `x`
+# never names its own, so L102 owes `x` its finding and `y` none. The pair a value names is keyed
+# by the file that wrote it, the same as a call — the other half of `l102-assoc-value` above.
+mkdir -p "$tmp/ownval/x" "$tmp/ownval/y"
+cat >"$tmp/ownval/x/mod.zg" <<'EOF'
+struct P {
+	pub n: int
+}
+
+impl P {
+	fn wrap(n: int) -> P {
+		return P(n)
+	}
+}
+
+pub fn a() -> int {
+	return P(2).n
+}
+EOF
+cat >"$tmp/ownval/y/mod.zg" <<'EOF'
+struct P {
+	pub n: int
+}
+
+impl P {
+	fn wrap(n: int) -> P {
+		return P(n)
+	}
+}
+
+pub fn b() -> int {
+	f := P.wrap
+	return f(4).n
+}
+EOF
+cat >"$tmp/ownval/main.zg" <<'EOF'
+import "./x"
+import "./y"
+
+fn main() {
+	print x.a() + y.b()
+}
+EOF
+ownval_out=$("$ZERG" lint "$tmp/ownval/main.zg" 2>&1)
+if echo "$ownval_out" | grep -q "/ownval/x/mod\.zg:[0-9]*:[0-9]*: L102 private function \`wrap\`"; then
+	pass=$((pass + 1))
+else
+	echo "QUIET     l102-value-is-the-file's — x/mod.zg never names its own \`wrap\`: $(echo "$ownval_out" | head -1)"
+	fail=$((fail + 1))
+fi
+if echo "$ownval_out" | grep -q "/ownval/y/mod\.zg:.*L102"; then
+	echo "SPOKE     l102-value-is-the-file's — L102 fired on y/mod.zg, which takes its own \`P.wrap\`: $(echo "$ownval_out" | grep '/ownval/y/mod\.zg' | head -1)"
+	fail=$((fail + 1))
+else
+	pass=$((pass + 1))
+fi
 
 # --- every documented rule has a case ----------------------------------------------
 #

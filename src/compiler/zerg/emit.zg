@@ -12142,6 +12142,7 @@ fn c_call(mut &em: Emitter, name: str, args: list[ast.Expr], l: int, c: int, sb:
 	if c_err_kind(name) > 0 {
 		raise c_diag(em, rule.Rule.TestableNotConstructible, f"`{name}` is testable but not constructible: a sender able to raise the end-of-stream sentinel would close its channel wearing it, and its consumer would read the crash as a clean finish") if not c_err_constructible(name)
 		em.used_rt = true
+		return f"zrt_err_new_kind({c_err_kind(name)}, {c_err_msg(em, args[0], sb)})" if args.len() == 1
 		return f"zrt_err_new_kind({c_err_kind(name)}, {c_args(em, args, sb)})"
 	}
 
@@ -21130,7 +21131,20 @@ fn c_err_value(mut &em: Emitter, x: ast.Expr) -> str {
 		check.chk_at(em, rule.Rule.RaiseCarriesErr, f"raise carries an `Err`, or a message to build one from — {ast.ty_name(t)} is neither; write `ValueError(…)`, or a `str`")
 	}
 
-	return f"zrt_err_new({c_expr(em, x, c_nosub())})"
+	return f"zrt_err_new({c_err_msg(em, x, c_nosub())})"
+}
+
+# c_err_msg renders the message an Err is built around AS THE ERR'S OWN. The runtime stores
+# the pointer it is handed and never copies it, and the raise that hands it over unwinds every
+# scope between here and the guard — running the drop of the binding the message was read
+# from. A name's str went to the runtime borrowed, was released on the way out, and the guard
+# read back an empty message: `raise m` of a caught error's text came out as `""` while
+# `raise "x" + m` (a fresh cell) kept it (#237). A borrowed operand is retained, so the Err
+# holds a count of its own; a fresh one already hands its count over.
+fn c_err_msg(mut &em: Emitter, x: ast.Expr, sb: Subst) -> str {
+	rendered := c_expr(em, x, sb)
+	return rendered if not c_is_borrow(x)
+	return c_taken(em, c_infer(em, x), rendered)
 }
 
 # c_err_cause renders the `from` operand. A cause is an Err — that is what a cause chain is

@@ -3104,10 +3104,14 @@ func (e *emitter) errCallEmit(n *ast.Call) (string, bool) {
 			return "", false
 		}
 		if kind, ok := sema.ErrCtorKind(callee.Name); ok && len(n.Args) == 1 {
-			return fmt.Sprintf("zrt_err_new_kind(%d, %s)", kind, e.expr(n.Args[0].Value)), true
+			return fmt.Sprintf("zrt_err_new_kind(%d, %s)", kind, e.ownedStr(n.Args[0].Value)), true
 		}
 	case *ast.Field:
 		if callee.Name == "message" && len(n.Args) == 0 && isErrType(e.cur.ExprType(e.info, callee.X)) {
+			// a CALL, so its reader owns what it answers (strOwned): the Err keeps its own
+			if e.strManaged {
+				return fmt.Sprintf("zrt_str_retain((%s).msg)", e.expr(callee.X)), true
+			}
 			return fmt.Sprintf("(%s).msg", e.expr(callee.X)), true
 		}
 	}

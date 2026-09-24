@@ -599,6 +599,51 @@ check(at is None, "a dangling import: zerg build names no place", at)
 check(d is not None and d["range"] == TOP and "-->" not in d["message"],
       "an abort naming no place lands at the top of the file", d)
 
+# --- a refusal raised by the lowering walk is published, sentence and place ----------------
+#
+# Everything above aborts in the LOADER. The walk that checks a loaded program refuses by raise
+# too, and the server reads a raise's text to tell it from a walk that returned — so a refusal
+# whose text came back empty (#237: a function body's abort is re-raised on its way out) was
+# published as a clean buffer, and the lint findings with it. One program per ROUTE the walk
+# raises out by — each pass of emit_unit_at that lowers or judges something — held to what
+# `zerg build --emit check` prints: the code, the sentence and the place. A fixture the command
+# stops refusing fails here rather than dropping out. An abort inside a decorator's expansion is
+# `BUFFERS` J's.
+ABORT = re.compile(r"(E\d+) (.*)\n  --> (.+):(\d+):(\d+)\n?$")
+
+for name, text, what in [
+    ("walk-body.zg", "fn main() {\n\tx := 2\n\tprint match x { _ => 1  2 => 2 }\n}\n",
+     "a refusal in a function body"),
+    ("walk-generic.zg", "fn pick[T](v: T, x: int) -> int {\n\treturn match x { _ => 1  2 => 2 }\n}\n\n"
+     "fn main() {\n\tprint pick(true, 2)\n}\n", "a refusal in a specialized template"),
+    ("walk-method.zg", "struct P {\n\tpub x: int\n}\n\nimpl P {\n\tfn pick(this) -> int {\n"
+     "\t\treturn match this.x { _ => 1  2 => 2 }\n\t}\n}\n\nfn main() {\n\tprint P(2).pick()\n}\n",
+     "a refusal in a method"),
+    ("walk-decl.zg", "struct A {\n\tb: B\n}\n\nstruct B {\n\ta: A\n}\n\nfn main() {\n\tprint 1\n}\n",
+     "a refusal in a declaration pass"),
+    ("walk-entry.zg", 'fn main() -> str {\n\treturn "x"\n}\n', "a refusal of the entry"),
+    ("walk-global.zg", "x := match 2 {\n\t_ => 1\n\t2 => 2\n}\n\nfn main() {\n\tprint x\n}\n",
+     "a refusal in a module-level initializer"),
+]:
+    p = os.path.join(tmp, name)
+    open(p, "w", encoding="utf-8").write(text)
+    u = "file://" + os.path.abspath(p)
+    _, fr = run([INIT, {"jsonrpc": "2.0", "method": "textDocument/didOpen", "params": {
+        "textDocument": {"uri": u, "languageId": "zerg", "version": 1, "text": text}}}, EXIT])
+    ds = [f for f in fr if f.get("method") == "textDocument/publishDiagnostics"]
+    got = [("%s %s" % (x.get("code", ""), x["message"]), x["range"]["start"])
+           for x in (ds[0]["params"]["diagnostics"] if ds else [])]
+    err = subprocess.run([zerg, "build", "--emit", "check", p], stdout=subprocess.DEVNULL,
+                         stderr=subprocess.PIPE, timeout=120).stderr.decode("utf-8")
+    m = ABORT.match(err)
+    if not m or os.path.abspath(m.group(3)) != os.path.abspath(p):
+        check(False, "%s: zerg build --emit check refuses %s with one coded abort in it" % (what, name), err)
+        continue
+    line, col = int(m.group(4)), int(m.group(5))
+    want = [("%s %s" % (m.group(1), m.group(2)),
+             {"line": line - 1, "character": utf16_char(text, line, col)})]
+    check(got == want, "%s is published as zerg build --emit check prints it" % what, got)
+
 sys.exit(1 if bad else 0)
 PYEOF
 then

@@ -1010,7 +1010,7 @@ fn lint_dead_fns(f: ast.File, calls: list[str], ids: list[str], mut &out: list[F
 			# Celsius` reported its own `into` as dead code in a program that converted four
 			# times.
 			continue_marker()
-		} else if not has_str(calls, fd.name) and not has_str(ids, fd.name) {
+		} else if not has_str(calls, fd.name) and not has_str(ids, fd.name) and not (fd.recv != "" and has_str(calls, assoc_key(fd.recv, fd.name))) {
 			out.append(Finding("", fd.path, fd.line, fd.col, "L102", f"private function `{fd.name}` is never called"))
 		}
 	}
@@ -1382,7 +1382,7 @@ fn walk_expr(e: ast.Expr, mut &ids: list[str], mut &calls: list[str], mut &ns: l
 		# this walk has no way to know. Left to the `_` arm below, an import or a binding used
 		# only inside `fs[0](x)` read as unused and `L101` retired it.
 		Expr.ECallVal(callee, args) => walk_all(ast.expr_parts(e), ids, calls, ns)
-		Expr.EField(target, name, _, _) => walk_expr(target, ids, calls, ns)
+		Expr.EField(target, name, _, _) => walk_field(target, name, ids, calls, ns)
 		Expr.EOptChain(target, name, _, _) => walk_expr(target, ids, calls, ns)
 		Expr.ETry(x) => walk_expr(x, ids, calls, ns)
 		Expr.EIndex(target, idx) => walk_pair(target, idx, ids, calls, ns)
@@ -1418,6 +1418,33 @@ fn walk_coalesce(a: ast.Expr, b: ast.Expr, jump: list[ast.Stmt], mut &ids: list[
 	walk_expr(a, ids, calls, ns)
 	walk_expr(b, ids, calls, ns)
 	walk_body(jump, ids, calls, ns)
+}
+
+# walk_field records `T.f` as a use of the associated fn `f` of `T` when the field is read
+# WITHOUT a call — the fn taken as a value (docs/code/functions.md), which names it as surely as
+# a call does. Walking only the target made `f := Bag.wrap` leave `wrap` looking dead.
+#
+# It is recorded as the pair, not the bare `f`: a field read `p.x` is far commoner than an
+# associated fn value, and the bare name would keep every private fn called `x` alive. What
+# stands left of the dot is the type's own name, or its last segment through a namespace
+# (`s.Bag.wrap`); a value there spells a pair no declaration answers to.
+fn walk_field(target: ast.Expr, name: str, mut &ids: list[str], mut &calls: list[str], mut &ns: list[str]) {
+	tn := match target {
+		Expr.EIdent(n, _, _) => n
+		Expr.EField(_, n, _, _) => n
+		_ => ""
+	}
+	if tn != "" {
+		calls.append(assoc_key(tn, name))
+	}
+	walk_expr(target, ids, calls, ns)
+}
+
+# assoc_key is the pair `<type>.<fn>` walk_field records and lint_dead_fns asks for, spelled once
+# so the two ends cannot disagree. A generic type is named bare (`Box.one`), so a receiver's
+# type arguments are taken off.
+fn assoc_key(ty: str, name: str) -> str {
+	return f"{emit.c_app_base(ty)}.{name}"
 }
 
 fn walk_call(name: str, args: list[ast.Expr], mut &ids: list[str], mut &calls: list[str], mut &ns: list[str]) {

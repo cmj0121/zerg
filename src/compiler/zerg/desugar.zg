@@ -686,7 +686,7 @@ fn dsg_fstr_core(body: str) -> bool {
 		if (c == b'{' or c == b'}') and i + 1 < n and b[i + 1] == c {
 			i = i + 2
 		} else if c == b'\\' {
-			i = i + 2
+			i = parser.fstr_esc_end(b, i)
 		} else if c == b'{' {
 			end := parser.fstr_hole_end(b, i)
 			hole := bytearray(parser.fstr_slice(b, i + 1, end))
@@ -716,7 +716,7 @@ fn dsg_emit_fstr(t: token.Token, mut &out: list[token.Token]) {
 		if (c == b'{' or c == b'}') and i + 1 < n and b[i + 1] == c {
 			i = i + 2
 		} else if c == b'\\' {
-			i = i + 2
+			i = parser.fstr_esc_end(b, i)
 		} else if c == b'{' {
 			txt := parser.fstr_slice(b, lo, i)
 			if txt != "" or not have {
@@ -813,9 +813,11 @@ fn dsg_hole_expr(t: token.Token, src: str, mut &out: list[token.Token]) {
 #
 # A TEXT PART IS NOT ESCAPED AND MUST NOT BE (dsg_quote_text). It is a slice of a literal that
 # already holds its escapes as they were written, so escaping the backslash again would turn
-# the `\n` a reader wrote into a backslash and an `n`.
+# the `\n` a reader wrote into a backslash and an `n`. Its BRACES are the one thing an
+# f-string spells differently from a `"…"`: `{{` is one brace there and two here, so they are
+# collapsed by the parser's own fstr_unbrace — the text is then what fstr_text hands the lexer.
 fn dsg_quote_text(txt: str) -> str {
-	return f"\"{txt}\""
+	return f"\"{parser.fstr_unbrace(txt)}\""
 }
 
 fn dsg_quote_src(txt: str) -> str {

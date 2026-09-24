@@ -5622,7 +5622,7 @@ pub fn fstr_slice(src: list[byte], lo: int, hi: int) -> str {
 
 # fstr_esc_end steps over a backslash escape. `\u{…}` carries braces of its own, which is
 # the reason this exists: two bytes would leave its `{` to be read as a hole.
-fn fstr_esc_end(src: list[byte], at: int) -> int {
+pub fn fstr_esc_end(src: list[byte], at: int) -> int {
 	n := src.len()
 
 	return at + 1 if at + 1 >= n
@@ -5685,7 +5685,7 @@ fn fstr_text(mut &p: Parser, t: token.Token, raw: str) -> str {
 	raise p_diag_at(p, t.line, t.col, rule.Rule.FStringTextMalformed, "f-string: malformed literal text: " + raw)
 }
 
-fn fstr_unbrace(raw: str) -> str {
+pub fn fstr_unbrace(raw: str) -> str {
 	b := bytearray(raw)
 	n := b.len()
 	mut out: list[byte] = []

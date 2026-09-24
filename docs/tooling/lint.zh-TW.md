@@ -186,6 +186,10 @@ _E3079 `Red` is a variant of `Colour`, and a variant is named through its enum_;
 method 讓呼叫端付這個代價卻什麼也沒回報 —— 而他們看不出原因,因為簽章就是全部的契約,而 `mut fn` 就是它說的
 全部。判準是對 `this` 的**寫入**,不是提到它。
 
+透過 `this` **呼叫**一個 `mut fn` 就是寫入:型別自己的(`this.bump()`)、欄位的(`this.inner.bump()`),
+或 spec 宣告的。編譯器對每一種都要求呼叫者是 `mut fn`(_E3023_),所以報它等於建議一個編譯不過的程式。
+呼叫一般的 `fn` 不是寫入。
+
 ## `L5xx` —— 轉換
 
 | 代碼   | 規則                                 |

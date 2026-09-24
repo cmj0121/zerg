@@ -211,6 +211,11 @@ the instance in a `mut` binding. A method that only reads charges its callers th
 nothing back — and they cannot see why, because the signature is the whole contract and
 `mut fn` is all of it. The test is a **write** to `this`, not a mention of it.
 
+A **call** through `this` to a `mut fn` is a write: the type's own (`this.bump()`), a field's
+(`this.inner.bump()`), or one a spec declares. The compiler holds the caller to `mut fn` for each
+(_E3023_), so reporting it would advise a program that does not compile. A call to a plain `fn` is
+not a write.
+
 ## `L5xx` — conversion
 
 | Code   | Rule                                          |

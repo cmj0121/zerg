@@ -288,10 +288,10 @@ and one that must not collide with anything the arm's body already names.
 
 `make desugar` runs two:
 
-- **`desugar-check`** — every program in `examples/`, `test-data/codegen/` and `test-data/desugar/`
-  is desugared as a whole directory (a program is not always one file, and `import` resolves against
-  the source's own directory), built both ways, run both ways, and compared on **stdout and exit
-  status**. It also asserts the C is identical for every file `D101` alone changed, and that every
+- **`desugar-check`** — every program in `examples/`, `test-data/codegen/`, `test-data/desugar/` and
+  `test-data/behaviour/` is desugared as a whole directory (a program is not always one file, and
+  `import` resolves against the source's own directory), built both ways, run both ways, and compared
+  on **stdout and exit status**. It also asserts the C is identical for every file `D101` alone changed, and that every
   desugared source is its own fixpoint. It carries a floor, because "these two agree" is trivially
   true of an empty list.
 - **`desugar-golden`** — each `test-data/desugar/<case>.zg` desugars to exactly the

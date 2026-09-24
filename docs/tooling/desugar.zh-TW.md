@@ -247,10 +247,10 @@ fn main() {
 
 `make desugar` 跑兩道:
 
-- **`desugar-check`**——`examples/`、`test-data/codegen/` 與 `test-data/desugar/` 裡的每個程式,以整個目錄為單位
-  desugar(一個程式不一定只有一個檔案,而 `import` 是相對 source 自己的目錄解析的),兩種形式都建、都跑,比對
-  **stdout 與 exit status**。它同時會對每個只有 `D101` 動過的檔案斷言 C 完全相同,並斷言每份 desugar 過的 source 都
-  是自己的 fixpoint。它帶有下限,因為「這兩者一致」對空集合恆真。
+- **`desugar-check`**——`examples/`、`test-data/codegen/`、`test-data/desugar/` 與 `test-data/behaviour/` 裡的
+  每個程式,以整個目錄為單位 desugar(一個程式不一定只有一個檔案,而 `import` 是相對 source 自己的目錄解析的),兩種
+  形式都建、都跑,比對 **stdout 與 exit status**。它同時會對每個只有 `D101` 動過的檔案斷言 C 完全相同,並斷言
+  每份 desugar 過的 source 都是自己的 fixpoint。它帶有下限,因為「這兩者一致」對空集合恆真。
 - **`desugar-golden`**——每個 `test-data/desugar/<case>.zg` 必須 desugar 成旁邊那份 `<case>.core.zg`,逐位元組相
   同,好讓規則產出的改變以 diff 而不是以數字的形式出現。core 檔會再被 desugar 一次且不得改變。最後,每條規則都必須
   有一個 case 讓它**觸發**——這件事是用問的而不是用宣告的:把規則關掉,看輸出會不會變。

@@ -357,8 +357,15 @@ oracle:                         # the seed and the shipping compiler agree about
 # the corpus rather than when somebody remembers to extend it.
 #
 # The floor is what makes the run mean something: every assertion inside is "these two
-# agree", which an empty list satisfies.
-DESUGAR_MIN ?= 80
+# agree", which an empty list satisfies. It sits above what the examples and the codegen
+# corpus hold together, so the behaviour corpus going missing is a failure and not a smaller
+# green.
+#
+# `test-data/behaviour` is read because it is a program per GRAMMAR production that runs and
+# prints, so a sugar form has one like any other form does. Its sibling
+# `test-data/productions` is not: a production sample is script-mode statements, which a build
+# treats as a nop, so both spellings would print nothing and agree about it.
+DESUGAR_MIN ?= 400
 
 # The language server has no analysis of its own — every answer it gives is a call into the
 # compiler's own `pub` surface — so the way it goes wrong is by growing one. This drives a
@@ -411,7 +418,7 @@ treesitter:                     # the tree-sitter grammar reads every Zerg file 
 
 desugar:                        # a program and the same program desugared do the same thing
 	$(MAKE) build
-	@MIN_COMPARED=$(DESUGAR_MIN) ./scripts/desugar-check.sh examples/[0-9][0-9]_*.zg $$(ls test-data/codegen/*.zg 2>/dev/null) $$(ls test-data/desugar/*.zg 2>/dev/null | grep -v '\.core\.zg$$')
+	@MIN_COMPARED=$(DESUGAR_MIN) ./scripts/desugar-check.sh examples/[0-9][0-9]_*.zg $$(ls test-data/codegen/*.zg 2>/dev/null) $$(ls test-data/desugar/*.zg 2>/dev/null | grep -v '\.core\.zg$$') $$(ls test-data/behaviour/*.zg 2>/dev/null)
 	@./scripts/desugar-golden.sh
 
 # Three places a gate has to appear before it protects anything: the makefiles, the board,

@@ -22,8 +22,11 @@
 # the PARSER — so a program whose only sugar is a guard must emit byte-identical C. The other
 # two rules produce a `for (;;)` where the sugar produced a `while` or a counted `for`, which
 # is the same program and not the same text. A file opts into the stronger check by being one
-# the weaker rules do not touch, which is asked rather than declared: desugar it with D101
-# switched off, and if nothing changed, D101 was the only rule that fired.
+# the weaker rules do not touch, which is asked rather than declared: desugar it with every
+# rule BUT D101 switched off, and if that is the whole desugared file, D101 was the only rule
+# that fired. Switching D101 alone off asks something else — a rule can fire only on what D101
+# unwrapped (D103 steps a `continue` that was a `continue if`), so nothing firing without it
+# does not mean nothing fired beside it.
 #
 # The floor at the bottom is the point of the whole script, as it is in oracle-check: every
 # assertion here is of the form "these two agree", which is trivially true of an empty set.
@@ -37,6 +40,18 @@ ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 ZERG=${ZERG:-./bin/zerg}
 
 runcmp_self_test || exit 1
+
+# THE RULES ARE READ FROM THE PASS, not listed here: a rule added to desugar.zg and missing
+# from a list would stay switched on in the D101-only probe below, and a file it rewrote would
+# be held to byte-identical C on D101's account.
+others=""
+for r in $(sed -nE 's/.*fmt_is_off\(off, "(D[0-9]+)"\).*/\1/p' "$ROOT/src/compiler/zerg/desugar.zg"); do
+	[ "$r" = D101 ] || others="$others --off $r"
+done
+if [ -z "$others" ]; then
+	echo "desugar-check: no rule but D101 was found in desugar.zg — the extraction stopped matching"
+	exit 1
+fi
 
 tmp=$(mktemp -d)
 trap 'rm -rf "$tmp"' EXIT
@@ -150,8 +165,9 @@ for src in "$@"; do
 	# that is not a finding.
 	cmp -s "$src" "$core" && continue
 	cp "$src" "$tmp/$name.probe.zg"
-	"$ZERG" desugar --off D101 "$tmp/$name.probe.zg" >/dev/null 2>&1
-	cmp -s "$src" "$tmp/$name.probe.zg" || continue
+	# shellcheck disable=SC2086 # one word per `--off` and per code
+	"$ZERG" desugar $others "$tmp/$name.probe.zg" >/dev/null 2>&1
+	cmp -s "$core" "$tmp/$name.probe.zg" || continue
 
 	"$ZERG" build --emit c "$src" 2>/dev/null | grep -v -e '^#line' -e '^$' >"$tmp/$name.sugar.c"
 	"$ZERG" build --emit c "$core" 2>/dev/null | grep -v -e '^#line' -e '^$' >"$tmp/$name.core.c"

@@ -432,6 +432,116 @@ fn main() {
 }
 EOF
 
+# A CALL THROUGH `this` IS A WRITE WHEN WHAT IT CALLS IS A `mut fn`, and only then. The first
+# three are the shapes the compiler holds to E3023 when the caller is a plain `fn` — a method
+# of the type, a method of a field, a spec's own `mut fn` — so L402's advice on any of them is
+# a program that does not compile. The last calls a PLAIN method, which writes nothing.
+quiet L402 'l402-calls-own-mut' 'a `mut fn` whose only write is a call to another `mut fn`' <<'EOF'
+struct C {
+	pub n: int
+}
+
+impl C {
+	mut fn bump() {
+		this.n = this.n + 1
+	}
+
+	mut fn twice() {
+		this.bump()
+		this.bump()
+	}
+}
+
+fn main() {
+	mut c := C(0)
+	c.twice()
+	print c.n
+}
+EOF
+
+quiet L402 'l402-calls-field-mut' 'a `mut fn` whose only write is a `mut fn` of a field of `this`' <<'EOF'
+struct In {
+	pub n: int
+}
+
+impl In {
+	mut fn bump() {
+		this.n = this.n + 1
+	}
+}
+
+struct C {
+	pub inner: In
+}
+
+impl C {
+	mut fn poke() {
+		this.inner.bump()
+	}
+}
+
+fn main() {
+	mut c := C(In(0))
+	c.poke()
+	print c.inner.n
+}
+EOF
+
+quiet L402 'l402-calls-spec-mut' 'a `mut fn` whose only write is a spec default that is a `mut fn`' <<'EOF'
+spec Tick {
+	mut fn tick()
+
+	mut fn twice() {
+		this.tick()
+		this.tick()
+	}
+}
+
+struct C {
+	pub n: int
+}
+
+impl Tick for C {
+	mut fn tick() {
+		this.n = this.n + 1
+	}
+}
+
+impl C {
+	mut fn four() {
+		this.twice()
+		this.twice()
+	}
+}
+
+fn main() {
+	mut c := C(0)
+	c.four()
+	print c.n
+}
+EOF
+
+lint L402 'never writes through `this`' 'L402-calls-plain' <<'EOF'
+struct P {
+	pub x: int
+}
+
+impl P {
+	fn log() {
+		print this.x
+	}
+
+	mut fn show() {
+		this.log()
+	}
+}
+
+fn main() {
+	mut p := P(1)
+	p.show()
+}
+EOF
+
 # --- L5xx — conversion ------------------------------------------------------------
 #
 # The family that needs TYPES, which is why the linter asks the lowering walk for it. `L501`

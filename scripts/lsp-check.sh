@@ -1738,7 +1738,9 @@ cat >"$tmp/hover/lib.zg" <<'ZG'
 # twice's maintainer note, which neither the page nor a hover shows.
 ##
 ## ```zerg
-## >>> lib.twice(3)
+## lib.twice(3)
+## ```
+## ```output
 ## 6
 ## ```
 pub fn twice(m: int) -> int {

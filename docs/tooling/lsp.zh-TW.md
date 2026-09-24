@@ -23,7 +23,8 @@ _「這個 buffer 現在有什麼問題」_。後者編譯器一直都在回答�
 
 除此之外它還帶了 **protocol case**,而且每一個都曾經是壞的:exit status、shutdown 之後的回覆、空的變更、增量變更、
 完整變更、`$/` notification 對比 `$/` request、格式錯誤的 frame、字串 id、一行 CJK 之後的 UTF-16 欄位、大於 runtime
-bounded leaf 一次讀取量的 body、發佈在 `zerg build` 所指位置的 abort,以及
+bounded leaf 一次讀取量的 body、發佈在 `zerg build` 所指位置的 abort、lowering 走訪的每一條離開路線上 raise 的
+refusal,以及
 [quick fix](#quick-fix-是編譯器的答案不是-server-的)。那是另一種、也更安靜的失敗——buffer 被弄壞的編輯器,
 或一個在乾等的 client,什麼都不會說。
 
@@ -162,6 +163,10 @@ finding,所以這個程式**含有**的每個開著的 buffer,都是把它說過
 地點就在句子裡:`zerg build` 印在它底下的最後一行 `--> file:line:col`。當那一行指名的是這個 buffer 的檔案,finding
 就發佈在那個位置,而那一行會從訊息裡拿掉,因為 range 已經說了。只讀這個形式,不讀更寬鬆的——沒有路徑的
 `--> line:col` 不知道是哪個檔案。
+
+**不論文字是什麼,raise 就是 abort。** lowering 走訪也用 raise 來拒絕——E4032 的 `match x { _ => 1  2 => 2 }`
+就是一例——而 raise 過的檢查絕不會被當成正常回傳的檢查。一則文字變成空字串的 raise 曾被當成走完的走訪,buffer
+就被發佈成乾淨的(#237);沒有話可說的 raise,會被發佈成一句說明這件事的句子。
 
 有兩種 finding 改以檔案頂端一個零寬度的 range 落地,理由各不相同。**沒有指名地點**的,落在那裡是因為編譯器沒說在哪。
 地點在程式裡**另一個**檔案的,落在那裡是因為那個地點不在這個 buffer 裡,而且它保留自己的 `-->` 那一行——這時只有那

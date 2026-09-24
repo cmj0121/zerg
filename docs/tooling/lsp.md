@@ -28,7 +28,7 @@ It carries **protocol cases** beside that, and every one of them failed once: th
 post-shutdown reply, an empty change, an incremental change, a full change, a `$/` notification
 versus a `$/` request, a malformed frame, a string id, a UTF-16 column after a line of CJK, a body
 larger than one read of the runtime's bounded leaf, an abort published where `zerg build` places it,
-and the [quick fix](#a-quick-fix-is-the-compilers-answer-not-the-servers).
+a refusal the lowering walk raises for each route out of that walk, and the [quick fix](#a-quick-fix-is-the-compilers-answer-not-the-servers).
 Those are a different kind of failure and a quieter one — an editor with a corrupted buffer, or a
 client left waiting, reports nothing at all.
 
@@ -210,6 +210,11 @@ guess and is marked as one. See [Positions](#positions).
 prints under it: `--> file:line:col`. Where that line names this buffer's file, the finding is
 published at that place and the line is dropped from the message, because the range now says it.
 Exactly that form is read and nothing looser — a pathless `--> line:col` knows no file.
+
+**A raise is an abort whatever its text.** The lowering walk refuses by raising as well — E4032's
+`match x { _ => 1  2 => 2 }` is one — and a check that raised is never read as one that returned. A
+raise whose text came back empty was once taken for a finished walk, and the buffer was published
+clean (#237); one with nothing to say is published as a sentence saying so.
 
 Two findings land as a zero-width range at the top of the file instead, for two different reasons. One
 that names **no place** lands there because the compiler did not say where. One placed in **another**

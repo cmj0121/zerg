@@ -314,6 +314,90 @@ fn main() {
 }
 EOF
 
+# AN ASSOCIATED FN NAMED AS A VALUE IS USED. `f := Bag.wrap` names the fn without a call
+# (docs/code/functions.md), and the walk read only what stands left of the dot. The same through
+# a generic type, which is named bare, and through a namespace — the last is two files, so the
+# module is written first and the entry handed to `quiet` under its directory.
+quiet L102 'l102-assoc-value' 'an associated fn named as a value' <<'EOF'
+struct Bag {
+	pub n: int
+}
+
+impl Bag {
+	fn wrap(n: int) -> Bag {
+		return Bag(n)
+	}
+}
+
+fn main() {
+	f := Bag.wrap
+	b := f(3)
+	print b.n
+}
+EOF
+
+quiet L102 'l102-assoc-value-generic' 'an associated fn of a generic type named as a value' <<'EOF'
+struct Box[T] {
+	pub v: T
+}
+
+impl Box[T] {
+	fn one() -> int {
+		return 1
+	}
+}
+
+fn main() {
+	f := Box.one
+	print f()
+}
+EOF
+
+mkdir -p "$tmp/l102-ns/s"
+cat >"$tmp/l102-ns/s/mod.zg" <<'EOF'
+pub struct Bag {
+	pub n: int
+}
+
+impl Bag {
+	fn wrap(n: int) -> Bag {
+		return Bag(n)
+	}
+}
+EOF
+quiet L102 'l102-ns/main' 'an associated fn named as a value through a namespace' <<'EOF'
+import "./s"
+
+fn main() {
+	f := s.Bag.wrap
+	b := f(3)
+	print b.n
+}
+EOF
+
+# and it is the PAIR that is used, not the name: a field read `c.wrap` on a value is not
+# `Bag.wrap`, and a walk that recorded the bare name would keep the dead fn alive
+lint L102 'private function `wrap` is never called' 'L102-field-not-assoc' <<'EOF'
+struct Bag {
+	pub n: int
+}
+
+impl Bag {
+	fn wrap(n: int) -> Bag {
+		return Bag(n)
+	}
+}
+
+struct Cup {
+	pub wrap: int
+}
+
+fn main() {
+	c := Cup(2)
+	print c.wrap
+}
+EOF
+
 # --- the suppression, and the two things worth saying about one ---------------------
 #
 # A `#[allow(…)]` that WORKS is silent, so the first case here proves the mechanism by the

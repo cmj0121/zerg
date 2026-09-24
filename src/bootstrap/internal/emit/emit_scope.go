@@ -307,14 +307,27 @@ func (e *emitter) raiseCause(x ast.Expr) string {
 // "raise" — a diagnostic that told the reader nothing, and one the self-hosted compiler
 // has always got right. That mattered most for the compiler the seed builds, whose own
 // error messages are almost all concatenations.
+//
+// A message some binding still owns is RETAINED, so the Err holds a count of its own: the
+// raise unwinds every scope between it and the guard, and the binding's release on the way
+// out freed the text the guard then read (#237). A fresh operand hands its count over.
 func (e *emitter) errMessage(x ast.Expr) string {
 	if s, ok := x.(*ast.StrLit); ok {
 		return cString(s.Value)
 	}
 	if e.isStrExpr(x) {
-		return e.expr(x)
+		return e.ownedStr(x)
 	}
 	return "\"raise\""
+}
+
+// ownedStr renders a str operand the consumer keeps: a borrowed one retained, in a managed
+// program, and a fresh one as it is.
+func (e *emitter) ownedStr(x ast.Expr) string {
+	if e.strManaged && !e.strOwned(x) {
+		return fmt.Sprintf("zrt_str_retain(%s)", e.expr(x))
+	}
+	return e.expr(x)
 }
 
 // --- defer --------------------------------------------------------------------

@@ -194,19 +194,18 @@ fn lint_merged(srcs: list[str], paths: list[str], ms: emit.Mods, prog: ast.File,
 	f := emit.c_with_builtin_specs(prog)
 	mut out: list[Finding] = []
 
-	# Names used ANYWHERE in the program: a private function called from another module
-	# of the same program is used, so the whole merged File is the unit of judgement.
+	# The names read and called, KEYED BY THE FILE THAT WROTE THEM (`<file>#<name>`): a private
+	# function is reachable only from its own file (#57), so a call written in another file is a
+	# call to a different function that happens to share the name — see lint_dead_fns.
 	mut ids: list[str] = []
 	mut calls: list[str] = []
 	mut ns: list[str] = []
 
-	# AND THE SAME NAMES KEYED BY THE FILE THAT WROTE THEM, which is what an import is judged
-	# by. `ids` and `ns` above are the whole program's, because a private function called from
-	# another module of the same program is used — that is L102's question. L101's is not the
-	# same question, and asking it of the merged program is a rule the compiler does not have:
-	# an import binds a namespace in the FILE that writes it, neither transitive nor shared
-	# with the file's neighbours (E5007, #57), so `import "ascii"` in one file of a module was
-	# read as used because a SIBLING wrote `ascii.`.
+	# AND THE NAMES AN IMPORT COULD BIND, keyed the same way, which is what an import is judged
+	# by. Asking the merged program is a rule the compiler does not have: an import binds a
+	# namespace in the FILE that writes it, neither transitive nor shared with the file's
+	# neighbours (E5007, #57), so `import "ascii"` in one file of a module was read as used
+	# because a SIBLING wrote `ascii.`.
 	mut used_at: list[str] = []
 	walk_program(f, ids, calls, ns, used_at)
 	lint_imports(f, used_at, ms, out)
@@ -988,6 +987,7 @@ fn lint_file_mod(path: str, ms: emit.Mods) -> str {
 # the runtime calls it, so it is never "unused" no matter what the source says.
 fn lint_dead_fns(f: ast.File, calls: list[str], ids: list[str], mut &out: list[Finding]) {
 	reqs := spec_required_names(f)
+	privs := lint_private_types(f)
 	for fd in f.fns {
 		# `init` is called by the generated main, the same way the runtime calls `main`
 		if fd.is_pub or fd.name == "main" or parser.is_init_name(fd.name) {
@@ -1008,10 +1008,49 @@ fn lint_dead_fns(f: ast.File, calls: list[str], ids: list[str], mut &out: list[F
 			# Celsius` reported its own `into` as dead code in a program that converted four
 			# times.
 			continue_marker()
-		} else if not has_str(calls, fd.name) and not has_str(ids, fd.name) and not (fd.recv != "" and has_str(calls, assoc_key(fd.recv, fd.name))) {
+		} else if has_str(calls, used_key(fd.path, fd.name)) or has_str(ids, used_key(fd.path, fd.name)) or (fd.recv != "" and has_str(calls, used_key(fd.path, assoc_key(fd.recv, fd.name)))) {
+			# USED IN ITS OWN FILE, which is the only place a private name can be reached from
+			# (#57): two files that each declare a private `helper` declare two functions, and
+			# the call one of them makes is not a call to the other.
+			continue_marker()
+		} else if fd.recv != "" and not has_str(privs, used_key(fd.path, emit.c_app_base(fd.recv))) and (lint_called_anywhere(calls, fd.name) or lint_called_anywhere(calls, assoc_key(fd.recv, fd.name))) {
+			# A METHOD OF A TYPE ANOTHER FILE CAN NAME is the exception, and it is the
+			# compiler's rather than the language's: a private method of a `pub` type is
+			# callable from another module today. Reporting it there would tell the author to
+			# delete a method the build needs. A private TYPE is its file's alone (#201), so its
+			# methods are judged in the file like a function.
+			continue_marker()
+		} else {
 			out.append(Finding("", fd.path, fd.line, fd.col, "L102", f"private function `{fd.name}` is never called"))
 		}
 	}
+}
+
+# lint_private_types is `<file>#<name>` for every type declared without `pub` — the types only
+# their own file can name (#201), whose methods are therefore called from that file or not at all.
+fn lint_private_types(f: ast.File) -> list[str] {
+	mut out: list[str] = []
+	for sd in f.structs {
+		if not sd.is_pub {
+			out.append(used_key(sd.path, sd.name))
+		}
+	}
+	for ed in f.enums {
+		if not ed.is_pub {
+			out.append(used_key(ed.path, ed.name))
+		}
+	}
+	return out
+}
+
+# lint_called_anywhere is whether any file calls `name`, which is what `calls` holds keyed by
+# file: an entry ending `#name`.
+fn lint_called_anywhere(calls: list[str], name: str) -> bool {
+	suffix := f"#{name}"
+	for c in calls {
+		return true if parser.strings_has_suffix(c, suffix)
+	}
+	return false
 }
 
 # spec_required_names is every method name some spec in the program declares. It is asked of
@@ -1164,11 +1203,11 @@ fn collect_binds_iflet(name: str, then_b: list[ast.Stmt], else_b: list[ast.Stmt]
 	collect_binds_at(else_b, w, names, ats)
 }
 
-# walk_program records every name a WHOLE PROGRAM reaches for. The two rules that judge a
-# declaration by its uses — L101 on an import, L102 on a private function — ask this, and
-# what they are asking is "does anything in this program name it?". So the answer has to
-# come from every place a name can be written, and it used to come from one: the bodies of
-# `f.fns`.
+# walk_program records every name a WHOLE PROGRAM reaches for, keyed by the file that wrote
+# it. The two rules that judge a declaration by its uses — L101 on an import, L102 on a
+# private function — ask this, and what they are asking is "does anything that can reach it
+# name it?". So the answer has to come from every place a name can be written, and it used to
+# come from one: the bodies of `f.fns`.
 #
 # Three places were missing, and they are one defect rather than three — an inventory of
 # where a name can appear, with entries left out:
@@ -1201,25 +1240,25 @@ fn walk_program(f: ast.File, mut &ids: list[str], mut &calls: list[str], mut &ns
 
 	for fd in f.fns {
 		mut lids: list[str] = []
+		mut lcalls: list[str] = []
 		mut lns: list[str] = []
-		walk_body(fd.body, lids, calls, lns)
-		walk_defaults(fd.params, lids, calls, lns)
-		keep_used(fd.path, lids, bound, ids, used_at)
-		keep_used(fd.path, lns, bound, ns, used_at)
+		walk_body(fd.body, lids, lcalls, lns)
+		walk_defaults(fd.params, lids, lcalls, lns)
+		keep_decl(fd.path, lids, lcalls, lns, bound, ids, calls, ns, used_at)
 	}
 	for c in f.consts {
 		mut lids: list[str] = []
+		mut lcalls: list[str] = []
 		mut lns: list[str] = []
-		walk_expr(c.value, lids, calls, lns)
-		keep_used(c.path, lids, bound, ids, used_at)
-		keep_used(c.path, lns, bound, ns, used_at)
+		walk_expr(c.value, lids, lcalls, lns)
+		keep_decl(c.path, lids, lcalls, lns, bound, ids, calls, ns, used_at)
 	}
 	for sd in f.structs {
 		mut lids: list[str] = []
+		mut lcalls: list[str] = []
 		mut lns: list[str] = []
-		walk_field_defaults(sd.fields, lids, calls, lns)
-		keep_used(sd.path, lids, bound, ids, used_at)
-		keep_used(sd.path, lns, bound, ns, used_at)
+		walk_field_defaults(sd.fields, lids, lcalls, lns)
+		keep_decl(sd.path, lids, lcalls, lns, bound, ids, calls, ns, used_at)
 	}
 
 	# the qualifier, not the type name: `testing.Context` says the file reaches the
@@ -1232,11 +1271,26 @@ fn walk_program(f: ast.File, mut &ids: list[str], mut &calls: list[str], mut &ns
 	}
 }
 
-# keep_used merges one declaration's names into the program-wide list, and records the ones an
-# import could have bound against the FILE the declaration was written in.
-fn keep_used(path: str, local: list[str], bound: list[str], mut &all: list[str], mut &used_at: list[str]) {
+# keep_decl merges one declaration's names into the program's lists: what it reads and calls
+# keyed by the FILE it was written in, which is L102's question, and the namespaces it reaches.
+fn keep_decl(path: str, lids: list[str], lcalls: list[str], lns: list[str], bound: list[str], mut &ids: list[str], mut &calls: list[str], mut &ns: list[str], mut &used_at: list[str]) {
+	keep_used(path, lids, bound, used_at)
+	keep_used(path, lns, bound, used_at)
+	for n in lids {
+		ids.append(used_key(path, n))
+	}
+	for n in lcalls {
+		calls.append(used_key(path, n))
+	}
+	for n in lns {
+		ns.append(n)
+	}
+}
+
+# keep_used records the names an import could have bound against the FILE the declaration was
+# written in.
+fn keep_used(path: str, local: list[str], bound: list[str], mut &used_at: list[str]) {
 	for n in local {
-		all.append(n)
 		if has_str(bound, n) {
 			used_at.append(used_key(path, n))
 		}

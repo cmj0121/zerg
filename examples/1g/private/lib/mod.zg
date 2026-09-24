@@ -1,7 +1,7 @@
 # lib — one public function and one module-private helper. A cross-module reference
 # to the private helper is a compile error (Phase 1g visibility enforcement).
 pub fn public_fn() -> int {
-	return 1
+	return helper() - 1
 }
 
 # helper is module-private: reachable only inside lib, never as lib.helper. Every module

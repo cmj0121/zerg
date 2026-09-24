@@ -106,12 +106,17 @@ read" is the one thing there is no point saying about it. The select-arm spellin
 redundancy is [`F407`](fmt.md)'s, because `GRAMMAR` makes that binder optional and
 dropping it leaves an arm. A statement's binder has no such spelling.
 
-`L101` asks the **file**, and `L102` asks the **program**, and the difference is not a
-detail of either rule: an `import` binds a namespace in the file that writes it — neither
-transitive nor shared with the file's neighbours (`E5007`) — while a private function called
-from another module of the same program is called. Asking the program about an import is a
-rule the compiler does not have, and it reads an import one file never wrote as used because
-a **sibling** in the same module wrote the name.
+`L101` and `L102` both ask the **file**, because the file is the unit of privacy and of naming
+([Modules, Packages & Programs](../runtime/package.md)). An `import` binds a namespace in the
+file that writes it — neither transitive nor shared with the file's neighbours (`E5007`). A
+private function is reachable only from the file that declares it, so two files that each
+declare a private `helper` declare two functions, and a call in one is not a call to the other;
+the methods of a private type are the same. Asking the program is a rule the compiler does not
+have: it reads an import as used because a **sibling** wrote the name, and a private function
+as called because another file called its namesake.
+
+A private method of a **`pub`** type is the one exception: the compiler lets another module
+call it today, so `L102` asks the program about it rather than report a method the build needs.
 
 `L101` and `L102` judge a declaration by its **uses**, and a use counts wherever it is
 written — not only inside a function body. A **type position** is one (`ctx: testing.Context`

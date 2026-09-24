@@ -57,6 +57,13 @@ that did.
 test nor a suppression that will never apply is acceptable. A gate board stricter than the tool
 has precedent here — `refuse-check` asserts more about a refusal than `zerg build` requires.
 
+**A program the compiler refuses fails the lint, with exit 1.** The rules run on the walk
+`zerg build --emit check` runs, so its findings are this tool's to report, on stderr and in the
+same lines that check prints. A refused program is not fit to ship, whatever the rules say, and
+`--strict` changes nothing about it. When the walk collects its findings and goes on, the lint
+findings still print beside them on stdout — the rules read the tree, and a refusal does not
+make what they say false. When the walk aborts, its refusal prints alone: the rules never ran.
+
 ## Suppressing a finding — `#[allow(…)]`
 
 `#[allow(L103)]` on a statement suppresses that code over the statement it leads, and over its

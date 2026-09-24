@@ -112,6 +112,10 @@ uses the `testing` import and writes no expression at all), and so is a module-l
 initialiser, a struct field's default and a parameter's default. Each of those is code that
 belongs to a declaration rather than to a body.
 
+A function **named as a value** is used without a call. For an associated fn that is the pair,
+`Bag.wrap` — through a namespace too, and bare for a generic type — so a field read `c.wrap` on a
+value keeps no fn called `wrap` alive.
+
 An import that supplies a **`spec`** is used, and it is the one use that is written with no
 namespace at all: `impl Tag for A` names the interface by a bare name, and the import is what
 put the module declaring it into the program. `L101` asks the loader which module each import

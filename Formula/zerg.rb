@@ -18,8 +18,8 @@
 class Zerg < Formula
   desc "Compiled language that translates to C, self-hosted and dependency-free"
   homepage "https://github.com/cmj0121/zerg"
-  url "https://github.com/cmj0121/zerg/archive/refs/tags/v0.5.0.tar.gz"
-  sha256 "a1a6cfae02bf611004978affe8f71d25784de6f9833b3fb26b12ef49d5e20404"
+  url "https://github.com/cmj0121/zerg/archive/refs/tags/v0.6.0.tar.gz"
+  sha256 "d2fb88a51aa0aaac9cbaed27137df37da3b9795ad590645980171c48406e9c14"
 
   # The layers are the repository's, and LICENSE says why they differ: what ends up in YOUR
   # binary is permissive, and what produced it is not.

@@ -164,6 +164,26 @@ static void ring_get(zrt_chan *ch, void *out) {
 	ch->len--;
 }
 
+/* hand_to_receiver gives a parked receiver the NEXT value in send order, and `val` joins the
+ * end of that order. A receiver parks only on an empty ring, so for a plain receiver the next
+ * value is `val` itself. A SELECT breaks that: it scans with each channel's lock, releases it,
+ * and only then pushes its waiter, so a sender can fill the ring in between and the waiter
+ * goes up beside values older than anything a later sender brings. Handing that later value
+ * straight across overtook them — a single-arm `for select` over one producer read `3` before
+ * `2`, and `conc_for_select` printed `12 1 4` about once in a few thousand runs with several
+ * workers. The oldest value goes to the receiver instead, and the new one takes the freed
+ * slot, so the ring stays as full as it was and the order is the order things were sent. */
+static void hand_to_receiver(zrt_chan *ch, zrt_waiter *r, const void *val) {
+	if (ch->len > 0) {
+		ring_get(ch, r->val);
+		ring_put(ch, val);
+	} else {
+		memcpy(r->val, val, ch->elemsz);
+	}
+	r->done = true;
+	zrt_sched_wake(r->co); /* channel lock held, scheduler lock taken inside */
+}
+
 /* --- construction / lifetime ------------------------------------------------- */
 
 /* chan_stop_iteration is the Err a CLEAN close carries: the end-of-stream sentinel the
@@ -314,9 +334,7 @@ void zrt_chan_send(zrt_chan *ch, const void *val) {
 		/* a waiting receiver takes the value directly (rendezvous / buffered hand-off). */
 		zrt_waiter *r = wq_take(&ch->recvq_head, &ch->recvq_tail);
 		if (r != NULL) {
-			memcpy(r->val, val, ch->elemsz);
-			r->done = true;
-			zrt_sched_wake(r->co); /* channel lock held, scheduler lock taken inside */
+			hand_to_receiver(ch, r, val);
 			zrt_mutex_unlock(&ch->lock);
 			return;
 		}
@@ -531,9 +549,7 @@ static bool sel_send_closed(zrt_chan *ch) {
 static int sel_try_send_locked(zrt_chan *ch, const void *val) {
 	zrt_waiter *r = wq_take(&ch->recvq_head, &ch->recvq_tail);
 	if (r != NULL) {
-		memcpy(r->val, val, ch->elemsz);
-		r->done = true;
-		zrt_sched_wake(r->co);
+		hand_to_receiver(ch, r, val);
 		return 1;
 	}
 	if (ch->len < ch->cap) {

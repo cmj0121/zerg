@@ -665,7 +665,8 @@ EOF
 # and the SAME function in a file whose name says where it belongs is silent. That is the
 # other half of the rule and the only thing that shows it is about the FILE rather than about
 # the decorator — without it, a rule that reported every `#[test]` anywhere would pass above.
-cat >"$tmp/lib_test.zg" <<'EOF'
+mkdir -p "$tmp/l601"
+cat >"$tmp/l601/lib_test.zg" <<'EOF'
 #[test]
 fn checks_something() {
 	print "ran"
@@ -675,7 +676,7 @@ fn main() {
 	print "hi"
 }
 EOF
-out=$("$ZERG" lint "$tmp/lib_test.zg" 2>&1)
+out=$("$ZERG" lint "$tmp/l601/lib_test.zg" 2>&1)
 status=$?
 if [ $status -ne 0 ] || [ -n "$out" ]; then
 	echo "L601      fired inside a *_test.zg file, where a test BELONGS: $(echo "$out" | head -1)"
@@ -701,7 +702,8 @@ EOF
 
 # and the same `assert` in a file whose name says where it belongs is silent — the half that
 # shows the rule is about the FILE and not about the word
-cat >"$tmp/claim_test.zg" <<'EOF'
+mkdir -p "$tmp/l602"
+cat >"$tmp/l602/claim_test.zg" <<'EOF'
 fn head(xs: list[int]) -> int {
 	assert xs.len() > 0
 	return xs[0]
@@ -711,7 +713,7 @@ fn main() {
 	print head([1])
 }
 EOF
-out=$("$ZERG" lint "$tmp/claim_test.zg" 2>&1)
+out=$("$ZERG" lint "$tmp/l602/claim_test.zg" 2>&1)
 status=$?
 if [ $status -ne 0 ] || [ -n "$out" ]; then
 	echo "L602      fired inside a *_test.zg file, where a claim BELONGS: $(echo "$out" | head -1)"
@@ -1185,6 +1187,47 @@ if echo "$ownval_out" | grep -q "/ownval/y/mod\.zg:.*L102"; then
 else
 	pass=$((pass + 1))
 fi
+
+# --- a white-box suite is linted as its package ---------------------------------------------
+#
+# A suite beside its module calls the module's private functions unqualified, so as a file on
+# its own it is a program the compiler refuses (E4016), and `zerg lint` says what the compiler
+# says. Named alone, a `*_test.zg` is therefore linted as the program `zerg test` builds from it.
+# The finding asked for is one only a program that COMPILES reaches: the walk has to get past
+# `twice` for the rule to be asked anything, and on the suite alone it aborts first.
+mkdir -p "$tmp/wb"
+cat >"$tmp/wb/calc.zg" <<'EOF'
+fn twice(n: int) -> int {
+	return n * 2
+}
+
+pub fn quad(n: int) -> int {
+	return twice(twice(n))
+}
+EOF
+cat >"$tmp/wb/calc_test.zg" <<'EOF'
+#[test]
+fn test_twice() {
+	n := 41 + 1
+	assert twice(2) == 4
+}
+EOF
+wb_out=$("$ZERG" lint "$tmp/wb/calc_test.zg" 2>&1)
+wb_status=$?
+case $wb_out in
+*"calc_test.zg:3:2: L103"*)
+	if [ "$wb_status" -ne 1 ]; then
+		echo "STATUS    white-box suite — wanted exit 1 on its L103, got $wb_status"
+		fail=$((fail + 1))
+	else
+		pass=$((pass + 1))
+	fi
+	;;
+*)
+	echo "PACKAGE   a white-box suite was not linted as its package: $(echo "$wb_out" | head -1)"
+	fail=$((fail + 1))
+	;;
+esac
 
 # --- every documented rule has a case ----------------------------------------------
 #

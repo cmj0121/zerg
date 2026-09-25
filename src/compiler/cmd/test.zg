@@ -221,6 +221,41 @@ fn pkg_identity(p: test_pkg.Pkg) -> str {
 	return "project:" + p.mod
 }
 
+# pkg_units loads a package's program from `files`, the package's sources and whatever a run
+# adds to them, as the unit the package IS. `zerg test` asks it with the driver it generated,
+# and `zerg lint` asks it with the package's sources alone: a white-box suite is a program only
+# as this unit, and linted as a file on its own it is one the compiler refuses.
+#
+# WHAT THIS UNIT ALREADY IS, handed to the loader so nothing loads it a second time. A package
+# built on a one-file module IS that module — `json.zg` is among the files — and an import of it
+# reached from anywhere else in this program must land on these sources rather than on a second
+# copy of the same file.
+pub fn pkg_units(p: test_pkg.Pkg, files: list[str]) -> list[unit.Unit] {
+	# THE IDENTITY IS THE LOCATION, so both of these are one. `seen` and `Unit.name` compare
+	# where a module's files are (#67); handing them the import path a reader would type made
+	# the entry unit answer to a name no import resolves to, and `json.zg` was loaded a second
+	# time under its own location — two modules declaring one `pub fn get`.
+	mut provides: list[str] = []
+	mut uname := p.dir
+	if p.mod != "" {
+		provides.append(pkg_identity(p))
+
+		# AND THE UNIT IS NAMED BY THAT MODULE, because it IS that module. The name is what
+		# `c_mod_of` reads back as a declaration's module identity, and naming a one-file
+		# module's package after its DIRECTORY made `strings.zg` a declaration of
+		# `src/stdlib` — so `time.zg`, loaded as `time` and writing `import "strings"`, was
+		# reading a member of a module nothing was called. Every stdlib suite failed with
+		# `module `strings` has no `pad_start`` about a `pub fn` two lines long.
+		#
+		# It is only safe to name it this while the "already loaded" question is asked at the
+		# IMPORT (`load_import`) rather than at the unit: asked at the unit, seeding `seen`
+		# with the same string would make this unit answer that it was already loaded, and
+		# the program would come back empty.
+		uname = pkg_identity(p)
+	}
+	return unit.load_units_of(files, uname, p.dir, provides)
+}
+
 # in_stdlib reports whether a directory, spelled however the caller spelled it, is the standard
 # library's or one inside it. `zerg doc --check` asks it too, of the directory a module's
 # examples import it from, because a stdlib module is imported by its bare name and nothing
@@ -318,36 +353,8 @@ fn run_pkg(root: str, p: test_pkg.Pkg, only: str, secs: int, mut &passed: int, m
 	# end left the driver behind: `zerg test src/stdlib` stopped at an `E9038` inside
 	# `atomic.zg` and left a `zerg_test_driver_test.zg` full of absolute cache paths in the
 	# standard library — a directory the compiler resolves imports by LISTING.
-	# WHAT THIS UNIT ALREADY IS, handed to the loader so nothing loads it a second time. A
-	# package built on a one-file module IS that module — `json.zg` is among the files above —
-	# and an import of it reached from anywhere else in this program must land on these sources
-	# rather than on a second copy of the same file.
-
-	# THE IDENTITY IS THE LOCATION, so both of these are one. `seen` and `Unit.name` compare
-	# where a module's files are (#67); handing them the import path a reader would type made
-	# the entry unit answer to a name no import resolves to, and `json.zg` was loaded a second
-	# time under its own location — two modules declaring one `pub fn get`.
-	mut provides: list[str] = []
-	mut uname := p.dir
-	if p.mod != "" {
-		provides.append(pkg_identity(p))
-
-		# AND THE UNIT IS NAMED BY THAT MODULE, because it IS that module. The name is what
-		# `c_mod_of` reads back as a declaration's module identity, and naming a one-file
-		# module's package after its DIRECTORY made `strings.zg` a declaration of
-		# `src/stdlib` — so `time.zg`, loaded as `time` and writing `import "strings"`, was
-		# reading a member of a module nothing was called. Every stdlib suite failed with
-		# `module `strings` has no `pad_start`` about a `pub fn` two lines long.
-		#
-		# It is only safe to name it this while the "already loaded" question is asked at the
-		# IMPORT (`load_import`) rather than at the unit: asked at the unit, seeding `seen`
-		# with the same string would make this unit answer that it was already loaded, and
-		# the program would come back empty.
-		uname = pkg_identity(p)
-	}
-
 	res := guard {
-		unit.load_units_of(files, uname, p.dir, provides)
+		pkg_units(p, files)
 	}
 	rm_file(drv)
 	for c in copies {

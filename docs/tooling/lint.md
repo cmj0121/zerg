@@ -12,6 +12,10 @@ a dot-name or a symlink is not entered. The rule is written once, in
 [the formatter](fmt.md#a-path-is-the-tree-under-it), and is the same for every command that
 takes sources.
 
+**A test file named alone is linted as its package**, the program `zerg test` builds from it. A
+white-box suite calls its module's private functions unqualified, so as a file on its own it is
+a program the compiler refuses.
+
 A rule has a **code** so it can be named — in a finding, in a review, in the `#[allow(…)]`
 that suppresses it. The prefix groups them the way a Python linter's does, and the grouping
 is by **what a rule does**, not by which pass implements it.

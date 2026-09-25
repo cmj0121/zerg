@@ -371,12 +371,12 @@ LINUX_IMAGE ?= golang:1.26-bookworm
 # the linter never reads is exactly how the `L103` above shipped, and it is the one file in a
 # package a `zerg lint <module>` cannot see, because a normal build resolves no `*_test.zg`.
 #
-# WHAT IT COSTS is that the two halves of a package are asked separately, so neither sees the
-# other's calls. A module-private function used ONLY from the suite beside it would be `L102`
-# when the module is linted — correctly, in the sense the rule means it: nothing a shipping
-# build compiles calls it. The way out is to delete it or to use it, not to widen this list;
-# an entry that merged the two would be `zerg lint` inventing a package shape only `zerg test`
-# has.
+# A SUITE IS LINTED AS ITS PACKAGE, the program `zerg test` builds from it (#238): a white-box
+# suite calls its module's private functions unqualified, so on its own it is a program the
+# compiler refuses, and `zerg lint` says what the compiler says. The MODULE is still an entry
+# of its own, as a shipping build compiles it: a module-private function used ONLY from the
+# suite beside it is `L102` there — correctly, in the sense the rule means it: nothing a
+# shipping build compiles calls it. The way out is to delete it or to use it.
 #
 # `atomic` is the one exclusion and it is not a judgement about the module: it declares
 # `Atomic[T]`, a generic struct this compiler has not built, so `import "atomic"` is refused by
@@ -403,22 +403,14 @@ LINUX_IMAGE ?= golang:1.26-bookworm
 # There is no exclusion list any more. If one is ever needed again it owes the shape
 # CORPUS_SKIP now has: a name is a claim, and the gate checks the claim rather than
 # remembering it.
-#
-# THE COMPILER'S SUITES ARE NOT ENTRIES, since `zerg lint` reports what the compiler refuses
-# (#238). Each is white-box beside one file of a library (`parser_test.zg` calls `parse_at`
-# unqualified), so handed over alone it is a program the compiler refuses — an undefined
-# function, a walk abort before any rule has run. It used to lint clean only because the refusal
-# was swallowed. A suite is a program only as the package `zerg test` builds, and `zerg lint`
-# has no such entry yet; a stdlib suite is not held out, because each one builds by itself.
-LINT_ENTRIES := $(ZERG_ENTRY) $(wildcard src/stdlib/*.zg) $(wildcard $(EXAMPLE_SRCS))
+LINT_ENTRIES := $(ZERG_ENTRY) $(wildcard src/compiler/zerg/*_test.zg) $(wildcard src/stdlib/*.zg) $(wildcard $(EXAMPLE_SRCS))
 
 # A FLOOR under how many entries were linted, of the kind `corpus`, `examples` and `fmt-corpus`
 # carry. The one glob above reaches a directory, and a glob that matches nothing leaves a loop
 # with nothing to iterate and a gate that exits 0 for having asked one question.
 #
-# 50 against the 59 there are today — 20 modules and suites, 39 examples: far enough below that
-# adding a module or retiring a suite is not a chore here, far enough above that a pattern which
-# stopped matching cannot pass.
+# The floor sits well below what the globs match: far enough that adding a module or retiring a
+# suite is not a chore here, and high enough that a pattern which stopped matching cannot pass.
 LINT_MIN ?= 50
 
 # `--strict`, and the tool without it exits 0 on a warning. That is not two answers to one

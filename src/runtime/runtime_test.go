@@ -685,6 +685,74 @@ static void prog(void) {
 int main(void) { return zrt_sched_main_nil(prog); }
 `
 
+// TestSelectReceivesInSendOrder holds a channel to the order its one sender wrote. The
+// stress above sums what it reads, and a sum is the same in any order, so it could not see
+// a select read `3` before `2`: a select scans with each channel's lock and releases it
+// before it pushes its waiter, a sender can fill the ring in that gap, and the next sender
+// used to hand its value straight to the waiter past the ones in the ring.
+//
+// The overtake needs two workers in that gap at once, so this is a race the test samples
+// rather than a schedule it forces; one long stream per run is where it shows most often.
+const selectOrderRuns = 8
+
+func TestSelectReceivesInSendOrder(t *testing.T) {
+	bin := buildConcurrent(t, "select_order", selectOrderC)
+
+	want := "in order: 300000\n"
+	for _, w := range workerModes {
+		for i := 0; i < selectOrderRuns; i++ {
+			out, code := runBounded(t, bin, w, 60*time.Second)
+			if out != want || code != 0 {
+				t.Fatalf("select order run %d (ZRT_WORKERS=%q) = %q exit=%d, want %q exit=0", i, w, out, code, want)
+			}
+		}
+	}
+}
+
+// selectOrderC: one producer sends 0..NVALS-1 through a two-slot buffer, and main reads them
+// with a single-arm select until the channel closes, naming the first value out of place.
+const selectOrderC = `
+#include "zergrt.h"
+#include <stdio.h>
+
+#define NVALS 300000
+
+static void producer(void *env) {
+    zrt_chan *ch = (zrt_chan *)env;
+    for (long v = 0; v < NVALS; v++) {
+        zrt_chan_send(ch, &v);
+    }
+    zrt_chan_sender_release(ch);
+}
+
+static void prog(void) {
+    zrt_chan *ch = zrt_chan_new(sizeof(long), 2);
+    zrt_spawn(producer, zrt_chan_sender_copy(ch), NULL);
+    zrt_chan_copy(ch);
+    zrt_chan_sender_release(ch); /* main keeps a holder and gives up its sender */
+
+    long want = 0;
+    for (;;) {
+        long v;
+        zrt_sel_case cs[1] = {{ZRT_SEL_RECV, ch, &v}};
+        int pick = zrt_select(cs, 1, false, true);
+        if (pick == ZRT_SEL_DONE) {
+            break;
+        }
+        if (v != want) {
+            printf("out of order: wanted %ld, got %ld\n", want, v);
+            zrt_chan_release(ch);
+            return;
+        }
+        want++;
+    }
+    zrt_chan_release(ch);
+    printf("in order: %ld\n", want);
+}
+
+int main(void) { return zrt_sched_main_nil(prog); }
+`
+
 // TestMainReturnEndsProgram pins the program lifetime: main's coroutine finishing ends
 // the program, and a `spawn` still in flight is abandoned where it stands rather than
 // drained (docs/code/coroutine.md, Termination & deadlock). The worker here is parked on

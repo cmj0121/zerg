@@ -3,6 +3,9 @@
 
 import "./diag"
 import "./source"
+import "./test"
+import "./test_pkg"
+import "./unit"
 import "./walkdir"
 import (
 	"cli"
@@ -48,14 +51,35 @@ fn do_lint(c: cli.Ctx) -> int {
 # say about the program; an ABORT is not guarded here at all, so it raises out of the run
 # exactly as it raises out of the check — its sentence, exit 1, and nothing beside it, since
 # the walk that raised it never reached the rules.
+#
+# A `*_test.zg` NAMED ALONE IS LINTED AS ITS PACKAGE: the program `zerg test` builds from it,
+# found by the same rule (`file_pkgs`) and loaded as the same unit (`pkg_units`), less the driver
+# a run generates. A white-box suite calls its module's private functions unqualified, so as a
+# file on its own it is a program the compiler refuses, and a linter that now says so has to be
+# handed the program the suite is.
 fn run_lint(files: list[str], strict: bool) -> int {
+	mut srcs: list[str] = []
 	mut paths: list[str] = []
-	mut mods: list[str] = []
-	mut res := source.res_new()
-	srcs := source.load_sources_at(files, paths, mods, res)
+	mut none: list[str] = []
+	mut ms := zerg.mods_of(none, none, none, none, none)
+	mut pkgs: list[test_pkg.Pkg] = []
+	if files.len() == 1 and zerg.is_test_file(files[0]) {
+		test_pkg.file_pkgs(files[0], pkgs)
+	}
+	if pkgs.len() > 0 {
+		units := test.pkg_units(pkgs[0], test_pkg.pkg_sources(pkgs[0]))
+		srcs = unit.unit_srcs(units)
+		paths = unit.unit_paths(units)
+		ms = unit.unit_mods(units)
+	} else {
+		mut mods: list[str] = []
+		mut res := source.res_new()
+		srcs = source.load_sources_at(files, paths, mods, res)
+		ms = zerg.mods_of(paths, mods, res.at, res.path, res.mod)
+	}
 
 	mut diags: list[zerg.Diag] = []
-	found := zerg.check_and_lint(srcs, paths, zerg.mods_of(paths, mods, res.at, res.path, res.mod), diags)
+	found := zerg.check_and_lint(srcs, paths, ms, diags)
 
 	mut bad := 0
 	mut warned := 0

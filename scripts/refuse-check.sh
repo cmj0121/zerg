@@ -2006,6 +2006,15 @@ fn head(x: int?) -> int {
 fn main() { print head(1) }
 EOF
 
+# `?? nil` on a `T?`: the fallback is not a value of `T`. It sat below as L201's lint case, but
+# the compiler refuses the program before lint could advise on it, and the rule has retired.
+expect "$ZERG" coalesce-with-nil E3036 <<'EOF'
+fn keep(x: int?) -> int? {
+	return x ?? nil
+}
+fn main() { print keep(1) ?? -1 }
+EOF
+
 # --- lint: what the toolchain must SAY something about ----------------------------
 #
 # A finding is not a refusal — these programs compile and run — so they are checked
@@ -2054,13 +2063,6 @@ expect_no_lint() {
 	*) pass=$((pass + 1)) ;;
 	esac
 }
-
-expect_lint coalesce-with-nil "L201" <<'EOF'
-fn keep(x: int?) -> int? {
-	return x ?? nil
-}
-fn main() { print keep(1) ?? -1 }
-EOF
 
 expect_lint force-where-try-fits "L202" <<'EOF'
 fn forced(x: int?) -> int? {

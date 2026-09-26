@@ -153,17 +153,21 @@ compiler's.
 
 | Code   | Finding                            | Why it is worth a line                                                |
 | ------ | ---------------------------------- | --------------------------------------------------------------------- |
-| `L201` | `?? nil`                           | the fallback IS the absent value, so the `??` changes nothing         |
 | `L202` | `!` in a function answering a `T?` | `?` hands the absence back; `!` aborts instead, and is easier to type |
 
 ```text
-L201 `?? nil` in `keep` changes nothing — the result is optional either way
 L202 `!` in `forced`, which answers a `T?` — `?` hands the absence back instead of aborting
 ```
 
-Both are answered from the parsed file alone, like every other rule here — `?? nil` is a
-shape, and so is a `!` inside a function whose declared result carries an absence. Neither
-needs a type nobody wrote down.
+It is answered from the parsed file alone, like every other rule here — a `!` inside a function
+whose declared result carries an absence is a shape, and needs no type nobody wrote down.
+
+`L201` stood beside it and has **retired**. It reported `?? nil` as a fallback that changes
+nothing, and it was never both reachable and true. On a `T?`, or a `Result[T]` whose `T` is not
+optional, a `nil` fallback is not a value of `T`, so the compiler refuses the program with
+_E3036_ before lint could advise on it. The one shape that compiles, `Result[T?] ?? nil`, is a
+real conversion — an error becomes an absence — which the rule called a no-op. The number is not
+reused: a reader who meets `L201` in an old log should find what it was and why it went.
 
 ## L3xx — capture
 

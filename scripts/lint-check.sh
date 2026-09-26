@@ -20,9 +20,11 @@
 #      described anywhere, because a warning that quietly started failing the tool — or a
 #      finding that quietly stopped — leaves the sentence exactly as it was.
 #
-# And one at the bottom: every code the linter documents must appear above. A rule added
+# And two at the bottom: every code the linter documents must appear above — a rule added
 # without a case is the hole this file exists to close, and counting is what makes that
-# automatic rather than remembered.
+# automatic rather than remembered — and every program linted above COMPILES. A case the
+# compiler refuses is not a lint case at all: `zerg lint` prints the refusal and exits 1 for
+# it, so a finding's sentence and status can pass on a program no reader could ship.
 
 set -u
 
@@ -35,6 +37,28 @@ trap 'rm -rf "$tmp"' EXIT
 pass=0
 fail=0
 seen=""
+
+# zlint [--strict] <file> — `zerg lint`, after building the file with `--emit check` and noting
+# the verdict in $tmp/linted, which the bottom of this file asserts over. It builds HERE rather
+# than at the bottom because two cases may share a file name and the later one overwrites the
+# earlier; and it writes a FILE rather than a variable because most calls run inside `$( )`, a
+# subshell whose assignments die with it. Every lint here goes through it except the few that
+# are ABOUT a program that does not compile on its own — `refused` below, and the white-box
+# suite — and those carry the marker `zlint-exempt` on the line, which the bottom asserts of
+# every direct call.
+: >"$tmp/linted"
+zlint() {
+	local a last=""
+	for a in "$@"; do
+		last=$a
+	done
+	if "$ZERG" build --emit check "$last" >"$tmp/formed.out" 2>&1; then
+		echo "ok $last" >>"$tmp/linted"
+	else
+		echo "BROKEN    $last — a lint case the compiler refuses: $(head -1 "$tmp/formed.out")" >>"$tmp/linted"
+	fi
+	"$ZERG" lint "$@" # zlint-exempt: the wrapper itself
+}
 
 # say <code> <wanted-substring> <wanted-status> [name] — the program arrives on stdin. The
 # three `lint` / `lint_warn` / `lint_info` wrappers below are this with the status filled in,
@@ -49,7 +73,7 @@ say() {
 	seen="$seen $code"
 
 	local out status
-	out=$("$ZERG" lint "$src" 2>&1)
+	out=$(zlint "$src" 2>&1)
 	status=$?
 
 	case $out in
@@ -103,7 +127,7 @@ quiet() {
 	cat >"$src"
 
 	local out status
-	out=$("$ZERG" lint "$src" 2>&1)
+	out=$(zlint "$src" 2>&1)
 	status=$?
 
 	case $out in
@@ -403,7 +427,7 @@ EOF
 # A `#[allow(…)]` that WORKS is silent, so the first case here proves the mechanism by the
 # only evidence there is: the same program, with and without the decorator. L102 fires above
 # and must not fire here.
-out=$("$ZERG" lint /dev/stdin <<'EOF' 2>&1
+cat >"$tmp/allow-l102.zg" <<'EOF'
 #[allow(L102)]
 fn unused_helper() -> int {
 	return 1
@@ -413,7 +437,7 @@ fn main() {
 	print "hi"
 }
 EOF
-)
+out=$(zlint "$tmp/allow-l102.zg" 2>&1)
 status=$?
 if [ $status -ne 0 ] || [ -n "$out" ]; then
 	echo "ALLOWED   the suppression did not suppress — wanted silence and exit 0, got status $status: $(echo "$out" | head -1)"
@@ -451,23 +475,9 @@ EOF
 
 # --- L2xx — null safety -----------------------------------------------------------
 
-# NOT A WELL FORMED PROGRAM, and no `?? nil` is: the compiler refuses every one with E3036, so
-# this rule fires only beside that refusal and exits 1 for it either way. The program used to be
-# one whose walk ABORTED (E3122 on `v ?? 0`, `v` being an `int`), which prints the abort alone —
-# it passed only while `zerg lint` swallowed the refusal (#238). What is left to pin is that the
-# rule still speaks where the walk collects and goes on.
-lint L201 '`?? nil`' <<'EOF'
-fn find(n: int) -> int? {
-	return nil if n < 0
-	return n
-}
-
-fn main() {
-	v: int? = find(1) ?? nil
-	print v ?? 0
-}
-EOF
-
+# `L201` stood here too, over `?? nil`, and the case went with the rule: every `?? nil` on a
+# `T?` is refused by E3036, and the one shape that compiles, `Result[T?] ?? nil`, is a real
+# conversion the rule called a no-op — so no program here could make it fire and be right.
 lint L202 'hands the absence back' <<'EOF'
 fn find(n: int) -> int? {
 	return nil if n < 0
@@ -676,7 +686,7 @@ fn main() {
 	print "hi"
 }
 EOF
-out=$("$ZERG" lint "$tmp/l601/lib_test.zg" 2>&1)
+out=$(zlint "$tmp/l601/lib_test.zg" 2>&1)
 status=$?
 if [ $status -ne 0 ] || [ -n "$out" ]; then
 	echo "L601      fired inside a *_test.zg file, where a test BELONGS: $(echo "$out" | head -1)"
@@ -713,7 +723,7 @@ fn main() {
 	print head([1])
 }
 EOF
-out=$("$ZERG" lint "$tmp/l602/claim_test.zg" 2>&1)
+out=$(zlint "$tmp/l602/claim_test.zg" 2>&1)
 status=$?
 if [ $status -ne 0 ] || [ -n "$out" ]; then
 	echo "L602      fired inside a *_test.zg file, where a claim BELONGS: $(echo "$out" | head -1)"
@@ -740,7 +750,7 @@ fn main() {
 	assert head([2]) == 2
 }
 EOF
-out=$("$ZERG" lint --strict "$tmp/allowed.zg" 2>&1)
+out=$(zlint --strict "$tmp/allowed.zg" 2>&1)
 status=$?
 if [ $status -ne 0 ] || [ -n "$out" ]; then
 	echo "L602      \`#[allow(L602)]\` did not suppress: $(echo "$out" | head -1)"
@@ -763,7 +773,7 @@ fn main() {
 	print "hi"
 }
 EOF
-if "$ZERG" lint --strict "$tmp/strict.zg" >/dev/null 2>&1; then
+if zlint --strict "$tmp/strict.zg" >/dev/null 2>&1; then
 	echo "STRICT    --strict exited 0 on a warning, so \`make lint\` would pass a test that ships"
 	fail=$((fail + 1))
 else
@@ -778,7 +788,7 @@ fn main() {
 	print "hi"
 }
 EOF
-if "$ZERG" lint --strict "$tmp/strict-info.zg" >/dev/null 2>&1; then
+if zlint --strict "$tmp/strict-info.zg" >/dev/null 2>&1; then
 	pass=$((pass + 1))
 else
 	echo "STRICT    --strict failed on an info, which never changes an exit status"
@@ -829,7 +839,7 @@ else
 	pass=$((pass + 1))
 fi
 
-spec_out=$("$ZERG" lint "$tmp/spec/main.zg" 2>&1)
+spec_out=$(zlint "$tmp/spec/main.zg" 2>&1)
 spec_status=$?
 case $spec_out in
 *L101*)
@@ -899,7 +909,7 @@ else
 fi
 mv "$tmp/sib/pair/a.kept" "$tmp/sib/pair/a.zg"
 
-sib_out=$("$ZERG" lint "$tmp/sib/main.zg" 2>&1)
+sib_out=$(zlint "$tmp/sib/main.zg" 2>&1)
 case $sib_out in
 *"b.zg"*L101*)
 	case $sib_out in
@@ -942,7 +952,7 @@ refused() {
 	esac
 
 	local status
-	"$ZERG" lint "$src" >/dev/null 2>"$tmp/$dir.lint"
+	"$ZERG" lint "$src" >/dev/null 2>"$tmp/$dir.lint" # zlint-exempt: refused by name
 	status=$?
 	if ! cmp -s "$tmp/$dir.check" "$tmp/$dir.lint"; then
 		echo "UNSAID    refused-$dir — \`zerg lint\` did not print what the check prints ($code): $(head -1 "$tmp/$dir.lint")"
@@ -1026,7 +1036,7 @@ fn main() {
 }
 EOF
 refused E3033 beside main.zg
-beside_out=$("$ZERG" lint "$tmp/beside/main.zg" 2>/dev/null)
+beside_out=$("$ZERG" lint "$tmp/beside/main.zg" 2>/dev/null) # zlint-exempt: refused above
 case $beside_out in
 *"warning: L601"*) pass=$((pass + 1)) ;;
 *)
@@ -1089,7 +1099,7 @@ fn main() {
 }
 EOF
 
-own_out=$("$ZERG" lint "$tmp/own/main.zg" 2>&1)
+own_out=$(zlint "$tmp/own/main.zg" 2>&1)
 seen="$seen L102"
 for want in helper hid; do
 	if echo "$own_out" | grep -q "/own/x/mod\.zg:[0-9]*:[0-9]*: L102 private function \`$want\`"; then
@@ -1174,7 +1184,7 @@ fn main() {
 	print x.a() + y.b()
 }
 EOF
-ownval_out=$("$ZERG" lint "$tmp/ownval/main.zg" 2>&1)
+ownval_out=$(zlint "$tmp/ownval/main.zg" 2>&1)
 if echo "$ownval_out" | grep -q "/ownval/x/mod\.zg:[0-9]*:[0-9]*: L102 private function \`wrap\`"; then
 	pass=$((pass + 1))
 else
@@ -1212,7 +1222,7 @@ fn test_twice() {
 	assert twice(2) == 4
 }
 EOF
-wb_out=$("$ZERG" lint "$tmp/wb/calc_test.zg" 2>&1)
+wb_out=$("$ZERG" lint "$tmp/wb/calc_test.zg" 2>&1) # zlint-exempt: a suite is its package's
 wb_status=$?
 case $wb_out in
 *"calc_test.zg:3:2: L103"*)
@@ -1267,12 +1277,45 @@ else
 	pass=$((pass + 1))
 fi
 
+# --- every program linted above compiles -------------------------------------------
+#
+# The verdicts are the ones `zlint` wrote down as it linted, not a list kept here, and they
+# have a floor: every rule seen firing had a program, so fewer verdicts than rules means the
+# wrapper stopped recording. A direct `zerg lint` call that skips the wrapper is refused unless
+# its line says why (`zlint-exempt`), so a case cannot leave the list by being written the
+# other way.
+formed=0
+while read -r verdict; do
+	formed=$((formed + 1))
+	case $verdict in
+	"ok "*) pass=$((pass + 1)) ;;
+	*)
+		echo "$verdict"
+		fail=$((fail + 1))
+		;;
+	esac
+done <"$tmp/linted"
+rules=$(printf '%s\n' $seen | sort -u | grep -c .)
+if [ "$formed" -lt "$rules" ]; then
+	echo "lint-check: $formed programs built for $rules rules seen firing — \`zlint\` stopped recording what it lints"
+	exit 1
+fi
+direct='"$ZERG"'" lint"
+bypass=$(grep -nF "$direct" "$0" | grep -v 'zlint-exempt')
+if [ -n "$bypass" ]; then
+	echo "BYPASS    a \`zerg lint\` call skips zlint, so its program is never built:"
+	echo "$bypass" | sed 's/^/          /'
+	fail=$((fail + 1))
+else
+	pass=$((pass + 1))
+fi
+
 if [ $fail -ne 0 ]; then
-	echo "lint-check: $fail rule(s) the linter no longer reports"
+	echo "lint-check: $fail failure(s) — a rule the linter no longer reports, or a case that is not a lint case"
 	exit 1
 fi
 # WHAT THE NUMBER IS. `pass` counts ASSERTIONS — a rule seen firing, a rule seen staying
 # silent, an exit status, a catalogue comparison — and the line used to call every one of them
 # a "rule seen firing", which read as a coverage figure four times the size of the rule set.
 # The rules are `seen`, and that is the number a reader of this gate wants.
-echo "lint-check: $(printf '%s\n' $seen | sort -u | grep -c .) rules seen firing over $pass assertions, every documented code covered"
+echo "lint-check: $rules rules seen firing over $pass assertions, every documented code covered, every program linted compiles"

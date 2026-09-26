@@ -174,7 +174,29 @@ fn main() {
 }
 ZG
 noted='{"errors": [], "lints": []}'
-for src in "$@" "$tmp/noted.zg"; do
+
+# AND TWO BUFFERS WITH ONE UNREAD BINDING each, told apart by how the walk stops (#246). One
+# COLLECTS its error and goes on, so `zerg lint` prints L103 beside it; the other ABORTS, so
+# `zerg lint` prints the refusal alone — the rules never ran. The editor was once measured
+# publishing the abort alone while the command printed L103 beside it. The loop holds each to
+# the command; the collecting twin is what says the binding is one the rules would name.
+cat >"$tmp/collected.zg" <<'ZG'
+fn main() {
+	unused := 3
+	x: int = "s"
+	print x
+}
+ZG
+cat >"$tmp/aborted.zg" <<'ZG'
+fn main() {
+	unused := 3
+	x := 2
+	print match x { _ => 1  2 => 2 }
+}
+ZG
+collected='{"errors": [], "lints": []}'
+aborted='{"errors": [], "lints": []}'
+for src in "$@" "$tmp/noted.zg" "$tmp/collected.zg" "$tmp/aborted.zg"; do
 	got=$(session "$ZERG" diag "$src" 2>"$tmp/err") || {
 		echo "SESSION   $src — the server did not complete a session"
 		sed 's/^/  /' "$tmp/err"
@@ -183,6 +205,8 @@ for src in "$@" "$tmp/noted.zg"; do
 	}
 	ran=$((ran + 1))
 	[ "$src" = "$tmp/noted.zg" ] && noted=$got
+	[ "$src" = "$tmp/collected.zg" ] && collected=$got
+	[ "$src" = "$tmp/aborted.zg" ] && aborted=$got
 
 	n=$(printf '%s' "$got" | "$PY" -c 'import json,sys; print(len(json.load(sys.stdin)["errors"]))')
 
@@ -291,6 +315,26 @@ notes = [l for l in got["lints"] if re.match(r"^(warning: |info: )?L5\d\d ", l)]
 if not got["errors"] or notes:
     print("NOTED     a buffer with an error: errors %s, conversion notes %s — want an error and no note"
           % (got["errors"], notes))
+    sys.exit(1)
+PYEOF
+then
+	fail=$((fail + 1))
+fi
+
+# The same for the two unread-binding buffers, outright: the collecting one publishes its error
+# AND the L103 beside it, the aborting one its refusal alone. Without the first, an aborting
+# fixture whose binding no rule names would agree with the command by saying nothing.
+if ! "$PY" - "$collected" "$aborted" <<'PYEOF'
+import json, sys
+col, ab = json.loads(sys.argv[1]), json.loads(sys.argv[2])
+l103 = [l for l in col["lints"] if l.startswith("L103 ")]
+if not col["errors"] or not l103:
+    print("BESIDE    a collected error: errors %s, lints %s — want the error and L103 beside it"
+          % (col["errors"], col["lints"]))
+    sys.exit(1)
+if len(ab["errors"]) != 1 or not ab["errors"][0].startswith("E4032 ") or ab["lints"]:
+    print("BESIDE    a walk abort: errors %s, lints %s — want the E4032 refusal alone"
+          % (ab["errors"], ab["lints"]))
     sys.exit(1)
 PYEOF
 then

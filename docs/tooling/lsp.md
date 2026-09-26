@@ -216,6 +216,11 @@ Exactly that form is read and nothing looser — a pathless `--> line:col` knows
 raise whose text came back empty was once taken for a finished walk, and the buffer was published
 clean (#237); one with nothing to say is published as a sentence saying so.
 
+**An abort is published alone, as `zerg lint` prints it.** The walk that raised it never reached the
+linter's rules, so no lint finding stands beside it ([the two exit codes](lint.md#severity-and-the-two-exit-codes)).
+An error the walk collects and goes on past keeps the lint findings beside it, in the editor as on the
+command line.
+
 Two findings land as a zero-width range at the top of the file instead, for two different reasons. One
 that names **no place** lands there because the compiler did not say where. One placed in **another**
 file of the program lands there because that place is not in this buffer, and it keeps its `-->`

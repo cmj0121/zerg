@@ -451,23 +451,9 @@ EOF
 
 # --- L2xx — null safety -----------------------------------------------------------
 
-# NOT A WELL FORMED PROGRAM, and no `?? nil` is: the compiler refuses every one with E3036, so
-# this rule fires only beside that refusal and exits 1 for it either way. The program used to be
-# one whose walk ABORTED (E3122 on `v ?? 0`, `v` being an `int`), which prints the abort alone —
-# it passed only while `zerg lint` swallowed the refusal (#238). What is left to pin is that the
-# rule still speaks where the walk collects and goes on.
-lint L201 '`?? nil`' <<'EOF'
-fn find(n: int) -> int? {
-	return nil if n < 0
-	return n
-}
-
-fn main() {
-	v: int? = find(1) ?? nil
-	print v ?? 0
-}
-EOF
-
+# `L201` stood here too, over `?? nil`, and the case went with the rule: every `?? nil` on a
+# `T?` is refused by E3036, and the one shape that compiles, `Result[T?] ?? nil`, is a real
+# conversion the rule called a no-op — so no program here could make it fire and be right.
 lint L202 'hands the absence back' <<'EOF'
 fn find(n: int) -> int? {
 	return nil if n < 0

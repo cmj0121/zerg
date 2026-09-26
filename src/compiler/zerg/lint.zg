@@ -37,10 +37,11 @@
 # Nothing here is a compile error — each of these programs runs — which is exactly why a
 # linter is where they belong.
 #
-#   L201  `?? nil` — a fallback that is itself the absent value, so the `??` changes
-#         nothing: the result is optional either way
 #   L202  `x!` inside a function whose result is a `T?` — the absence can be HANDED BACK
 #         with `?` instead of turned into an abort, and `!` is the easier key to reach
+#
+# L201 was `?? nil`, and is RETIRED — see the range's own section below for why it was
+# never both reachable and true.
 #
 # `L4xx` is RESOLUTION: a name that answers to more than one thing.
 #
@@ -564,9 +565,15 @@ fn writes_this_arms(arms: list[ast.SelArm], refs: list[str]) -> bool {
 
 # --- L2xx: null safety -------------------------------------------------------------------
 #
-# Both checks are answered from the parsed File alone, like every other rule here. That is
-# what keeps them honest: `?? nil` is a SHAPE, and so is a `!` inside a function whose
-# declared result is a `T?`. Neither needs to know a type that was not written down.
+# The check is answered from the parsed File alone, like every other rule here. That is what
+# keeps it honest: a `!` inside a function whose declared result is a `T?` is a SHAPE, and it
+# needs no type that was not written down.
+#
+# L201 IS RETIRED AND NO LONGER EMITTED. It reported `?? nil` as a fallback that changes
+# nothing, and it was never both reachable and true. On a `T?`, or a `Result[T]` whose `T` is
+# not optional, `nil` is not a value of `T` and the checker refuses it (E3036) before lint runs.
+# The one shape that compiles, `Result[T?] ?? nil`, turns an error into an absence — a real
+# conversion the rule called a no-op, and which only the TYPE of the left side tells apart.
 fn lint_optionals(f: ast.File, mut &out: list[Finding]) {
 	for fd in f.fns {
 		lint_opt_body(fd.body, LWhere(fd.path, fd.line, fd.col, fd.name), c_ret_is_opt(fd), out)
@@ -640,7 +647,7 @@ fn lint_opt_arms(arms: list[ast.SelArm], w: LWhere, ret_opt: bool, mut &out: lis
 
 fn lint_opt_expr(e: ast.Expr, w: LWhere, ret_opt: bool, mut &out: list[Finding]) {
 	match e {
-		Expr.ECoalesce(a, b, jump) => lint_opt_coalesce(a, b, w, ret_opt, out)
+		Expr.ECoalesce(a, b, jump) => lint_opt_pair(a, b, w, ret_opt, out)
 		Expr.EForce(x) => lint_opt_force(x, w, ret_opt, out)
 		Expr.EBinary(op, a, b) => lint_opt_pair(a, b, w, ret_opt, out)
 		Expr.EUnary(op, x) => lint_opt_expr(x, w, ret_opt, out)
@@ -665,26 +672,11 @@ fn lint_opt_args(args: list[ast.Expr], w: LWhere, ret_opt: bool, mut &out: list[
 	}
 }
 
-fn lint_opt_coalesce(a: ast.Expr, b: ast.Expr, w: LWhere, ret_opt: bool, mut &out: list[Finding]) {
-	if is_nil_expr(b) {
-		out.append(Finding("", w.path, w.line, w.col, "L201", f"`?? nil` in `{w.fname}` changes nothing — the result is optional either way"))
-	}
-	lint_opt_expr(a, w, ret_opt, out)
-	lint_opt_expr(b, w, ret_opt, out)
-}
-
 fn lint_opt_force(x: ast.Expr, w: LWhere, ret_opt: bool, mut &out: list[Finding]) {
 	if ret_opt {
 		out.append(Finding("", w.path, w.line, w.col, "L202", f"`!` in `{w.fname}`, which answers a `T?` — `?` hands the absence back instead of aborting"))
 	}
 	lint_opt_expr(x, w, ret_opt, out)
-}
-
-fn is_nil_expr(e: ast.Expr) -> bool {
-	return match e {
-		Expr.ENil => true
-		_         => false
-	}
 }
 
 fn lint_skip() {
@@ -1581,7 +1573,7 @@ struct Allow {
 # directions: a code documented and not listed here can never be allowed, and a code listed
 # here and not documented is a rule with no entry to read.
 fn lint_codes() -> list[str] {
-	return ["L101", "L102", "L103", "L104", "L105", "L106", "L107", "L108", "L201", "L202", "L301", "L402", "L502", "L601", "L602"]
+	return ["L101", "L102", "L103", "L104", "L105", "L106", "L107", "L108", "L202", "L301", "L402", "L502", "L601", "L602"]
 }
 
 # lint_allowed applies every `#[allow(…)]` to the findings, and then says the two things that

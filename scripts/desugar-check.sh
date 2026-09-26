@@ -77,8 +77,8 @@ for src in "$@"; do
 	mkdir -p "$tmp/$slug"
 	cp -R "$dir/." "$tmp/$slug/" 2>/dev/null || true
 
-	# a case the transform cannot read is a finding, not a skip: `zerg desugar` refuses a
-	# source whose brackets do not close and says so, and the corpus holds no such program
+	# a case the transform cannot read is a finding, not a skip: `zerg desugar` declines a
+	# source that does not parse and says so, and the corpus holds no such program
 	if ! err=$("$ZERG" desugar "$tmp/$slug"/*.zg 2>&1 >/dev/null); then
 		echo "DESUGAR   $dir — the transform refused a source in this directory"
 		echo "  $(echo "$err" | head -1)"
@@ -202,6 +202,39 @@ if "$ZERG" desugar --check "$tmp/canonical-sugar.zg" >/dev/null 2>&1; then
 	echo "CHECK     a canonically-formatted file that DOES hold sugar was reported clean"
 	fail=$((fail + 1))
 fi
+
+# --- a file that does not parse is declined, not rewritten ------------------------------
+#
+# Every rule is a claim that two spellings are the same program, and a file the parser refuses
+# is no program. The bracket gate this used to stop at let one through: an `assert` whose
+# message follows a `,` balances, is E2005 to the compiler, and came back from D104 as a tuple
+# condition with exit 0 — a second refusal, about a line nobody wrote. So the rewrite and
+# `--check` must each exit non-zero, leave the file byte-for-byte as it was, and say what the
+# compiler says: the first line `zerg build` reports about the same file.
+printf 'fn main() {\n\ts := "x"\n\tassert s == "x", f"bad {s}"\n}\n' >"$tmp/unparsed.zg"
+cp "$tmp/unparsed.zg" "$tmp/unparsed.orig"
+want=$("$ZERG" build --emit c "$tmp/unparsed.zg" 2>&1 >/dev/null | head -1)
+if ! printf '%s' "$want" | grep -qE '\bE[0-9]{4}\b'; then
+	echo "DECLINE   the unparsed fixture is no longer refused by the compiler — the case asserts nothing"
+	fail=$((fail + 1))
+fi
+for flag in "" --check; do
+	# shellcheck disable=SC2086 # `--check` or nothing
+	if got=$("$ZERG" desugar $flag "$tmp/unparsed.zg" 2>&1 >/dev/null); then
+		echo "DECLINE   \`zerg desugar${flag:+ $flag}\` exited 0 on a file the compiler refuses"
+		fail=$((fail + 1))
+	elif [ "$(printf '%s\n' "$got" | head -1)" != "$want" ]; then
+		echo "DECLINE   \`zerg desugar${flag:+ $flag}\` declined without the compiler's finding"
+		echo "  compiler: $want"
+		echo "  desugar : $(printf '%s\n' "$got" | head -1)"
+		fail=$((fail + 1))
+	fi
+	if ! cmp -s "$tmp/unparsed.zg" "$tmp/unparsed.orig"; then
+		echo "DECLINE   \`zerg desugar${flag:+ $flag}\` rewrote a file the compiler refuses"
+		cp "$tmp/unparsed.orig" "$tmp/unparsed.zg"
+		fail=$((fail + 1))
+	fi
+done
 
 if [ $fail -ne 0 ]; then
 	echo "desugar-check: $fail program(s) do not survive having their sugar undone"

@@ -1739,9 +1739,9 @@ fn fmt_wrap_breaks(mut &toks: list[token.Token]) -> list[int] {
 	return brk
 }
 
-# fmt_wrap_widths is what each token costs on a flat line, its own text plus the space
-# F201/F202 would put before it. Measuring from the same predicate the printer uses is
-# what keeps the estimate and the output from drifting apart.
+# fmt_wrap_widths is what each token costs on a flat line, its own text in display columns
+# plus the space F201/F202 would put before it. Measuring from the same predicate the
+# printer uses is what keeps the estimate and the output from drifting apart.
 fn fmt_wrap_widths(mut &toks: list[token.Token]) -> list[int] {
 	mut w: list[int] = []
 	mut prev2 := token.Kind.Semi
@@ -1749,9 +1749,7 @@ fn fmt_wrap_widths(mut &toks: list[token.Token]) -> list[int] {
 	mut i := 0
 	for i < toks.len() {
 		t := toks[i]
-		s: str = fmt_text(t)
-		b := bytearray(s)
-		mut n := b.len()
+		mut n := text_width(fmt_text(t))
 		if i > 0 and fmt_space_between(toks, i, prev2, prev) {
 			n = n + 1
 		}
@@ -2552,14 +2550,14 @@ fn fmt_mark_at(mut &marks: list[int], i: int) -> int {
 # A table is one thing or it is not a table.
 fn fmt_align_run(mut &lines: list[str], mut &mark: list[int], mut &also: list[int], at: int, arms: bool) -> int {
 	tabs := fmt_indent_of(lines[at])
-	mut lo := fmt_head_width(lines[at], mark[at])
+	mut lo := fmt_head_width(lines[at], fmt_head_end(lines[at], mark[at]))
 	mut hi := lo
 	mut end := at + 1
 	for end < lines.len() {
 		break if fmt_indent_of(lines[end]) != tabs
 		break if not fmt_align_row(lines, mark, also, end, arms)
 
-		w := fmt_head_width(lines[end], mark[end])
+		w := fmt_head_width(lines[end], fmt_head_end(lines[end], mark[end]))
 		if w < lo {
 			lo = w
 		}
@@ -2570,20 +2568,23 @@ fn fmt_align_run(mut &lines: list[str], mut &mark: list[int], mut &also: list[in
 	}
 	return end if hi - lo > fmt_align_gap()
 
-	want := hi + 1 # the column every mark in the run lands in: one past its widest head
+	# every mark in the run lands one COLUMN past the widest head. A column is not a byte once a
+	# head holds `"日本"`, so each line's pad is its own head's shortfall, and the offset its mark
+	# lands at is its own: the bytes line up only where the text is ASCII.
 	mut i := at
 	for i < end {
-		if want != mark[i] {
-			w := fmt_head_width(lines[i], mark[i])
-			lines[i] = fmt_set_gap(lines[i], w, mark[i], hi - w + 1)
+		e := fmt_head_end(lines[i], mark[i])
+		pad := hi - fmt_head_width(lines[i], e) + 1
+		if e + pad != mark[i] {
+			lines[i] = fmt_set_gap(lines[i], e, mark[i], pad)
 
 			# the other mark moves only if it stood to the RIGHT of the gap, and it is asked
 			# BEFORE this line's own mark moves — a wide pad would otherwise carry the arrow
 			# past a trailing comment and leave the comment behind
 			if i < also.len() and also[i] > mark[i] {
-				also[i] = also[i] + want - mark[i]
+				also[i] = also[i] + e + pad - mark[i]
 			}
-			mark[i] = want
+			mark[i] = e + pad
 		}
 		i = i + 1
 	}
@@ -2614,9 +2615,10 @@ fn fmt_arm_flat(s: str, at: int, cut: int) -> bool {
 	return false
 }
 
-# fmt_head_width is what stands to the left of the mark: the column the last byte of code
-# before it ends at, with the space the printer put in front of the mark not counted.
-fn fmt_head_width(s: str, at: int) -> int {
+# fmt_head_end is where the code in front of the mark ends: the byte just past its last byte,
+# with the space the printer put in front of the mark not counted. It is an OFFSET, which is
+# what the rewrite needs; the column the reader sees is fmt_head_width's.
+fn fmt_head_end(s: str, at: int) -> int {
 	b := bytearray(s)
 	mut i := at - 1
 	for i >= 0 {
@@ -2624,6 +2626,95 @@ fn fmt_head_width(s: str, at: int) -> int {
 		i = i - 1
 	}
 	return 0
+}
+
+# fmt_head_width is the column that code ends at, in display columns — `"日本"` is six bytes
+# and four columns, and a column of notes lined up by bytes steps right past every line that
+# has one. A line with nothing past ASCII is its byte count, which is every line but a few.
+fn fmt_head_width(s: str, end: int) -> int {
+	b := bytearray(s)
+	mut wide := false
+	mut i := 0
+	for i < end {
+		wide = wide or b[i] >= byte(128)
+		i = i + 1
+	}
+	return end if not wide
+
+	mut out: list[byte] = []
+	i = 0
+	for i < end {
+		out.append(b[i])
+		i = i + 1
+	}
+	return text_width(str(out))
+}
+
+# text_width is a string's width in terminal columns: every code point asked how wide it is,
+# and the answers added up. Neither the byte count nor the rune count is that number — the
+# em-dash is three bytes and one column, and a Han character is one rune and two columns.
+#
+# It is the ONE measure of width in the compiler: F106/F107's column and F403's budget here,
+# and `zerg doc`'s fill in cmd/doc_render.zg, all ask it, so a line the formatter lays out
+# and a line the document fills are held to the same count.
+pub fn text_width(s: str) -> int {
+	b := bytearray(s)
+	mut ascii := true
+	for c in b {
+		ascii = ascii and c < byte(128)
+	}
+	return b.len() if ascii
+
+	mut n := 0
+	for r in runearray(s) {
+		n = n + rune_width(r)
+	}
+	return n
+}
+
+# rune_width is one code point's width. TWO COLUMNS for East Asian Wide and Fullwidth, and for
+# the emoji blocks, which the standard also calls Wide and every terminal prints two columns
+# wide. ZERO for what draws on the character before it: a combining mark, a zero-width space
+# or joiner, a variation selector. ONE for everything else. The blocks are listed in code
+# point order, and the comment beside each is the name the standard gives it, so a reader can
+# check the list against Unicode's East_Asian_Width without reading the arithmetic.
+#
+# It works BY BLOCK, and a block is a comparison where a scattered code point is a table: what
+# it gets wrong, knowingly, is the handful of Wide code points outside these blocks (some
+# arrows and dingbats, `⌚`), the handful of text-presentation symbols inside the emoji blocks,
+# and a sequence joined by U+200D, which a terminal draws as one glyph and this counts as the
+# sum of its parts. The blocks are what text written in Chinese, Japanese or Korean is made of,
+# and the emoji people put in a string or a comment.
+pub fn rune_width(r: rune) -> int {
+	c := int(r)
+	return 1 if c < 0x0300
+	return 0 if c <= 0x036F # combining diacritical marks
+	return 2 if c >= 0x1100 and c <= 0x115F # Hangul Jamo initial consonants
+	return 0 if c >= 0x200B and c <= 0x200F # zero-width space, joiners, direction marks
+	return 0 if c >= 0x20D0 and c <= 0x20FF # combining marks for symbols
+	return 2 if c >= 0x2E80 and c <= 0x303E # CJK radicals, Kangxi radicals, CJK punctuation
+	return 2 if c >= 0x3041 and c <= 0x33FF # kana, Bopomofo, Hangul jamo, enclosed CJK
+	return 2 if c >= 0x3400 and c <= 0x4DBF # CJK unified ideographs extension A
+	return 2 if c >= 0x4E00 and c <= 0x9FFF # CJK unified ideographs
+	return 2 if c >= 0xA000 and c <= 0xA4CF # Yi syllables and Yi radicals
+	return 2 if c >= 0xA960 and c <= 0xA97F # Hangul Jamo extended-A
+	return 2 if c >= 0xAC00 and c <= 0xD7A3 # Hangul syllables
+	return 2 if c >= 0xF900 and c <= 0xFAFF # CJK compatibility ideographs
+	return 0 if c >= 0xFE00 and c <= 0xFE0F # variation selectors
+	return 2 if c >= 0xFE10 and c <= 0xFE19 # vertical forms
+	return 0 if c >= 0xFE20 and c <= 0xFE2F # combining half marks
+	return 2 if c >= 0xFE30 and c <= 0xFE6F # CJK compatibility forms, small form variants
+	return 2 if c >= 0xFF00 and c <= 0xFF60 # fullwidth ASCII forms
+	return 2 if c >= 0xFFE0 and c <= 0xFFE6 # fullwidth currency and other signs
+	return 2 if c >= 0x1F200 and c <= 0x1F2FF # enclosed ideographic supplement
+	return 2 if c >= 0x1F300 and c <= 0x1F64F # miscellaneous symbols and pictographs, emoticons
+	return 2 if c >= 0x1F680 and c <= 0x1F6FF # transport and map symbols
+	return 2 if c >= 0x1F900 and c <= 0x1F9FF # supplemental symbols and pictographs
+	return 2 if c >= 0x1FA70 and c <= 0x1FAFF # symbols and pictographs extended-A
+	return 2 if c >= 0x20000 and c <= 0x3FFFD # CJK unified ideographs, planes 2 and 3
+	return 0 if c >= 0xE0000 and c <= 0xE0FFF # tags, variation selectors supplement
+
+	return 1
 }
 
 fn fmt_indent_of(s: str) -> int {

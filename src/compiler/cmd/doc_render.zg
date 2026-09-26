@@ -24,13 +24,12 @@
 # prints at up to 160 columns — off the edge of the terminal the document was laid out for. It
 # is not a hypothetical comment either, in a tree whose every `docs/*.md` has a zh-TW twin.
 #
-# WHAT `doc_rune_width` COVERS is East Asian Wide and Fullwidth, block by contiguous block,
-# each one named at the function. What it counts as one column, knowing better, is everything
-# that would need a table rather than a block: the scattered single code points the standard
-# also calls Wide (the arrows, the dingbats, the emoji), a combining mark and a zero-width
-# joiner, which take no columns at all, and a grapheme cluster spelled with several code points.
-# Those tables are the dependency this file would be the only caller of; the blocks are what
-# text written in Chinese, Japanese or Korean is made of, and they are what this file is held to.
+# THE COUNT IS `zerg.text_width`'s, the one measure of width the compiler has, so a line this
+# file fills and a line `zerg fmt` lays out are held to the same columns. It is two columns for
+# East Asian Wide and Fullwidth and for the emoji blocks, zero for a combining mark or a
+# zero-width joiner, and one for everything else, block by contiguous block — fmt.zg names each
+# block and says what the approximation gets wrong. The blocks are what text written in Chinese,
+# Japanese or Korean is made of, and they are what this file is held to.
 #
 # WHAT IT DELIBERATELY IS NOT:
 #
@@ -311,7 +310,7 @@ fn doc_table(title: str, names: list[str], says: list[str], marks: list[bool], c
 
 	mut w := 0
 	for n in names {
-		nw := doc_width(n)
+		nw := zerg.text_width(n)
 		if nw > w {
 			w = nw
 		}
@@ -334,7 +333,7 @@ fn doc_table(title: str, names: list[str], says: list[str], marks: list[bool], c
 			continue
 		}
 
-		out.append(diag.blanks(2) + doc_bold(name, col) + diag.blanks(at - 2 - doc_width(name)) + rows[0])
+		out.append(diag.blanks(2) + doc_bold(name, col) + diag.blanks(at - 2 - zerg.text_width(name)) + rows[0])
 		mut k := 1
 		for k < rows.len() {
 			out.append(diag.blanks(at) + rows[k])
@@ -718,7 +717,7 @@ fn doc_block_end(mut &out: list[DocBlock], kind: int, mut &run: list[str]) {
 # so a joiner that put one there would be writing a character into the sentence that its author
 # did not, and the reader would see a gap in the middle of a sentence the source has none in.
 #
-# THE QUESTION HERE IS WIDTH, WHICH IS WHY IT IS `doc_rune_width` AND NOT `doc_is_ideograph`.
+# THE QUESTION HERE IS WIDTH, WHICH IS WHY IT IS `zerg.rune_width` AND NOT `doc_is_ideograph`.
 # The two live beside each other and answer genuinely different questions, and this file needs
 # both. The ideograph list says where a line MAY BREAK, and is deliberately narrow: it never
 # takes a cut beside a punctuation mark, because a mark carries a not-at-line-start or
@@ -735,11 +734,11 @@ pub fn doc_joined(para: list[str]) -> str {
 	mut wide := false
 	for p in para {
 		rs := runearray(p)
-		if text != "" and not (wide and doc_rune_width(rs[0]) == 2) {
+		if text != "" and not (wide and zerg.rune_width(rs[0]) == 2) {
 			text = text + " "
 		}
 		text = text + p
-		wide = doc_rune_width(rs[rs.len() - 1]) == 2
+		wide = zerg.rune_width(rs[rs.len() - 1]) == 2
 	}
 	return text
 }
@@ -786,7 +785,7 @@ fn doc_fill(text: str, width: int) -> list[str] {
 	mut line := ""
 	mut n := 0
 	for p in doc_pieces(text) {
-		k := doc_width(p.text)
+		k := zerg.text_width(p.text)
 		if line == "" {
 			line = p.text
 			n = k
@@ -999,50 +998,11 @@ pub fn doc_methods_of(m: zerg.DocModule, name: str) -> list[int] {
 	return out
 }
 
-# doc_width is a string's width in terminal columns: every code point asked how wide it is, and
-# the answers added up. Neither the byte count nor the rune count is that number — see the file
-# header for what each of them gets wrong, and which way.
-fn doc_width(s: str) -> int {
-	mut n := 0
-	for r in runearray(s) {
-		n = n + doc_rune_width(r)
-	}
-	return n
-}
-
-# doc_rune_width is one code point's width, and it is the whole of what this file knows about
-# the shape of a character: two columns for East Asian Wide and Fullwidth, one for everything
-# else. The blocks are listed in code point order, and the comment beside each is the name the
-# standard gives it — so a reader can check the list against Unicode's East_Asian_Width without
-# reading the arithmetic, and adding a block is adding a line.
-#
-# The file header says what is deliberately left at one column and why. The short of it: a block
-# is a comparison and a scattered code point is a table.
-fn doc_rune_width(r: rune) -> int {
-	c := int(r)
-	return 2 if c >= 0x1100 and c <= 0x115F   # Hangul Jamo initial consonants
-	return 2 if c >= 0x2E80 and c <= 0x303E   # CJK radicals, Kangxi radicals, CJK punctuation
-	return 2 if c >= 0x3041 and c <= 0x33FF   # kana, Bopomofo, Hangul jamo, enclosed CJK
-	return 2 if c >= 0x3400 and c <= 0x4DBF   # CJK unified ideographs extension A
-	return 2 if c >= 0x4E00 and c <= 0x9FFF   # CJK unified ideographs
-	return 2 if c >= 0xA000 and c <= 0xA4CF   # Yi syllables and Yi radicals
-	return 2 if c >= 0xA960 and c <= 0xA97F   # Hangul Jamo extended-A
-	return 2 if c >= 0xAC00 and c <= 0xD7A3   # Hangul syllables
-	return 2 if c >= 0xF900 and c <= 0xFAFF   # CJK compatibility ideographs
-	return 2 if c >= 0xFE10 and c <= 0xFE19   # vertical forms
-	return 2 if c >= 0xFE30 and c <= 0xFE6F   # CJK compatibility forms, small form variants
-	return 2 if c >= 0xFF00 and c <= 0xFF60   # fullwidth ASCII forms
-	return 2 if c >= 0xFFE0 and c <= 0xFFE6   # fullwidth currency and other signs
-	return 2 if c >= 0x20000 and c <= 0x3FFFD # CJK unified ideographs, planes 2 and 3
-
-	return 1
-}
-
 # doc_is_ideograph reports whether a line may end after this code point and begin with the next
 # one — which is to say whether it is a character a language writes words with and puts no
 # spaces between.
 #
-# THIS IS A SHORTER LIST THAN THE WIDTHS ABOVE, and deliberately not derived from it. Every
+# THIS IS A SHORTER LIST THAN `zerg.rune_width`'S, and deliberately not derived from it. Every
 # code point named here is two columns wide, but "wide" and "breakable" are two questions: the
 # fullwidth Latin letters are wide and spell words that must not be cut, the punctuation is
 # wide and has a side of the line it belongs on, and the kana have non-starters — the small

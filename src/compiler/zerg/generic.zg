@@ -74,7 +74,7 @@ pub fn gen_mangle(name: str, args: list[ast.Ty]) -> str {
 # make the program compile as something nobody wrote.
 pub fn gen_solve(tparams: list[str], decls: list[ast.Ty], actuals: list[ast.Ty], apps: list[ast.TyApp]) -> list[ast.Ty] {
 	mut sol: list[ast.Ty] = []
-	for n in tparams {
+	for _ in tparams {
 		sol.append(ast.Ty.TUnknown)
 	}
 	mut i := 0
@@ -151,12 +151,12 @@ fn gen_parts(apps: list[ast.TyApp], t: ast.Ty) -> list[ast.Ty] {
 	return match t {
 		Ty.TList(e) => [e]
 		Ty.TOpt(e) => [e]
-		Ty.TChan(e, d) => [e]
+		Ty.TChan(e, _) => [e]
 		Ty.TMap(k, v) => [k, v]
 		Ty.TSet(e) => [e]
 		Ty.TTuple(es) => es
 		Ty.TEither(x, y) => [x, y]
-		Ty.TArr(e, n) => [e]
+		Ty.TArr(e, _) => [e]
 		Ty.TRef(e) => [e]
 		Ty.TPtr(e) => [e]
 		Ty.TUnsafe(e) => [e]

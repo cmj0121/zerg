@@ -237,7 +237,7 @@ fn ls_handle(mut &s: Server, body: str, load: fn (str, list[str], list[str]) -> 
 		json.decode(body)
 	} {
 		Either.Left(v)  => v
-		Either.Right(e) => json.null()
+		Either.Right(_) => json.null()
 	}
 	if json.is_null(msg) {
 		ls_log("lsp: a frame that is not JSON was dropped")

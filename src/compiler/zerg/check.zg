@@ -3037,7 +3037,7 @@ pub fn chk_no_nil_value(mut &em: emit.Emitter, t: ast.Ty, where: str) {
 fn chk_typeless_form(e: ast.Expr) -> str {
 	return match e {
 		Expr.EListLit(elems) => chk_empty_says(elems.len(), "the empty list `[]`")
-		Expr.EMapLit(ks, vs) => chk_empty_says(ks.len(), "the empty map `{:}`")
+		Expr.EMapLit(ks, _) => chk_empty_says(ks.len(), "the empty map `{:}`")
 		Expr.ENil => "`nil`"
 		_ => ""
 	}

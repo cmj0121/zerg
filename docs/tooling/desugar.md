@@ -18,6 +18,13 @@ a dot-name or a symlink is not entered. The rule is written once, in
 [the formatter](fmt.md#a-path-is-the-tree-under-it), and is the same for every command that
 takes sources.
 
+**It will not rewrite a file that does not parse.** Every rule claims that two spellings are the same program, and a
+file the parser refuses is no program to be the same as. Such a file is reported with the finding `zerg build` gives,
+exit non-zero, and is left exactly as it was found; `--check` answers the same way. This asks more than
+[the formatter](fmt.md), which stops at bracket balance so it can tidy source the compiler cannot read. The balance
+gate once let `assert s == "x", f"bad {s}"` through: it is `E2005` to the compiler, and `D104` read the `,` into the
+condition, writing a tuple condition the compiler refused again, about a line nobody wrote.
+
 ## Why it exists
 
 [`GRAMMAR`](../../GRAMMAR) defines several surface forms **as** something else. `return x if c` is

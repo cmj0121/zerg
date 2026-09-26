@@ -957,15 +957,26 @@ fn fmt_blank_mark(mut &toks: list[token.Token], mut &at: list[bool]) {
 
 # fmt_blank_comment reports a comment on its own line with code before it AND code after it
 # — the shape that heads a new chunk. A comment TRAILING code shares that code's line and is
-# part of it; a comment under another comment is one block and is not split; and a comment
-# with nothing but the closing `}` after it heads nothing, so a blank would only push it
-# away from what it is commenting ON.
+# part of it; a comment under another own-line comment is one block and is not split, while
+# one under a TRAILING comment starts a block of its own; and a comment with nothing but the
+# closing `}` after it heads nothing, so a blank would only push it away from what it is
+# commenting ON.
 fn fmt_blank_comment(mut &toks: list[token.Token], at: int) -> bool {
 	return false if not is_comment(toks[at].kind)
 	return false if at == 0
 
-	p := fmt_prev_code(toks, at)
+	mut p := fmt_prev_code(toks, at)
 	return false if p < 0
+
+	# a comment TRAILING code above is that code's, not the head of a block this one joins:
+	# `pub a: int # t` then `# c` is a line of code and then a comment block, so it is asked
+	# what stands in front of the trailing comment
+	if is_comment(toks[p].kind) {
+		q := fmt_prev_code(toks, p)
+		if q >= 0 and toks[q].line == toks[p].line and not is_comment(toks[q].kind) {
+			p = q
+		}
+	}
 	k := toks[p].kind
 	return false if is_comment(k) or is_lbrace(k)
 

@@ -456,6 +456,17 @@ fn main() {
 }
 EOF
 
+# and an allow naming a WALK rule, judged on a program that compiles: the walk ran to its end
+# and noted no literal here, so this allow is as stale as the tree-rule one above. The refused
+# program's allow, which is NOT judged, is held further down beside the other refusals.
+lint_info L106 '`#[allow(L502)]` has nothing to suppress' 'L106-walk' <<'EOF'
+fn main() {
+	#[allow(L502)]
+	b: byte = byte(5)
+	print b
+}
+EOF
+
 # The WARNING, in the spelling that matters: an `E` code. `#[allow]` must never suppress a
 # compiler diagnostic, so naming one is a suppression that can never apply.
 lint_warn L107 'an `E` code is a COMPILER diagnostic' <<'EOF'
@@ -1041,6 +1052,35 @@ case $beside_out in
 *"warning: L601"*) pass=$((pass + 1)) ;;
 *)
 	echo "BESIDE    a refused program's lint findings are no longer printed beside the compiler's: $beside_out"
+	fail=$((fail + 1))
+	;;
+esac
+
+# BUT L106 JUDGES ONLY A RULE THAT RAN (#245). The walk hands back no L5xx note on a program it
+# refused, so an L5xx allow there suppressed nothing because nothing was asked — while a stale
+# TREE-rule allow beside it is still stale, since the tree rules ran. The two allows differ in
+# exactly that, and the case asserts both halves, so saying L106 of both or of neither fails.
+mkdir -p "$tmp/unrun"
+cat >"$tmp/unrun/main.zg" <<'EOF'
+#[allow(L102)]
+fn main() {
+	#[allow(L502)]
+	b: byte = 5
+	print b
+	y: int = "s"
+	print y
+}
+EOF
+refused E3033 unrun main.zg
+unrun_out=$("$ZERG" lint "$tmp/unrun/main.zg" 2>/dev/null) # zlint-exempt: refused above
+case $unrun_out in
+*'`#[allow(L502)]` has nothing to suppress'*)
+	echo "UNRUN     L106 judged an L5xx allow on a program the walk refused: $unrun_out"
+	fail=$((fail + 1))
+	;;
+*'`#[allow(L102)]` has nothing to suppress'*) pass=$((pass + 1)) ;;
+*)
+	echo "UNRUN     a stale tree-rule allow on a refused program went unreported: $unrun_out"
 	fail=$((fail + 1))
 	;;
 esac

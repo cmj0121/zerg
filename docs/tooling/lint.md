@@ -64,9 +64,10 @@ has precedent here — `refuse-check` asserts more about a refusal than `zerg bu
 **A program the compiler refuses fails the lint, with exit 1.** The rules run on the walk
 `zerg build --emit check` runs, so its findings are this tool's to report, on stderr and in the
 same lines that check prints. A refused program is not fit to ship, whatever the rules say, and
-`--strict` changes nothing about it. When the walk collects its findings and goes on, the lint
-findings still print beside them on stdout — the rules read the tree, and a refusal does not
-make what they say false. When the walk aborts, its refusal prints alone: the rules never ran.
+`--strict` changes nothing about it. When the walk collects its findings and goes on, the tree
+rules' findings still print beside them on stdout — they read the tree, and a refusal does not
+make what they say false — while the walk's own `L5xx` rules report none. When the walk aborts,
+its refusal prints alone: the rules never ran.
 
 ## Suppressing a finding — `#[allow(…)]`
 
@@ -79,6 +80,9 @@ official feature. See [Decorators](../core/decorators.md).
 
 Two codes are about a suppression itself. `L106` matters more than it looks: a stale allow
 silences a rule that has stopped firing, and nobody learns when the real problem returns.
+`L106` judges only a rule that ran. On a program the compiler refuses, the `L5xx` rules report
+nothing (see [below](#l5xx--conversion)), so an allow naming one is not judged there; an allow
+naming a tree rule still is.
 
 | Code   | Severity    | Finding                                                    |
 | ------ | ----------- | ---------------------------------------------------------- |

@@ -26,7 +26,9 @@
 #         silencing it when the real problem comes back. That is the shape this project
 #         spent a whole span taking out of its gates — a thing that measures nothing looks
 #         exactly like a thing that finds nothing — and it must not come back in through
-#         the suppression mechanism, so a stale allow is reported rather than tolerated
+#         the suppression mechanism, so a stale allow is reported rather than tolerated. It
+#         judges only a rule that RAN: an allow naming an L5xx rule is not judged on a program
+#         the walk refused, because the walk hands back no notes then (lint_allow_says)
 #   L107  an `#[allow(…)]` naming a code no rule has. An `E` code is one spelling of it and
 #         the important one: an `E` is a COMPILER diagnostic, and a program that could
 #         switch a compiler check off would make bypassing one an official feature. A lint
@@ -163,7 +165,7 @@ pub struct Finding {
 pub fn check_and_lint(srcs: list[str], paths: list[str], ms: emit.Mods, mut &diags: list[ast.Diag]) -> list[Finding] {
 	prog := emit.merge_files_at(srcs, paths)
 	convs := emit.lint_conversions_of(prog, ms, diags)
-	return lint_merged(srcs, paths, ms, prog, convs)
+	return lint_merged(srcs, paths, ms, prog, convs, emit.walk_notes_kept(diags))
 }
 
 # check_lint_index is check_and_lint that also answers the NAME INDEX (#24) in `nx`, out of the
@@ -175,20 +177,24 @@ pub fn check_and_lint(srcs: list[str], paths: list[str], ms: emit.Mods, mut &dia
 pub fn check_lint_index(srcs: list[str], paths: list[str], ms: emit.Mods, mut &diags: list[ast.Diag], mut &nx: ast.NameIndex, mut &notes: list[ast.Diag]) -> list[Finding] {
 	prog := emit.merge_files_at(srcs, paths)
 	notes = emit.lint_index_of(prog, ms, diags, nx)
-	return lint_after(srcs, paths, ms, prog, notes)
+	return lint_after(srcs, paths, ms, prog, notes, emit.walk_notes_kept(diags))
 }
 
-fn lint_after(srcs: list[str], paths: list[str], ms: emit.Mods, prog: ast.File, convs: list[ast.Diag]) -> list[Finding] {
+fn lint_after(srcs: list[str], paths: list[str], ms: emit.Mods, prog: ast.File, convs: list[ast.Diag], walked: bool) -> list[Finding] {
 	mut out: list[Finding] = []
 	guard {
-		out = lint_merged(srcs, paths, ms, prog, convs)
+		out = lint_merged(srcs, paths, ms, prog, convs, walked)
 	}
 	return out
 }
 
 # lint_merged is every rule over a program already merged, plus the lowering walk's L5xx
 # notes, with the `#[allow(…)]` suppressions applied last so they see every finding.
-fn lint_merged(srcs: list[str], paths: list[str], ms: emit.Mods, prog: ast.File, convs: list[ast.Diag]) -> list[Finding] {
+#
+# `walked` is whether the walk handed its notes back at all (emit.walk_notes_kept): on a program
+# it refused with a collected error it hands back none, and an empty `convs` then says nothing
+# about whether an L5xx rule would have fired.
+fn lint_merged(srcs: list[str], paths: list[str], ms: emit.Mods, prog: ast.File, convs: list[ast.Diag], walked: bool) -> list[Finding] {
 	# THE BUILT-IN SPECS TOO, and through the same function the lowering walk uses: `Into` is
 	# declared by the language, so a program that implements it declares no spec by that name
 	# — and L102 read the resulting `into` as a private function nobody calls.
@@ -223,7 +229,7 @@ fn lint_merged(srcs: list[str], paths: list[str], ms: emit.Mods, prog: ast.File,
 		out.append(Finding("", d.path, d.line, d.col, d.code, d.msg))
 	}
 
-	return lint_allowed(srcs, paths, out)
+	return lint_allowed(srcs, paths, out, walked)
 }
 
 # lint_token_rules is the ONE lex the rules that read TOKENS share. There are two of them,
@@ -1578,7 +1584,7 @@ fn lint_codes() -> list[str] {
 
 # lint_allowed applies every `#[allow(…)]` to the findings, and then says the two things that
 # are worth saying about the allows themselves.
-fn lint_allowed(srcs: list[str], paths: list[str], found: list[Finding]) -> list[Finding] {
+fn lint_allowed(srcs: list[str], paths: list[str], found: list[Finding], walked: bool) -> list[Finding] {
 	allows := lint_allows(srcs, paths)
 
 	# fired[i] is whether allow i suppressed anything. It is what makes L106 possible, and
@@ -1602,7 +1608,7 @@ fn lint_allowed(srcs: list[str], paths: list[str], found: list[Finding]) -> list
 
 	mut i := 0
 	for i < allows.len() {
-		lint_allow_says(allows[i], fired[i], out)
+		lint_allow_says(allows[i], fired[i], walked, out)
 		i = i + 1
 	}
 	return out
@@ -1623,13 +1629,19 @@ fn lint_allow_for(allows: list[Allow], fd: Finding) -> int {
 #
 # The two are exclusive and in this order: a code no rule has could not have suppressed
 # anything, so reporting BOTH would be the same fact twice with the useless half second.
-fn lint_allow_says(a: Allow, fired: int, mut &out: list[Finding]) {
+#
+# AND L106 JUDGES ONLY A RULE THAT RAN (#245). The walk's rules — the L5xx range, the one this
+# file does not answer — hand back nothing on a program the walk refused with a collected error,
+# so an allow naming one suppressed nothing because nothing was ASKED, and "delete it" would be
+# advice about a program nobody measured. The tree rules always run, so their allows are judged.
+fn lint_allow_says(a: Allow, fired: int, walked: bool, mut &out: list[Finding]) {
 	if not has_str(lint_codes(), a.code) {
 		out.append(Finding("warning", a.path, a.line, a.col, "L107", f"`#[allow({a.code})]` names no rule this linter has, so this suppression will never apply — {lint_no_rule_why(a.code)}"))
 		return
 	}
 
 	return if fired != 0
+	return if not walked and parser.strings_has_prefix(a.code, "L5")
 
 	out.append(Finding("info", a.path, a.line, a.col, "L106", f"`#[allow({a.code})]` has nothing to suppress — {a.code} did not fire over the statement below it, so it silences nothing now and will go on silencing nothing when the real problem comes back; delete it"))
 }

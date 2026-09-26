@@ -21816,9 +21816,17 @@ fn c_lint_walk(f: ast.File, ms: Mods, want_index: bool, mut &diags: list[ast.Dia
 	# that mistake at its smallest.
 	c_emit_unit(f, f, ms, true, true, true, want_index, diags, lints, nx)
 
-	return [] if diags.len() > 0
+	return [] if not walk_notes_kept(diags)
 
 	return lints
+}
+
+# walk_notes_kept is whether the walk's L5xx notes are handed back after a walk that collected
+# `diags`: none of them are once it collected an error, not the ones before it. The linter asks
+# the same question, because an allow naming a rule whose notes were dropped cannot be judged
+# stale (#245), and one predicate is what keeps the two answers from drifting apart.
+pub fn walk_notes_kept(diags: list[ast.Diag]) -> bool {
+	return diags.len() == 0
 }
 
 # merge_asts joins already-parsed files into the whole-program view, in order.

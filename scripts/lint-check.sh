@@ -307,6 +307,100 @@ fn main() {
 }
 EOF
 
+# --- every binder, not the two a hand list named ----------------------------------------
+#
+# L103 collected `x :=` and `if v :=` and nothing else, so each form below bound a name nobody
+# read and the rule said nothing. It walks ast's own binder enumeration now (stmt_binds,
+# expr_binds), and each case is a binder that enumeration names.
+
+lint L103 'binding `b` in `main` is never read' 'l103-tuple-destructure' <<'EOF'
+fn pair() -> (int, int) {
+	return (1, 2)
+}
+
+fn main() {
+	(a, b) := pair()
+	print a
+}
+EOF
+
+lint L103 'binding `y` in `main` is never read' 'l103-struct-destructure' <<'EOF'
+struct P {
+	pub x: int
+	pub y: int
+}
+
+fn main() {
+	P{x, y} := P(1, 2)
+	print x
+}
+EOF
+
+lint L103 'binding `x` in `main` is never read' 'l103-loop-variable' <<'EOF'
+fn main() {
+	mut n := 0
+	for x in [1, 2] {
+		n = n + 1
+	}
+	print n
+}
+EOF
+
+lint L103 'binding `v` in `main` is never read' 'l103-select-arm' <<'EOF'
+fn main() {
+	ch := chan[int](1)
+	ch <- 1
+	select {
+		v := <-ch => print "got"
+	}
+}
+EOF
+
+lint L103 'binding `b` in `main` is never read' 'l103-match-arm' <<'EOF'
+fn main() {
+	print match (1, 2) {
+		(a, b) => a
+	}
+}
+EOF
+
+lint L103 'binding `whole` in `main` is never read' 'l103-match-as' <<'EOF'
+fn main() {
+	print match (1, 2) {
+		(a, _) as whole => a
+	}
+}
+EOF
+
+# `_` is how each of those forms says the value is not wanted, and it says so without a finding
+# — L103's or L104's, which is about `_ :=` alone.
+quiet L103 'l103-wild-binders' 'the `_` a loop, a destructure and a match arm write for a value not wanted' <<'EOF'
+fn pair() -> (int, int) {
+	return (1, 2)
+}
+
+fn main() {
+	mut n := 0
+	for _ in [1, 2] {
+		n = n + 1
+	}
+	(a, _) := pair()
+	print match (n, a) {
+		(k, _) => k
+	}
+}
+EOF
+
+quiet L104 'l104-loop-wild' 'a loop written `for _ in`, which binds nothing' <<'EOF'
+fn main() {
+	mut n := 0
+	for _ in [1, 2] {
+		n = n + 1
+	}
+	print n
+}
+EOF
+
 quiet L102 'l102-from-const' 'a private function called only from a module-level const' <<'EOF'
 import "math"
 
@@ -501,6 +595,154 @@ fn twice(n: int) -> int? {
 
 fn main() {
 	print twice(1) ?? 0
+}
+EOF
+
+# EVERY EXPRESSION A `!` CAN BE WRITTEN IN. The walk descended into a hand list of forms, and
+# each case here is one it did not name — each compiled, and lint said nothing. It walks ast's
+# enumerations now, so a form is reached by being in the tree rather than by being remembered.
+# One `!` per program, so the finding can only have come from the shape the case is named for.
+l202_shape() {
+	local name=$1 body=$2
+	lint L202 'in `f`, which answers a `T?`' "$name" <<EOF
+fn get(k: int) -> int? {
+	return nil if k < 0
+	return k
+}
+
+fn show(n: int) {
+	print n
+}
+
+$body
+
+fn main() {
+	show(0)
+	print f(1) ?? 0
+}
+EOF
+}
+
+l202_shape l202-list-literal 'fn f(k: int) -> int? {
+	xs := [get(k)!, 1]
+	return xs[0]
+}'
+
+l202_shape l202-if-expression 'fn f(k: int) -> int? {
+	v := if k > 5 { 1 } else { get(k)! }
+	return v
+}'
+
+l202_shape l202-fstring-hole 'fn f(k: int) -> int? {
+	print f"{get(k)!}"
+	return 1
+}'
+
+l202_shape l202-return-if 'fn f(k: int) -> int? {
+	return get(k)! * 2 if k > 0
+	return 0
+}'
+
+l202_shape l202-match-arm 'fn f(k: int) -> int? {
+	return match k {
+		1 => get(k)!
+		_ => 0
+	}
+}'
+
+l202_shape l202-tuple 'fn f(k: int) -> int? {
+	t := (get(k)!, 2)
+	return t.0
+}'
+
+l202_shape l202-index 'fn f(k: int) -> int? {
+	xs := [1, 2, 3]
+	return xs[get(k)!]
+}'
+
+l202_shape l202-if-condition 'fn f(k: int) -> int? {
+	if get(k)! > 0 {
+		return 1
+	}
+	return 0
+}'
+
+l202_shape l202-block-expression 'fn f(k: int) -> int? {
+	v := { get(k)! }
+	return v
+}'
+
+l202_shape l202-defer 'fn f(k: int) -> int? {
+	defer show(get(k)!)
+	return 1
+}'
+
+l202_shape l202-spawn 'fn f(k: int) -> int? {
+	spawn show(get(k)!)
+	return 1
+}'
+
+l202_shape l202-raise 'fn f(k: int) -> int? {
+	raise ValueError(f"bad {get(k)!}") if k > 100
+	return 1
+}'
+
+# A CLOSURE ANSWERS FOR ITSELF: `?` in it hands the absence back from the closure, so its own
+# result type decides. One answering `int?` is named as the closure it is …
+lint L202 'in a closure in `f`, which answers a `T?`' 'l202-closure' <<'EOF'
+fn get(k: int) -> int? {
+	return nil if k < 0
+	return k
+}
+
+fn f(k: int) -> int {
+	g := fn() -> int? {
+		return get(k)!
+	}
+	return g() ?? 0
+}
+
+fn main() {
+	print f(1)
+}
+EOF
+
+# … and one answering `int`, inside a function answering `int?`, has no `?` to reach for.
+quiet L202 'l202-closure-answers-int' 'a `!` in a closure answering `int`, inside a fn answering `int?`' <<'EOF'
+fn get(k: int) -> int? {
+	return nil if k < 0
+	return k
+}
+
+fn f(k: int) -> int? {
+	g := fn() -> int {
+		return get(k)!
+	}
+	return g()
+}
+
+fn main() {
+	print f(1) ?? 0
+}
+EOF
+
+# A `guard` CATCHES what `!` raises and makes it the guard's error value — the `!` does not end
+# the function, so there is no absence for `?` to have handed back instead.
+quiet L202 'l202-in-guard' 'a `!` inside a `guard`, which catches the abort it raises' <<'EOF'
+fn get(k: int) -> int? {
+	return nil if k < 0
+	return k
+}
+
+fn f(k: int) -> int? {
+	r := guard {
+		get(k)!
+	}
+	return r ?? 0
+}
+
+fn main() {
+	print f(1) ?? 0
 }
 EOF
 

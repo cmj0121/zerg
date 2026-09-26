@@ -211,6 +211,10 @@ The padding is **spaces** while the indent stays **tabs**, so the column holds a
 width: the tabs are identical across a run and cancel out. A line may pass the column
 `F403` wraps at by as much as the budget, which is the price of the table.
 
+A column is a **display** column, the one a reader lines the marks up by: a Han character or
+an emoji is two, a combining mark is none, and everything else is one — so `"日本"` is four
+columns though it is six bytes. `F403` measures its budget in the same columns.
+
 The marks come from the printer rather than from a scan of the finished text, and that is
 load-bearing rather than incidental: once the tokens are gone, a `=>` inside a string
 literal reads exactly like an arm's, and padding that one would not lay out a table — it
@@ -439,7 +443,8 @@ this rule never breaks up a group that was not already broken.
 
 A group its author DID break is joined back onto one line unless one of these vetoes it:
 
-- printed flat, it would end at or past column 120 — a tab counts as 4;
+- printed flat, it would end at or past column 120 — a tab counts as 4, and a column is
+  the display column `F106` counts;
 - it holds 6 or more top-level elements.
 
 When one does, the group breaks at **every** top-level comma instead. Never half of each:
@@ -593,6 +598,10 @@ comment there heads a new chunk — that is what makes it its own line rather th
 one — and half the blank lines already in this tree's bodies are that shape. It applies in
 any block, so a `struct`'s commented field group gets the same separation Go's does.
 
+A comment **trailing** the line above does not make this one part of its block: the trailing
+comment is that line's. So `pub a: int ## …` with `# note` on the next line gets the blank as
+well, and a maintainer's note does not read as the tail of the reader's text.
+
 It declines in five cases: a comment ahead of a guard run, which is that run's **heading**
 — the blank goes in front of the comment, not between it and the table it introduces; a
 comment at the top level, which heads a declaration whose spacing is the author's; a
@@ -690,6 +699,11 @@ a form the grammar does not have, and it is the group `fmt-tokens` turns off to 
 question — so a rewrite is measured by the round-trip gate or by nothing. State the shapes
 the rule DECLINES as corpus cases too: a decline is a claim, and a case that is already
 canonical is how one is written down.
+
+A rule that only ADDS — a blank line, a joined group — cannot be shown by a canonical case:
+the formatter that lost it leaves the author's blank or joined line where it is. It is held
+from the input side instead, by a pair in `test-data/fmt/rewrite/`: `<name>.zg` is not
+canonical, and `<name>.fmt.zg` is what `zerg fmt` must write. `make fmt-corpus` checks both.
 
 Give it the next number in the `F` group its EFFECT belongs to, add it to the table in
 [`src/compiler/zerg/fmt.zg`](../../src/compiler/zerg/fmt.zg), and add it here. A rule that

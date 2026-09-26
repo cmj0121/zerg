@@ -71,6 +71,7 @@ fn main() {
 	spawn stage(source(3), cancel, out)
 
 	cancel <- 1 # stop it now …
+
 	# close(cancel)  # … or: no cancellation — let the work finish and `close` fire
 
 	print (<-out)!

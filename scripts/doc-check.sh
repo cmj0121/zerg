@@ -708,7 +708,7 @@ fi
 # CHARACTERS in the gawk Linux ships, and neither of those is columns; and a host with no
 # perl is TOLD so rather than passed over, because a gate whose whole subject is the width of
 # a character cannot report success from a machine that could not measure one. The block list
-# below is the same list `doc_rune_width` carries, written out a second time on purpose: the
+# below is the CJK blocks `zerg.rune_width` carries, written out a second time on purpose: the
 # assertion is that the renderer applied it, and a check that asked the renderer what it
 # thought a column was would be the renderer agreeing with itself.
 cat >"$tmp/proj/width.zg" <<'ZG'

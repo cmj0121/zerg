@@ -169,16 +169,41 @@ examples:                       # every example builds, runs, and prints what it
 FMT_CORPUS ?= test-data/fmt
 FMT_CORPUS_MIN ?= 24
 
+# A FIXPOINT CANNOT SHOW A RULE THAT ONLY ADDS. A formatter that stopped writing F406's blank
+# line, or stopped joining a group F403 says fits, still leaves the blank or the joined line an
+# author wrote exactly where it is — so a canonical case of either is green on the formatter
+# that lost it. Those are held from the input side: `$(FMT_CORPUS)/rewrite/<name>.zg` is a
+# source that is NOT canonical, and `<name>.fmt.zg` beside it is what `zerg fmt` must write.
+# A pair whose input is already its output is a fixpoint filed in the wrong place, and is
+# refused. The floor is the fixpoints' reason: an empty directory satisfies every assertion.
+FMT_REWRITE_MIN ?= 2
+
 # `zerg fmt --check` is the tool answering its own question. This target used to copy each
 # case to a temp file, format the copy and `cmp` — the Makefile reimplementing in shell
-# something the formatter knew and had no way to say.
-fmt-corpus:                     # every test-data/fmt case must already be canonical
+# something the formatter knew and had no way to say. The rewrite pairs are the one place a
+# copy is formatted, because what they hold is an output, which `--check` has no way to name.
+fmt-corpus:                     # every test-data/fmt case is canonical; every rewrite pair formats to its twin
 	$(MAKE) build
 	@[ -d $(FMT_CORPUS) ] || { echo "test-data submodule not initialized (git submodule update --init)"; exit 1; }
 	@./bin/zerg fmt --check $(FMT_CORPUS)/*.zg || { echo "fmt-corpus: a case is not in canonical form"; exit 1; }
 	@n=$$(ls $(FMT_CORPUS)/*.zg | wc -l | tr -d ' '); \
 	[ $$n -ge $(FMT_CORPUS_MIN) ] || { echo "fmt-corpus: only $$n cases were checked, and the floor is $(FMT_CORPUS_MIN)"; exit 1; }; \
 	echo "fmt-corpus: $$n cases are fmt's fixpoint"
+	@tmp=$$(mktemp -d); trap 'rm -rf "$$tmp"' EXIT; n=0; \
+	for src in $(FMT_CORPUS)/rewrite/*.zg; do \
+		case "$$src" in *.fmt.zg) continue ;; esac; \
+		[ -f "$$src" ] || continue; \
+		want="$${src%.zg}.fmt.zg"; \
+		[ -f "$$want" ] || { echo "fmt-corpus: $$src has no $$want to format to"; exit 1; }; \
+		! cmp -s "$$src" "$$want" || { echo "fmt-corpus: $$src is already canonical — a fixpoint belongs in $(FMT_CORPUS)"; exit 1; }; \
+		cp "$$src" "$$tmp/case.zg"; \
+		./bin/zerg fmt "$$tmp/case.zg" >/dev/null || { echo "fmt-corpus: zerg fmt failed on $$src"; exit 1; }; \
+		cmp -s "$$tmp/case.zg" "$$want" || { echo "fmt-corpus: $$src does not format to $$want"; diff "$$want" "$$tmp/case.zg"; exit 1; }; \
+		./bin/zerg fmt --check "$$want" || { echo "fmt-corpus: $$want is not fmt's fixpoint"; exit 1; }; \
+		n=$$((n + 1)); \
+	done; \
+	[ $$n -ge $(FMT_REWRITE_MIN) ] || { echo "fmt-corpus: only $$n rewrite pairs were checked, and the floor is $(FMT_REWRITE_MIN)"; exit 1; }; \
+	echo "fmt-corpus: $$n rewrite pairs format to their twins"
 
 # The sources this repository WRITES, which no gate covered. That is how three fresh deviations
 # landed in one branch: `zerg fmt` would have silently reverted four lines of it. This

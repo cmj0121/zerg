@@ -332,7 +332,7 @@ pub fn str_in(xs: list[str], s: str) -> bool {
 # anything at runtime.
 fn fix_order(fixts: list[Fixt], mut &order: list[str], mut &errs: list[str]) {
 	mut color: list[int] = []
-	for f in fixts {
+	for _ in fixts {
 		color.append(0)
 	}
 	mut i := 0

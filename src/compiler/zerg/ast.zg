@@ -2061,19 +2061,19 @@ fn dump_block(body: list[Stmt], ind: str) -> str {
 
 fn dump_stmt(s: Stmt, ind: str) -> str {
 	return match s {
-		Stmt.SLet(name, ty, has_ty, is_mut, is_const, value, _, _) => f"{ind}let {name} = {expr_kind(value)}\n"
+		Stmt.SLet(name, _, _, _, _, value, _, _) => f"{ind}let {name} = {expr_kind(value)}\n"
 		Stmt.SAssign(target, value) => f"{ind}assign {expr_kind(target)} = {expr_kind(value)}\n"
-		Stmt.SDestructure(_, value, is_bind, _, _) => f"{ind}destructure {expr_kind(value)}\n"
+		Stmt.SDestructure(_, value, _, _, _) => f"{ind}destructure {expr_kind(value)}\n"
 		Stmt.SPrint(x) => f"{ind}print {expr_kind(x)}\n"
-		Stmt.SReturn(has_value, value) => f"{ind}return {expr_kind(value)}\n"
+		Stmt.SReturn(_, value) => f"{ind}return {expr_kind(value)}\n"
 		Stmt.SReturnIf(value, cond) => f"{ind}return-if {expr_kind(cond)}\n"
 		Stmt.SExpr(x) => f"{ind}expr {expr_kind(x)}\n"
-		Stmt.SIf(cond, then_b, has_else, else_b) => dump_if(cond, then_b, else_b, ind)
-		Stmt.SIfLet(name, value, then_b, has_else, else_b, _, _) => ind + "if-let " + name + "\n" + dump_block(then_b, ind + "\t") + dump_block(else_b, ind + "\t")
+		Stmt.SIf(cond, then_b, _, else_b) => dump_if(cond, then_b, else_b, ind)
+		Stmt.SIfLet(name, value, then_b, _, else_b, _, _) => ind + "if-let " + name + "\n" + dump_block(then_b, ind + "\t") + dump_block(else_b, ind + "\t")
 		Stmt.SScope(body_b, is_unsafe) => ind + scope_kind(is_unsafe) + "\n" + dump_block(body_b, ind + "\t")
-		Stmt.SFor(is_cond, cond, body_b) => ind + "for " + expr_kind(cond) + "\n" + dump_block(body_b, ind + "\t")
+		Stmt.SFor(_, cond, body_b) => ind + "for " + expr_kind(cond) + "\n" + dump_block(body_b, ind + "\t")
 		Stmt.SForIn(name, iter, body_b, _, _) => ind + "for " + name + " in " + expr_kind(iter) + "\n" + dump_block(body_b, ind + "\t")
-		Stmt.SForSelect(arms) => ind + "for-select\n"
+		Stmt.SForSelect(_) => ind + "for-select\n"
 		Stmt.SRaise(x, _, _) => f"{ind}raise {expr_kind(x)}\n"
 		Stmt.SAssert(body_b) => ind + "assert\n" + dump_block(body_b, ind + "\t")
 		Stmt.SBreak => ind + "break\n"
@@ -2095,40 +2095,40 @@ pub fn expr_kind(e: Expr) -> str {
 	return match e {
 		Expr.EInt(lex, _, _) => "int " + lex
 		Expr.EFloat(lex) => "float " + lex
-		Expr.EStr(v) => "str"
-		Expr.EBool(v) => "bool"
+		Expr.EStr(_) => "str"
+		Expr.EBool(_) => "bool"
 		Expr.ENil => "nil"
 		Expr.EIdent(n, _, _) => "ident " + n
-		Expr.EUnary(oper, x) => "unary " + oper
-		Expr.EBinary(oper, a, b) => "binary " + oper
-		Expr.ECall(name, args, _, _, _) => "call " + name
-		Expr.ECallVal(callee, args) => "call through " + expr_kind(callee)
+		Expr.EUnary(oper, _) => "unary " + oper
+		Expr.EBinary(oper, _, _) => "binary " + oper
+		Expr.ECall(name, _, _, _, _) => "call " + name
+		Expr.ECallVal(callee, _) => "call through " + expr_kind(callee)
 		Expr.ENamedArg(nm, _, _, _) => f"named argument {nm}:"
-		Expr.EField(target, name, _, _) => "field ." + name
-		Expr.EOptChain(target, name, _, _) => "optional chain ?." + name
-		Expr.ETry(x) => "try `?`"
-		Expr.EIndex(target, idx) => "index"
-		Expr.EMethod(target, meth, args, _, _) => "method ." + meth
-		Expr.EListLit(elems) => "list-literal"
-		Expr.EFill(v, n) => "fill"
-		Expr.EConv(ty, x, nm) => "convert " + nm
-		Expr.EFmt(x, _, _) => "format hole"
-		Expr.EIf(cond, then_e, else_e) => "if-expr"
-		Expr.EMatch(scrut, arms) => "match"
-		Expr.ERange(lo, hi, inclusive) => "range"
-		Expr.ETuple(elems) => "tuple"
-		Expr.EMapLit(ks, vs) => "map-literal"
-		Expr.EFn(ps, has_ret, ret, body) => "fn-expr"
-		Expr.EChanNew(t, cap) => "chan-new"
-		Expr.ERecv(ch) => "recv"
-		Expr.EForce(x) => "force"
-		Expr.ECoalesce(a, b, jump) => "coalesce"
-		Expr.EGuard(body) => "guard"
-		Expr.EBlock(body) => "block-expr"
+		Expr.EField(_, name, _, _) => "field ." + name
+		Expr.EOptChain(_, name, _, _) => "optional chain ?." + name
+		Expr.ETry(_) => "try `?`"
+		Expr.EIndex(_, _) => "index"
+		Expr.EMethod(_, meth, _, _, _) => "method ." + meth
+		Expr.EListLit(_) => "list-literal"
+		Expr.EFill(_, n) => "fill"
+		Expr.EConv(_, _, nm) => "convert " + nm
+		Expr.EFmt(_, _, _) => "format hole"
+		Expr.EIf(_, _, _) => "if-expr"
+		Expr.EMatch(_, _) => "match"
+		Expr.ERange(_, _, _) => "range"
+		Expr.ETuple(_) => "tuple"
+		Expr.EMapLit(_, _) => "map-literal"
+		Expr.EFn(_, _, _, _) => "fn-expr"
+		Expr.EChanNew(_, _) => "chan-new"
+		Expr.ERecv(_) => "recv"
+		Expr.EForce(_) => "force"
+		Expr.ECoalesce(_, _, _) => "coalesce"
+		Expr.EGuard(_) => "guard"
+		Expr.EBlock(_) => "block-expr"
 		Expr.EUnsafe(_) => "unsafe-block"
 		Expr.EAsm(_, _) => "asm"
-		Expr.EIs(x, name) => "is " + name
-		Expr.EIn(x, set) => "in"
+		Expr.EIs(_, name) => "is " + name
+		Expr.EIn(_, _) => "in"
 		_ => "?"
 	}
 }
@@ -2452,6 +2452,247 @@ fn stmt_sel_kids(arms: list[SelArm]) -> list[Stmt] {
 		for k in a.body {
 			out.append(k)
 		}
+	}
+	return out
+}
+
+# expr_stmts is the last of the four: the STATEMENTS an expression carries — the block that
+# expr_parts deliberately does not open. With expr_parts, stmt_exprs and stmt_kids it is the
+# whole tree, so a walk written over the four reaches every node without an arm of its own
+# for any form, and a form added tomorrow is reached by the walk that exists today.
+#
+# NO CATCH-ALL, for expr_parts's reason: a `_` answers "carries no block" for a closure, and
+# the walk that trusted it would stop at the closure's `{` without a word.
+pub fn expr_stmts(e: Expr) -> list[Stmt] {
+	return match e {
+		Expr.EFn(_, _, _, body) => body
+		Expr.ECoalesce(_, _, jump) => jump
+		Expr.EGuard(body) => body
+		Expr.EBlock(body) => body
+		Expr.EUnsafe(body) => body
+		Expr.EInt(_, _, _) => stmt_kids_none()
+		Expr.EFloat(_) => stmt_kids_none()
+		Expr.EStr(_) => stmt_kids_none()
+		Expr.EBool(_) => stmt_kids_none()
+		Expr.ENil => stmt_kids_none()
+		Expr.EIdent(_, _, _) => stmt_kids_none()
+		Expr.EUnary(_, _) => stmt_kids_none()
+		Expr.EBinary(_, _, _) => stmt_kids_none()
+		Expr.ECall(_, _, _, _, _) => stmt_kids_none()
+		Expr.ECallVal(_, _) => stmt_kids_none()
+		Expr.ENamedArg(_, _, _, _) => stmt_kids_none()
+		Expr.EField(_, _, _, _) => stmt_kids_none()
+		Expr.EOptChain(_, _, _, _) => stmt_kids_none()
+		Expr.ETry(_) => stmt_kids_none()
+		Expr.EIndex(_, _) => stmt_kids_none()
+		Expr.EMethod(_, _, _, _, _) => stmt_kids_none()
+		Expr.EListLit(_) => stmt_kids_none()
+		Expr.EFill(_, _) => stmt_kids_none()
+		Expr.EConv(_, _, _) => stmt_kids_none()
+		Expr.EFmt(_, _, _) => stmt_kids_none()
+		Expr.EIf(_, _, _) => stmt_kids_none()
+		Expr.EMatch(_, _) => stmt_kids_none()
+		Expr.ERange(_, _, _) => stmt_kids_none()
+		Expr.ETuple(_) => stmt_kids_none()
+		Expr.EMapLit(_, _) => stmt_kids_none()
+		Expr.EChanNew(_, _) => stmt_kids_none()
+		Expr.ERecv(_) => stmt_kids_none()
+		Expr.EForce(_) => stmt_kids_none()
+		Expr.EAsm(_, _) => stmt_kids_none()
+		Expr.EIs(_, _) => stmt_kids_none()
+		Expr.EIn(_, _) => stmt_kids_none()
+	}
+}
+
+# stmt_binds is the names one statement MINTS — `x :=`, each leaf of `(a, b) :=`, the loop
+# variable, the `if v :=` name, a select arm's `v := <-ch`. It is the binder half of stmt_exprs:
+# what a statement mentions and what it names are two different questions, and a walk asking
+# the second one — `zerg lint`'s L103, a closure's capture analysis — used to answer it with a
+# hand list that had two of the five, so a destructured name was a capture out of nothing.
+#
+# NO CATCH-ALL, for stmt_exprs's reason. A binding made in a NESTED block is that block's
+# statement's to report, reached through stmt_kids.
+pub fn stmt_binds(s: Stmt) -> list[str] {
+	return match s {
+		Stmt.SLet(nm, _, _, _, _, _, _, _) => [nm]
+		Stmt.SDestructure(t, _, is_bind, _, _) => tgt_binds(t, is_bind)
+		Stmt.SForIn(nm, _, _, _, _) => stmt_bind_name(nm)
+		Stmt.SIfLet(nm, _, _, _, _, _, _) => stmt_bind_name(nm)
+		Stmt.SSelect(arms) => stmt_sel_binds(arms)
+		Stmt.SForSelect(arms) => stmt_sel_binds(arms)
+		Stmt.SAssign(_, _) => stmt_binds_none()
+		Stmt.SPrint(_) => stmt_binds_none()
+		Stmt.SReturn(_, _) => stmt_binds_none()
+		Stmt.SReturnIf(_, _) => stmt_binds_none()
+		Stmt.SExpr(_) => stmt_binds_none()
+		Stmt.SIf(_, _, _, _) => stmt_binds_none()
+		Stmt.SFor(_, _, _) => stmt_binds_none()
+		Stmt.SRaise(_, _, _) => stmt_binds_none()
+		Stmt.SAssert(_) => stmt_binds_none()
+		Stmt.SBreak => stmt_binds_none()
+		Stmt.SContinue => stmt_binds_none()
+		Stmt.SNop => stmt_binds_none()
+		Stmt.SScope(_, _) => stmt_binds_none()
+		Stmt.SDefer(_) => stmt_binds_none()
+		Stmt.SSpawn(_) => stmt_binds_none()
+		Stmt.SSend(_, _) => stmt_binds_none()
+		Stmt.SDel(_, _, _) => stmt_binds_none()
+		Stmt.SClose(_, _) => stmt_binds_none()
+		Stmt.SAt(_, _, _, _) => stmt_binds_none()
+	}
+}
+
+# expr_binds is the names an EXPRESSION mints: each `match` arm's pattern binders, and a
+# closure's parameters. Both are scoped to something inside the expression — an arm, a body —
+# but a walk over a whole function asks what it binds anywhere, and these are the two places a
+# name is minted without a statement of its own.
+pub fn expr_binds(e: Expr) -> list[str] {
+	return match e {
+		Expr.EMatch(_, arms) => expr_arm_binds(arms)
+		Expr.EFn(ps, _, _, _) => expr_param_names(ps)
+		Expr.EInt(_, _, _) => stmt_binds_none()
+		Expr.EFloat(_) => stmt_binds_none()
+		Expr.EStr(_) => stmt_binds_none()
+		Expr.EBool(_) => stmt_binds_none()
+		Expr.ENil => stmt_binds_none()
+		Expr.EIdent(_, _, _) => stmt_binds_none()
+		Expr.EUnary(_, _) => stmt_binds_none()
+		Expr.EBinary(_, _, _) => stmt_binds_none()
+		Expr.ECall(_, _, _, _, _) => stmt_binds_none()
+		Expr.ECallVal(_, _) => stmt_binds_none()
+		Expr.ENamedArg(_, _, _, _) => stmt_binds_none()
+		Expr.EField(_, _, _, _) => stmt_binds_none()
+		Expr.EOptChain(_, _, _, _) => stmt_binds_none()
+		Expr.ETry(_) => stmt_binds_none()
+		Expr.EIndex(_, _) => stmt_binds_none()
+		Expr.EMethod(_, _, _, _, _) => stmt_binds_none()
+		Expr.EListLit(_) => stmt_binds_none()
+		Expr.EFill(_, _) => stmt_binds_none()
+		Expr.EConv(_, _, _) => stmt_binds_none()
+		Expr.EFmt(_, _, _) => stmt_binds_none()
+		Expr.EIf(_, _, _) => stmt_binds_none()
+		Expr.ERange(_, _, _) => stmt_binds_none()
+		Expr.ETuple(_) => stmt_binds_none()
+		Expr.EMapLit(_, _) => stmt_binds_none()
+		Expr.EChanNew(_, _) => stmt_binds_none()
+		Expr.ERecv(_) => stmt_binds_none()
+		Expr.EForce(_) => stmt_binds_none()
+		Expr.ECoalesce(_, _, _) => stmt_binds_none()
+		Expr.EGuard(_) => stmt_binds_none()
+		Expr.EBlock(_) => stmt_binds_none()
+		Expr.EUnsafe(_) => stmt_binds_none()
+		Expr.EAsm(_, _) => stmt_binds_none()
+		Expr.EIs(_, _) => stmt_binds_none()
+		Expr.EIn(_, _) => stmt_binds_none()
+	}
+}
+
+fn expr_arm_binds(arms: list[Arm]) -> list[str] {
+	mut out: list[str] = []
+	for a in arms {
+		for nm in pat_binds(a.pat) {
+			out.append(nm)
+		}
+	}
+	return out
+}
+
+fn expr_param_names(ps: list[Param]) -> list[str] {
+	mut out: list[str] = []
+	for pm in ps {
+		out.append(pm.name)
+	}
+	return out
+}
+
+# stmt_bind_name is a loop's or an `if v :=`'s one name, and none for `_` — which is how either
+# says the value is not wanted. `_ :=` is the one `_` stmt_binds keeps: that binder is a
+# statement of its own with nothing else in it, and L104 is about exactly that.
+fn stmt_bind_name(nm: str) -> list[str] {
+	return stmt_binds_none() if nm == "_"
+	return [nm]
+}
+
+fn stmt_binds_none() -> list[str] {
+	mut out: list[str] = []
+	return out
+}
+
+# a select arm binds only when it names its value; `_` and no name are both "", and neither is
+# a name anything can read
+fn stmt_sel_binds(arms: list[SelArm]) -> list[str] {
+	mut out: list[str] = []
+	for a in arms {
+		if a.bind != "" and a.bind != "_" {
+			out.append(a.bind)
+		}
+	}
+	return out
+}
+
+# tgt_binds is the names a destructuring BINDING mints: every leaf of its target, which the
+# parser writes as an identifier. An assignment's leaves are storage that already exists, so
+# `(a, b) = …` mints nothing.
+fn tgt_binds(t: Target, is_bind: bool) -> list[str] {
+	mut out: list[str] = []
+	return out if not is_bind
+
+	for e in tgt_places(t) {
+		nm := tgt_leaf_name(e)
+		if nm != "" and nm != "_" {
+			out.append(nm)
+		}
+	}
+	return out
+}
+
+fn tgt_leaf_name(e: Expr) -> str {
+	return match e {
+		Expr.EIdent(nm, _, _) => nm
+		_ => ""
+	}
+}
+
+# pat_binds is every name a PATTERN mints, at any depth: `x`, `… as x`, and the `..rest` of a
+# list pattern. It is the pattern's half of stmt_binds, for the binders a `match` arm makes.
+pub fn pat_binds(p: Pat) -> list[str] {
+	return match p {
+		Pat.PWild => stmt_binds_none()
+		Pat.PBind(nm, _, _) => [nm]
+		Pat.PLit(_) => stmt_binds_none()
+		Pat.PVariant(_, _, ps, _, _) => pat_binds_all(ps, "")
+		Pat.PStruct(_, _, ps, _) => pat_binds_all(ps, "")
+		Pat.PList(ps, _, rest, _, _) => pat_binds_all(ps, rest)
+		Pat.PTuple(ps) => pat_binds_all(ps, "")
+		Pat.POr(ps) => pat_binds_side(ps)
+		Pat.PAs(inner, nm, _, _) => pat_binds_as(inner, nm)
+	}
+}
+
+fn pat_binds_as(inner: Pat, nm: str) -> list[str] {
+	mut out := pat_binds(inner)
+	out.append(nm)
+	return out
+}
+
+# an or-pattern's sides bind the SAME names — the emitter refuses one whose sides differ — so
+# one side is the whole answer, and every side would name each binder once per `|`
+fn pat_binds_side(ps: list[Pat]) -> list[str] {
+	return stmt_binds_none() if ps.len() == 0
+	return pat_binds(ps[0])
+}
+
+# pat_binds_all is the names under `ps`, then `also` — the name the node itself mints, "" for
+# none.
+fn pat_binds_all(ps: list[Pat], also: str) -> list[str] {
+	mut out: list[str] = []
+	for p in ps {
+		for nm in pat_binds(p) {
+			out.append(nm)
+		}
+	}
+	if also != "" and also != "_" {
+		out.append(also)
 	}
 	return out
 }

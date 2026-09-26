@@ -142,6 +142,10 @@ put the module declaring it into the program. `L101` asks the loader which modul
 resolved to and which module each file was read as, rather than deriving either — a module is
 what an import resolved to, and only the loader knows the roots a prefix expands under.
 
+`L103` asks about **every name a function binds**, whatever form binds it: a destructuring
+target, a loop variable and a `match` pattern as much as `x :=`. Write `_` there for a value
+that is not wanted. A parameter is the signature's, a closure's included, and is never reported.
+
 `L103` counts a **call** as a read. `g := add` followed by `g(1, 2)` reads `g`; a binding that
 holds a function is used by being called, which is the only way to use one. And it says nothing
 about the binding a **nameless `with`** makes: `with acquire() { … }` still binds — that is what
@@ -165,6 +169,12 @@ L202 `!` in `forced`, which answers a `T?` — `?` hands the absence back instea
 
 It is answered from the parsed file alone, like every other rule here — a `!` inside a function
 whose declared result carries an absence is a shape, and needs no type nobody wrote down.
+
+It reaches a `!` in any expression the function holds, however deeply nested. Two places
+change the answer. A **closure** answers for itself: `?` inside it hands the absence back from the closure,
+so its own declared result decides, and the finding names it as a closure in the enclosing
+function. A **`guard`** catches what `!` raises and makes it the guard's error value, so a `!`
+inside one does not end the function and is not reported.
 
 `L201` stood beside it and has **retired**. It reported `?? nil` as a fallback that changes
 nothing, and it was never both reachable and true. On a `T?`, or a `Result[T]` whose `T` is not

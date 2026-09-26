@@ -377,7 +377,7 @@ fn run_pkg(root: str, p: test_pkg.Pkg, only: str, secs: int, mut &passed: int, m
 
 	mut verdict: list[str] = []
 	mut text: list[str] = []
-	for n in names {
+	for _ in names {
 		verdict.append("")
 		text.append("")
 	}

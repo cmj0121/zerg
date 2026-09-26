@@ -9038,14 +9038,14 @@ fn c_guard_no_jump(mut &em: Emitter, body: list[ast.Stmt], in_loop: bool) {
 	for s in body {
 		match s {
 			Stmt.SAt(l, c, el, ec) => c_mark_to(em, l, c, el, ec)
-			Stmt.SReturn(has_val, e) => c_guard_jump_err(em, "return")
-			Stmt.SReturnIf(v, cond) => c_guard_jump_err(em, "return")
+			Stmt.SReturn(_, _) => c_guard_jump_err(em, "return")
+			Stmt.SReturnIf(_, _) => c_guard_jump_err(em, "return")
 			Stmt.SBreak => c_guard_loop_jump(em, "break", in_loop)
 			Stmt.SContinue => c_guard_loop_jump(em, "continue", in_loop)
-			Stmt.SIf(cond, then_b, has_else, else_b) => c_guard_no_jump_two(em, then_b, else_b, in_loop)
-			Stmt.SIfLet(nm, v, then_b, has_else, else_b, _, _) => c_guard_no_jump_two(em, then_b, else_b, in_loop)
-			Stmt.SFor(is_cond, cond, body_b) => c_guard_no_jump(em, body_b, true)
-			Stmt.SForIn(nm, it, body_b, _, _) => c_guard_no_jump(em, body_b, true)
+			Stmt.SIf(_, then_b, _, else_b) => c_guard_no_jump_two(em, then_b, else_b, in_loop)
+			Stmt.SIfLet(_, _, then_b, _, else_b, _, _) => c_guard_no_jump_two(em, then_b, else_b, in_loop)
+			Stmt.SFor(_, _, body_b) => c_guard_no_jump(em, body_b, true)
+			Stmt.SForIn(_, _, body_b, _, _) => c_guard_no_jump(em, body_b, true)
 			Stmt.SSelect(arms) => c_guard_no_jump_sel(em, arms, in_loop)
 
 			# and inside a bare block, where a `return` was leaving a `guard` unseen: the
@@ -10957,7 +10957,7 @@ fn c_is_lvalue(e: ast.Expr) -> bool {
 		Expr.EField(_, _, _, _) => true
 		Expr.EOptChain(_, _, _, _) => false
 		Expr.ETry(_) => false
-		Expr.EIndex(t, i) => not c_is_range(i)
+		Expr.EIndex(_, i) => not c_is_range(i)
 		_ => false
 	}
 }
@@ -15191,10 +15191,10 @@ fn c_infer_node(mut &em: Emitter, e: ast.Expr) -> ast.Ty {
 		Expr.EIndex(target, idx) => c_elem_ty(em, target, idx)
 		Expr.EListLit(elems) => c_infer_listlit(em, elems)
 
-		Expr.EFill(v, _) => c_infer_fill(em, v)
-		Expr.EConv(ty, x, nm) => ty
-		Expr.EFmt(_, _, _) => ast.Ty.TStr
-		Expr.EIf(cond, then_e, else_e) => c_infer(em, then_e)
+		Expr.EFill(v, _)         => c_infer_fill(em, v)
+		Expr.EConv(ty, x, _)     => ty
+		Expr.EFmt(_, _, _)       => ast.Ty.TStr
+		Expr.EIf(_, then_e, _)   => c_infer(em, then_e)
 		Expr.EMatch(scrut, arms) => c_infer_match(em, scrut, arms)
 
 		# A RANGE'S TYPE IS ITS BOUNDS'. It answered TUnknown while the form was refused, and
@@ -15204,10 +15204,10 @@ fn c_infer_node(mut &em: Emitter, e: ast.Expr) -> ast.Ty {
 		Expr.ETuple(elems) => c_tuple_ty(em, elems)
 		Expr.EMapLit(ks, vs) => c_map_lit_ty(em, ks, vs)
 		Expr.EFn(ps, has_ret, ret, body) => c_lambda_ty(ps, has_ret, ret)
-		Expr.EChanNew(t, cap) => ast.ty_chan(t, 0, "")
+		Expr.EChanNew(t, _) => ast.ty_chan(t, 0, "")
 		Expr.ERecv(ch) => ast.Ty.TOpt(ast.ty_chan_elem(c_infer(em, ch)))
 		Expr.EForce(x) => c_carrier_elem(c_infer(em, x))
-		Expr.ECoalesce(a, b, jump) => c_infer_coalesce(em, a, b)
+		Expr.ECoalesce(a, b, _) => c_infer_coalesce(em, a, b)
 		Expr.EGuard(body) => ast.Ty.TEither(c_guard_elem(c_guard_val_ty(em, body)), ast.Ty.TErr)
 		Expr.EBlock(body) => c_block_val_ty(em, body)
 		Expr.EUnsafe(body) => c_block_val_ty(em, body)
@@ -15215,7 +15215,7 @@ fn c_infer_node(mut &em: Emitter, e: ast.Expr) -> ast.Ty {
 		# an `asm(…)` yields nothing: its effects are its operands and its clobbers
 		Expr.EAsm(_, _)   => ast.Ty.TVoid
 		Expr.EIs(x, name) => ast.Ty.TBool
-		Expr.EIn(x, set)  => ast.Ty.TBool
+		Expr.EIn(x, _)    => ast.Ty.TBool
 	}
 }
 
@@ -18235,7 +18235,7 @@ fn c_has_defer(body: list[ast.Stmt]) -> bool {
 fn c_is_defer(s: ast.Stmt) -> bool {
 	return match s {
 		Stmt.SDefer(_) => true
-		Stmt.SClose(ch, at_exit) => at_exit
+		Stmt.SClose(_, at_exit) => at_exit
 		_ => false
 	}
 }
@@ -20640,7 +20640,7 @@ fn c_let_list(mut &em: Emitter, name: str, eff: ast.Ty, is_mut: bool, is_const: 
 		# and the value have to be taken apart again
 		mut filled := ""
 		match ival {
-			Expr.EFill(v, _) => {
+			Expr.EFill(_, _) => {
 				if vals.len() > 1 {
 					filled = c_fill_pushes(em, cname, et, c_list_elem(eff), vals[0], vals.len(), ind)
 				}
@@ -21382,10 +21382,10 @@ fn c_check_loop_jump(mut &em: Emitter, body: list[ast.Stmt], in_loop: bool) {
 			Stmt.SAt(l, c, el, ec) => c_mark_to(em, l, c, el, ec)
 			Stmt.SBreak => c_loop_jump_err(em, "break", in_loop)
 			Stmt.SContinue => c_loop_jump_err(em, "continue", in_loop)
-			Stmt.SIf(cond, then_b, has_else, else_b) => c_check_loop_jump_two(em, then_b, else_b, in_loop)
-			Stmt.SIfLet(nm, v, then_b, has_else, else_b, _, _) => c_check_loop_jump_two(em, then_b, else_b, in_loop)
-			Stmt.SFor(is_cond, cond, body_b) => c_check_loop_jump(em, body_b, true)
-			Stmt.SForIn(nm, it, body_b, _, _) => c_check_loop_jump(em, body_b, true)
+			Stmt.SIf(_, then_b, _, else_b) => c_check_loop_jump_two(em, then_b, else_b, in_loop)
+			Stmt.SIfLet(_, _, then_b, _, else_b, _, _) => c_check_loop_jump_two(em, then_b, else_b, in_loop)
+			Stmt.SFor(_, _, body_b) => c_check_loop_jump(em, body_b, true)
+			Stmt.SForIn(_, _, body_b, _, _) => c_check_loop_jump(em, body_b, true)
 			Stmt.SSelect(arms) => c_check_loop_jump_sel(em, arms, in_loop)
 
 			# A BARE BLOCK DOES NOT MAKE A LOOP, and without this arm the walk never looked

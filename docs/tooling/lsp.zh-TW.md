@@ -684,5 +684,10 @@ notes 在走過時順手留下,這不改變任何錯誤,所以錯誤仍然是 `c
 
 **quick fix 也不再花一趟走訪。** `textDocument/codeAction` 過去為了它的 fix 再 lower 一次程式——也就是上面那第二趟
 走訪,在每一次要選單時再付一次,不論有沒有提供任何東西,都是半次檢查。現在它從檢查留下的東西作答。`make lsp` 從行程
-外面量一個開啟程式後要求 code action 的 session,對照同一個不要求的 session:八個 request 之前約花五次檢查,之後不到
-一次的十分之一,到一半就失敗。
+外面量一個開啟程式後要求 code action 的 session,對照同一個不要求的 session:八個 request 之前約花五次檢查,之後
+三十二個約花四分之一次,到三次就失敗。
+
+**主機不計 instructions 時,秒數取最低的讀數。** CI runner 的虛擬機一個也不計,所以 `make lsp` 在那裡退回 CPU 秒數,
+而它帶著 runner 鄰居的雜訊。按鍵與 quick fix 的量測把每個 session 讀成數次讀數中最低的一次,因為這種雜訊只會往上加。
+最低的讀數仍無法在雜訊之上看見的成本,會被回報為未判定——由該段落以及 gate 的最後一行說出——而不是通過或失敗;
+以 instructions 計數時,同樣的落差就是失敗。

@@ -890,5 +890,11 @@ and the instructions are the work. A debounce would hide what is left.
 fixes — the second walk above, paid again on every request for the menu, half a check whether it
 offered anything or not. It answers now from what the check kept. `make lsp` measures a session that
 opens a program and asks for code actions against the same session asking none, from outside the
-process: eight requests cost about five checks before and under a tenth of one after, and it fails
-at half.
+process: eight requests cost about five checks before, thirty-two cost about a quarter of one after, and it
+fails at three.
+
+**Where the host counts no instructions, the seconds are read low.** A CI runner's virtual machine counts none,
+so `make lsp` falls back to CPU seconds there, and those carry the noise of the runner's neighbours. The keystroke
+and quick-fix measurements read each session as the lowest of several, since that noise only ever adds. A cost the
+lowest readings still cannot see above it is reported as not judged — by the section and on the gate's last line —
+rather than passed or failed; counted in instructions, the same miss fails.

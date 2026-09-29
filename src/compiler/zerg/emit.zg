@@ -1079,7 +1079,7 @@ fn c_fit_copied(mut &em: Emitter, where: str, want: ast.Ty, e: ast.Expr, sb: Sub
 	# `f([i, 2, 3])` on a `list[float]` parameter wrote int64_t bit patterns into a buffer read
 	# back as doubles. Each element is a typed position of its own, which is also where `Into`
 	# fires on it.
-	return c_list_lit_vals(em, c_list_elem(want), c_elem_exprs(em, e, c_list_elem(want))) if c_is_list(want) and c_is_listlit(e)
+	return c_list_lit_vals(em, c_list_elem(want), c_elem_exprs(em, e, c_list_elem(want), sb)) if c_is_list(want) and c_is_listlit(e)
 
 	return c_into(em, want, e, sb)
 }
@@ -1102,7 +1102,7 @@ fn c_into(mut &em: Emitter, want: ast.Ty, e0: ast.Expr, sb: Subst) -> str {
 	# read HERE rather than in c_fit_copied because a DECLARED BINDING is the one typed
 	# position that does not lower through that one, and `xs: [int; 3] = [1, 2, 3]` is the
 	# first thing anybody writes.
-	return c_arr_lit(em, c_into_says(want), want, e0) if c_is_arr(want) and c_is_listlit(e0)
+	return c_arr_lit(em, c_into_says(want), want, e0, sb) if c_is_arr(want) and c_is_listlit(e0)
 
 	# CARVE-OUT (c): a closure's omitted parameter types — and its omitted return type —
 	# come from the function type it is CHECKED AGAINST, which is a fact about THIS POSITION
@@ -16025,20 +16025,26 @@ fn c_assign_dropping(mut &em: Emitter, t: ast.Ty, lv: str, val: str, ind: str) -
 # Rendering them at their own types put a bare int into a slot whose C type is an optional's
 # carrier — `xs: list[int?] = [nil, 1]` — so the tag it was read back through was whatever
 # the value's first bytes happened to be, when it compiled at all.
-fn c_elem_exprs(mut &em: Emitter, lit: ast.Expr, elem: ast.Ty) -> list[str] {
+#
+# AND UNDER THE SUBSTITUTION THE LITERAL WAS HANDED (#270). A match arm's binding is text
+# spliced in by `sb`, never a C variable, and an EXPRESSION arm has no `em.sub` standing to
+# fall back on — so `P.Wrap(inner) => size([inner])` rendered `inner` with an empty set and
+# came out as `zg_inner__1`, which nothing declares. A binding's initializer, a statement,
+# passes the empty set and gets an enclosing block arm's names from `em.sub` as before.
+fn c_elem_exprs(mut &em: Emitter, lit: ast.Expr, elem: ast.Ty, sb: Subst) -> list[str] {
 	mut out: list[str] = []
-	c_elem_exprs_into(em, c_listlit_elems(em, lit), elem, out)
+	c_elem_exprs_into(em, c_listlit_elems(em, lit), elem, sb, out)
 	return out
 }
 
-fn c_elem_exprs_into(mut &em: Emitter, elems: list[ast.Expr], elem: ast.Ty, mut &out: list[str]) {
+fn c_elem_exprs_into(mut &em: Emitter, elems: list[ast.Expr], elem: ast.Ty, sb: Subst, mut &out: list[str]) {
 	# THE LABEL IS THE CHECKER'S, character for character. Both walks reach the same bad
 	# element and both report at the statement's place, so an identical sentence is one
 	# finding after chk_at_place's dedupe and two if the wording drifts by a word.
 	mut i := 0
 	for e in elems {
 		i = i + 1
-		out.append(c_fit_copied(em, check.chk_elem_says(i), elem, e, c_nosub()))
+		out.append(c_fit_copied(em, check.chk_elem_says(i), elem, e, sb))
 	}
 }
 
@@ -18923,10 +18929,10 @@ fn c_forarr(mut &em: Emitter, var: str, iter: ast.Expr, ct: ast.Ty, body: list[a
 }
 
 # c_arr_fill is `[v; N]` in an array position: one evaluation, then N - 1 copies.
-fn c_arr_fill(mut &em: Emitter, want: ast.Ty, et: ast.Ty, e: ast.Expr, n: int) -> str {
+fn c_arr_fill(mut &em: Emitter, want: ast.Ty, et: ast.Ty, e: ast.Expr, n: int, sb: Subst) -> str {
 	ct := c_type(et)
 	fv := c_tmp(em, "zgt_af")
-	mut out := f"({{ {ct} {fv} = " + c_fit_copied(em, c_into_says(want), et, c_fill_value(e), c_nosub()) + "; "
+	mut out := f"({{ {ct} {fv} = " + c_fit_copied(em, c_into_says(want), et, c_fill_value(e), sb) + "; "
 	out = out + f"({c_type(want)}){{{{"
 	mut i := 0
 	for i < n {
@@ -19392,9 +19398,9 @@ fn c_into_says(want: ast.Ty) -> str {
 # c_arr_lit builds `[T; N]` out of a list literal in an array position. The ELEMENTS are each
 # a typed position of their own, exactly as a list literal's are, so a literal element adopts
 # the array's element type rather than the first element's.
-fn c_arr_lit(mut &em: Emitter, where: str, want: ast.Ty, e: ast.Expr) -> str {
+fn c_arr_lit(mut &em: Emitter, where: str, want: ast.Ty, e: ast.Expr, sb: Subst) -> str {
 	et := c_arr_elem(want)
-	elems := c_elem_exprs(em, e, et)
+	elems := c_elem_exprs(em, e, et, sb)
 	n := c_arr_len(em, want)
 	if elems.len() != n {
 		check.chk_at(em, rule.Rule.ArrayLitLen, f"{where} takes {strconv.to_string(n, 10)} element(s) and this literal has {strconv.to_string(elems.len(), 10)} — an array's length is part of its type, so the two have to agree")
@@ -19407,7 +19413,7 @@ fn c_arr_lit(mut &em: Emitter, where: str, want: ast.Ty, e: ast.Expr) -> str {
 	# one value, not four calls. The list's own fill says so with a temporary, and an array
 	# would otherwise render the expression once per slot, because a fill's elements are the
 	# same expression repeated.
-	return c_arr_fill(em, want, et, e, n) if c_is_fill(e) and n > 1
+	return c_arr_fill(em, want, et, e, n, sb) if c_is_fill(e) and n > 1
 
 	mut out := f"({c_type(want)}){{{{"
 	mut i := 0
@@ -20629,7 +20635,7 @@ fn c_let_list(mut &em: Emitter, name: str, eff: ast.Ty, is_mut: bool, is_const: 
 	# as in c_let: the initializer names what was in scope BEFORE this binding
 	if c_is_listlit(ival) {
 		et := c_type(c_list_elem(eff))
-		vals := c_elem_exprs(em, ival, c_list_elem(eff))
+		vals := c_elem_exprs(em, ival, c_list_elem(eff), c_nosub())
 		c_add_var(em, name, eff, is_mut, is_const)
 		cname := c_var_cname(em, name)
 		mut out := f"{ind}zrt_list {cname}; zrt_list_init(&{cname}, sizeof({et}), &{c_elem_vt(em, c_list_elem(eff))});\n"

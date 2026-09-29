@@ -426,6 +426,15 @@ chan[int]() }`——或任何不是字面值、模組常數，或它們之間算
   這對 bootstrap 不花任何代價:編譯器自己的原始碼沒有寫過跨這兩種形狀的泛型,而種子建不起來的程式是一個
   **skip**、不是一次比對。`test-data/codegen/generic_shapes.zg` 連同它的理由列在表上。
 
+- **陣列 `[T; N]` 不是種子搬得動的值。** 種子把它降成裸的 C 陣列，而 C 不能回傳、指派或條件式地選一個，
+  所以回傳陣列的函式、作為 variant payload 或元素的陣列、直接交給 `[T; N]` 參數的 literal，以及值為陣列的
+  `match` 或 `if`，全都走到 cc——_void function should not return a value_、_array initializer must be an
+  initializer list_。`zerg` 把陣列包進一個 struct，上面每一種都建得起來。
+
+  這對 bootstrap 不花任何代價：編譯器自己的原始碼沒有宣告任何陣列，而種子建不起來的程式是一個 SKIP 而不是
+  一次比對。`test-data/codegen/array_valued_match.zg` 與 `test-data/codegen/array_literal_elem_adopts.zg`
+  連同它的理由列在清單上。
+
 - **`impl` 目標的限定詞不會被檢查。** `zerg` 會記下 `impl` 的目標上有人打了限定詞——`impl Show for shape.P`——
   並問其他每個型別位置的限定詞都會被問的同一個問題:是一個這個檔案沒有 import 的真模組,還是一個程式裡根本沒有
   綁定過的名字。種子把限定詞丟掉、只讀裸名字,所以 `impl Show for bogus.P` 建得起來。

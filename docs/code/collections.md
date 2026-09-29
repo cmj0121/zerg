@@ -239,6 +239,11 @@ of the rules already stated for `list`:
   collection without spelling every element; there is no implicit zero-fill. Under a bare `:=` the fill form
   builds a **`list[T]`**, not the array type `[T; N]`.
 
+  Each element is a typed position of its own, so an untyped one adopts: `xs: [float; 2] = [1, 2]` holds
+  `1.0` and `2.0`. What is context-typed is the **literal** and never a list: a list binding, a call's
+  result, and a `match` or `if` whose arms are literals are `list[T]` values — an arm is not the slot's
+  position — so none of them fits an array slot (_E3033 cannot bind list[int] to a [int; 3] binding_).
+
   The **count is the same compile-time constant** an array length is — a literal, a name whose binding
   folds (module-level or local), or the arithmetic over them: `[0; 256]`, `[0; ROWS * COLS]` and
   `[b'\0'; WIDTH]` are one form. A count that does not fold — a value read at run time, a call — is an

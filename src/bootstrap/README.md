@@ -554,6 +554,17 @@ byte(N)` and `byte(N * 3)` are compile errors. The seed folds the literal alone:
   and a program the seed cannot build is a SKIP rather than a comparison.
   `test-data/codegen/generic_shapes.zg` is listed with its reason.
 
+- **AN ARRAY `[T; N]` IS NOT A VALUE THE SEED CAN MOVE.** It lowers one to a bare C array, and C
+  cannot return, assign or conditionally choose one of those, so a function answering an array,
+  an array as a variant payload or an element, a literal handed straight to a `[T; N]`
+  parameter, and a `match` or `if` whose value is an array all reach cc — _void function should
+  not return a value_, _array initializer must be an initializer list_. `zerg` wraps the array in
+  a struct and builds each of them.
+
+  It costs the bootstrap nothing: the compiler's own sources declare no array, and a program the
+  seed cannot build is a SKIP rather than a comparison. `test-data/codegen/array_valued_match.zg`
+  and `test-data/codegen/array_literal_elem_adopts.zg` are listed with its reason.
+
 - **AN `impl` TARGET'S QUALIFIER IS NOT CHECKED.** `zerg` records that a qualifier was typed on
   an `impl`'s target — `impl Show for shape.P` — and asks the same question every other type
   position's qualifier is asked: a real module this file did not import, or a name nothing in the

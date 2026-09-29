@@ -2113,6 +2113,142 @@ fn main() {
 }
 EOF
 
+# A LIST IS NEVER AN ARRAY — ONLY A LITERAL IS CONTEXT-TYPED (docs/code/collections.md). The
+# rule used to be written on the two TYPES, so every `list[T]` meeting a `[T; N]` slot passed the
+# checker and cc was the one to refuse it: a `match` or an `if` whose arms are list literals
+# (#276), a list binding, a call's result. An arm is not the slot's position, so its literal
+# answers a `list` — the same reason `x: float = if c { 1 } else { 2 }` is refused. Each slot is
+# here once, because the failure this guards against is one slot being forgotten.
+expect "$ZERG" array-slot-return-of-a-match-of-literals E3032 'answer is [int; 3], and this gives list[int]' <<'EOF'
+enum E {
+	Int(int)
+	Other
+}
+
+fn f(e: E) -> [int; 3] {
+	return match e {
+		E.Int(_) => [1, 2, 3]
+		E.Other => [4, 5, 6]
+	}
+}
+
+fn main() {
+	a := f(E.Int(1))
+	print a[0]
+}
+EOF
+
+expect "$ZERG" array-slot-binding-of-an-if-of-literals E3033 'cannot bind list[int] to a [int; 3] binding' <<'EOF'
+fn main() {
+	b := false
+	a: [int; 3] = if b { [1, 2, 3] } else { [4, 5, 6] }
+	print a[1]
+}
+EOF
+
+expect "$ZERG" array-slot-argument-of-a-match-of-literals E3038 'is [int; 3], and this gives list[int]' <<'EOF'
+fn g(x: [int; 3]) -> int {
+	return x[0]
+}
+
+fn main() {
+	b := true
+	print g(match b {
+		true => [1, 2, 3]
+		false => [4, 5, 6]
+	})
+}
+EOF
+
+expect "$ZERG" array-slot-field-of-a-match-of-fills E3036 'is [int; 3], and this gives list[int]' <<'EOF'
+struct S {
+	pub a: [int; 3]
+}
+
+fn main() {
+	b := true
+	s := S(a: match b {
+		true => [7; 3]
+		false => [4, 5, 6]
+	})
+	print s.a[0]
+}
+EOF
+
+expect "$ZERG" array-slot-return-of-a-block-arm-binding E3032 'answer is [int; 3], and this gives list[int]' <<'EOF'
+enum E {
+	Int(int)
+	Other
+}
+
+fn f(e: E) -> [int; 3] {
+	return match e {
+		E.Int(n) => {
+			m := n * 2
+			[m, m, m]
+		}
+		E.Other => [4, 5, 6]
+	}
+}
+
+fn main() {
+	print f(E.Int(1))[0]
+}
+EOF
+
+expect "$ZERG" array-slot-binding-of-a-call-answering-a-list E3033 'cannot bind list[int] to a [int; 3] binding' <<'EOF'
+fn mk() -> list[int] {
+	return [1, 2, 3]
+}
+
+fn main() {
+	a: [int; 3] = mk()
+	print a[0]
+}
+EOF
+
+expect "$ZERG" array-slot-assignment-of-a-list E3037 'holds [int; 3]' <<'EOF'
+fn main() {
+	xs := [1, 2, 3]
+	mut a: [int; 3] = [0; 3]
+	a = xs
+	print a[0]
+}
+EOF
+
+expect "$ZERG" array-slot-list-element-of-a-list E3028 'is [int; 3], and this gives list[int]' <<'EOF'
+fn main() {
+	xs := [1, 2, 3]
+	ys: list[[int; 3]] = [xs]
+	print ys.len()
+}
+EOF
+
+# and the two constructs that answer one type from several places: a literal arm adopts nothing
+# from an array-typed sibling, so the two arms give two types
+expect "$ZERG" array-and-list-literal-match-arms E3021 'give [int; 3] and list[int]' <<'EOF'
+fn f(b: bool) -> [int; 3] {
+	x: [int; 3] = [1, 2, 3]
+	return match b {
+		true => x
+		false => [4, 5, 6]
+	}
+}
+
+fn main() {
+	print f(false)[0]
+}
+EOF
+
+expect "$ZERG" array-and-list-literal-if-branches E3020 'give [int; 3] and list[int]' <<'EOF'
+fn main() {
+	x: [int; 3] = [1, 2, 3]
+	b := false
+	a: [int; 3] = if b { x } else { [4, 5, 6] }
+	print a[0]
+}
+EOF
+
 # THE STRUCT PATTERN IS BUILT, and these are the three questions naming its fields makes it
 # ask. The type name is an ASSERTION and not a reference — the scrutinee's type decides which
 # struct the pattern is about — and without a `..` the pattern names every field, so a struct

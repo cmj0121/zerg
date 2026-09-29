@@ -210,6 +210,11 @@ row := [b'\0'; WIDTH]           # WIDTH 是 top-level const——在裸 := 下�
   **N 份 `v`**——用來建大集合而不必逐一列出；沒有隱式 zero-fill。在裸 `:=` 下 fill 形式建的是一個 **`list[T]`**，
   不是陣列型別 `[T; N]`。
 
+  每個元素各是一個有型別的位置，所以未定型別的元素會採用它：`xs: [float; 2] = [1, 2]` 存的是 `1.0` 與
+  `2.0`。context-typed 的是 **literal**，從來不是 list：list binding、呼叫的結果，以及 arm 為 literal 的
+  `match` 或 `if`，都是 `list[T]` 值——arm 不是該 slot 的位置——所以沒有一個放得進陣列 slot
+  （_E3033 cannot bind list[int] to a [int; 3] binding_）。
+
   這個 **count 就是陣列長度那個編譯期常數**——一個 literal、一個初始式摺得出來的名字（module-level 或 local），
   或它們之間的算術：`[0; 256]`、`[0; ROWS * COLS]` 與 `[b'\0'; WIDTH]` 是同一個形式。摺不出來的 count（runtime
   才讀到的值、函式呼叫）是**在 fill 這一行**報錯，而不是在它所指名的 binding 上，因為要編譯期值的是 fill 這一

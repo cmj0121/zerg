@@ -29,6 +29,10 @@ fail=0
 ran=0
 outlined=0
 
+# What a cost section declined to judge because this host's CPU seconds cannot see it above
+# their noise — named in the last line, so a pass that judged less says so.
+not_judged=""
+
 # A literal tab, for the outline's patterns further down. See the comment there: `\t` written
 # inside a pattern is a tab to BSD grep and the letter `t` to GNU grep, which is a gate that
 # asks one question on a developer's machine and a different one in CI.
@@ -3050,9 +3054,21 @@ fi
 # keystrokes several times over, and on a runner timing in seconds the difference of two large
 # noisy numbers read 6.2 for the fix. So the other program is one whose LOAD is its cost: each
 # module file is one function under a long run of comment lines, which the loader reads and lexes
-# on every question and a walk never visits. And the probe refuses to judge — it fails, loudly —
-# when a session's keystrokes cost less than FLOOR times the rest of that session, because a
-# ratio the measurement cannot see is no answer in either direction.
+# on every question and a walk never visits. And the probe refuses to judge when a session's
+# keystrokes cost less than FLOOR times the rest of that session, because a ratio the
+# measurement cannot see is no answer in either direction.
+#
+# CPU SECONDS ARE READ AS THE LOWEST OF SEVERAL (#275). The noise only ever adds — a shared
+# runner's neighbours, and on Apple silicon a session that lands on an efficiency core, which
+# costs the same work about three times the seconds — so a reading that misses the floor or
+# crosses K is taken again, up to ROUNDS times, and every session is judged at the lowest it read.
+# That is SESSION's rule for a peak. A macOS runner once read 20 keystrokes at 0.47 of the rest
+# of a session that reads 1.3 on the same code counted in instructions, and the gate failed for
+# it; a regression only ever adds to the far session's keystrokes, so it never hides under the
+# floor. A floor the lowest readings still miss is then the host's noise and not the server's
+# cost, and the probe says it did NOT JUDGE the rule and passes the section — in CPU seconds only.
+# Instructions are the same count however the machine is loaded, so there a missed floor is the
+# fixture no longer measuring a keystroke, and it fails.
 #
 # THE SUBJECT'S OWN ROUND HAS TO BE SMALL too. `probe/anchor.zg` is there to stop the entry
 # search climbing into the fixtures the sections above left lying in `$tmp` — the search stops at
@@ -3153,35 +3169,55 @@ def session(open_others, keystrokes):
 # One keystroke is the DIFFERENCE between a session of MANY and a session of one, divided by
 # the keystrokes between them, so the process start-up and the opens cancel out of both sides —
 # and the floor says whether what is left is large enough to be read at all.
-MANY = 21
+MANY = 31
+ROUNDS = 1 if counts else 3
+lowest = {}
 
 
-def per_keystroke(open_others):
-    p1, one = cost(session(open_others, 1))
-    pn, many = cost(session(open_others, MANY))
-    for p in (p1, pn):
-        if b"publishDiagnostics" not in p.stdout:
-            print("PROBE     a session published nothing, so no keystroke was measured")
-            sys.exit(1)
-    typed = many - one
-    if typed < floor * one:
+def reading(open_others, keystrokes):
+    p, c = cost(session(open_others, keystrokes))
+    if b"publishDiagnostics" not in p.stdout:
+        print("PROBE     a session published nothing, so no keystroke was measured")
+        sys.exit(1)
+    at = (len(open_others), keystrokes)
+    lowest[at] = min(lowest.get(at, c), c)
+    return lowest[at]
+
+
+# (buffers open, the rest of the session, its keystrokes) at the lowest readings so far
+def typed(open_others):
+    one = reading(open_others, 1)
+    return len(open_others), one, reading(open_others, MANY) - one
+
+
+for rounds in range(1, ROUNDS + 1):
+    near, far = typed(others[:1]), typed(others)
+    unseen = [t for t in (near, far) if t[2] < floor * t[1]]
+    ratio = None if unseen else far[2] / near[2]
+    if ratio is not None and ratio <= k:
+        break
+read = " — the lowest of %d readings" % rounds if rounds > 1 else ""
+
+if unseen:
+    for n, one, keys in unseen:
         print("PROBE     %d keystrokes with %d of the other program's buffers open cost %.4g %s against %.4g "
-              "for the rest of the session, under the floor of %.2g times it: the measurement cannot see "
-              "a keystroke, so it does not judge one" % (MANY - 1, len(open_others), typed, unit, one, floor))
+              "for the rest of the session, under the floor of %.2g times it%s"
+              % (MANY - 1, n, keys, unit, one, floor, read))
+    if counts:
+        print("PROBE     the fixture no longer makes a keystroke most of what a session costs")
         sys.exit(2)
-    return typed / (MANY - 1)
-
-
-near = per_keystroke(others[:1])
-far = per_keystroke(others)
-ratio = far / near
-print("PROBE     a keystroke with %d buffers of another program costs %.2f times one with 1 (%s: %.4g, %.4g)"
-      % (len(others), ratio, unit, near, far))
+    print("PROBE     NOT JUDGED on this host: its CPU seconds cannot see a keystroke above their noise")
+    sys.exit(3)
+print("PROBE     a keystroke with %d buffers of another program costs %.2f times one with 1 (%s: %.4g, %.4g%s)"
+      % (len(others), ratio, unit, near[2] / (MANY - 1), far[2] / (MANY - 1), read))
 if ratio > k:
     print("PROBE     the cost of a keystroke grows with the number of open buffers of one program")
     sys.exit(1)
 PYEOF
-if [ "$probe_rc" -eq 2 ]; then
+if [ "$probe_rc" -eq 3 ]; then
+	echo "lsp-check: a keystroke is too small a part of its session for this host to measure, so its cost was not judged"
+	not_judged="$not_judged, what a keystroke costs"
+elif [ "$probe_rc" -eq 2 ]; then
 	echo "lsp-check: a keystroke is too small a part of its session to be measured, so its cost was not judged"
 	exit 1
 elif [ "$probe_rc" -ne 0 ]; then
@@ -3211,14 +3247,27 @@ fi
 # asking none. A walk per request makes the difference A walks; an answer from the check makes it
 # the cost of A replies. The program is one whose WALK is its cost — many small functions, each a
 # lowering and each holding two fixable literals — so the check the difference is judged against
-# is well above the process's start-up. And the probe refuses to judge — it fails, loudly — when
-# that check costs under FLOOR times a session that opens nothing, because on a runner timing in
-# CPU seconds a ratio over a check the timer cannot see is no answer either way.
+# is well above the process's start-up. And the probe refuses to judge when that check costs
+# under FLOOR times a session that opens nothing, because on a runner timing in CPU seconds a
+# ratio over a check the timer cannot see is no answer either way.
 #
-# K IS NAMED HERE: A requests cost under K checks together. A walk per request reads about A/2 —
-# a check is a walk and the tree rules — and an answer from the check reads near 0.
-LSP_CA_ASKS=8
-LSP_CA_K=0.5
+# THE SIGNAL IS MADE LARGE AND THE NOISE READ LOW (#275), because a runner counting CPU seconds
+# once read 8 requests of the fixed server at 0.55 checks, over a K of 0.5, where instructions
+# read the same code at 0.09: its check was 0.4 s and its neighbours' noise the same order as
+# the difference. So a walk per request is made many checks and the fixed server's replies a
+# fraction of one — A is large, and so is the program — and K sits between them with a margin of
+# several checks either way, where the noise on a difference of two sessions is a fraction of one. And each session is read as the LOWEST of several: the noise only ever
+# adds, so a reading over K or under the floor is taken again, up to ROUNDS times, before it
+# fails the gate, as SESSION confirms a peak. A floor the lowest readings still miss is the
+# host's noise, not the server's cost — a code action that walks adds to neither side of the
+# floor — so in CPU seconds the section says it did NOT JUDGE the rule and passes; counted in
+# instructions, which no load moves, a missed floor is the fixture failing to measure, and fails.
+#
+# K IS NAMED HERE: A requests cost under K checks together. A walk on every other request —
+# #204's half a check a request — reads about 2A/5, one on every request more, and an answer
+# from the check under A/100.
+LSP_CA_ASKS=32
+LSP_CA_K=3
 LSP_CA_FLOOR=4
 mkdir -p "$tmp/ca" "$tmp/cacost"
 cat >"$tmp/ca/lib.zg" <<'ZG'
@@ -3354,9 +3403,9 @@ print("QUICKFIX  %d quick fixes in lib.zg, the ones `zerg lint` places, from eit
 # --- what it costs ---
 prog = os.path.join(cost_dir, "many.zg")
 with open(prog, "w", encoding="utf-8") as f:
-    for i in range(2000):
+    for i in range(4000):
         f.write("fn f%d() -> float {\n\tx: float = 1 / 2\n\treturn x\n}\n\n" % i)
-    f.write("fn main() {\n\tprint f0() + f1999()\n}\n")
+    f.write("fn main() {\n\tprint f0() + f3999()\n}\n")
 ref = subprocess.run([zerg, "build", "--emit", "check", prog], stdout=subprocess.PIPE, stderr=subprocess.PIPE)
 if ref.returncode != 0:
     print("QUICKFIX  the cost fixture does not check: %s" % ref.stderr.decode("utf-8", "replace").strip())
@@ -3394,32 +3443,55 @@ def ask_at(i):
         "context": {"diagnostics": []}}}
 
 
-_, bare = cost([INIT] + DOWN)
-p0, none = cost([INIT, opened(prog)] + DOWN)
-pa, some = cost([INIT, opened(prog)] + [ask_at(10 + i) for i in range(asks)] + DOWN)
-fr = frames(pa.stdout)
-answers = [offered(fr, 10 + i, prog) for i in range(asks)]
-if published(frames(p0.stdout), prog) is None or any(a is None or len(a) != 1 for a in answers):
-    print("QUICKFIX  a session did not check the program or answer every request with its one fix: %r" % answers)
-    sys.exit(1)
+ROUNDS = 1 if counts else 3
+lowest = {}
 
-check = none - bare
-if check < floor * bare:
+
+def reading(what, msgs):
+    p, c = cost(msgs)
+    lowest[what] = min(lowest.get(what, c), c)
+    return p
+
+
+for rounds in range(1, ROUNDS + 1):
+    reading("bare", [INIT] + DOWN)
+    p0 = reading("none", [INIT, opened(prog)] + DOWN)
+    pa = reading("some", [INIT, opened(prog)] + [ask_at(10 + i) for i in range(asks)] + DOWN)
+    fr = frames(pa.stdout)
+    answers = [offered(fr, 10 + i, prog) for i in range(asks)]
+    if published(frames(p0.stdout), prog) is None or any(a is None or len(a) != 1 for a in answers):
+        print("QUICKFIX  a session did not check the program or answer every request with its one fix: %r" % answers)
+        sys.exit(1)
+    bare, none, some = lowest["bare"], lowest["none"], lowest["some"]
+    check = none - bare
+    seen = check >= floor * bare
+    ratio = (some - none) / check if seen else None
+    if seen and ratio < k:
+        break
+read = " — the lowest of %d readings" % rounds if rounds > 1 else ""
+
+if not seen:
     print("QUICKFIX  a check costs %.4g %s against %.4g for a session that opens nothing, under the floor of "
-          "%.2g times it: the measurement cannot see a walk, so it does not judge one" % (check, unit, bare, floor))
-    sys.exit(2)
-ratio = (some - none) / check
-print("QUICKFIX  %d code actions on an unchanged buffer cost %.2f checks (%s: check %.4g, the requests %.4g)"
-      % (asks, ratio, unit, check, some - none))
+          "%.2g times it%s" % (check, unit, bare, floor, read))
+    if counts:
+        print("QUICKFIX  the fixture no longer makes a walk most of what a session costs")
+        sys.exit(2)
+    print("QUICKFIX  NOT JUDGED on this host: its CPU seconds cannot see a walk above their noise")
+    sys.exit(3)
+print("QUICKFIX  %d code actions on an unchanged buffer cost %.2f checks (%s: check %.4g, the requests %.4g%s)"
+      % (asks, ratio, unit, check, some - none, read))
 if ratio >= k:
     print("QUICKFIX  a code action on an unchanged buffer walks the program")
     sys.exit(1)
 PYEOF
-if [ "$ca_rc" -eq 2 ]; then
+if [ "$ca_rc" -eq 3 ]; then
+	echo "lsp-check: a check is too small a part of its session for this host to measure, so a code action's cost was not judged"
+	not_judged="$not_judged, what a code action costs"
+elif [ "$ca_rc" -eq 2 ]; then
 	echo "lsp-check: a check is too small a part of its session to be measured, so a code action's cost was not judged"
 	exit 1
 elif [ "$ca_rc" -ne 0 ]; then
 	echo "lsp-check: a quick fix is not the check's answer, or costs a walk of its own"
 	exit 1
 fi
-echo "lsp-check: $ran buffers agree with the compiler, $outlined outlines are the parser's own, $members module members are checked against their module, formatting is fmt's answer, every protocol case holds, the dump carries the type parameters the outline cannot show, a check is one walk, a name answers with the declaration the compiler resolved it to, a long session stays in the band of one check, a hover is the document zerg doc prints for it, the outline is a view of the program, an outline of the largest source is not a walk of it, every open buffer is the program the editor holds, and a quick fix is the check's answer and costs no walk of its own"
+echo "lsp-check: $ran buffers agree with the compiler, $outlined outlines are the parser's own, $members module members are checked against their module, formatting is fmt's answer, every protocol case holds, the dump carries the type parameters the outline cannot show, a check is one walk, a name answers with the declaration the compiler resolved it to, a long session stays in the band of one check, a hover is the document zerg doc prints for it, the outline is a view of the program, an outline of the largest source is not a walk of it, every open buffer is the program the editor holds, a keystroke asks once per program, and a quick fix is the check's answer and costs no walk of its own${not_judged:+ — NOT JUDGED on this host: ${not_judged#, }}"

@@ -17584,10 +17584,11 @@ fn c_lambda(mut &em: Emitter, ps: list[ast.Param], has_ret: bool, ret: ast.Ty, b
 	for cn in caps {
 		ct := c_lookup_var(em, cn)
 
-		# A capture whose type is unknown cannot be given a field. It carries no CODE because
-		# no program reaches it: a binding with no type of its own is refused at the binding
-		# (E3034), long before a lambda can close over it. This is the guard that says so if
-		# that ever stops being true, and a code exists when a gate pins it and not before.
+		# A capture whose type is unknown cannot be given a field, so it is refused here and
+		# the refusal NAMES it. What arrives untyped is a read the enclosing function's
+		# environment has no row for: a name no local, constant or function answers to; a
+		# name that function binds only LATER, below the closure; and a name that is not a
+		# value at all — an imported namespace, or an enum's name, written before a `.`.
 		raise c_diag(em, rule.Rule.ClosureCaptureUnknown, f"a closure captures `{cn}`, and this compiler cannot work out what it holds") if c_is_unknown(ct)
 
 		cps.append(ast.Param(cn, ct, false, false, ast.Expr.ENil, 0, 0))
@@ -17838,25 +17839,201 @@ fn c_stmts_free(e: ast.Expr) -> list[str] {
 	}
 }
 
-# c_body_free is every name a body of statements reads and does not bind, with `ps` the
-# parameters that bind around it (a closure's) — what the body would have to be handed.
+# c_body_free is every name a body of statements reads from OUTSIDE itself, in the order it
+# first reads them, with `ps` the parameters that bind around it (a closure's) — what the body
+# would have to be handed.
+#
+# IT IS DECIDED BY SCOPE, read by read: a name is free when nothing inside the body has bound
+# it BEFORE that read, in a block the read stands in. A flat set — every name read, less every
+# name bound anywhere — answered two programs wrongly. `t := n` followed by `n := 5` reads the
+# outer `n` and then shadows it; the flat set called `n` bound, so nothing was captured and the
+# read was an undefined name. And the set it subtracted knew `:=` and `if v :=` only, so a
+# destructured name, a loop variable, a match arm's binder, a select arm's `v := <-ch` and a
+# nested closure's own parameter were each a capture out of nothing (#269).
+#
+# HOW FAR A BINDER REACHES is the rule the walk below states, because the tree's enumerations
+# (`ast.stmt_binds`, `ast.pat_binds`) say what a form names and not where the name ends:
+#
+#   - `x := e` and `(a, b) := e` bind the statements AFTER them in their block. The value is
+#     walked first, so `n := n + 1` reads the outer `n`.
+#   - a loop variable, the `v` of `if v := e` (its then-branch), a select arm's `v := <-ch`, a
+#     match arm's pattern binders (the arm's guard and body) and a closure's parameters bind
+#     what they head and nothing after it: `for n in xs { … }` and then `n` reads the outer `n`.
+#   - a block's `}` ends everything bound inside it.
+#
+# A FORM THE WALK DOES NOT KNOW LEAVES ITS NAMES FREE, which is the safe side to be wrong on: a
+# capture nothing outside holds is refused aloud, while a name wrongly called bound is read
+# from whatever else answers to it, in silence.
+#
+# The READS are the tree's own (`ast.stmt_exprs`, `ast.expr_parts`) and not `lint.walk_body`'s:
+# that walk answers "is this name used anywhere" for the lint rules, and has no order to give.
 fn c_body_free(ps: list[ast.Param], body: list[ast.Stmt]) -> list[str] {
-	mut ids: list[str] = []
-	mut calls: list[str] = []
-	mut ns: list[str] = []
-	lint.walk_body(body, ids, calls, ns)
 	mut bound: list[str] = []
 	for pm in ps {
 		bound.append(pm.name)
 	}
-	lint.collect_binds(body, bound)
 	mut out: list[str] = []
-	for id in ids {
-		if not c_name_in(bound, id) and not c_name_in(out, id) {
-			out.append(id)
-		}
-	}
+	c_free_stmts(body, bound, out)
 	return out
+}
+
+# `bound` is the scope stack, innermost last: whatever opens a scope notes the length on the
+# way in and c_free_close gives back what was added on the way out. `out` is the free names.
+fn c_free_stmts(body: list[ast.Stmt], mut &bound: list[str], mut &out: list[str]) {
+	for s in body {
+		c_free_stmt(s, bound, out)
+	}
+}
+
+# c_free_block is one block with `names` bound over the whole of it — the binders of the form
+# that heads it, or none.
+fn c_free_block(names: list[str], body: list[ast.Stmt], mut &bound: list[str], mut &out: list[str]) {
+	mark := bound.len()
+	for nm in names {
+		bound.append(nm)
+	}
+	c_free_stmts(body, bound, out)
+	c_free_close(bound, mark)
+}
+
+# c_free_close ends a scope. Its names are BLANKED rather than removed — the seed's list grows
+# and is indexed, and does not shrink — and no name is "".
+fn c_free_close(mut &bound: list[str], mark: int) {
+	mut i := mark
+	for i < bound.len() {
+		bound[i] = ""
+		i = i + 1
+	}
+}
+
+fn c_free_read(nm: str, mut &bound: list[str], mut &out: list[str]) {
+	if not c_free_has(bound, nm) and not c_free_has(out, nm) {
+		out.append(nm)
+	}
+}
+
+# c_free_has is `c_name_in` with the list left where it is. `c_name_in` takes its list BY
+# VALUE — no element is copied, a list's buffer is copy-on-write, but each call retains the
+# buffer and releases it — and this is asked once per identifier read.
+fn c_free_has(mut &names: list[str], nm: str) -> bool {
+	mut i := 0
+	for i < names.len() {
+		return true if names[i] == nm
+		i = i + 1
+	}
+	return false
+}
+
+fn c_free_stmt(s: ast.Stmt, mut &bound: list[str], mut &out: list[str]) {
+	match s {
+		Stmt.SLet(_, _, _, _, _, _, _, _) => c_free_binding(s, bound, out)
+		Stmt.SDestructure(_, _, _, _, _) => c_free_binding(s, bound, out)
+		Stmt.SIf(c, tb, _, eb) => c_free_branch(c, [], tb, eb, bound, out)
+		Stmt.SIfLet(_, v, tb, _, eb, _, _) => c_free_branch(v, ast.stmt_binds(s), tb, eb, bound, out)
+		Stmt.SForIn(_, it, b, _, _) => c_free_branch(it, ast.stmt_binds(s), b, [], bound, out)
+		Stmt.SSelect(arms) => c_free_sel(arms, bound, out)
+		Stmt.SForSelect(arms) => c_free_sel(arms, bound, out)
+
+		# TRANSPARENT (ast.Stmt.SAssert): its statements run in the enclosing block, so the
+		# temporaries it mints are that block's
+		Stmt.SAssert(ss)    => c_free_stmts(ss, bound, out)
+		Stmt.SDel(nm, _, _) => c_free_read(nm, bound, out)
+
+		# A BARE BLOCK IS A SCOPE (`unsafe { … }` as a statement is the same node): what it
+		# binds ends at its `}`, so a read after it is the outer name's
+		Stmt.SScope(ss, _) => c_free_block([], ss, bound, out)
+
+		# every other statement binds nothing and holds at most one block
+		_ => c_free_plain(s, bound, out)
+	}
+}
+
+# c_free_binding is a statement whose names begin AFTER it: what it reads is walked first, and
+# the names stay on the stack for the siblings that follow, until the block's own close.
+fn c_free_binding(s: ast.Stmt, mut &bound: list[str], mut &out: list[str]) {
+	for e in ast.stmt_exprs(s) {
+		c_free_expr(e, bound, out)
+	}
+	for nm in ast.stmt_binds(s) {
+		bound.append(nm)
+	}
+}
+
+# c_free_branch is a head expression, the block `names` are bound over, and a second block
+# they are not bound in — an `else`, or nothing. The head is read OUTSIDE the names: the
+# iterable of `for x in x` and the value of `if v := v` are the outer `x` and `v`.
+fn c_free_branch(head: ast.Expr, names: list[str], then_b: list[ast.Stmt], else_b: list[ast.Stmt], mut &bound: list[str], mut &out: list[str]) {
+	c_free_expr(head, bound, out)
+	c_free_block(names, then_b, bound, out)
+	c_free_block([], else_b, bound, out)
+}
+
+fn c_free_plain(s: ast.Stmt, mut &bound: list[str], mut &out: list[str]) {
+	for e in ast.stmt_exprs(s) {
+		c_free_expr(e, bound, out)
+	}
+	c_free_block([], ast.stmt_kids(s), bound, out)
+}
+
+# a select arm's channel and sent value are read outside its binder; `v := <-ch` binds the
+# arm's body alone. An arm with no name carries "", which binds nothing a read can spell.
+fn c_free_sel(arms: list[ast.SelArm], mut &bound: list[str], mut &out: list[str]) {
+	for a in arms {
+		c_free_expr(a.ch, bound, out)
+		c_free_expr(a.val, bound, out)
+		c_free_block([a.bind], a.body, bound, out)
+	}
+}
+
+fn c_free_expr(e: ast.Expr, mut &bound: list[str], mut &out: list[str]) {
+	match e {
+		Expr.EIdent(nm, _, _)    => c_free_read(nm, bound, out)
+		Expr.EMatch(scrut, arms) => c_free_match(scrut, arms, bound, out)
+		Expr.EFn(ps, _, _, body) => c_free_fn(ps, body, bound, out)
+
+		# every other expression binds nothing: its parts, and the block it carries if it does
+		_ => c_free_parts(e, bound, out)
+	}
+}
+
+fn c_free_parts(e: ast.Expr, mut &bound: list[str], mut &out: list[str]) {
+	for k in ast.expr_parts(e) {
+		c_free_expr(k, bound, out)
+	}
+	c_free_block([], ast.expr_stmts(e), bound, out)
+}
+
+# a pattern's literals are read outside the arm; its binders reach the arm's guard and body
+fn c_free_match(scrut: ast.Expr, arms: list[ast.Arm], mut &bound: list[str], mut &out: list[str]) {
+	c_free_expr(scrut, bound, out)
+	for a in arms {
+		for e in ast.pat_exprs(a.pat) {
+			c_free_expr(e, bound, out)
+		}
+		mark := bound.len()
+		for nm in ast.pat_binds(a.pat) {
+			bound.append(nm)
+		}
+		if a.has_guard {
+			c_free_expr(a.guard_expr, bound, out)
+		}
+		c_free_expr(a.body, bound, out)
+		c_free_close(bound, mark)
+	}
+}
+
+# a NESTED closure: what it reads and does not bind, the closure around it has to hold too. A
+# parameter's default is walked before the parameter is bound, so it sees the ones before it.
+fn c_free_fn(ps: list[ast.Param], body: list[ast.Stmt], mut &bound: list[str], mut &out: list[str]) {
+	mark := bound.len()
+	for pm in ps {
+		if pm.has_def {
+			c_free_expr(pm.def, bound, out)
+		}
+		bound.append(pm.name)
+	}
+	c_free_stmts(body, bound, out)
+	c_free_close(bound, mark)
 }
 
 # c_lambda_free_all is every name a lambda's body uses and does not bind — its CAPTURES.

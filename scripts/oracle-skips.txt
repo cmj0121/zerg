@@ -15,6 +15,12 @@
 # the signal this is for.
 #
 # The private corpus keeps its own half of this file, inside the submodule.
+#
+# A sentence here can read like a rule and be a missing form. `24_closures` is turned away
+# for an argument count: it calls a local closure that shares a function's name, and the seed
+# — which has no closure values, so nothing to capture — reads the call as the function and
+# checks it against the wrong declaration, before it reaches the sentence that says a closure
+# is not a value it lowers.
 
 examples/11_coroutines.zg	the bootstrap seed does not lower a send `ch <- v`: concurrency belongs to the self-hosting compiler, which implements the whole chapter
 examples/12_actor.zg	the bootstrap seed does not lower a send `ch <- v`: concurrency belongs to the self-hosting compiler, which implements the whole chapter
@@ -22,5 +28,5 @@ examples/13_cancel.zg	the bootstrap seed does not lower a send `ch <- v`: concur
 examples/14_optional.zg	the bootstrap seed does not supply the implicit `nil` for an omitted `T?` field; pass it explicitly
 examples/21_structs.zg	undefined name "Point"
 examples/23_collections.zg	a map has no method "has"
-examples/24_closures.zg	a closure used as a value is not yet supported
+examples/24_closures.zg	function "double" expects 1 argument(s), got 2
 examples/25_errors.zg	undefined name "Either"

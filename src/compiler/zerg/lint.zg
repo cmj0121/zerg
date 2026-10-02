@@ -1100,63 +1100,6 @@ fn lint_unread_bindings(f: ast.File, mut &out: list[Finding]) {
 
 # --- collection ------------------------------------------------------------------------
 
-# collect_binds is the names a block binds, for the EMITTER's closure-capture analysis
-# (c_body_free subtracts them from what a body reads). It is NOT L103's walk, and it is kept
-# exactly as it was when the two were one: it knows `:=` and `if v :=`, the blocks of the
-# statements that hold them, and the one block-carrying expression at a `:=` value or an
-# expression statement. Widening it changes which closures the compiler accepts — in both
-# directions, since the analysis is a flat name set with no scopes — and that is a compiler
-# change with its own case to make, not a lint rule's side effect.
-pub fn collect_binds(body: list[ast.Stmt], mut &names: list[str]) {
-	for s in body {
-		match s {
-			Stmt.SLet(name, _, _, _, _, value, _, _) => capture_binds_let(name, value, names)
-			Stmt.SIf(_, then_b, _, else_b) => capture_binds_two(then_b, else_b, names)
-			Stmt.SFor(_, _, body_b) => collect_binds(body_b, names)
-			Stmt.SForIn(_, _, body_b, _, _) => collect_binds(body_b, names)
-			Stmt.SAssert(body_b) => collect_binds(body_b, names)
-			Stmt.SIfLet(name, _, then_b, _, else_b, _, _) => capture_binds_iflet(name, then_b, else_b, names)
-			Stmt.SExpr(x) => capture_binds_expr(x, names)
-			Stmt.SSelect(arms) => capture_binds_arms(arms, names)
-			Stmt.SForSelect(arms) => capture_binds_arms(arms, names)
-			Stmt.SScope(body_b, _) => collect_binds(body_b, names)
-			_ => skip()
-		}
-	}
-}
-
-fn capture_binds_arms(arms: list[ast.SelArm], mut &names: list[str]) {
-	for a in arms {
-		collect_binds(a.body, names)
-	}
-}
-
-fn capture_binds_let(name: str, value: ast.Expr, mut &names: list[str]) {
-	names.append(name)
-	capture_binds_expr(value, names)
-}
-
-fn capture_binds_expr(e: ast.Expr, mut &names: list[str]) {
-	match e {
-		Expr.EGuard(body_b) => collect_binds(body_b, names)
-		Expr.EBlock(body_b) => collect_binds(body_b, names)
-		Expr.EUnsafe(body_b) => collect_binds(body_b, names)
-		Expr.EFn(_, _, _, body_b) => collect_binds(body_b, names)
-		_ => skip()
-	}
-}
-
-fn capture_binds_two(then_b: list[ast.Stmt], else_b: list[ast.Stmt], mut &names: list[str]) {
-	collect_binds(then_b, names)
-	collect_binds(else_b, names)
-}
-
-fn capture_binds_iflet(name: str, then_b: list[ast.Stmt], else_b: list[ast.Stmt], mut &names: list[str]) {
-	names.append(name)
-	collect_binds(then_b, names)
-	collect_binds(else_b, names)
-}
-
 # collect_binds_at is L103's walk: every name a function binds, keeping WHERE each was bound
 # alongside it. The two lists are parallel: `ats[i]` is where `names[i]` was written, taken
 # from the SAt marker the parser leaves before every statement of a block.
@@ -1332,7 +1275,7 @@ fn walk_field_defaults(fields: list[ast.FieldDef], mut &ids: list[str], mut &cal
 
 # walk_body records every identifier read, every called function name, and every namespace
 # a method call goes through, for a whole block.
-pub fn walk_body(body: list[ast.Stmt], mut &ids: list[str], mut &calls: list[str], mut &ns: list[str]) {
+fn walk_body(body: list[ast.Stmt], mut &ids: list[str], mut &calls: list[str], mut &ns: list[str]) {
 	for s in body {
 		match s {
 			Stmt.SLet(_, _, _, _, _, value, _, _) => walk_expr(value, ids, calls, ns)

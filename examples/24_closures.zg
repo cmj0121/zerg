@@ -4,8 +4,16 @@
 # (`fn (a: int) -> int { … }`) captures each closed-over binding BY COPY at
 # the point it is written, so the value it saw is the value it keeps.
 #
+# What it captures is what its body reads from OUTSIDE. A closure body is an
+# ordinary body, so a name it binds for itself is its own and is not a capture;
+# and a name means its nearest binding, to a closure as to the line beside it.
+# A module's constant is not a capture either: nothing is copied, and the
+# closure reads it where it lives.
+#
 # beyond-the-seed: a closure used as a value. The bootstrap seed does not lower
 # one, so this example is built by `zerg` — which is what `make examples` uses.
+const STEP := 7
+
 fn double(x: int) -> int {
 	return x * 2
 }
@@ -20,6 +28,92 @@ fn adder(n: int) -> fn (int) -> int {
 	}
 }
 
+fn bounds() -> (int, int) {
+	return (2, 5)
+}
+
+# Every closure here reads `base`, and that is the one thing each of them
+# captures: any other name in a body is bound by the body, or is the module's.
+fn own_names() {
+	base := 1000
+
+	# `lo` and `hi` are the destructure's, and `x` is the loop's
+	span := fn () -> int {
+		(lo, hi) := bounds()
+		mut t := base
+
+		for x in [lo, hi, 30] {
+			t = t + x
+		}
+		return t
+	}
+	print span() # 1037
+
+	# `big` is bound by the arm that names it
+	clamp := fn (n: int) -> int {
+		return match n {
+			0 => base
+			big if big > 100 => 100
+			_ => n + base
+		}
+	}
+	print clamp(0)   # 1000
+	print clamp(500) # 100
+	print clamp(7)   # 1007
+
+	# `v` is the receive arm's
+	inbox := chan[int](1)
+	inbox <- 20
+	take := fn (c: <-chan[int]) -> int {
+		mut got := base
+
+		select {
+			v := <-c => got = got + v
+		}
+		return got
+	}
+	print take(inbox) # 1020
+
+	# a closure inside a closure: `y` is the inner one's parameter, and `base`
+	# is captured by the outer one so that the inner one can capture it too
+	outer := fn (a: int) -> int {
+		inner := fn (y: int) -> int {
+			return y + base
+		}
+		return inner(a) * 2
+	}
+	print outer(3) # 2006
+
+	# read, THEN shadowed: until its own `base` is bound the body means the
+	# captured one, and the copy it took is all the shadow can hide
+	next := fn () -> int {
+		seen := base
+		base := 5
+		return seen + base
+	}
+	print next() # 1005
+	print base   # 1000
+
+	# a loop variable may take the captured name too, and only for its loop:
+	# past the closing brace `base` is the captured one again
+	laps := fn () -> int {
+		mut t := 0
+
+		for base in [1, 2] {
+			t = t + base
+		}
+		return t + base
+	}
+	print laps() # 1003
+
+	# `STEP` is the module's and `base` is this function's, so `base` is still
+	# the only capture
+	stride := fn (n: int) -> int {
+		return base + n * STEP
+	}
+	print stride(3) # 1021
+}
+
 fn main() {
 	print apply(double, 21)
 
@@ -28,4 +122,17 @@ fn main() {
 	print add10(5)
 	print add100(5)
 	print add10(1)
+
+	own_names()
+
+	# A local may take a function's name, and from here on `double` is this
+	# closure — which is what the closure below captures and calls, rather than
+	# the function at the top of the file.
+	double := fn (x: int, y: int) -> int {
+		return (x + y) * 2
+	}
+	both := fn (v: int) -> int {
+		return double(v, 1)
+	}
+	print both(21) # 44
 }

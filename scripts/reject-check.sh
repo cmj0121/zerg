@@ -5764,6 +5764,26 @@ fn main() {
 }
 EOF
 
+# and a closure written under that binding is asked the same question and gives the same
+# answer. A closure used to skip every name a function also carries when it worked out what
+# it captures, so the call below went past the local to the function and the program was
+# built: a wrong answer, and a quiet one (#280). The function and the local differ in KIND
+# here, so there is no reading of this program under which the call is right — the half
+# where the local IS callable, and answers, is examples/24_closures.zg.
+reject a-closure-calling-a-binding-that-shadows-a-function E3066 '`tally` holds an int' <<'EOF'
+fn tally(x: int) -> int {
+	return x + 100
+}
+
+fn main() {
+	tally := 3
+	h := fn () -> int {
+		return tally(4)
+	}
+	print h()
+}
+EOF
+
 reject field-on-a-non-struct E3072 <<'EOF'
 fn main() {
 	n := 5
@@ -8925,10 +8945,30 @@ fn main(args: list[str]) {
 }
 EOF
 
-reject a-closure-capturing-a-name-with-no-type E4069 <<'EOF'
+# THE NAME IS THE ASSERTION. The code alone says a capture went untyped and not WHICH name
+# the compiler took for a capture, and that is where this rule was wrong: a name the body
+# binds for itself was counted as read from outside and refused with this same code (#269).
+# The second case is the one that tells the two analyses apart: its body binds `x` before it
+# reads `nowhere`, so a compiler that still takes a body's own binder for a capture names
+# `x` and is turned away by the sentence.
+reject a-closure-capturing-a-name-with-no-type E4069 'a closure captures `zz`' <<'EOF'
 fn main() {
 	f := fn () -> int {
 		return zz
+	}
+	print f()
+}
+EOF
+
+reject a-closure-that-binds-its-own-names-capturing-one-with-no-type E4069 'a closure captures `nowhere`' <<'EOF'
+fn main() {
+	f := fn () -> int {
+		mut t := 0
+
+		for x in [1, 2] {
+			t = t + x
+		}
+		return t + nowhere
 	}
 	print f()
 }

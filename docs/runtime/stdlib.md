@@ -625,11 +625,6 @@ e := testing.assert_raises(guard { strings.split("a,b", "") })
 assert e is ValueError
 ```
 
-> A **closure** — `assert_raises(fn () { strings.split("a,b", "") })` — reads better and does not compile:
-> a closure body naming an imported module is _E4069 a closure captures `strings`_, a namespace being a
-> free name that a capture would have to give a type. Every test that reaches its module through `import`
-> is that shape, so the `guard` is the form that serves them.
-
 ### What a running test says
 
 `Context` is the channel a test speaks to its runner over, and every method on it is a message rather than

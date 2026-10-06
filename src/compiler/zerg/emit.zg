@@ -17585,10 +17585,11 @@ fn c_lambda(mut &em: Emitter, ps: list[ast.Param], has_ret: bool, ret: ast.Ty, b
 		ct := c_lookup_var(em, cn)
 
 		# A capture whose type is unknown cannot be given a field, so it is refused here and
-		# the refusal NAMES it. What arrives untyped is a read the enclosing function's
-		# environment has no row for: a name no local, constant or function answers to; a
-		# name that function binds only LATER, below the closure; and a name that is not a
-		# value at all — an imported namespace, or an enum's name, written before a `.`.
+		# the refusal NAMES it. Every capture is a binding of the enclosing function, so what
+		# arrives untyped is a binding that function never typed — `xs := []`, which the
+		# checker has already reported and which would otherwise go on into a C declaration.
+		# A name that function has NOT bound is no capture and never reaches this line: the
+		# lifted body resolves it, or refuses it as it would be refused outside a closure.
 		raise c_diag(em, rule.Rule.ClosureCaptureUnknown, f"a closure captures `{cn}`, and this compiler cannot work out what it holds") if c_is_unknown(ct)
 
 		cps.append(ast.Param(cn, ct, false, false, ast.Expr.ENil, 0, 0))
@@ -18052,9 +18053,9 @@ fn c_free_fn(ps: list[ast.Param], body: list[ast.Stmt], mut &bound: list[str], m
 	c_free_close(bound, mark)
 }
 
-# c_lambda_free_all is every name a lambda's body uses and does not bind — its CAPTURES.
-# A parameter, a name bound inside, a module constant and a function are all answered
-# elsewhere, so what is left is the enclosing function's bindings.
+# c_lambda_free_all is what a lambda's body uses, does not bind, and the ENCLOSING FUNCTION
+# has bound — its CAPTURES. That is one rule for a name that is read and a name that is
+# called, and it is asked of the environment rather than worked out by elimination.
 #
 # THE NEAREST BINDING WINS, and a live local of the enclosing function is nearer than any
 # function. So a name that function has bound is a capture WHATEVER else answers to it — read
@@ -18064,14 +18065,17 @@ fn c_free_fn(ps: list[ast.Param], body: list[ast.Stmt], mut &bound: list[str], m
 # (#280). A local closure no function shares a name with was not reachable from a closure at
 # all, for the same reason: a called name was never asked about.
 #
-# A name the enclosing function has NOT bound keeps the old answer. Read, it is a capture
-# unless a constant or a function answers to it — and c_lambda refuses it by name when nothing
-# does. Called, it is the call's own to resolve, or to refuse.
+# A name the enclosing function has NOT bound is the lifted body's own to resolve, or to
+# refuse, exactly as the same text would be outside a closure. Reads used to be decided by
+# what the name was NOT — a capture unless a constant or a function answered to it — and a
+# name that is no value at all fell through that list: an imported namespace, an enum's name
+# and a type's name before a `.` were each taken for a capture and refused (#281). A name
+# nothing answers to is `undefined name` from the body, as it is anywhere else.
 fn c_lambda_free_all(mut &em: Emitter, ps: list[ast.Param], body: list[ast.Stmt]) -> list[str] {
 	mut calls: list[str] = []
 	mut out: list[str] = []
 	for id in c_body_names(ps, body, calls) {
-		if c_is_fn_local(em, id) or (c_k_idx(em, id) < 0 and not c_sig_seen(em, id)) {
+		if c_is_fn_local(em, id) {
 			out.append(id)
 		}
 	}

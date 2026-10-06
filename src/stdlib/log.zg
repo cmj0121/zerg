@@ -190,9 +190,9 @@ pub enum Format {
 # THE DESTINATION IS A VALUE CARRYING A MODE, and it was chosen over the two alternatives
 # after measuring both. A spec with `#[dyn]` is the shape this would take in a language with
 # interfaces, and this compiler has a deferred gap around non-`#[dyn]` provided spec methods;
-# a closure would work but a closure that names an imported module is `E4069` in this compiler,
-# which is every writer that would want to reach `io`. A value needs no dynamic dispatch and
-# no capture, so it is the one of the three that is simply available.
+# a closure would work, but a closure that named an imported module was refused when this was
+# chosen (#281), which was every writer that would want to reach `io`. A value needs no
+# dynamic dispatch and no capture, so it is the one of the three that is simply available.
 #
 # THE CHANNEL IS WHAT MAKES A LOGGER TESTABLE, and that is not a side benefit. A logger whose
 # only destination is a file descriptor can be asked nothing by a test in the same process —

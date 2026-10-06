@@ -45,14 +45,12 @@ fn not_raised() -> Err {
 # language's own `is`, and this module never has to learn the error taxonomy it is
 # deliberately outside of (see the header).
 #
-# A `guard` AND NOT AN `fn ()`, and the difference was measured rather than preferred. The
-# closure reads better — `assert_raises(fn () { strings.split("a,b", "") })` says what it
-# does — and this compiler cannot compile it: a closure body naming an imported module is
-# _E4069 a closure captures `strings`, and this compiler cannot work out what it holds_,
-# because a namespace is a free name and a capture needs a type. Every test that reaches
-# its module through `import` is exactly that shape, so the closure form would be a form
-# that works only for the tests that need it least. The `guard` is evaluated at the CALL
-# SITE, where the namespace is in scope, and hands the outcome over as an ordinary value.
+# A `guard` AND NOT AN `fn ()`. The closure form can be written — a closure body may name
+# an imported module, `fn () -> list[str] { return strings.split("a,b", "") }` — and it was
+# not always so: a namespace in a closure was once refused as a capture with no type (#281),
+# which is what first settled this on the `guard`. What keeps it there is what the caller
+# writes: the `guard` is evaluated at the CALL SITE and hands the outcome over as an
+# ordinary value, where the closure has to spell the type of a call it expects to fail.
 #
 # IT IS GENERIC BECAUSE THE CARRIER IS — `split` raises out of a `list[str]`, `repeat` out
 # of a `str`, `count` out of an `int` — which is what a suite that hand-rolled this helper

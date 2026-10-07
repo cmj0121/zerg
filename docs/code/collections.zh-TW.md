@@ -176,6 +176,15 @@ for mut x in ys { x = x * 2 }             # 就地改——[not yet]，對每一
 己那塊儲存的一個可寫名字,所以 `for x in xs { grow(xs, x) }` 不管 `grow` 拿它做什麼,都是一次結構性改動。這條規則
 仍然是本地的 —— 它拒絕的是那次**借用**、在呼叫處,而不是去讀被呼叫者。
 
+**裝著被走訪 collection 的東西,跟它一起凍結。** 在 `for x in p.xs` 裡,對 `p` 的一次寫入可以不必寫出 `p.xs` 就把它
+長大或換掉,所以那次寫入在它被寫下的地方就是 `E3089` —— 對 holder 取 `mut &`(`grow(p, x)`)、在它身上呼叫 `mut fn`
+(`p.grow(x)`)、rebind 它(`p = Box([x, x])`),或是 holder 自己就是 collection 時對它呼叫會變動的 method
+(`for x in xs[0] { xs.append([x]) }`)。**裝著**同樣是從拼法讀出來的:被寫的位置,就是被走訪的路徑在某個 `.` 或索引
+處截短、而且在同一個綁定裡。所以 `p` 與 `p.inner` 都裝著 `p.inner.xs`,`p` 不裝著 `pq.xs`,而迴圈本體自己宣告的
+`p` 是另一個 `p`。讀 `p`、呼叫它的非 `mut` method、以值傳遞它、借出一個兄弟欄位(`bump(p.n)`)、指派一個元素
+(`p.xs[0] = 9`)都不是結構性改動,可以編譯。上面的索引規則在這裡同樣成立:`for x in ps[0].xs` 裡的
+`grow(ps[i], x)` 可以編譯,而迴圈走的仍是迴圈開始時的那個 list。
+
 想就地轉換的話，用一個內部走訪受控的 `mut` method（`xs.retain(pred)`），或是重建（`xs = xs.filter(pred)`——迴圈後
 rebind）。想邊讀 `xs` 邊累積，就 append 到**另一個** collection。
 

@@ -201,6 +201,17 @@ leaves the loop's body: a `mut &` is a writable name for the caller's own storag
 grow(xs, x) }` is a structural change whatever `grow` does with it. The rule stays local by refusing the
 **borrow**, at the call, rather than by reading the callee.
 
+**What holds the walked collection is frozen with it.** Inside `for x in p.xs`, a write to `p` could grow or
+replace `p.xs` without ever spelling it, so the write is `E3089` where it is written — a `mut &` of the holder
+(`grow(p, x)`), a `mut fn` called on it (`p.grow(x)`), a rebind of it (`p = Box([x, x])`), or a mutating
+method on a holder that is itself a collection (`for x in xs[0] { xs.append([x]) }`). **Holds** is read off
+the spelling too: the written place is the walked path cut short at a `.` or an index, in the same binding.
+So `p` and `p.inner` both hold `p.inner.xs`, `p` does not hold `pq.xs`, and a `p` the body declares for itself
+is another `p`. Reading `p`, calling its non-`mut` methods, passing it by value, lending a sibling field
+(`bump(p.n)`) and assigning an element (`p.xs[0] = 9`) are no structural change and compile. The index rule
+above holds here as well: `grow(ps[i], x)` inside `for x in ps[0].xs` compiles, and the loop still walks the
+list as it stood when the loop began.
+
 To transform in place, use a single `mut` method whose internal walk is controlled (`xs.retain(pred)`), or
 rebuild (`xs = xs.filter(pred)` — a rebind after the loop). To accumulate while reading `xs`, append to a
 **different** collection.

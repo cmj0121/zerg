@@ -481,15 +481,17 @@ byte(N)` and `byte(N * 3)` are compile errors. The seed folds the literal alone:
   but its own bootstrap.
 
 - **THE FREEZE SEES ONLY A BARE NAME.** Inside `for x in xs` the seed refuses `xs.append(v)` and
-  `xs = [9]` as `zerg` does, and it refuses nothing else. The three other spellings of the same
+  `xs = [9]` as `zerg` does, and it refuses nothing else. The other spellings of the same
   structural change — through a PATH (`for x in p.xs { p.xs.append(v) }`), through an index by a
-  literal (`xs[0]`), and by HANDING the walked collection to a `mut &` parameter — all compile
-  under the seed and really grow or rebind the collection being walked.
+  literal (`xs[0]`), by HANDING the walked collection to a `mut &` parameter, and by writing to
+  what HOLDS it (`grow(p, x)` or `p = Box([x, x])` inside `for x in p.xs`) — all compile under
+  the seed and really grow or rebind the collection being walked. `p.grow(x)` on a `mut fn` is
+  the exception, and not by this rule: the seed turns that program away at the `mut fn` itself.
 
   It costs the bootstrap nothing: no source the seed compiles writes any of them, and a program
   the seed accepts and `zerg` rejects is never compared by `make oracle`, which only runs what
-  the seed builds. The four cases in `scripts/reject-check.sh` carry a `seed-gap` marker each,
-  so the day the seed learns the rule the gate says so and this entry comes out.
+  the seed builds. Each such case in `scripts/reject-check.sh` carries a `seed-gap` marker, so
+  the day the seed learns the rule the gate says so and this entry comes out.
 
 - **`fn main(mut &args: …)` IS NOT REFUSED.** The seed checks `main`'s parameter TYPE, and
   `zerg` also checks that it is taken by value — the runtime hands the argument list over, so

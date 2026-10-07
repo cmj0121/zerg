@@ -71,6 +71,7 @@ import (
 	"./emit"
 	"./lexer"
 	"./lint"
+	"./parser"
 	"./rule"
 )
 pub fn chk_at(mut &em: emit.Emitter, code: rule.Rule, msg: str) {
@@ -717,6 +718,10 @@ pub fn chk_assignable(mut &em: emit.Emitter, lhs: ast.Expr) {
 		return
 	}
 
+	# and what HOLDS the walked collection is rebound with it: `for x in p.xs { p = Box([9]) }`
+	# replaces `p.xs` along with everything else `p` owns.
+	return if chk_frozen_holder(em, lhs, "rebind")
+
 	if emit.c_is_index(lhs) {
 		tgt := chk_store_target(lhs)
 		tn := emit.c_ident_name(tgt)
@@ -802,9 +807,9 @@ pub fn chk_is_module_binding(mut &em: emit.Emitter, idx: int) -> bool {
 # body's extent, and the two spellings of a structural change — a mutating method and an
 # assignment — each ask the stack. What it deliberately does not see is an alias: a second
 # binding is a COPY under value semantics, and a capture is a copy too, so neither can reach
-# the walked buffer. What it does not see YET is a structural change reached through a PATH
-# (`for x in p.xs { p.xs.append(v) }`), which docs/code/collections.md carries as its one
-# remaining [deviation] on this section.
+# the walked buffer. A structural change reached through a PATH is seen by its spelling
+# (chk_frozen_path), and a write to what HOLDS the walked path by the same spelling read one
+# step further in (chk_frozen_within).
 #
 # A ROW AND NOT A NAME, because a plain `:=` may be shadowed: a body declaring its own `xs`
 # inside `for x in xs` names a second collection, and matching the spelling refused an
@@ -873,10 +878,53 @@ fn chk_frozen_path(mut &em: emit.Emitter, path: str) -> bool {
 	return false
 }
 
+# chk_frozen_within is the walked path that `path` is a PROPER PREFIX of, and "" when there
+# is none: `p` and `p.inner` each hold the `p.inner.xs` a loop walks. A whole-place write to
+# the holder — a rebind, or a `mut &` of it handed to code this rule does not read — reaches
+# the walked collection as surely as its own spelling does, so the freeze reads one step
+# further IN from what is written, by the same spelled comparison chk_frozen_path makes.
+#
+# PROPER, and on a step boundary: the walked path continues past `path` with a field or an
+# index, so `p` is not a prefix of `pq.xs`, and `p.xs` is not one of itself — that one is
+# chk_frozen_path's. A walked BARE NAME has no prefix and is not asked.
+#
+# AND ROOTED IN THE SAME BINDING, which the spelling alone cannot say: `root` is the name
+# `path` starts at, resolved HERE, and the loop recorded the row its own path started at
+# (emit.frz_roots). A body that declares its own `p` writes a different value.
+fn chk_frozen_within(mut &em: emit.Emitter, path: str, root: str) -> str {
+	return "" if path == ""
+
+	row := emit.c_live_idx(em, root)
+	mut i := 0
+	for i < em.frz_paths.len() {
+		f := em.frz_paths[i]
+		return f if em.frz_roots[i] == row and (parser.strings_has_prefix(f, path + ".") or parser.strings_has_prefix(f, path + "["))
+		i = i + 1
+	}
+	return ""
+}
+
+# chk_frozen_holder records the freeze against a write to what HOLDS the walked collection,
+# and answers whether it did.
+fn chk_frozen_holder(mut &em: emit.Emitter, place: ast.Expr, action: str) -> bool {
+	path := chk_path_text(place)
+	walked := chk_frozen_within(em, path, chk_root_name(place))
+	return false if walked == ""
+
+	chk_frozen_says(em, path, action, f"it holds `{walked}`, the collection this `for` loop walks")
+	return true
+}
+
 # chk_frozen records the one finding every spelling of a structural change shares; `action`
 # names the spelling ("rebind", "`append` to", "assign into"), and the sentence is the rule.
 fn chk_frozen(mut &em: emit.Emitter, name: str, action: str) {
-	chk_at(em, rule.Rule.CollectionFrozenInLoop, f"cannot {action} `{name}`: it is the collection this `for` loop walks, and a collection is frozen against structural change inside its own loop (docs/code/collections.md) — append to a different collection, or rebuild after the loop")
+	chk_frozen_says(em, name, action, "it is the collection this `for` loop walks")
+}
+
+# chk_frozen_says is the one report both of them make: `why` says how the written place
+# reaches the walked collection — it IS it, or it holds it.
+fn chk_frozen_says(mut &em: emit.Emitter, name: str, action: str, why: str) {
+	chk_at(em, rule.Rule.CollectionFrozenInLoop, f"cannot {action} `{name}`: {why}, and a collection is frozen against structural change inside its own loop (docs/code/collections.md) — append to a different collection, or rebuild after the loop")
 }
 
 # chk_recv_mut judges a `mut this` method's receiver the way chk_assignable judges an
@@ -898,6 +946,7 @@ pub fn chk_recv_mut(mut &em: emit.Emitter, target: ast.Expr, meth: str) {
 		chk_frozen(em, tp, f"`{meth}` to")
 		return
 	}
+	return if chk_frozen_holder(em, target, f"`{meth}` to")
 
 	root := chk_root_name(target)
 	return if root == ""
@@ -1559,6 +1608,10 @@ pub fn chk_ref_arg(mut &em: emit.Emitter, key: str, pos: int, a: ast.Expr) {
 		chk_frozen(em, ap, "hand over a `mut &` to")
 		return
 	}
+
+	# and of what HOLDS it — `for x in p.xs { grow(p, x) }`, and `p.grow(x)` for a `mut fn`,
+	# whose receiver arrives here as the borrow it is.
+	return if chk_frozen_holder(em, a, "hand over a `mut &` to")
 
 	# TWO INDEPENDENT CONTROLS MEET HERE (GRAMMAR#param): the CALLER decides whether its
 	# variable is `mut`, the CALLEE decides via `mut &` whether it writes back, and "a

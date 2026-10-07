@@ -1237,6 +1237,47 @@ fn main() {
 }
 ZG
 
+# --- a composite rendered where it arrives ------------------------------------------------
+# A renderer reads its operand and keeps none of it, so an operand nobody else holds — a
+# call's result, a literal — was shown and then had no one to give it back (#307). `print` is
+# the spelling the issue names; `.debug()` and a converted hole reach the same renderer and
+# are held with it. The seed prints no composite at all, so this is `zerg` alone.
+#
+# The borrowed operand is beside them: a named list printed twice and read afterwards, which
+# a release that took the binding's storage would free under the second line.
+case_run printed_rvalue no no <<'ZG'
+struct Row {
+	pub tag: str
+	pub xs: list[int]
+}
+
+fn mk(n: int) -> list[int] {
+	return [n, n + 1]
+}
+
+fn row(n: int) -> Row {
+	return Row(f"{n}abcdefghijklmnop", mk(n))
+}
+
+fn main() {
+	mut n := 0
+	mut i := 0
+	r := rounds()
+	for i < r {
+		print mk(i)
+		print [i, i + 1]
+		print row(i)
+		n = n + bytearray(mk(i).debug()).len() + bytearray(f"{row(i)!r}").len()
+		xs := mk(i)
+		print xs
+		print xs
+		n = n + xs.len()
+		i = i + 1
+	}
+	print n
+}
+ZG
+
 if [ "$fail" -ne 0 ]; then
 	printf '\nmem-check: a value outlives the scope that made it\n' >&2
 	printf 'mem-check: the sources, the C and the binaries are kept in %s\n' "$WORK" >&2

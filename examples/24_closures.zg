@@ -12,6 +12,8 @@
 #
 # beyond-the-seed: a closure used as a value. The bootstrap seed does not lower
 # one, so this example is built by `zerg` — which is what `make examples` uses.
+import "strings"
+
 const STEP := 7
 
 fn double(x: int) -> int {
@@ -114,6 +116,18 @@ fn own_names() {
 	print stride(3) # 1021
 }
 
+# A module is not a value, so it is not a capture: `strings` means in a closure
+# what it means on the line beside it, and `word` is the one thing this copies.
+fn not_values() {
+	word := "banana"
+
+	tally := fn (c: str) -> int {
+		return strings.count(word, c) * STEP
+	}
+	print tally("a")  # 21
+	print tally("an") # 14
+}
+
 fn main() {
 	print apply(double, 21)
 
@@ -124,6 +138,7 @@ fn main() {
 	print add10(1)
 
 	own_names()
+	not_values()
 
 	# A local may take a function's name, and from here on `double` is this
 	# closure — which is what the closure below captures and calls, rather than

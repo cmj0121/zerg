@@ -8945,13 +8945,14 @@ fn main(args: list[str]) {
 }
 EOF
 
-# THE NAME IS THE ASSERTION. The code alone says a capture went untyped and not WHICH name
-# the compiler took for a capture, and that is where this rule was wrong: a name the body
-# binds for itself was counted as read from outside and refused with this same code (#269).
-# The second case is the one that tells the two analyses apart: its body binds `x` before it
-# reads `nowhere`, so a compiler that still takes a body's own binder for a capture names
-# `x` and is turned away by the sentence.
-reject a-closure-capturing-a-name-with-no-type E4069 'a closure captures `zz`' <<'EOF'
+# THE NAME IS THE ASSERTION. A closure's capture is a name the enclosing function BOUND and
+# nothing else: a name nobody bound is the body's own to resolve, so it is told what it would
+# be told outside a closure. It was once refused as a capture with no type, and so were a
+# namespace, an enum's name and a type's name before a `.` (#281); before that, a name the
+# body binds for itself was counted as read from outside and refused the same way (#269).
+# The second case holds the body's own binders out of it: `x` is bound before `nowhere` is
+# read, and the sentence turns away a compiler that reports `x`.
+reject a-closure-reading-a-name-nothing-binds E3069 'undefined name `zz`' <<'EOF'
 fn main() {
 	f := fn () -> int {
 		return zz
@@ -8960,7 +8961,7 @@ fn main() {
 }
 EOF
 
-reject a-closure-that-binds-its-own-names-capturing-one-with-no-type E4069 'a closure captures `nowhere`' <<'EOF'
+reject a-closure-that-binds-its-own-names-reading-one-nothing-binds E3069 'undefined name `nowhere`' <<'EOF'
 fn main() {
 	f := fn () -> int {
 		mut t := 0
@@ -8969,6 +8970,60 @@ fn main() {
 			t = t + x
 		}
 		return t + nowhere
+	}
+	print f()
+}
+EOF
+
+# a name the enclosing function binds only BELOW the closure is not bound where the closure
+# is written, so it is no capture either
+reject a-closure-reading-a-name-bound-below-it E3069 'undefined name `later`' <<'EOF'
+fn main() {
+	f := fn () -> int {
+		return later + 1
+	}
+	later := 4
+	print f()
+}
+EOF
+
+# WHAT IS LEFT OF THE UNTYPED CAPTURE: a binding the enclosing function did make and never
+# typed. The closure is where that type would have to be written down, so it is named there.
+reject a-closure-capturing-a-binding-with-no-type E4069 'a closure captures `xs`' <<'EOF'
+fn main() {
+	xs := []
+	f := fn () -> int {
+		return xs.len()
+	}
+	print f()
+}
+EOF
+
+# AND A TYPE'S NAME WITH NO `.` AFTER IT is a name no value answers to, in a closure and out
+# of one. A struct's was let through the undefined-name rule and written into the C as the
+# type it names, which cc refused; an enum's was already turned away here. The closure half
+# is what #281 uncovered: while a type's name was taken for a capture the closure was
+# refused before the read was ever lowered.
+reject a-struct-name-read-as-a-value E3069 'undefined name `P`' <<'EOF'
+struct P {
+	pub x: int
+}
+
+fn main() {
+	q := P
+	print 1
+}
+EOF
+
+reject a-closure-reading-a-struct-name-as-a-value E3069 'undefined name `P`' <<'EOF'
+struct P {
+	pub x: int
+}
+
+fn main() {
+	f := fn () -> int {
+		q := P
+		return 1
 	}
 	print f()
 }

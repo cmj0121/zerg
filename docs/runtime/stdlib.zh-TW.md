@@ -570,10 +570,6 @@ e := testing.assert_raises(guard { strings.split("a,b", "") })
 assert e is ValueError
 ```
 
-> 用 **closure**——`assert_raises(fn () { strings.split("a,b", "") })`——讀起來更好，但編不過：closure 主體
-> 只要提到被 import 的模組就是 _E4069 a closure captures `strings`_，因為 namespace 是自由名稱，而 capture 得給它
-> 一個型別。每一個透過 `import` 取用自己模組的測試都是這個形狀，所以能服務它們的是 `guard`。
-
 ### 執行中的測試說了什麼
 
 `Context` 是測試對 runner 說話的那條 channel,它上面的每個方法都是一則訊息、而不是一項主張。

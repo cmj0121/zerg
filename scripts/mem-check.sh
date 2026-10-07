@@ -720,6 +720,34 @@ fn main() {
 }
 ZG
 
+# --- a closure called where it arrives ----------------------------------------------------
+# The same environment with no binding to give it back: `make_adder(b)(1)` hands the call a
+# closure nobody else holds, and the callee was a temp nothing released (#305). One
+# environment per round, so the difference grows with the rounds. The borrowed callee is
+# beside it — an element of a list the loop still holds, called twice — because a release
+# that took the list's count would free it under the second call.
+case_run closure_in_place no no <<'ZG'
+fn make_adder(base: str) -> fn(int) -> int {
+	return fn(k: int) -> int {
+		return bytearray(base).len() + k
+	}
+}
+
+fn main() {
+	mut n := 0
+	mut i := 0
+	r := rounds()
+	for i < r {
+		b := str(i) + "!"
+		n = n + make_adder(b)(1)
+		fs := [make_adder(b)]
+		n = n + fs[0](2) + fs[0](3)
+		i = i + 1
+	}
+	print n
+}
+ZG
+
 # --- a disabled log entry allocates nothing --------------------------------------------
 #
 # The claim `log`'s whole design rests on. The builder is chained through four field methods

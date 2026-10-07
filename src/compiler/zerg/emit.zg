@@ -10299,7 +10299,7 @@ fn c_conv(mut &em: Emitter, ty: ast.Ty, x: ast.Expr, nm: str, sb: Subst) -> str 
 		}
 
 		c_display_check(em, xt0, "this rendering")
-		return c_render_of(em, xt0, c_expr(em, x, sb), false)
+		return c_render_expr(em, xt0, x, false, sb)
 	}
 	if c_is_list(ty) {
 		em.used_str = true
@@ -11140,7 +11140,7 @@ fn c_render_meth(mut &em: Emitter, target: ast.Expr, meth: str, tty: ast.Ty, sb:
 	# `str` they are the same text — a composite's parts are rendered as debug either way,
 	# because a rendering nobody can read back is not a developer view. So the METHOD picks
 	# the flag, which is what makes `x.debug()` and `f"{x!r}"` one answer.
-	return c_render_of(em, tty, c_expr(em, target, sb), meth == "debug")
+	return c_render_expr(em, tty, target, meth == "debug", sb)
 }
 
 fn c_meth_kind(mut &em: Emitter, tty: ast.Ty, meth: str) -> MethKind {
@@ -19246,9 +19246,17 @@ fn c_render_of(mut &em: Emitter, t: ast.Ty, inner: str, quoted: bool) -> str {
 	# POINTER — a different number every run, of a value the program never wrote.
 	return c_spec_render_disp(em, c_named_of(t), inner) if c_is_spec_name(em, c_named_of(t))
 
+	# AN OVERRIDE IS A METHOD, AND A METHOD OWNS ITS RECEIVER: `this` is a by-value parameter the
+	# callee gives back (c_pend_drop), which is why a written `p.display()` copies `p` on the
+	# way in. What arrives here is always somebody else's — a part read out of the value being
+	# rendered, a boxed payload, a name — so it is copied for the same reason. Handed over as it
+	# stood, the override released storage its holder still had: `f"{p!r}"` freed `p`'s list
+	# under `p`, and a `list[P]` lost every element's to the rendering of it.
 	if meth := c_render_override(em, t) {
-		return f"{c_fn_cname(c_named_of(t), meth)}({inner})" if meth != ""
-		return "\"\""
+		return "\"\"" if meth == ""
+		return c_render_through(em, t, meth, c_copy_of(em, t, inner)) if c_needs_copy(em, t)
+
+		return c_render_through(em, t, meth, inner)
 	}
 
 	# A `str` IS THE ONE TYPE THAT READS DIFFERENTLY IN THE TWO VIEWS: on its own it is its
@@ -19262,6 +19270,46 @@ fn c_render_of(mut &em: Emitter, t: ast.Ty, inner: str, quoted: bool) -> str {
 
 	return f"{c_render_fn(em, t)}({inner})" if c_has_parts(em, t)
 	return c_display(t, inner)
+}
+
+# c_render_expr is the rendering of an EXPRESSION, which is c_render_of plus the one thing a
+# rendered C string cannot answer: whose the operand is. A renderer takes its value by value and
+# reads it, so an operand that names storage is rendered in place — and one this expression
+# built (c_owns_value: a call's result, a literal, an element read out of either) has no other
+# holder, so `print mk(7)` showed the list and left it with nobody to give it back (#307).
+#
+# AN OWNED OPERAND IS A BINDING NOBODY NAMED, the way c_call_val's owned callee is, and it is
+# given back the same way: registered on the cleanup stack (c_pend_drop) inside a mark of its
+# own, and unwound once the text is built. On the stack rather than written after the render
+# because a rendering can abort — a part that declares `display` runs the program's own code —
+# and a line written after it is never reached by one that does.
+#
+# A type that owns nothing is asked first and takes c_render_of's road unchanged, temporaries
+# and all, so the only C this changes is the C that leaked.
+fn c_render_expr(mut &em: Emitter, t: ast.Ty, x: ast.Expr, quoted: bool, sb: Subst) -> str {
+	inner := c_expr(em, x, sb)
+	return c_render_of(em, t, inner, quoted) if not c_owns_value(x) or c_drop_thunk(em, t) == ""
+
+	# an override is the one renderer that TAKES its operand (c_render_of), so an owned one is
+	# handed straight to it: the receiver is the callee's to give back, and nothing is owed here
+	if meth := c_render_override(em, t) {
+		return c_render_through(em, t, meth, inner) if meth != ""
+	}
+
+	keep := em.rel_cnames.len()
+	v := c_tmp(em, "zgt_pv")
+	mark := c_tmp(em, "zgt_pm")
+	rn := c_tmp(em, "zgt_pt")
+	give := c_pend_drop(em, t, v, "")
+	text := c_render_of(em, t, v, quoted)
+	c_scope_forget(em, keep)
+
+	return f"({{ size_t {mark} = zrt_scope_mark(); {c_type(t)} {v} = {inner}; {give}const char* {rn} = {text}; zrt_unwind_to({mark}); {rn}; }})"
+}
+
+# c_render_through is the call to a type's own `display`, with the receiver it is handed.
+fn c_render_through(mut &em: Emitter, t: ast.Ty, meth: str, recv: str) -> str {
+	return f"{c_fn_cname(c_named_of(t), meth)}({recv})"
 }
 
 # c_has_parts is the class the generator answers for: a value made OF other values. An
@@ -19554,8 +19602,7 @@ fn c_fmt_hole(mut &em: Emitter, x: ast.Expr, conv: str, fspec: str, sb: Subst) -
 
 	return f"{c_fmt_num_fn(t)}({c_expr(em, x, sb)}, {c_str_lit(fspec)})" if conv == "" and fspec != "" and c_fmt_is_number(t)
 
-	text := c_render_of(em, t, c_expr(em, x, sb), conv == "r" or conv == "a")
-	mut out := text
+	mut out := c_render_expr(em, t, x, conv == "r" or conv == "a", sb)
 	if conv == "a" {
 		out = c_str_thru(em, out, "zrt_ascii_escape", "")
 	}
@@ -20965,7 +21012,7 @@ fn c_print(mut &em: Emitter, e: ast.Expr, ind: str) -> str {
 	# no two-argument `print` and the pair builds a tuple.
 	if c_renders_fresh(em, ty) {
 		em.used_rt = true
-		return f"{ind}{{ const char* zgt_ps = {c_render_of(em, ty, c_expr(em, e, c_nosub()), false)}; printf(\"%s\\n\", zgt_ps); zrt_str_release(zgt_ps); }}\n"
+		return f"{ind}{{ const char* zgt_ps = {c_render_expr(em, ty, e, false, c_nosub())}; printf(\"%s\\n\", zgt_ps); zrt_str_release(zgt_ps); }}\n"
 	}
 
 	ex := c_expr(em, e, c_nosub())

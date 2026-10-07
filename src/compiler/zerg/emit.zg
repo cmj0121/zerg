@@ -19246,9 +19246,17 @@ fn c_render_of(mut &em: Emitter, t: ast.Ty, inner: str, quoted: bool) -> str {
 	# POINTER — a different number every run, of a value the program never wrote.
 	return c_spec_render_disp(em, c_named_of(t), inner) if c_is_spec_name(em, c_named_of(t))
 
+	# AN OVERRIDE IS A METHOD, AND A METHOD OWNS ITS RECEIVER: `this` is a by-value parameter the
+	# callee gives back (c_pend_drop), which is why a written `p.display()` copies `p` on the
+	# way in. What arrives here is always somebody else's — a part read out of the value being
+	# rendered, a boxed payload, a name — so it is copied for the same reason. Handed over as it
+	# stood, the override released storage its holder still had: `f"{p!r}"` freed `p`'s list
+	# under `p`, and a `list[P]` lost every element's to the rendering of it.
 	if meth := c_render_override(em, t) {
-		return f"{c_fn_cname(c_named_of(t), meth)}({inner})" if meth != ""
-		return "\"\""
+		return "\"\"" if meth == ""
+		return c_render_through(em, t, meth, c_copy_of(em, t, inner)) if c_needs_copy(em, t)
+
+		return c_render_through(em, t, meth, inner)
 	}
 
 	# A `str` IS THE ONE TYPE THAT READS DIFFERENTLY IN THE TWO VIEWS: on its own it is its
@@ -19262,6 +19270,11 @@ fn c_render_of(mut &em: Emitter, t: ast.Ty, inner: str, quoted: bool) -> str {
 
 	return f"{c_render_fn(em, t)}({inner})" if c_has_parts(em, t)
 	return c_display(t, inner)
+}
+
+# c_render_through is the call to a type's own `display`, with the receiver it is handed.
+fn c_render_through(mut &em: Emitter, t: ast.Ty, meth: str, recv: str) -> str {
+	return f"{c_fn_cname(c_named_of(t), meth)}({recv})"
 }
 
 # c_has_parts is the class the generator answers for: a value made OF other values. An

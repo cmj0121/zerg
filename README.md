@@ -135,17 +135,12 @@ linker against generated code nobody wrote. A feature the specification marks **
 `NotImplemented` and stops.
 
 **Where the compiler falls short of that, the specification says so** — a **[deviation]** in the
-chapter the feature belongs to. The ones worth knowing before writing anything are the **silent**
-ones, where a program gets an answer and no diagnostic:
+chapter the feature belongs to. The one worth knowing before writing anything is the **silent**
+one, where a program gets an answer and no diagnostic:
 
-| Silent deviation                                                      | Chapter                                 |
-| --------------------------------------------------------------------- | --------------------------------------- |
-| `for x in p.xs { grow(p, x) }` grows what it walks, through a `mut &` | [collections](docs/code/collections.md) |
-| an `init()` in a module the run never touches still runs              | [modules](docs/runtime/package.md)      |
-
-The first row is the INDIRECT form. Writing the append where the loop can see it —
-`for x in p.xs { p.xs.append(v) }` — is refused (`E3089`); reaching the same list through a
-`mut &` parameter is not, and the loop walks a buffer that moves underneath it.
+| Silent deviation                                         | Chapter                            |
+| -------------------------------------------------------- | ---------------------------------- |
+| an `init()` in a module the run never touches still runs | [modules](docs/runtime/package.md) |
 
 One more is structural, and a running program feels it: the scheduler is **cooperative, not
 preemptive**, so a CPU-bound coroutine occupies a worker until it parks

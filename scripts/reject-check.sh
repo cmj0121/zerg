@@ -523,6 +523,108 @@ fn main() {
 }
 EOF
 
+# AND WHAT HOLDS IT. `p.xs` lives inside `p`, so a write to `p` is a write to the walked
+# collection by a SHORTER name: a `mut &` to `p` lets the callee grow `p.xs`, and a rebind of
+# `p` replaces it outright (#286). The rule is still one of spelling — a written path that is
+# a proper prefix of the walked one — and the sentence names BOTH places, the one written and
+# the one walked, which is what each case pins: a message that named only the walked
+# collection would send the reader to a line that never mentions it.
+#
+# One case per way a holder is written. A case is `seed-gap` where the seed builds the program.
+reject borrow-what-holds-the-walked-collection E3089 'cannot hand over a `mut &` to `p`: it holds `p.xs`' seed-gap <<'EOF'
+struct Box {
+	pub xs: list[int]
+}
+
+fn grow(mut &b: Box, v: int) {
+	b.xs.append(v)
+}
+
+fn main() {
+	mut p := Box([1, 2, 3])
+	for x in p.xs {
+		grow(p, x)
+	}
+	print(f"{p.xs.len()}")
+}
+EOF
+
+# A `mut fn` receiver is the same borrow with the argument written before the dot, and it is
+# answered in the borrow's sentence.
+#
+# NO `seed-gap` MARKER, AND THE SEED DOES NOT ENFORCE THIS EITHER: it refuses the DECLARATION
+# ("a `mut fn` method's receiver is not yet written back to the caller"), so it says no for a
+# reason that is not this rule, and a marker here would report a gap closed that never was.
+reject mut-fn-on-what-holds-the-walked-collection E3089 'cannot hand over a `mut &` to `p`: it holds `p.xs`' <<'EOF'
+struct Box {
+	pub xs: list[int]
+}
+
+impl Box {
+	mut fn grow(v: int) {
+		this.xs.append(v)
+	}
+}
+
+fn main() {
+	mut p := Box([1, 2, 3])
+	for x in p.xs {
+		p.grow(x)
+	}
+	print(f"{p.xs.len()}")
+}
+EOF
+
+reject rebind-what-holds-the-walked-collection E3089 'cannot rebind `p`: it holds `p.xs`' seed-gap <<'EOF'
+struct Box {
+	pub xs: list[int]
+}
+
+fn main() {
+	mut p := Box([1, 2, 3])
+	for x in p.xs {
+		p = Box([x, x])
+	}
+	print(f"{p.xs.len()}")
+}
+EOF
+
+# A holder need not be a struct: `xs` holds `xs[0]`, and growing the outer list may move the
+# inner one the cursor is in. The built-in method is refused where a user's `mut fn` is.
+reject append-to-what-holds-the-walked-collection E3089 'cannot `append` to `xs`: it holds `xs[0]`' seed-gap <<'EOF'
+fn main() {
+	mut xs: list[list[int]] = [[1, 2]]
+	for x in xs[0] {
+		xs.append([x])
+	}
+	print(f"{xs.len()}")
+}
+EOF
+
+# And the holder is whatever prefix was WRITTEN, not the root of the path: handing over
+# `o.inner` is named as `o.inner`, so the sentence is true of the line it points at.
+reject borrow-a-nested-holder-of-the-walked-collection E3089 'cannot hand over a `mut &` to `o.inner`: it holds `o.inner.xs`' seed-gap <<'EOF'
+struct In {
+	pub xs: list[int]
+}
+
+struct Out {
+	pub inner: In
+}
+
+fn tweak(mut &i: In, v: int) {
+	i.xs.append(v)
+}
+
+fn main() {
+	mut o := Out(In([1, 2, 3]))
+	for x in o.inner.xs {
+		tweak(o.inner, x)
+	}
+	print(f"{o.inner.xs.len()}")
+}
+EOF
+
 # The freeze is the loop's OWN collection and nothing wider: appending to a DIFFERENT
 # collection while reading `xs` is the accumulation idiom the spec itself recommends, so
 # it is asserted to stay accepted right beside the rules that could over-reach into it.
@@ -563,6 +665,80 @@ if "$ZERG" build --emit bin -o "$tmp/append-to-a-shadowing-binding.bin" "$tmp/ap
 	pass=$((pass + 1))
 else
 	echo "FROZEN    append-to-a-shadowing-binding — the freeze matched a NAME, not the loop's binding"
+	fail=$((fail + 1))
+fi
+
+# The holder rule has the same two edges, and each is asserted to stay accepted. A holder is
+# a PREFIX of the walked path and nothing beside it: another struct of the same type, a
+# sibling collection in the same struct and a scalar field of it are all written through a
+# `mut &` here while `p.xs` is walked, and none of them holds `p.xs`. A rule that froze the
+# root name `p` instead of the prefix would refuse the last two. The seed builds it.
+cat >"$tmp/borrow-beside-the-walked-collection.zg" <<'EOF'
+struct Box {
+	pub xs: list[int]
+	pub seen: list[int]
+	pub n: int
+}
+
+fn grow(mut &b: Box, v: int) {
+	b.xs.append(v)
+}
+
+fn keep(mut &ys: list[int], v: int) {
+	ys.append(v)
+}
+
+fn bump(mut &n: int) {
+	n = n + 1
+}
+
+fn main() {
+	mut p := Box([1, 2, 3], [], 0)
+	mut q := Box([7], [], 0)
+	for x in p.xs {
+		grow(q, x)
+		keep(p.seen, x)
+		bump(p.n)
+	}
+	print(f"{p.xs.len()} {q.xs.len()} {p.seen.len()} {p.n}")
+}
+EOF
+if "$ZERG" build --emit bin -o "$tmp/borrow-beside-the-walked-collection.bin" "$tmp/borrow-beside-the-walked-collection.zg" >/dev/null 2>&1; then
+	pass=$((pass + 1))
+else
+	echo "FROZEN    borrow-beside-the-walked-collection — the freeze reached a place that does not hold the walked collection"
+	fail=$((fail + 1))
+fi
+
+# And a body's own `p` is a different holder wearing the same name. It is a different TYPE
+# with a differently named field, so nothing about it could be mistaken for the walked `p.xs`
+# except the spelling of its root. The seed builds it.
+cat >"$tmp/borrow-a-shadowing-holder.zg" <<'EOF'
+struct Box {
+	pub xs: list[int]
+}
+
+struct Crate {
+	pub ys: list[str]
+}
+
+fn grow(mut &c: Crate, v: str) {
+	c.ys.append(v)
+}
+
+fn main() {
+	mut p := Box([1, 2, 3])
+	for x in p.xs {
+		mut p := Crate(["a"])
+		grow(p, f"{x}")
+		print(f"{p.ys.len()}")
+	}
+}
+EOF
+if "$ZERG" build --emit bin -o "$tmp/borrow-a-shadowing-holder.bin" "$tmp/borrow-a-shadowing-holder.zg" >/dev/null 2>&1; then
+	pass=$((pass + 1))
+else
+	echo "FROZEN    borrow-a-shadowing-holder — the freeze matched a holder's NAME, not the loop's binding"
 	fail=$((fail + 1))
 fi
 

@@ -689,14 +689,20 @@ pub struct Emitter {
 	# popped within a function, so the index recorded here stays the loop's own binding,
 	# while c_live_idx answers the inner row for every name the body rebinds.
 	#
-	# Only a BARE name is pushed — an iterable that is a field path, a slice or a call
-	# result has no row to record, which is the [deviation] docs/code/collections.md carries.
+	# Only a BARE name is pushed here — a field path has no row to record and goes to
+	# frz_paths below; a slice or a call result names no place, so there is nothing to freeze.
 	pub frz_idxs: list[int]
 
 	# frz_paths are the same freeze for an iterable that has no environment row: a field
 	# path, or an index by an integer literal. What says two of them are the same collection
 	# is that they are spelled the same way — see chk_path_text (check.zg).
 	pub frz_paths: list[str]
+
+	# frz_roots is the environment row each of frz_paths ROOTS in, held beside it and -1 for
+	# a root that has none. A path has no row but its first name has, and that is what a
+	# write to the HOLDER of a walked collection is told apart by: a body that declares its
+	# own `p` inside `for x in p.xs` names a second value, exactly as frz_idxs says of a name.
+	pub frz_roots: list[int]
 
 	# unit_paths / unit_mods are THE MODULE IDENTITY TABLE: every source path this program was
 	# loaded from, and the module each one belongs to. It is filled by the LOADER and read by
@@ -1787,11 +1793,13 @@ fn c_gen_inst_pre(mut &em: Emitter, t: ast.Ty) {
 	# variants yet: "cannot match a subject of type Box[int]", about the enum it matches.
 	er := c_gen_enum_row(em, c_app_base(nm))
 	if er >= 0 {
-		for a in em.ty_apps {
-			if a.name == nm {
-				c_gen_enum_on_demand(em, em.gen_enums[er], nm, a.args)
+		mut ei := 0
+		for ei < em.ty_apps.len() {
+			if em.ty_apps[ei].name == nm {
+				c_gen_enum_on_demand(em, em.gen_enums[er], nm, em.ty_apps[ei].args)
 				return
 			}
+			ei = ei + 1
 		}
 		return
 	}
@@ -1799,11 +1807,13 @@ fn c_gen_inst_pre(mut &em: Emitter, t: ast.Ty) {
 	r := c_gen_struct_row(em, c_app_base(nm))
 	return if r < 0
 
-	for a in em.ty_apps {
-		if a.name == nm {
-			c_gen_type_on_demand(em, em.gen_structs[r], nm, a.args)
+	mut i := 0
+	for i < em.ty_apps.len() {
+		if em.ty_apps[i].name == nm {
+			c_gen_type_on_demand(em, em.gen_structs[r], nm, em.ty_apps[i].args)
 			return
 		}
+		i = i + 1
 	}
 }
 
@@ -2238,6 +2248,7 @@ fn c_reset_env(mut &em: Emitter) {
 	em.env_nx = []
 	em.frz_idxs = []
 	em.frz_paths = []
+	em.frz_roots = []
 
 	# scope 0 is the module: the constants below live there and it is open in every
 	# function. c_fn opens one more for the parameters, and the body block one after that.
@@ -3614,15 +3625,21 @@ fn c_with_impl_insts(mut &em: Emitter, f: ast.File, record: bool) -> ast.File {
 		}
 	}
 
-	for m in em.impl_tpl_fns {
-		for applied in em.inst_tys {
-			continue if c_app_base(applied) != c_app_base(m.recv)
-
-			mi := c_tpl_method_for(em, f, m, applied)
-			if not c_seat_tpl_method(em, mi) {
-				fns.append(mi)
+	mut mi := 0
+	for mi < em.impl_tpl_fns.len() {
+		m := em.impl_tpl_fns[mi]
+		mut ti := 0
+		for ti < em.inst_tys.len() {
+			applied := em.inst_tys[ti]
+			if c_app_base(applied) == c_app_base(m.recv) {
+				inst := c_tpl_method_for(em, f, m, applied)
+				if not c_seat_tpl_method(em, inst) {
+					fns.append(inst)
+				}
 			}
+			ti = ti + 1
 		}
+		mi = mi + 1
 	}
 
 	# AN INHERENT TEMPLATE IMPL RECORDS NO ImplDecl — there is no spec to record — so whether
@@ -3663,7 +3680,10 @@ fn c_seat_tpl_method(mut &em: Emitter, inst: ast.FnDecl) -> bool {
 }
 
 fn c_tpl_methods_late(mut &em: Emitter, applied: str) {
-	for m in em.impl_tpl_fns {
+	mut mi := 0
+	for mi < em.impl_tpl_fns.len() {
+		m := em.impl_tpl_fns[mi]
+		mi = mi + 1
 		continue if c_app_base(applied) != c_app_base(m.recv)
 
 		inst := c_tpl_method_at(em, m, applied)
@@ -3678,7 +3698,10 @@ fn c_tpl_methods_late(mut &em: Emitter, applied: str) {
 	# declaration sweep knew. A specialization minted by a constructor is not among them — so
 	# `use(Box("s"))` was refused as `Box[str]` not implementing `Show` while its `show` was
 	# sitting in the signature table.
-	for ip in em.impl_tpls {
+	mut ii := 0
+	for ii < em.impl_tpls.len() {
+		ip := em.impl_tpls[ii]
+		ii = ii + 1
 		continue if c_app_base(applied) != c_app_base(ip.target) or c_impls(em, applied, ast.spec_key(ip.on, ip.args))
 
 		em.impl_on.append(ast.spec_key(ip.on, ip.args))
@@ -3704,9 +3727,11 @@ fn c_tpl_method_at(mut &em: Emitter, m: ast.FnDecl, applied: str) -> ast.FnDecl 
 # that name no type, once the types are known and the File is not in hand.
 fn c_tpl_params_at(mut &em: Emitter, recv: str) -> list[str] {
 	mut tps: list[str] = []
-	for a in em.ty_apps {
-		if a.name == recv {
-			for arg in a.args {
+	mut i := 0
+	for i < em.ty_apps.len() {
+		if em.ty_apps[i].name == recv {
+			args := em.ty_apps[i].args
+			for arg in args {
 				nm := c_named_of(arg)
 				if nm != "" and not c_is_applied(nm) and c_ty_kind(em, nm) == TK_NONE and not parser.is_conv(nm) and nm != "Err" {
 					tps.append(nm)
@@ -3717,6 +3742,7 @@ fn c_tpl_params_at(mut &em: Emitter, recv: str) -> list[str] {
 			# one name, and reading both answered `[T, T]` — a second `T` no call can decide.
 			return tps
 		}
+		i = i + 1
 	}
 	return tps
 }
@@ -4237,8 +4263,10 @@ fn c_ref_new_with(mut &em: Emitter, el: ast.Ty, x: str, user_drop: str) -> str {
 # value side mints its own (c_ref_record); this is the other door, and both end at the same
 # registry so a type reached either way is written once.
 fn c_ref_written(mut &em: Emitter, nm: str, s: Site) {
-	for a in em.ty_apps {
-		if a.name == nm {
+	mut i := 0
+	for i < em.ty_apps.len() {
+		if em.ty_apps[i].name == nm {
+			a := em.ty_apps[i]
 			c_type_arity(a, 1)
 			en := c_named_of(a.args[0])
 			if en != "" {
@@ -4247,6 +4275,7 @@ fn c_ref_written(mut &em: Emitter, nm: str, s: Site) {
 			c_spelled_register(em, ast.Ty.TNamed(nm))
 			return
 		}
+		i = i + 1
 	}
 }
 
@@ -5710,12 +5739,15 @@ fn c_tpl_sites(mut &em: Emitter) -> list[Site] {
 	}
 
 	# A METHOD OF A TEMPLATE IMPL is bound by the impl's parameters as well as its own
-	for m in em.impl_tpl_fns {
+	mut mi := 0
+	for mi < em.impl_tpl_fns.len() {
+		m := em.impl_tpl_fns[mi]
 		mut tps := c_tpl_params_at(em, m.recv)
 		for t in m.tparams {
 			tps.append(t)
 		}
 		c_fn_sites(m, tps, m.path, m.line, m.col, out)
+		mi = mi + 1
 	}
 	return out
 }
@@ -6052,13 +6084,16 @@ fn c_check_type_name(mut &em: Emitter, nm: str, s: Site) {
 fn c_open_app_checked(mut &em: Emitter, nm: str, s: Site) -> bool {
 	return false if not c_is_applied(nm) or s.tparams.len() == 0
 
-	for a in em.ty_apps {
-		if a.name == nm {
+	mut i := 0
+	for i < em.ty_apps.len() {
+		if em.ty_apps[i].name == nm {
+			a := em.ty_apps[i]
 			return false if c_gen_struct_row(em, a.base) < 0 and c_gen_enum_row(em, a.base) < 0
 
 			c_check_named_ty_list(em, a.args, s)
 			return true
 		}
+		i = i + 1
 	}
 	return false
 }
@@ -17674,6 +17709,7 @@ fn c_lambda(mut &em: Emitter, ps: list[ast.Param], has_ret: bool, ret: ast.Ty, b
 	# the enclosing function's environment, which is saved and restored with it.
 	saved_frz := em.frz_idxs
 	saved_frz_paths := em.frz_paths
+	saved_frz_roots := em.frz_roots
 
 	# and the active substitution with them. It belongs to the block expression that opened
 	# it, and inside a function lifted OUT of that block its names mean nothing — the values
@@ -17696,6 +17732,7 @@ fn c_lambda(mut &em: Emitter, ps: list[ast.Param], has_ret: bool, ret: ast.Ty, b
 	em.ref_names = saved_refs
 	em.frz_idxs = saved_frz
 	em.frz_paths = saved_frz_paths
+	em.frz_roots = saved_frz_roots
 	em.used_fnptr = true
 
 	# NOTHING CAPTURED is the case that already worked: the lifted function is an ordinary
@@ -20395,6 +20432,7 @@ fn c_frz_push(mut &em: Emitter, iter: ast.Expr) -> bool {
 	return false if path == ""
 
 	em.frz_paths.append(path)
+	em.frz_roots.append(c_live_idx(em, check.chk_root_name(iter)))
 	return true
 }
 
@@ -20409,6 +20447,7 @@ fn c_frz_pop(mut &em: Emitter, pushed: bool, iter: ast.Expr) {
 		return
 	}
 	c_strs_drop_last(em.frz_paths)
+	c_ints_drop_last(em.frz_roots)
 }
 
 # c_forin lowers `for v in xs { ... }` to an index loop over the runtime list.
@@ -24277,7 +24316,7 @@ fn c_emit_unit_as(prog0: ast.File, own0: ast.File, ft: FileTypes, ms: Mods, whol
 	# is what makes that invariant hold for a multi-unit program, at the place it already lives,
 	# and it is what lets the declaration passes below go back to reading the WHOLE program.
 	seen := diags.len()
-	mut em := Emitter([], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], false, false, false, false, [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], 0, [], 0, [], [], false, "", "", [], [], ast.Ty.TVoid, 0, "", 0, 0, 0, 0, "", diags, 0, 0, [], [], [], [], [], false, 0, false, "", 0, false, false, [], [], [], [], [], [], [], [], [], [], [], "", want_lints, [], [], [], [], [], [], [], [], [], [], [], [], false, 0, [], [], "", c_nosub(), [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], false, ast.no_index(), [], [], [], [], [], [], [], [], [], [], [], [])
+	mut em := Emitter([], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], false, false, false, false, [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], 0, [], 0, [], [], false, "", "", [], [], ast.Ty.TVoid, 0, "", 0, 0, 0, 0, "", diags, 0, 0, [], [], [], [], [], false, 0, false, "", 0, false, false, [], [], [], [], [], [], [], [], [], [], [], "", want_lints, [], [], [], [], [], [], [], [], [], [], [], [], false, 0, [], [], "", c_nosub(), [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], false, ast.no_index(), [], [], [], [], [], [], [], [], [], [], [], [])
 
 	# ASSIGNED, NOT PASSED. Every argument above is a zero value, and `layering` asserts that
 	# — it lines the call up with the fields by KIND, which only works while nothing in it

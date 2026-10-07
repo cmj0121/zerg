@@ -12100,7 +12100,39 @@ fn c_call_val(mut &em: Emitter, callee: ast.Expr, args: list[ast.Expr], sb: Subs
 	raise c_diag(em, rule.Rule.CalleeNotAFunction, f"`{ast.expr_kind(callee)}` is a {ast.ty_name(fty)} and this calls it — a callee that is not a name has to be a function VALUE (GRAMMAR#postfix)") if not c_is_fn(fty)
 
 	v := c_tmp(em, "zgt_cv")
-	return f"({{ zg_fnptr {v} = {c_expr(em, callee, sb)}; ({c_fnptr_cast(fty)}{v}.fn)({v}.env{c_args_after(em, fty, args, sb)}); }})"
+	bind := f"zg_fnptr {v} = {c_expr(em, callee, sb)}; "
+	return f"({{ {bind}{c_call_through(em, v, fty, args, sb)}; }})" if not c_owns_value(callee)
+
+	# AN OWNED CALLEE IS A BINDING NOBODY NAMED (#305). `adder(1)(7)` is handed the closure
+	# `adder` built, and with it the one count its environment arrived with; the temp is the
+	# only holder there will ever be. So it is registered the way a `f := adder(1)` is
+	# (c_pend_drop), inside a scope of its own the way a block expression takes one
+	# (c_block_expr): a mark, the release on the cleanup stack, and an unwind once the call has
+	# answered. On the stack rather than written after the call for c_scope_forget's reason — a
+	# call that aborts never reaches a line written after it.
+	#
+	# A BORROWED one is left alone above: `fs[0](1)` reads a value the list still holds, and
+	# giving that back here would be the list's own count.
+	keep := em.rel_cnames.len()
+	mark := c_tmp(em, "zgt_cm")
+	give := c_pend_drop(em, fty, v, "")
+	call := c_call_through(em, v, fty, args, sb)
+	c_scope_forget(em, keep)
+
+	head := f"({{ size_t {mark} = zrt_scope_mark(); {bind}{give}"
+	ret := c_fn_ret(fty)
+	return f"{head}{call}; zrt_unwind_to({mark}); }})" if c_is_nil_ty(ret)
+
+	# the answer is held across the unwind: it is the caller's own by the time the call
+	# returns, and the environment it was computed from goes on the next line
+	rn := c_tmp(em, "zgt_cr")
+	return f"{head}{c_type(ret)} {rn} = {call}; zrt_unwind_to({mark}); {rn}; }})"
+}
+
+# c_call_through is the call itself, through a function value already held in a C name: the
+# cast back to its signature, then the environment ahead of the arguments.
+fn c_call_through(mut &em: Emitter, v: str, fty: ast.Ty, args: list[ast.Expr], sb: Subst) -> str {
+	return f"({c_fnptr_cast(fty)}{v}.fn)({v}.env{c_args_after(em, fty, args, sb)})"
 }
 
 #

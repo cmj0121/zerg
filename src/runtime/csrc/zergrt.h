@@ -116,6 +116,13 @@ void *zrt_dyn_alloc(size_t payload_sz, const void *vt);
  * through the table's copy slot (a NULL one is a POD payload: the bytes are the copy). */
 void *zrt_dyn_copy(const void *cell);
 
+/* zrt_dyn_free gives back a cell whose PAYLOAD HAS BEEN MOVED OUT: the storage alone, with
+ * no teardown run through the table. It is what a by-value method call on a box ends with —
+ * the member took the payload as its `this` and dropped it — where `zrt_release` would drop
+ * the same payload a second time. The caller holds the only reference: a cell is never
+ * shared, because copying one builds another (zrt_dyn_copy). */
+void zrt_dyn_free(void *cell);
+
 /* zrt_dyn_vt is the witness table a spec value was boxed against. */
 const void *zrt_dyn_vt(const void *cell);
 

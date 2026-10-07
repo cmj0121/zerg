@@ -59,6 +59,10 @@ void *zrt_dyn_copy(const void *cell) {
 	return d;
 }
 
+void zrt_dyn_free(void *cell) {
+	zrt_free(cell);
+}
+
 const void *zrt_dyn_vt(const void *cell) {
 	return ((const zrt_dyn_hdr *)cell)->vt;
 }

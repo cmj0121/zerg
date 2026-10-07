@@ -14135,6 +14135,13 @@ fn c_spec_disp_register(mut &em: Emitter, sp: str, meth: str) -> str {
 	# dispatcher is generated C and has no scope to register a release in, so it writes the
 	# by-value half by hand. Without it every call on a box built a cell and dropped it on the
 	# floor: `zrt_dyn_copy` in the argument, nothing anywhere giving it back.
+	#
+	# WHAT IT GIVES BACK IS THE CELL AND NOT THE PAYLOAD. The slot's shim hands the payload on
+	# by value to the member, and a by-value `this` is the member's to drop like any other
+	# parameter — so by the time the slot answers, the payload has an owner that has already
+	# given it back. `zrt_release` here ran the payload's teardown a SECOND time through the
+	# table: one count too many off every buffer the copy shared with the caller's own box,
+	# which is the caller's box read after free on its next use.
 	byref := em.pr_ref[c_param_row(em, key, 0)]
 	mut cell := "zg_self"
 	mut ps := f"{c_ty_cname(sp)} zg_self"
@@ -14154,7 +14161,7 @@ fn c_spec_disp_register(mut &em: Emitter, sp: str, meth: str) -> str {
 	call := f"((const {c_spec_vt_type(sp)} *)zrt_dyn_vt({cell}))->{meth}({xs})"
 	mut give := ""
 	if not byref {
-		give = "    zrt_release(zg_self);\n"
+		give = "    zrt_dyn_free(zg_self);\n"
 	}
 	mut out := f"static {c_type(rty)} {dn}({ps}) {{\n"
 	if em.sig_hasret[row] {

@@ -22895,6 +22895,13 @@ fn c_spec_render_disp(mut &em: Emitter, sp: str, inner: str) -> str {
 	}
 	em.svt_names.append(dn)
 
+	# DECLARED WITH THE RENDERERS, defined with the tables. The body reads the table's type, so
+	# it stays behind the typedef; but a STRUCTURAL renderer is a rendering site too — a list of
+	# boxes, a struct holding one — and those are written ahead of every table. Without the
+	# prototype only a site inside a function body saw the definition, and cc reported an
+	# implicit declaration for any composite holding the box.
+	em.rnd_protos.append(f"static const char *{dn}({c_ty_cname(sp)} zg_self);\n")
+
 	mut out := f"static const char *{dn}({c_ty_cname(sp)} zg_self) {{\n"
 	out = out + f"    return ((const {c_spec_vt_type(sp)} *)zrt_dyn_vt(zg_self))->render(zrt_dyn_payload(zg_self));\n}}\n"
 	em.svt_decls.append(out)

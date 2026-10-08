@@ -19660,9 +19660,103 @@ fn c_render_join(ind: str, piece: str, owned: bool) -> str {
 	return f"{ind}{{ const char *o = s; const char *p = {piece}; s = zrt_str_concat(s, p); zrt_str_release(o); zrt_str_release(p); }}\n"
 }
 
-# c_render_close is the same for the last piece, which is a literal and is RETURNED.
-fn c_render_close(tail: str) -> str {
-	return f"    {{ const char *o = s; const char *r = zrt_str_concat(s, \"{tail}\"); zrt_str_release(o); return r; }}\n"
+# c_render_close is the same for the last piece, which is a literal and is RETURNED. A held
+# accumulator (c_render_open) comes off the cleanup stack here, before the one line that gives
+# it back: nothing between the two can leave.
+fn c_render_close(tail: str, held: bool) -> str {
+	mut off := ""
+	if held {
+		off = "zrt_forget(1); "
+	}
+	return f"    {{ const char *o = s; const char *r = zrt_str_concat(s, \"{tail}\"); {off}zrt_str_release(o); return r; }}\n"
+}
+
+# c_render_open declares a renderer's accumulator, and HOLDS it when a part rendered after it
+# can run the program's own code (#311). A generated renderer is plain C outside every scope
+# the emitter tracks, so `s` had no owner but the `return` at the end: a part whose `display`
+# raised left the text built so far with nobody to give it back.
+#
+# THE CLEANUP IS HANDED `&s` AND READS IT WHEN IT RUNS, which is what makes one registration
+# serve an accumulator every join reassigns. A join binds the piece before it touches `s`
+# (c_render_join), so at every point a part can abort `s` is the cell the last join left and
+# the piece is still the callee's — there is no state in which the cleanup and a join's own
+# release name the same cell.
+#
+# It is written by hand rather than through c_hold because nothing here is on the emitter's
+# pending list to take off again: the registration is one line and c_render_close's is the
+# other, and every body goes through the pair.
+fn c_render_open(mut &em: Emitter, ind: str, first: str, held: bool) -> str {
+	out := f"{ind}const char *s = {first};\n"
+	return out if not held
+
+	return out + f"{ind}zrt_defer({c_drop_thunk(em, ast.Ty.TStr)}, &s);\n"
+}
+
+# c_render_runs is whether rendering a value of this type can run the program's own code, and
+# so whether it can abort. It asks c_render_of's questions in c_render_of's order: a box
+# renders through its table, a type that declares `display` or `debug` through that method,
+# and both are the program's; a `str` and a scalar are a runtime leaf; and a composite is
+# whatever its parts are. `seen` is the composites already being asked about, so a type that
+# reaches itself — a self-recursive enum — is answered by its other parts.
+fn c_render_runs(mut &em: Emitter, t: ast.Ty, mut &seen: list[str]) -> bool {
+	return true if c_is_spec_name(em, c_named_of(t))
+
+	if meth := c_render_override(em, t) {
+		return meth != ""
+	}
+	return false if c_is_str(t) or not c_has_parts(em, t)
+
+	key := c_render_key(em, t)
+	for n in seen {
+		return false if n == key
+	}
+	seen.append(key)
+
+	for p in c_render_parts(em, t) {
+		return true if c_render_runs(em, p, seen)
+	}
+	return false
+}
+
+# c_render_holds is the question a renderer body asks of the parts it is about to join.
+fn c_render_holds(mut &em: Emitter, parts: list[ast.Ty]) -> bool {
+	mut seen: list[str] = []
+	for p in parts {
+		return true if c_render_runs(em, p, seen)
+	}
+	return false
+}
+
+# c_render_parts is the types a composite's renderer renders, one per c_render_*_body.
+fn c_render_parts(mut &em: Emitter, t: ast.Ty) -> list[ast.Ty] {
+	return [c_list_elem(t)] if c_is_list(t)
+	return [c_arr_elem(t)] if c_is_arr(t)
+	return [c_map_key_ty(t), c_map_val_ty(t)] if c_is_map(t)
+	return [c_set_elem(t)] if c_is_set(t)
+	return ast.ty_tuple_elems(t) if c_is_tuple(t)
+	return [c_opt_elem(t)] if ast.ty_is_opt(t)
+	return [c_either_left(t), c_either_right(t)] if c_is_carrier(t)
+
+	nm := c_named_of(t)
+	mut out: list[ast.Ty] = []
+	mut i := 0
+	if c_is_enum_ty(em, t) {
+		for i < em.vf_variant.len() {
+			if em.vf_enum[i] == nm {
+				out.append(em.vf_ty[i])
+			}
+			i = i + 1
+		}
+		return out
+	}
+
+	for i < em.fld_struct.len() {
+		if em.fld_struct[i] == nm {
+			out.append(em.fld_ty[i])
+		}
+		i = i + 1
+	}
+	return out
 }
 
 # differs is where the length comes from and how a slot is reached, which is two lines.
@@ -19682,12 +19776,13 @@ fn c_render_list_body(mut &em: Emitter, t: ast.Ty) -> str {
 		slot = "v.v[i]"
 	}
 
-	mut out := "    const char *s = zrt_str_dup(\"[\");\n"
+	held := c_render_holds(em, [et])
+	mut out := c_render_open(em, "    ", "zrt_str_dup(\"[\")", held)
 	out = out + f"    for (size_t i = 0; i < (size_t)({n}); i++) {{\n"
 	out = out + "        if (i > 0) " + c_render_join("", "\", \"", false)
 	out = out + c_render_join("        ", c_render_of(em, et, slot, true), true)
 	out = out + "    }\n"
-	return out + c_render_close("]")
+	return out + c_render_close("]", held)
 }
 
 # A MAP RENDERS AS ITS LITERAL, `{k: v}`, in INSERTION ORDER — the order the language pins for
@@ -19699,14 +19794,15 @@ fn c_render_map_body(mut &em: Emitter, t: ast.Ty) -> str {
 	ks := f"(*({c_type(kt)}*)zrt_map_key_at(&v, i))"
 	vs := f"(*({c_type(vt)}*)zrt_map_val_at(&v, i))"
 
-	mut out := "    const char *s = zrt_str_dup(\"{\");\n"
+	held := c_render_holds(em, [kt, vt])
+	mut out := c_render_open(em, "    ", "zrt_str_dup(\"{\")", held)
 	out = out + "    for (size_t i = 0; i < zrt_map_len(&v); i++) {\n"
 	out = out + "        if (i > 0) " + c_render_join("", "\", \"", false)
 	out = out + c_render_join("        ", c_render_of(em, kt, ks, true), true)
 	out = out + c_render_join("        ", "\": \"", false)
 	out = out + c_render_join("        ", c_render_of(em, vt, vs, true), true)
 	out = out + "    }\n"
-	return out + c_render_close("}")
+	return out + c_render_close("}", held)
 }
 
 # c_render_set_body is the map's body with the value half dropped: `{1, 2}`, in insertion
@@ -19716,17 +19812,19 @@ fn c_render_set_body(mut &em: Emitter, t: ast.Ty) -> str {
 	et := c_set_elem(t)
 	es := f"(*({c_type(et)}*)zrt_map_key_at(&v, i))"
 
-	mut out := "    const char *s = zrt_str_dup(\"{\");\n"
+	held := c_render_holds(em, [et])
+	mut out := c_render_open(em, "    ", "zrt_str_dup(\"{\")", held)
 	out = out + "    for (size_t i = 0; i < zrt_map_len(&v); i++) {\n"
 	out = out + "        if (i > 0) " + c_render_join("", "\", \"", false)
 	out = out + c_render_join("        ", c_render_of(em, et, es, true), true)
 	out = out + "    }\n"
-	return out + c_render_close("}")
+	return out + c_render_close("}", held)
 }
 
 fn c_render_tuple_body(mut &em: Emitter, t: ast.Ty) -> str {
 	es := ast.ty_tuple_elems(t)
-	mut out := "    const char *s = zrt_str_dup(\"(\");\n"
+	held := c_render_holds(em, es)
+	mut out := c_render_open(em, "    ", "zrt_str_dup(\"(\")", held)
 	mut i := 0
 	for i < es.len() {
 		if i > 0 {
@@ -19735,7 +19833,7 @@ fn c_render_tuple_body(mut &em: Emitter, t: ast.Ty) -> str {
 		out = out + c_render_join("    ", c_render_of(em, es[i], f"v.f{strconv.to_string(i, 10)}", true), true)
 		i = i + 1
 	}
-	return out + c_render_close(")")
+	return out + c_render_close(")", held)
 }
 
 # A CARRIER RENDERS WHAT IT HOLDS, and an absent optional renders `nil` — the word the program
@@ -19752,14 +19850,16 @@ fn c_render_carrier_body(mut &em: Emitter, t: ast.Ty) -> str {
 	# plus the rendered payload on the floor.
 	lt := c_either_left(t)
 	rt := c_either_right(t)
+	rheld := c_render_holds(em, [rt])
+	lheld := c_render_holds(em, [lt])
 	mut out := "    if (v.tag != 0) {\n"
-	out = out + "        const char *s = zrt_str_dup(\"Right(\");\n"
+	out = out + c_render_open(em, "        ", "zrt_str_dup(\"Right(\")", rheld)
 	out = out + c_render_join("        ", c_render_of(em, rt, "v.err", true), true)
-	out = out + "    " + c_render_close(")")
+	out = out + "    " + c_render_close(")", rheld)
 	out = out + "    }\n"
-	out = out + "    const char *s = zrt_str_dup(\"Left(\");\n"
+	out = out + c_render_open(em, "    ", "zrt_str_dup(\"Left(\")", lheld)
 	out = out + c_render_join("    ", c_render_of(em, lt, c_res_val(em, t, "v"), true), true)
-	return out + c_render_close(")")
+	return out + c_render_close(")", lheld)
 }
 
 # A SUM RENDERS BY TAG THEN PAYLOAD: `E.A` for a variant that carries nothing, `E.B(3)` for one
@@ -19781,10 +19881,12 @@ fn c_render_enum_body(mut &em: Emitter, en: str) -> str {
 
 fn c_render_variant(mut &em: Emitter, en: str, vn: str) -> str {
 	mut ps: list[str] = []
+	mut tys: list[ast.Ty] = []
 	mut i := 0
 	for i < em.vf_variant.len() {
 		if em.vf_enum[i] == en and em.vf_variant[i] == vn {
 			ty := em.vf_ty[i]
+			tys.append(ty)
 			mut slot := f"v.u.{vn}.f{strconv.to_string(em.vf_index[i], 10)}"
 
 			# A BOXED PAYLOAD IS A POINTER — the auto-boxing a self-recursive enum gets — so
@@ -19808,7 +19910,8 @@ fn c_render_variant(mut &em: Emitter, en: str, vn: str) -> str {
 	# returned it as one expression, so it was invisible to a change keyed on the `s` shape —
 	# and every intermediate cell, plus every rendered payload, was dropped on the floor.
 	# `print Shape.Line(3)` allocated three cells and released none.
-	mut out := f"        const char *s = {lit};\n"
+	held := c_render_holds(em, tys)
+	mut out := c_render_open(em, "        ", lit, held)
 	out = out + c_render_join("        ", "\"(\"", false)
 	mut j := 0
 	for j < ps.len() {
@@ -19818,28 +19921,29 @@ fn c_render_variant(mut &em: Emitter, en: str, vn: str) -> str {
 		out = out + c_render_join("        ", ps[j], true)
 		j = j + 1
 	}
-	return out + "    " + c_render_close(")")
+	return out + "    " + c_render_close(")", held)
 }
 
 # A PRODUCT RENDERS BY ITS FIELDS, named: `P(x: 1, y: "a")` is the constructor a reader would
 # write with the names a reader would have to count without.
 fn c_render_struct_body(mut &em: Emitter, sn: str) -> str {
-	mut out := f"    const char *s = zrt_str_dup(\"{c_ft_written(em, sn)}(\");\n"
-	mut first := true
+	mut tys: list[ast.Ty] = []
+	mut joins := ""
 	mut i := 0
 	for i < em.fld_struct.len() {
 		if em.fld_struct[i] == sn {
-			if not first {
-				out = out + c_render_join("    ", "\", \"", false)
+			if tys.len() > 0 {
+				joins = joins + c_render_join("    ", "\", \"", false)
 			}
-			first = false
+			tys.append(em.fld_ty[i])
 			fnm := em.fld_name[i]
-			out = out + c_render_join("    ", f"\"{fnm}: \"", false)
-			out = out + c_render_join("    ", c_render_of(em, em.fld_ty[i], f"v.zg_{fnm}", true), true)
+			joins = joins + c_render_join("    ", f"\"{fnm}: \"", false)
+			joins = joins + c_render_join("    ", c_render_of(em, em.fld_ty[i], f"v.zg_{fnm}", true), true)
 		}
 		i = i + 1
 	}
-	return out + c_render_close(")")
+	held := c_render_holds(em, tys)
+	return c_render_open(em, "    ", f"zrt_str_dup(\"{c_ft_written(em, sn)}(\")", held) + joins + c_render_close(")", held)
 }
 
 # --- an f-string hole with a tail (GRAMMAR#interp) ----------------------------------------

@@ -186,6 +186,12 @@ on **every** path, **including the abort-unwind path**, and several `defer`s in 
 **last-scheduled-first (LIFO)**, interleaved with the scope-owned frees and `Ref` drops of that same reverse
 order.
 
+> **[deviation]** A value an expression has built and not yet bound is given back on that path too — an
+> operand held across a later one, the parts of a literal or a construction already built. A call's
+> **arguments** are not: when a later argument aborts and a `guard` catches it, the arguments already
+> evaluated are never released, and neither is a method call's receiver, nor what a `spawn` or a `defer`
+> had stored of its own arguments (#326). The answer is unchanged; the storage is lost until the program ends.
+
 **Assignment** is a drop too: writing over a binding that owns something frees what it held, and the new
 value is built **before** the old one is released — `s = s + x` reads `s` to make its own right-hand side.
 

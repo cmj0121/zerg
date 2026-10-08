@@ -438,6 +438,12 @@ void zrt_unwind_to(size_t mark);
  * a balanced expression guarantees; zrt_unwind_to is the exit that runs what it pops. */
 void zrt_forget(size_t n);
 
+/* zrt_defer_release is the `void (*)(void *)` adapter for a refcounted CELL held in a
+ * temporary: zrt_defer hands a cleanup the ADDRESS of what it registered, and zrt_release
+ * takes the cell. It is what holds a boxed enum payload while the payloads after it are
+ * evaluated, as zrt_defer_chan_release holds a channel end. */
+void zrt_defer_release(void *p);
+
 /* zrt_handler_push links a frame as the innermost abort handler, recording the
  * current cleanup-stack height in frame->mark. The caller must then arm
  * frame->buf with setjmp in its own activation. A plain handler REPORTS an abort's

@@ -430,6 +430,14 @@ void zrt_defer(void (*fn)(void *env), void *env);
  * zrt_scope_mark. This is the normal (non-abort) scope-exit path. */
 void zrt_unwind_to(size_t mark);
 
+/* zrt_forget pops the last n cleanups WITHOUT running them. It is the normal-path end of a
+ * temporary an expression holds across a later operand: the temporary is registered with
+ * zrt_defer where it is bound, so an abort in between gives it back, and once the operand
+ * has answered the expression gives it back itself on the next line - the registration is
+ * simply taken off. The caller owes that everything pushed since has been unwound, which
+ * a balanced expression guarantees; zrt_unwind_to is the exit that runs what it pops. */
+void zrt_forget(size_t n);
+
 /* zrt_handler_push links a frame as the innermost abort handler, recording the
  * current cleanup-stack height in frame->mark. The caller must then arm
  * frame->buf with setjmp in its own activation. A plain handler REPORTS an abort's

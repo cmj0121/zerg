@@ -93,6 +93,10 @@ void zrt_unwind_to(size_t mark) {
 	}
 }
 
+void zrt_forget(size_t n) {
+	g_tls.len -= n;
+}
+
 void zrt_handler_push(zrt_frame *frame) {
 	frame->mark = g_tls.len;
 	frame->prev = g_tls.handler;

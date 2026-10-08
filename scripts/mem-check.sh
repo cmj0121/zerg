@@ -1430,6 +1430,610 @@ fn main() {
 }
 ZG
 
+# --- what an expression owns when it aborts ---------------------------------------------
+# A release written on the line after a use is a release an abort jumps over. The cases below
+# hold the places that was true, each in the shape the others above cannot see: every value
+# is built at run time and is owned by nothing but the expression that is still being
+# evaluated when a LATER part of it raises, under a `guard` that lets the loop go round again.
+#
+# EVERY SHAPE IS RUN TWICE A ROUND through `both`: once where the later part raises and once
+# where it does not. The twin is what a fix that registers a temporary can break — a value
+# given back by the unwind AND by the line after it is freed twice — and it is also what makes
+# the raising half mean something: `gone` ends the run when a part that had to abort answered,
+# and `kept` when a twin did not, so a shape the compiler quietly stopped aborting is a `RUN`
+# failure here rather than a round that allocated and freed nothing of interest.
+#
+# What is NOT here is as deliberate. An earlier argument of a call or a method, held while a
+# later one raises, is the same class and still leaks unless it is a channel end, and so do a
+# `spawn`'s environment and a `defer`'s (#326); a shape that leaks on the path where nothing
+# raises is a different defect with an issue of its own. Neither is written into a case,
+# because a case that has to tolerate a leak counts nothing.
+abort_prelude='fn gone(v: int) -> int {
+	raise "a part that had to abort answered instead" if v >= 0
+	return 1
+}
+
+fn kept(v: int) -> int {
+	raise "a twin that had to answer aborted instead" if v < 0
+	return v
+}
+
+fn both(f: fn (int, int) -> int, i: int) -> int {
+	return gone(guard { f(i, 1) } ?? -1) + kept(guard { f(i, 0) } ?? -1)
+}
+
+fn word(n: int) -> str {
+	return str(n) + "abcdefghijklmnop"
+}
+
+fn boom(k: int) -> str {
+	raise "boom" if k > 0
+	return "ok"
+}
+
+fn bad(k: int) -> int {
+	raise "bad" if k > 0
+	return 0
+}
+
+fn mk(n: int) -> list[int] {
+	return [n, n + 1]
+}
+'
+
+# case_abort <name> <conc?> — a case built with the prelude above in front of the body on
+# stdin, for `zerg` alone. The seed has no `in`, no slice, no `set`, no `Either` and no spec
+# as a type, and every case here uses one of them, so it is not the oracle for these.
+case_abort() {
+	local name=$1 conc=$2
+	{
+		printf '%s\n' "$abort_prelude"
+		cat
+	} | emit_case "$name"
+	cases=$((cases + 1))
+	measure zerg "$ZERG" "$name" "$conc"
+	return 0
+}
+
+# A TEMPORARY HELD ACROSS A LATER OPERAND (#309). The left side of a `+`, a comparison or an
+# `in`, the list under an index or a slice, a `match`'s scrutinee, a map nobody named under a
+# method, a channel end handed to a call that raises or whose next argument does, the value a
+# send could not deliver, an assignment's key, and the left side of an operator its own type
+# declares: each sits in a C temporary while something after it runs, and each was given back
+# only on the line that something had to reach. The index and the slice abort in the runtime's
+# own bounds check as well as in a part that raises, and the send aborts because the channel
+# is closed — an abort is not always a `raise` the program wrote. The channels are buffered
+# and nothing is spawned; the schedule is pinned all the same, as it is for every case that
+# holds one.
+case_abort abort_operand yes <<'ZG'
+struct P {
+	pub name: str
+	pub xs: list[int]
+}
+
+impl Eq for P {
+	fn eq(o: P) -> bool {
+		return this.name == o.name
+	}
+
+	fn ne(o: P) -> bool {
+		return not this.eq(o)
+	}
+}
+
+impl Ord for P {
+	fn less(o: P) -> bool {
+		return this.xs.len() < o.xs.len()
+	}
+}
+
+fn mkp(n: int) -> P {
+	return P(word(n), mk(n))
+}
+
+fn mkq(n: int, k: int) -> P {
+	raise "q" if k > 0
+	return P(word(n), mk(n))
+}
+
+fn mkm(n: int) -> map[str, int] {
+	return {word(n): n}
+}
+
+fn source(n: int) -> chan[int] {
+	c := chan[int](2)
+	c <- n
+	return c
+}
+
+fn drain(c: <-chan[int], k: int) -> int {
+	return bad(k) + 1
+}
+
+fn concat(i: int, k: int) -> int {
+	return bytearray(word(i) + boom(k)).len()
+}
+
+fn concat_chain(i: int, k: int) -> int {
+	return bytearray(word(i) + word(i + 1) + boom(k) + word(i + 2)).len()
+}
+
+fn hole(i: int, k: int) -> int {
+	return bytearray(f"{word(i)}:{boom(k)}").len()
+}
+
+fn str_eq(i: int, k: int) -> int {
+	return 1 if word(i) == boom(k)
+	return 2
+}
+
+fn str_lt(i: int, k: int) -> int {
+	return 1 if word(i) < boom(k)
+	return 2
+}
+
+fn in_list(i: int, k: int) -> int {
+	return 1 if bad(k) in mk(i)
+	return 2
+}
+
+fn in_map(i: int, k: int) -> int {
+	return 1 if boom(k) in mkm(i)
+	return 2
+}
+
+fn index_part(i: int, k: int) -> int {
+	return mk(i)[bad(k)] - i
+}
+
+fn index_range(i: int, k: int) -> int {
+	return mk(i)[k * 5] - i
+}
+
+fn slice_part(i: int, k: int) -> int {
+	return mk(i)[0..bad(k) + 1].len()
+}
+
+fn slice_range(i: int, k: int) -> int {
+	return mk(i)[0..k * 5 + 1].len()
+}
+
+fn match_list(i: int, k: int) -> int {
+	return match mk(i) {
+		_ => bad(k)
+	}
+}
+
+fn match_str(i: int, k: int) -> int {
+	return match word(i) {
+		"x" => 1
+		_   => bad(k)
+	}
+}
+
+fn map_method(i: int, k: int) -> int {
+	return 1 if mkm(i).has(boom(k))
+	return 2
+}
+
+fn chan_arg(i: int, k: int) -> int {
+	return drain(source(i), k)
+}
+
+fn pass(c: <-chan[int], k: int) -> int {
+	return k + 1
+}
+
+fn chan_arg_later(i: int, k: int) -> int {
+	return pass(source(i), bad(k))
+}
+
+fn send_closed(i: int, k: int) -> int {
+	c := chan[list[int]](1)
+	if k > 0 {
+		close(c)
+	}
+	c <- mk(i)
+	xs := <-c ?? [0]
+	return xs.len()
+}
+
+fn map_key(i: int, k: int) -> int {
+	mut m := {word(i): mk(i)}
+	m[word(i + 1)] = mk(bad(k))
+	return m.len()
+}
+
+fn own_eq(i: int, k: int) -> int {
+	return 1 if mkp(i) == mkq(i, k)
+	return 2
+}
+
+fn own_lt(i: int, k: int) -> int {
+	return 1 if mkp(i) < mkq(i, k)
+	return 2
+}
+
+fn main() {
+	mut n := 0
+	mut i := 0
+	r := rounds()
+	for i < r {
+		n = n + both(concat, i) + both(concat_chain, i) + both(hole, i)
+		n = n + both(str_eq, i) + both(str_lt, i)
+		n = n + both(in_list, i) + both(in_map, i)
+		n = n + both(index_part, i) + both(index_range, i)
+		n = n + both(slice_part, i) + both(slice_range, i)
+		n = n + both(match_list, i) + both(match_str, i)
+		n = n + both(map_method, i)
+		n = n + both(chan_arg, i) + both(chan_arg_later, i) + both(send_closed, i)
+		n = n + both(map_key, i)
+		n = n + both(own_eq, i) + both(own_lt, i)
+		i = i + 1
+	}
+	print n
+}
+ZG
+
+# A VALUE UNDER CONSTRUCTION (#312). A literal's earlier parts are owned by nothing until the
+# whole value exists: a list or a map written as an expression, a map literal a `:=` binds (the
+# binding is registered after the literal is whole, so it does not help), a set built from a
+# literal, a tuple, an array, a struct written by position, by name and with a trailing default
+# that raises, and a variant — whose payload, when the enum holds itself, is a cell as well as
+# a value. A spec box is the same cell one type over, as a list's element and a struct's field.
+case_abort abort_literal no <<'ZG'
+struct P {
+	pub name: str
+	pub xs: list[int]
+}
+
+struct D {
+	pub name: str
+	pub xs: list[int]
+	pub n: int = bad(1)
+}
+
+enum E {
+	None
+	Two(str, list[int])
+}
+
+enum T {
+	Leaf(list[int])
+	Node(T, T)
+}
+
+spec Shape {
+	fn area() -> int
+}
+
+struct Sq {
+	pub s: int
+	pub tags: list[str]
+}
+
+impl Shape for Sq {
+	fn area() -> int {
+		return this.s * this.s
+	}
+}
+
+struct H {
+	pub a: Shape
+	pub n: int
+}
+
+fn total(xs: list[Shape]) -> int {
+	mut n := 0
+	for x in xs {
+		n = n + x.area()
+	}
+	return n
+}
+
+fn depth(t: T) -> int {
+	return match t {
+		T.Leaf(xs)   => xs.len()
+		T.Node(a, b) => depth(a) + depth(b)
+	}
+}
+
+fn list_of_lists(i: int, k: int) -> int {
+	return [mk(i), mk(i + 1 + bad(k)), mk(i + 2)].len()
+}
+
+fn list_of_strs(i: int, k: int) -> int {
+	return [word(i), boom(k)].len()
+}
+
+fn map_key(i: int, k: int) -> int {
+	return {word(i): 1, boom(k): 2}.len()
+}
+
+fn map_value(i: int, k: int) -> int {
+	return {word(i): mk(i), word(i + 1): mk(bad(k))}.len()
+}
+
+fn map_bound(i: int, k: int) -> int {
+	m := {word(i): mk(i), word(i + 1): mk(bad(k))}
+	return m.len()
+}
+
+fn set_of(i: int, k: int) -> int {
+	return set([i, i + 1, i + 2 + bad(k)]).len()
+}
+
+fn tuple_of(i: int, k: int) -> int {
+	t := (word(i), mk(i), boom(k))
+	return t.1.len()
+}
+
+fn array_of(i: int, k: int) -> int {
+	a: [str; 2] = [word(i), boom(k)]
+	return a.len()
+}
+
+fn struct_by_place(i: int, k: int) -> int {
+	p := P(word(i), mk(bad(k)))
+	return p.xs.len()
+}
+
+fn struct_by_name(i: int, k: int) -> int {
+	p := P(name: word(i), xs: mk(bad(k)))
+	return p.xs.len()
+}
+
+fn struct_default(i: int, k: int) -> int {
+	return D(word(i), mk(i), 0).xs.len() if k == 0
+	d := D(word(i), mk(i))
+	return d.xs.len()
+}
+
+fn variant(i: int, k: int) -> int {
+	e := E.Two(word(i), mk(bad(k)))
+	return match e {
+		E.None       => 0
+		E.Two(_, xs) => xs.len()
+	}
+}
+
+fn variant_boxed(i: int, k: int) -> int {
+	t := T.Node(T.Node(T.Leaf(mk(i)), T.Leaf(mk(i + 1))), T.Leaf(mk(bad(k))))
+	return depth(t)
+}
+
+fn box_list(i: int, k: int) -> int {
+	return total([Sq(1, [word(i)]), Sq(2, [word(i + 1)]), Sq(bad(k), [word(i + 2)])])
+}
+
+fn box_field(i: int, k: int) -> int {
+	h := H(Sq(2, [word(i)]), bad(k))
+	return h.a.area() + h.n
+}
+
+fn main() {
+	mut n := 0
+	mut i := 0
+	r := rounds()
+	for i < r {
+		n = n + both(list_of_lists, i) + both(list_of_strs, i)
+		n = n + both(map_key, i) + both(map_value, i) + both(map_bound, i)
+		n = n + both(set_of, i)
+		n = n + both(tuple_of, i) + both(array_of, i)
+		n = n + both(struct_by_place, i) + both(struct_by_name, i) + both(struct_default, i)
+		n = n + both(variant, i) + both(variant_boxed, i)
+		n = n + both(box_list, i) + both(box_field, i)
+		i = i + 1
+	}
+	print n
+}
+ZG
+
+# A RENDERER'S TEXT (#311). A generated renderer joins its parts into one accumulator, and a
+# part whose own `display` raises leaves by a jump that the release at the renderer's end is
+# not on. Every part before the one that raises is rendered first, so there is text to lose:
+# a list, an array, a map's value, a tuple, an Either arm, a variant's payload and a struct's
+# field, reached through `.debug()` and — for one of them each — `print`, `str()` and an
+# f-string hole with and without its conversion.
+case_abort abort_render no <<'ZG'
+struct Q {
+	pub k: int
+	pub tags: list[str]
+}
+
+impl Q {
+	fn display() -> str {
+		raise "no show" if this.k > 0
+		return f"Q{this.tags.len()}{this.tags[0]}"
+	}
+}
+
+struct W {
+	pub name: str
+	pub q: Q
+}
+
+enum E {
+	None
+	Two(str, Q)
+}
+
+fn q(n: int, k: int) -> Q {
+	return Q(k, [word(n)])
+}
+
+fn res(n: int, k: int) -> Result[Q] {
+	return Either.Left(q(n, k))
+}
+
+fn size(s: str) -> int {
+	return bytearray(s).len()
+}
+
+fn list_debug(i: int, k: int) -> int {
+	ys := [q(i, 0), q(i, k)]
+	return size(ys.debug())
+}
+
+fn list_print(i: int, k: int) -> int {
+	ys := [q(i, 0), q(i, k)]
+	print ys
+	return ys.len()
+}
+
+fn list_rvalue(i: int, k: int) -> int {
+	print [q(i, 0), q(i, k)]
+	return i
+}
+
+fn array_debug(i: int, k: int) -> int {
+	ys: [Q; 2] = [q(i, 0), q(i, k)]
+	return size(ys.debug())
+}
+
+fn map_debug(i: int, k: int) -> int {
+	ys := {word(i): q(i, 0), word(i + 1): q(i, k)}
+	return size(ys.debug())
+}
+
+fn tuple_debug(i: int, k: int) -> int {
+	ys := (word(i), q(i, 0), q(i, k))
+	return size(ys.debug())
+}
+
+fn tuple_str(i: int, k: int) -> int {
+	ys := (word(i), q(i, 0), q(i, k))
+	return size(str(ys) + "!")
+}
+
+fn either_debug(i: int, k: int) -> int {
+	ys := res(i, k)
+	return size(ys.debug())
+}
+
+fn variant_debug(i: int, k: int) -> int {
+	ys := E.Two(word(i), q(i, k))
+	return size(ys.debug())
+}
+
+fn struct_debug(i: int, k: int) -> int {
+	ys := W(word(i), q(i, k))
+	return size(ys.debug())
+}
+
+fn struct_hole(i: int, k: int) -> int {
+	ys := W(word(i), q(i, k))
+	return size(f"<{i}|{ys}|{ys!r}>")
+}
+
+fn nested(i: int, k: int) -> int {
+	ys := [[q(i, 0), q(i, 0)], [q(i, 0), q(i, k)]]
+	return size(ys.debug())
+}
+
+fn main() {
+	mut n := 0
+	mut i := 0
+	r := rounds()
+	for i < r {
+		n = n + both(list_debug, i) + both(list_print, i) + both(list_rvalue, i)
+		n = n + both(array_debug, i) + both(map_debug, i)
+		n = n + both(tuple_debug, i) + both(tuple_str, i)
+		n = n + both(either_debug, i) + both(variant_debug, i)
+		n = n + both(struct_debug, i) + both(struct_hole, i)
+		n = n + both(nested, i)
+		i = i + 1
+	}
+	print n
+}
+ZG
+
+# A SPEC METHOD'S CELL (#318). A by-value spec method is called on a copy of the box, and the
+# member that raises gives back the payload it was handed and not the cell the copy was made
+# in. The box is reached through a name, as a receiver nobody named and as a parameter; the
+# member takes owned arguments of its own; and the method is the spec's default, which has no
+# member of the type's to enter.
+case_abort abort_spec no <<'ZG'
+spec Shape {
+	fn size() -> int
+	fn area(k: int) -> int
+	fn fit(k: int, tag: str, xs: list[str]) -> int
+	fn twice(k: int) -> int {
+		return this.size() * 2 + bad(k)
+	}
+}
+
+struct Lab {
+	pub parts: list[str]
+}
+
+impl Shape for Lab {
+	fn size() -> int {
+		return this.parts.len()
+	}
+
+	fn area(k: int) -> int {
+		return this.parts.len() + bad(k)
+	}
+
+	fn fit(k: int, tag: str, xs: list[str]) -> int {
+		return this.parts.len() + xs.len() + bytearray(tag).len() + bad(k)
+	}
+}
+
+fn ml(n: int) -> Shape {
+	return Lab([word(n), word(n + 1)])
+}
+
+fn through(s: Shape, k: int) -> int {
+	return s.area(k)
+}
+
+fn named(i: int, k: int) -> int {
+	y := ml(i)
+	return y.area(0) + y.area(k)
+}
+
+fn rvalue(i: int, k: int) -> int {
+	return ml(i).area(k)
+}
+
+fn param(i: int, k: int) -> int {
+	return through(ml(i), k)
+}
+
+fn named_args(i: int, k: int) -> int {
+	y := ml(i)
+	return y.fit(0, word(i), [word(i + 2)]) + y.fit(k, word(i), [word(i + 3)])
+}
+
+fn rvalue_args(i: int, k: int) -> int {
+	return ml(i).fit(k, word(i), [word(i + 2)])
+}
+
+fn named_default(i: int, k: int) -> int {
+	y := ml(i)
+	return y.twice(0) + y.twice(k)
+}
+
+fn rvalue_default(i: int, k: int) -> int {
+	return ml(i).twice(k)
+}
+
+fn main() {
+	mut n := 0
+	mut i := 0
+	r := rounds()
+	for i < r {
+		n = n + both(named, i) + both(rvalue, i) + both(param, i)
+		n = n + both(named_args, i) + both(rvalue_args, i)
+		n = n + both(named_default, i) + both(rvalue_default, i)
+		i = i + 1
+	}
+	print n
+}
+ZG
+
 if [ "$fail" -ne 0 ]; then
 	printf '\nmem-check: a value outlives the scope that made it\n' >&2
 	printf 'mem-check: the sources, the C and the binaries are kept in %s\n' "$WORK" >&2

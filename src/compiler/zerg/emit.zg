@@ -782,6 +782,13 @@ pub struct Emitter {
 	# says the name its file wrote — `P(x: 7)`, never the name the compiler kept it apart by.
 	pub ft_to: list[str]
 	pub ft_name: list[str]
+
+	# hold_recv asks the NEXT method call rendered to hold its receiver across its arguments
+	# (c_hold). c_eq_call and c_ord_call set it: an operator's left operand becomes the
+	# receiver of `eq` / `less`, bound to a sequencing temporary before the right operand is
+	# evaluated, and the operator has no other way to reach the call it is rewritten into.
+	# c_recv_args takes it and clears it, so it never outlives the one call it was set for.
+	pub hold_recv: bool
 }
 
 # Subst is an active set of identifier substitutions: an EIdent whose name appears in
@@ -1085,7 +1092,7 @@ fn c_fit_copied(mut &em: Emitter, where: str, want: ast.Ty, e: ast.Expr, sb: Sub
 	# `f([i, 2, 3])` on a `list[float]` parameter wrote int64_t bit patterns into a buffer read
 	# back as doubles. Each element is a typed position of its own, which is also where `Into`
 	# fires on it.
-	return c_list_lit_vals(em, c_list_elem(want), c_elem_exprs(em, e, c_list_elem(want), sb)) if c_is_list(want) and c_is_listlit(e)
+	return c_list_build(em, c_list_elem(want), c_listlit_elems(em, e), true, sb) if c_is_list(want) and c_is_listlit(e)
 
 	return c_into(em, want, e, sb)
 }
@@ -9134,25 +9141,33 @@ fn c_guard_jump_err(mut &em: Emitter, kw: str) {
 # could tell — it costs a name and nothing else, and it keeps one list in one place.
 fn c_str_concat(mut &em: Emitter, a: ast.Expr, b: ast.Expr, sb: Subst) -> str {
 	ra := c_expr(em, a, sb)
-	rb := c_expr(em, b, sb)
 	oa := c_owns_value(a)
 	ob := c_owns_value(b)
 	seq := c_needs_order([a, b], 1)
 	ba := oa or seq
 	bb := ob or seq
-	return f"zrt_str_concat({ra}, {rb})" if not ba and not bb
 
+	# THE LEFT OPERAND IS HELD ACROSS THE RIGHT ONE (c_hold): it is bound first, and the right
+	# one is where `f"{a} {risky()}"` aborts. The right operand is bound last and given back
+	# straight after the join, with nothing evaluated in between, so it is never registered.
+	keep := em.rel_cnames.len()
 	mut decls := ""
 	mut frees := ""
 	mut la := ra
-	mut lb := rb
 	if ba {
 		la = c_tmp(em, "zgt_t")
 		decls = decls + f"const char *{la} = {ra}; "
 		if oa {
 			frees = frees + f"zrt_str_release({la}); "
+			if c_runs_code(b) {
+				decls = decls + c_hold(em, ast.Ty.TStr, la)
+			}
 		}
 	}
+	rb := c_expr(em, b, sb)
+	return f"zrt_str_concat({ra}, {rb})" if not ba and not bb
+
+	mut lb := rb
 	if bb {
 		lb = c_tmp(em, "zgt_t")
 		decls = decls + f"const char *{lb} = {rb}; "
@@ -9160,6 +9175,7 @@ fn c_str_concat(mut &em: Emitter, a: ast.Expr, b: ast.Expr, sb: Subst) -> str {
 			frees = frees + f"zrt_str_release({lb}); "
 		}
 	}
+	decls = decls + c_unhold(em, keep)
 	rn := c_tmp(em, "zgt_t")
 	return f"({{ {decls}const char *{rn} = zrt_str_concat({la}, {lb}); {frees}{rn}; }})"
 }
@@ -9373,14 +9389,22 @@ fn c_binexpr(mut &em: Emitter, oper: str, a: ast.Expr, b: ast.Expr, sb: Subst) -
 			la := c_tmp(em, "zgt_t")
 			lb := c_tmp(em, "zgt_t")
 			rn := c_tmp(em, "zgt_t")
+			keep := em.rel_cnames.len()
 			mut frees := ""
+			mut left := f"const char *{la} = {c_expr(em, a, sb)}; "
 			if oa {
 				frees = frees + f"zrt_str_release({la}); "
+
+				# held across the right operand, as a concat's left one is
+				if c_runs_code(b) {
+					left = left + c_hold(em, ast.Ty.TStr, la)
+				}
 			}
 			if ob {
 				frees = frees + f"zrt_str_release({lb}); "
 			}
-			return f"({{ const char *{la} = {c_expr(em, a, sb)}; const char *{lb} = {c_expr(em, b, sb)}; int {rn} = strcmp({la}, {lb}); {frees}({rn} {oper} 0); }})"
+			right := f"const char *{lb} = {c_expr(em, b, sb)}; "
+			return f"({{ {left}{right}{c_unhold(em, keep)}int {rn} = strcmp({la}, {lb}); {frees}({rn} {oper} 0); }})"
 		}
 		if c_is_cmp_op(oper) {
 			seq := c_needs_order([a, b], 1)
@@ -9495,9 +9519,22 @@ fn c_eq_legal(mut &em: Emitter, t: ast.Ty) -> bool {
 # handing it back to c_expr gets the receiver copy, the name mangling and the argument rules
 # from the one place that already has them — the same move `Into` makes for `.into()`.
 fn c_eq_call(mut &em: Emitter, oper: str, a: ast.Expr, b: ast.Expr, sb: Subst) -> str {
-	return c_expr(em, ast.Expr.EMethod(a, "eq", [b], 0, 0), sb) if oper == "=="
+	mut call := ast.Expr.EMethod(a, "ne", [b], 0, 0)
+	if oper == "==" {
+		call = ast.Expr.EMethod(a, "eq", [b], 0, 0)
+	}
+	return c_holding_recv(em, call, sb)
+}
 
-	return c_expr(em, ast.Expr.EMethod(a, "ne", [b], 0, 0), sb)
+# c_holding_recv renders an operator rewritten as a method call, with the call's receiver held
+# across its argument (hold_recv). The flag is cleared on the way out as well as where it is
+# taken, so a rewriting that never reaches c_recv_args cannot leave it standing for a call
+# somebody wrote.
+fn c_holding_recv(mut &em: Emitter, call: ast.Expr, sb: Subst) -> str {
+	em.hold_recv = true
+	out := c_expr(em, call, sb)
+	em.hold_recv = false
+	return out
 }
 
 # c_is_order_op is the half of the comparison operators `Ord` answers. `==` and `!=` are
@@ -9516,11 +9553,11 @@ fn c_is_order_op(oper: str) -> bool {
 # (docs/core/specs.md), and under totality `a <= b` is exactly `not (b < a)`, which spends
 # each operand once.
 fn c_ord_call(mut &em: Emitter, oper: str, a: ast.Expr, b: ast.Expr, sb: Subst) -> str {
-	return c_expr(em, ast.Expr.EMethod(a, "less", [b], 0, 0), sb) if oper == "<"
-	return c_expr(em, ast.Expr.EMethod(b, "less", [a], 0, 0), sb) if oper == ">"
-	return c_expr(em, ast.Expr.EUnary("not", ast.Expr.EMethod(b, "less", [a], 0, 0)), sb) if oper == "<="
+	return c_holding_recv(em, ast.Expr.EMethod(a, "less", [b], 0, 0), sb) if oper == "<"
+	return c_holding_recv(em, ast.Expr.EMethod(b, "less", [a], 0, 0), sb) if oper == ">"
+	return c_holding_recv(em, ast.Expr.EUnary("not", ast.Expr.EMethod(b, "less", [a], 0, 0)), sb) if oper == "<="
 
-	return c_expr(em, ast.Expr.EUnary("not", ast.Expr.EMethod(a, "less", [b], 0, 0)), sb)
+	return c_holding_recv(em, ast.Expr.EUnary("not", ast.Expr.EMethod(a, "less", [b], 0, 0)), sb)
 }
 
 # c_eq_refuse names what is missing, and there are four different sentences under one gap —
@@ -9947,9 +9984,16 @@ fn c_in_container(mut &em: Emitter, x: ast.Expr, set: ast.Expr, st: ast.Ty, sb: 
 
 	give := c_in_give(em, set, st, sv)
 
-	head := f"{c_type(st)} {sv} = {c_expr(em, set, sb)}; {et} {kv} = {c_fit_copied(em, "the value looked for by `in`", elem, x, sb)};"
+	# the set is bound FIRST, so one this expression owns is held across the value looked for
+	keep := em.rel_cnames.len()
+	mut head := f"{c_type(st)} {sv} = {c_expr(em, set, sb)}; "
+	if give != "" and c_runs_code(x) {
+		head = head + c_hold(em, st, sv)
+	}
+	head = head + f"{et} {kv} = {c_fit_copied(em, "the value looked for by `in`", elem, x, sb)}; "
+	head = head + c_unhold(em, keep)
 
-	return f"({{ {head} {bt} {rv} = zrt_map_has(&{sv}, &{kv});{give} {rv}; }})" if c_is_map(st) or c_is_set(st)
+	return f"({{ {head}{bt} {rv} = zrt_map_has(&{sv}, &{kv});{give} {rv}; }})" if c_is_map(st) or c_is_set(st)
 
 	iv := n + "i"
 	at := f"(*({et} *)zrt_list_at_ref(&{sv}, {iv}))"
@@ -9958,7 +10002,7 @@ fn c_in_container(mut &em: Emitter, x: ast.Expr, set: ast.Expr, st: ast.Ty, sb: 
 
 	# the LENGTH is read once: zrt_list_len is a call into another translation unit, so asking
 	# it in the condition is one call per element rather than one for the loop
-	return f"({{ {head} {bt} {rv} = false; size_t {nv} = zrt_list_len(&{sv}); for (size_t {iv} = 0; {iv} < {nv}; {iv}++) {{ if ({c_in_eq(at, kv, elem)}) {{ {rv} = true; break; }} }}{give} {rv}; }})"
+	return f"({{ {head}{bt} {rv} = false; size_t {nv} = zrt_list_len(&{sv}); for (size_t {iv} = 0; {iv} < {nv}; {iv}++) {{ if ({c_in_eq(at, kv, elem)}) {{ {rv} = true; break; }} }}{give} {rv}; }})"
 }
 
 # c_in_elem_owes_eq is whether the element type is one a PROGRAM could give an `==` and has
@@ -10823,17 +10867,18 @@ fn c_index(mut &em: Emitter, target: ast.Expr, idx: ast.Expr, sb: Subst) -> str 
 	# `xs` and reads `js`, and unsharing `js` for it would be a copy nobody asked for
 	w := em.lv_write
 	tgt := c_expr(em, target, sb)
-	em.lv_write = false
-	ix := c_expr(em, idx, sb)
-	em.lv_write = w
-
 	at := c_list_at_fn(w)
 
 	# c_is_PLACE and not c_is_lvalue: the type-blind question calls `m[k]` an lvalue, and
 	# it is not — it lowers to a statement expression, so `c["k"][0]` took the address of
 	# an rvalue and cc said so about C nobody wrote. c_is_place is the same question with
 	# the types that tell them apart, and it is what the mutating-method path already asks.
-	return f"(*({ct}*){at}(&({tgt}), {ix}))" if c_is_place(em, target)
+	if c_is_place(em, target) {
+		em.lv_write = false
+		ix := c_expr(em, idx, sb)
+		em.lv_write = w
+		return f"(*({ct}*){at}(&({tgt}), {ix}))"
+	}
 
 	# A CALL OR CONVERSION RESULT IS AN RVALUE: it is materialised so its address can be
 	# taken, and — because nothing else will ever name it — given back here. `print
@@ -10853,6 +10898,18 @@ fn c_index(mut &em: Emitter, target: ast.Expr, idx: ast.Expr, sb: Subst) -> str 
 	ln := c_tmp(em, "zgt_t")
 	vn := c_tmp(em, "zgt_t")
 	et := c_list_elem(tty)
+	borrowed := c_is_map_index(em, target)
+
+	# THE LIST IS HELD ACROSS THE READ (c_hold) when it is this expression's to give back: the
+	# index is evaluated after it is bound, and the read itself aborts on an index out of range.
+	keep := em.rel_cnames.len()
+	mut bind := f"zrt_list {ln} = {tgt}; "
+	if not borrowed {
+		bind = bind + c_hold(em, tty, ln)
+	}
+	em.lv_write = false
+	ix := c_expr(em, idx, sb)
+	em.lv_write = w
 	slot := f"(*({ct}*){at}(&{ln}, {ix}))"
 
 	# A MAP INDEX IS A BORROW, and this is the exception to the sentence above. `m[k]` lowers
@@ -10867,14 +10924,13 @@ fn c_index(mut &em: Emitter, target: ast.Expr, idx: ast.Expr, sb: Subst) -> str 
 	# end kept a count that held its stream open forever (#23). Only an element this
 	# expression is the owner of is taken, and then the map's list is not given back, because
 	# the map still holds it.
-	borrowed := c_is_map_index(em, target)
 	mut val := slot
 	if not (borrowed and c_is_borrow(target)) {
 		val = c_taken(em, et, slot)
 	}
-	return f"({{ zrt_list {ln} = {tgt}; {ct} {vn} = {val}; {vn}; }})" if borrowed
+	return f"({{ {bind}{ct} {vn} = {val}; {vn}; }})" if borrowed
 
-	return f"({{ zrt_list {ln} = {tgt}; {ct} {vn} = {val}; zrt_list_drop(&{ln}); {vn}; }})"
+	return f"({{ {bind}{ct} {vn} = {val}; {c_unhold(em, keep)}zrt_list_drop(&{ln}); {vn}; }})"
 }
 
 # c_list_at_fn picks the runtime slot accessor. They differ by exactly one thing — the
@@ -11966,8 +12022,24 @@ fn c_recv_args(mut &em: Emitter, key: str, target: ast.Expr, args: list[ast.Expr
 	# A default that reads an earlier parameter puts every argument in a temporary
 	# (c_args_from), and those run before the receiver unless it is held in one as well.
 	seq := c_needs_order_args(args, c_ref_args(em, key, 1, args), 0) or c_defaults_read_earlier(em, key, 1, args.len(), c_args_filled(em, key, 1, args))
-	recv := c_ordered(em, seq and not c_is_ref_param(em, key, 0), c_arg(em, key, 0, 0, target, sb))
-	return recv + c_args_from(em, key, 1, args, true, sb)
+	held := em.hold_recv
+	em.hold_recv = false
+	bound := seq and not c_is_ref_param(em, key, 0)
+	recv := c_ordered(em, bound, c_arg(em, key, 0, 0, target, sb))
+	return recv + c_args_from(em, key, 1, args, true, sb) if not held or not bound
+
+	# AN OPERATOR'S LEFT OPERAND, HELD ACROSS ITS RIGHT ONE. The receiver is a by-value
+	# parameter, so what the temporary holds is the callee's the moment the call is entered and
+	# this expression's until then; the hold ends on the last line before the call, after every
+	# argument has been bound.
+	row := c_param_row(em, key, 0)
+	keep := em.rel_cnames.len()
+	if row >= 0 {
+		em.seq_pre = em.seq_pre + c_hold(em, em.pr_ty[row], recv)
+	}
+	rest := c_args_from(em, key, 1, args, true, sb)
+	em.seq_pre = em.seq_pre + c_unhold(em, keep)
+	return recv + rest
 }
 
 # c_call emits an enum-variant construction as a tagged-union literal, a struct
@@ -11986,7 +12058,7 @@ fn c_recv_args(mut &em: Emitter, key: str, target: ast.Expr, args: list[ast.Expr
 # already supply it.
 # It takes its element type from the FIRST element, which is what a literal with no
 # destination has to do. Where there IS a destination the declared type is better, and
-# c_fit_copied supplies it — see c_list_lit_vals.
+# c_fit_copied supplies it — see c_list_build.
 # c_fill_lit lowers `[v; N]` — the FILL form, which GRAMMAR#list-lit defines as "N copies of
 # v". Copies of the VALUE, so v is evaluated ONCE. It used to expand into a list literal of N
 # copies of the EXPRESSION, and the emitter then rendered that expression N times: `[bump(c);
@@ -12040,35 +12112,50 @@ fn c_list_lit(mut &em: Emitter, elems: list[ast.Expr], sb: Subst) -> str {
 	# arm body, where `Expr.EBinary(_, a, b) => [a, b]` builds a list out of two names. Every
 	# other list literal in the language reaches c_fit_copied and is built element by element
 	# at the declared type.
-	ety := c_infer(em, elems[0])
-	mut vals: list[str] = []
-	for e in elems {
-		vals.append(c_copied(em, ety, e, sb))
-	}
-	return c_list_lit_vals(em, ety, vals)
+	return c_list_build(em, c_infer(em, elems[0]), elems, false, sb)
 }
 
-# c_list_lit_vals assembles the literal from ALREADY-RENDERED elements, so that the two
-# callers can disagree about how an element is rendered while agreeing about everything else.
-# They do disagree, and it matters: one has a declared element type to render AT and the other
-# only has the elements. `xs: list[float] = [i, 2, 3]` for an `int` binding `i` built a buffer
-# of int64_t bit patterns and read them back as doubles — it printed 5.92879e-323 — because
-# the sizeof, the element vtable and every push came from the first element's type instead of
-# the one the declaration named.
-fn c_list_lit_vals(mut &em: Emitter, ety: ast.Ty, vals: list[str]) -> str {
-	return "(zrt_list){0}" if vals.len() == 0
+# c_list_build assembles the literal, element by element, for the two callers that disagree
+# about how an element is rendered while agreeing about everything else. They do disagree, and
+# it matters: one has a declared element type to render AT (`typed`, c_fit_copied) and the
+# other only has the elements (c_copied). `xs: list[float] = [i, 2, 3]` for an `int` binding
+# `i` built a buffer of int64_t bit patterns and read them back as doubles — it printed
+# 5.92879e-323 — because the sizeof, the element vtable and every push came from the first
+# element's type instead of the one the declaration named.
+#
+# THE LIST UNDER CONSTRUCTION IS HELD ACROSS THE ELEMENTS AFTER THE FIRST (c_hold, #312). A
+# push hands the element to the list, and the list is a C temporary nobody owns until the
+# statement expression answers: `[mk(1), mk(bad(1))]` left the buffer and its first element
+# behind when `bad` raised. The hold goes on after the first push — an empty list owns nothing,
+# so a first element that aborts has nothing to give back — and each element is rendered where
+# it is bound, which is what puts the hold on the pending list while the later ones are
+# rendered. A list is droppable with any number of elements in it, so one registration serves
+# every abort point. A literal bound by `:=` needs none of this (c_let_list): its binding is
+# registered for its whole scope before the first push.
+fn c_list_build(mut &em: Emitter, ety: ast.Ty, elems: list[ast.Expr], typed: bool, sb: Subst) -> str {
+	return "(zrt_list){0}" if elems.len() == 0
 	em.used_rt = true
 
 	et := c_type(ety)
-	mut out := "({ zrt_list zgt_ll = zg_empty_list(sizeof(" + et + "), &" + c_elem_vt(em, ety) + ");"
+	keep := em.rel_cnames.len()
+	later := c_needs_order(elems, 1)
+	mut out := "({ zrt_list zgt_ll = zg_empty_list(sizeof(" + et + "), &" + c_elem_vt(em, ety) + "); "
 	mut i := 0
-	for i < vals.len() {
+	for i < elems.len() {
+		mut val := ""
+		if typed {
+			val = c_fit_copied(em, check.chk_elem_says(i + 1), ety, elems[i], sb)
+		} else {
+			val = c_copied(em, ety, elems[i], sb)
+		}
 		tmp := "zgt_ll" + strconv.to_string(i, 10)
-		out = out + " " + et + " " + tmp + " = " + vals[i] + ";"
-		out = out + " zrt_list_push(&zgt_ll, &" + tmp + ");"
+		out = out + et + " " + tmp + " = " + val + "; zrt_list_push(&zgt_ll, &" + tmp + "); "
+		if i == 0 and later {
+			out = out + c_hold(em, ast.Ty.TList(ety), "zgt_ll")
+		}
 		i = i + 1
 	}
-	return out + " zgt_ll; })"
+	return out + c_unhold(em, keep) + "zgt_ll; })"
 }
 
 # c_call_written is what is left of a call that WROTE its type arguments. The form is gone —
@@ -12704,6 +12791,34 @@ fn c_struct_args(mut &em: Emitter, sname: str, written: list[ast.Expr], sb: Subs
 	# a field a NAME skipped holds its default, which is lowered in the struct's own file
 	filled := c_struct_filled(em, sname, written)
 
+	# A FIELD THAT OWNS SOMETHING IS HELD ACROSS THE ONES AFTER IT (c_hold, #312). The fields
+	# of a sequenced construction sit in temporaries until the compound literal is written,
+	# and `P(word(1), mk(bad(1)))` left the first of them with nobody to give it back. The
+	# hold goes on where the field is bound and they all come off on the last line before the
+	# literal, which is where the struct takes them. A default the construction left off the
+	# end is a part like any other, so a run that has to hold across one binds it as well
+	# (c_struct_rest) — the literal itself is written after the holds are off.
+	last := c_struct_last_code(em, sname, args, n)
+	mut need := false
+	mut k := 0
+	for k < last and not need {
+		mut part := ast.Expr.ENil
+		if k < args.len() {
+			part = args[k]
+		} else if c_struct_field_hasdef(em, sname, k) {
+			part = c_struct_field_def(em, sname, k)
+		}
+		need = c_part_owns(em, c_struct_field_ty_at(em, sname, k), part)
+		k = k + 1
+	}
+	mut upto := 0 - 1
+	if need {
+		upto = last
+	}
+
+	bind := seq or need
+	keep := em.rel_cnames.len()
+
 	mut out := ""
 	mut i := 0
 	for i < args.len() {
@@ -12716,11 +12831,30 @@ fn c_struct_args(mut &em: Emitter, sname: str, written: list[ast.Expr], sb: Subs
 			s = c_nosub()
 			saved = c_field_default_enter(em, sname, i)
 		}
-		out = out + c_ordered(em, seq, c_field_init(em, check.chk_field_says(em, sname, i + 1), c_struct_field_ty_at(em, sname, i), args[i], s))
+		fty := c_struct_field_ty_at(em, sname, i)
+		val := c_ordered(em, bind, c_field_init(em, check.chk_field_says(em, sname, i + 1), fty, args[i], s))
 		c_default_leave(em, saved)
+		if i < upto and c_part_owns(em, fty, args[i]) {
+			em.seq_pre = em.seq_pre + c_hold(em, fty, val)
+		}
+		out = out + val
 		i = i + 1
 	}
-	return out + c_struct_rest(em, sname, args.len(), args.len() > 0)
+	rest := c_struct_rest(em, sname, args.len(), args.len() > 0, upto)
+	em.seq_pre = em.seq_pre + c_unhold(em, keep)
+	return out + rest
+}
+
+# c_struct_last_code is c_last_code over a construction's fields, the defaults it left off the
+# end included: `D(word(1), mk(1))` on a struct whose last field defaults to a call runs that
+# call after both arguments, and it is where the construction can still abort.
+fn c_struct_last_code(mut &em: Emitter, sname: str, args: list[ast.Expr], n: int) -> int {
+	mut i := n - 1
+	for i >= args.len() {
+		return i if c_struct_field_hasdef(em, sname, i) and c_runs_code(c_struct_field_def(em, sname, i))
+		i = i - 1
+	}
+	return c_last_code(args)
 }
 
 # c_struct_filled is c_args_filled for a construction: per slot of c_struct_args_named's answer,
@@ -12763,7 +12897,11 @@ fn c_struct_filled(mut &em: Emitter, sname: str, written: list[ast.Expr]) -> lis
 # at the construction that omitted the field, which is what makes it evaluated per
 # construction — the same backfill, and the same consequence, as `c_args_from` gives a
 # parameter default at a call.
-fn c_struct_rest(mut &em: Emitter, sname: str, given: int, lead: bool) -> str {
+#
+# `upto` is the index of the last field a construction that HOLDS a part has to wait for
+# (c_struct_args), or -1: a default at or before it is bound to a temporary, so that it is
+# evaluated before the holds come off, and held in its turn when one after it runs code.
+fn c_struct_rest(mut &em: Emitter, sname: str, given: int, lead: bool, upto: int) -> str {
 	mut out := ""
 	mut i := given
 	mut sep := lead
@@ -12790,8 +12928,15 @@ fn c_struct_rest(mut &em: Emitter, sname: str, given: int, lead: bool) -> str {
 			# `beep` the struct's file declares, not the constructing file's
 			what := f"the default for {check.chk_field_says(em, sname, i + 1)}"
 			saved := c_field_default_enter(em, sname, i)
-			out = out + c_field_init(em, what, ft, c_struct_field_def(em, sname, i), c_nosub())
+			mut val := c_field_init(em, what, ft, c_struct_field_def(em, sname, i), c_nosub())
 			c_default_leave(em, saved)
+			if i <= upto {
+				val = c_ordered(em, true, val)
+				if i < upto and c_part_owns(em, ft, c_struct_field_def(em, sname, i)) {
+					em.seq_pre = em.seq_pre + c_hold(em, ft, val)
+				}
+			}
+			out = out + val
 		} else if ast.ty_is_opt(ft) {
 			out = out + "(" + c_opt_name(em, c_opt_elem(ft)) + "){ .tag = 1 }"
 		} else {
@@ -13245,6 +13390,10 @@ fn c_call_releasing(mut &em: Emitter, cfn: str, key: str, args: list[ast.Expr], 
 	need := c_defaults_read_earlier(em, key, 0, args.len(), [])
 	mut prior: list[str] = []
 
+	# AN END THE CALLER KEEPS IS HELD ACROSS THE CALL (c_hold_with), not only across the
+	# arguments after it: the callee borrows it, so a callee that raises leaves it the caller's
+	# to give back exactly as a later argument that raises does.
+	keep := em.rel_cnames.len()
 	mut decls := ""
 	mut call := cfn + "("
 	mut frees := ""
@@ -13271,6 +13420,9 @@ fn c_call_releasing(mut &em: Emitter, cfn: str, key: str, args: list[ast.Expr], 
 				v = c_chan_narrowed(em, v, c_infer(em, args[i]), em.pr_ty[row])
 			}
 			decls = decls + f"zrt_chan *{tn} = {v}; "
+			if row >= 0 {
+				decls = decls + c_hold_with(em, c_chan_defer_thunk(c_chan_dir(em.pr_ty[row])), tn)
+			}
 			frees = frees + f"{rels[i]}({tn}); "
 			v = tn
 		}
@@ -13297,6 +13449,7 @@ fn c_call_releasing(mut &em: Emitter, cfn: str, key: str, args: list[ast.Expr], 
 	}
 	call = call + ")"
 
+	frees = c_unhold(em, keep) + frees
 	ret := c_lookup_sig_ret(em, key)
 	return f"({{ {decls}{call}; {frees}}})" if ast.ty_eq(ret, ast.Ty.TVoid)
 
@@ -13568,6 +13721,12 @@ fn c_variant_ctor(mut &em: Emitter, en: str, name: str, args: list[ast.Expr], sb
 	# THROUGH c_ty_cname, which is the function that knows an APPLIED name is mangled. Spelled
 	# `"zg_" + en` by hand, a specialization of a generic enum came out as `(zg_Maybe[int])` —
 	# brackets and all, against C nobody can write.
+
+	# A PAYLOAD THAT OWNS SOMETHING IS HELD ACROSS THE ONES AFTER IT (c_hold, #312), as a
+	# struct's field is (c_struct_args). A boxed payload's temporary holds the CELL, which is
+	# given back through the cell's own release and not through the payload type's drop.
+	last := c_last_code(args)
+	keep := em.rel_cnames.len()
 	mut out := "(" + c_ty_cname(en) + "){.tag = " + strconv.to_string(c_variant_tag_in(em, en, name), 10)
 	if args.len() > 0 {
 		out = out + ", .u." + name + " = {"
@@ -13576,18 +13735,28 @@ fn c_variant_ctor(mut &em: Emitter, en: str, name: str, args: list[ast.Expr], sb
 			if i > 0 {
 				out = out + ", "
 			}
-			mut val := c_field_init(em, f"payload {strconv.to_string(i + 1, 10)} of `{name}`", c_variant_field_ty(em, en, name, i), args[i], sb)
-			if c_is_boxed(em, en, name, i) {
+
+			fty := c_variant_field_ty(em, en, name, i)
+			boxed := c_is_boxed(em, en, name, i)
+			mut val := c_field_init(em, f"payload {strconv.to_string(i + 1, 10)} of `{name}`", fty, args[i], sb)
+			if boxed {
 				# box a self-recursive payload into a refcounted cell that releases it
 				val = f"{c_ty_helper("refnew", en)}({val})"
 			}
 
 			# the BOX is inside the temporary, not outside it: hoisting the unboxed value
 			# would leave the allocation where the literal is and put it back out of order.
-			out = f"{out}.f{i} = {c_ordered(em, seq, val)}"
+			val = c_ordered(em, seq, val)
+			if i < last and boxed {
+				em.seq_pre = em.seq_pre + c_hold_with(em, "zrt_defer_release", val)
+			} else if i < last and c_part_owns(em, fty, args[i]) {
+				em.seq_pre = em.seq_pre + c_hold(em, fty, val)
+			}
+			out = f"{out}.f{i} = {val}"
 			i = i + 1
 		}
 		out = out + "}"
+		em.seq_pre = em.seq_pre + c_unhold(em, keep)
 	}
 	return out + "}"
 }
@@ -14158,12 +14327,19 @@ fn c_spec_disp_register(mut &em: Emitter, sp: str, meth: str) -> str {
 		i = i + 1
 	}
 
+	# THE CELL IS HELD ACROSS THE CALL (#318). The member runs the program's code and can abort,
+	# and the line after the call is then never reached: the member's own frame gives the payload
+	# back, and the storage it was read out of had nobody. The cleanup is the same free the next
+	# line writes — the storage alone, for the reason above — and it comes off unrun when the
+	# member answers.
 	call := f"((const {c_spec_vt_type(sp)} *)zrt_dyn_vt({cell}))->{meth}({xs})"
+	mut hold := ""
 	mut give := ""
 	if not byref {
-		give = "    zrt_dyn_free(zg_self);\n"
+		hold = "    zrt_defer(zrt_defer_dyn_free, &zg_self);\n"
+		give = "    zrt_forget(1);\n    zrt_dyn_free(zg_self);\n"
 	}
-	mut out := f"static {c_type(rty)} {dn}({ps}) {{\n"
+	mut out := f"static {c_type(rty)} {dn}({ps}) {{\n" + hold
 	if em.sig_hasret[row] {
 		out = out + f"    {c_type(rty)} zg_r = {call};\n" + give + "    return zg_r;\n"
 	}
@@ -14203,7 +14379,6 @@ fn c_match(mut &em: Emitter, scrut: ast.Expr, arms: list[ast.Arm], sb: Subst) ->
 	tag := strconv.to_string(em.op_n, 10)
 	em.op_n = em.op_n + 1
 	tmp := "zgt_ms" + tag
-	body := c_arms(em, arms, 0, tmp, st, sb)
 
 	# THE TEMP IS THIS EXPRESSION'S, SO IT IS GIVEN BACK. Nothing else names it, and every arm
 	# answers with a value of its own — a payload it binds is copied out on the way — so once
@@ -14216,9 +14391,15 @@ fn c_match(mut &em: Emitter, scrut: ast.Expr, arms: list[ast.Arm], sb: Subst) ->
 		rt = c_infer_arm_body(em, arms[0], st)
 	}
 	if not c_is_nil_ty(rt) and not c_is_unknown(rt) {
+		# held across the arms (c_hold): an arm runs the program's own code, and one that
+		# raises — or returns — never reaches the drop written after them
+		keep := em.rel_cnames.len()
+		hold := c_hold(em, st, tmp)
+		body := c_arms(em, arms, 0, tmp, st, sb)
 		rv := c_tmp(em, "zgt_mr")
-		return f"({{ {c_type(st)} {tmp} = {s}; __auto_type {rv} = {body}; {c_drop_stmt(em, st, tmp)} {rv}; }})"
+		return f"({{ {c_type(st)} {tmp} = {s}; {hold}__auto_type {rv} = {body}; {c_unhold(em, keep)}{c_drop_stmt(em, st, tmp)} {rv}; }})"
 	}
+	body := c_arms(em, arms, 0, tmp, st, sb)
 	return f"({{ {c_type(st)} {tmp} = {s}; {body}; }})"
 }
 
@@ -17161,7 +17342,14 @@ fn c_send(mut &em: Emitter, ch: ast.Expr, v: ast.Expr, ind: str) -> str {
 	# here rendered the value a second time to reach the same answer, which is one temp and one
 	# walk of the expression per send
 	sv := c_fit_copied(em, "the value sent on this channel", elem, v, c_nosub())
-	return ind + "{ " + ct + " zgt_sv = " + sv + "; zrt_chan_send(" + c_expr(em, ch, c_nosub()) + ", &zgt_sv); }\n"
+
+	# THE VALUE IS THE SENDER'S UNTIL THE CHANNEL TAKES IT, so it is held across the send
+	# (c_hold): zrt_chan_send aborts on a closed channel — and on a deadlock — without having
+	# taken it, and returns only once a receiver or the buffer has.
+	keep := em.rel_cnames.len()
+	hold := c_hold(em, elem, "zgt_sv")
+	to := c_expr(em, ch, c_nosub())
+	return ind + "{ " + ct + " zgt_sv = " + sv + "; " + hold + "zrt_chan_send(" + to + ", &zgt_sv); " + c_unhold(em, keep) + "}\n"
 }
 
 # c_spawn lowers `spawn f(args)`. It is the same shape as a defer — a per-site env
@@ -18706,13 +18894,21 @@ fn c_map_lit(mut &em: Emitter, ks: list[ast.Expr], vs: list[ast.Expr], sb: Subst
 
 # c_map_lit builds the map in a statement expression: init, then one set per entry, in
 # the order they were written.
+#
+# TWO THINGS ARE HELD WHILE IT IS BUILT (c_hold, #312), because two things are owned by
+# nothing: a key this entry built, until zrt_map_set takes it — held across the entry's value,
+# as c_map_set holds one — and the map itself once it has an entry in it, held across every
+# later key and value. A map is droppable with any number of entries, and an empty one owns
+# nothing, so the registration goes on after the first set.
 fn c_map_lit_at(mut &em: Emitter, kt: ast.Ty, vt: ast.Ty, ks: list[ast.Expr], vs: list[ast.Expr], sb: Subst) -> str {
 	em.used_rt = true
 
 	vtn := c_map_vt(em, kt, vt)
 	kc := c_type(kt)
 	vc := c_type(vt)
-	mut out := f"({{ zrt_map zgt_mm; zrt_map_init(&zgt_mm, sizeof({kc}), sizeof({vc}), &{vtn});"
+	keep := em.rel_cnames.len()
+	later := c_needs_order(ks, 1) or c_needs_order(vs, 1)
+	mut out := f"({{ zrt_map zgt_mm; zrt_map_init(&zgt_mm, sizeof({kc}), sizeof({vc}), &{vtn}); "
 	mut i := 0
 	for i < ks.len() {
 		# The KEY does not lower through c_fit_copied — a key is HASHED rather than owned, so
@@ -18721,12 +18917,21 @@ fn c_map_lit_at(mut &em: Emitter, kt: ast.Ty, vt: ast.Ty, ks: list[ast.Expr], vs
 		# then did not perform it: `{u: 1}` for a `map[int, int]` and a `uint` `u` wrote
 		# UINT64_MAX in as -1, while `x: int = u` one line down raised.
 		check.chk_slot_fits(em, "a key of this map literal", kt, ks[i])
+
 		mk := c_into(em, kt, ks[i], sb)
+		kkeep := em.rel_cnames.len()
+		mut khold := ""
+		if c_owns_value(ks[i]) and c_runs_code(vs[i]) {
+			khold = c_hold(em, kt, "zgt_mk")
+		}
 		mv := c_fit_copied(em, "a value of this map literal", vt, vs[i], sb)
-		out = out + f" {{ {kc} zgt_mk = {mk}; {vc} zgt_mv = {mv}; zrt_map_set(&zgt_mm, &zgt_mk, &zgt_mv); }}"
+		out = out + f"{{ {kc} zgt_mk = {mk}; {khold}{vc} zgt_mv = {mv}; {c_unhold(em, kkeep)}zrt_map_set(&zgt_mm, &zgt_mk, &zgt_mv); }} "
+		if i == 0 and later {
+			out = out + c_hold(em, ast.Ty.TMap(kt, vt), "zgt_mm")
+		}
 		i = i + 1
 	}
-	return out + " zgt_mm; })"
+	return out + c_unhold(em, keep) + "zgt_mm; })"
 }
 
 # c_set_ctor lowers `set(xs)` — the constructor GRAMMAR#map-lit's note explains: a set is
@@ -18858,6 +19063,15 @@ fn c_slice(mut &em: Emitter, target: ast.Expr, idx: ast.Expr, tty: ast.Ty, sb: S
 	c_slice_bound(em, c_range_hi(idx))
 
 	src := c_expr(em, target, sb)
+
+	# a source that is given back below is held across the bounds and the slice itself
+	# (c_hold): either bound can run code, and a range outside the list aborts in the runtime
+	keep := em.rel_cnames.len()
+	owned := not c_is_place(em, target)
+	mut hold := ""
+	if owned {
+		hold = " " + c_hold(em, tty, "zgt_ss")
+	}
 	lo := c_expr(em, c_range_lo(idx), sb)
 	mut hi := c_expr(em, c_range_hi(idx), sb)
 	if c_range_incl(idx) {
@@ -18869,7 +19083,7 @@ fn c_slice(mut &em: Emitter, target: ast.Expr, idx: ast.Expr, tty: ast.Ty, sb: S
 	# here pushed raw slots — a memcpy whatever the type — so a slice of a `list[list[int]]`
 	# named the parent's inner buffers and a write through it was read back through both.
 	em.used_rt = true
-	mut out := "({ zrt_list zgt_ss = " + src + "; zrt_list zgt_sl;"
+	mut out := "({ zrt_list zgt_ss = " + src + ";" + hold + " zrt_list zgt_sl;"
 	out = out + " zrt_list_slice(&zgt_sl, &zgt_ss, (size_t)(" + lo + "), (size_t)(" + hi + "));"
 
 	# AND THE MATERIALISED SOURCE GOES BACK, when it was materialised out of something that
@@ -18880,8 +19094,8 @@ fn c_slice(mut &em: Emitter, target: ast.Expr, idx: ast.Expr, tty: ast.Ty, sb: S
 	# reason: `zrt_list zgt_ss = xs` is a HEADER copy that shares the buffer, so giving it
 	# back where `xs` still names it frees a buffer the caller is holding.
 	mut give := ""
-	if not c_is_place(em, target) {
-		give = " " + c_drop_stmt(em, tty, "zgt_ss")
+	if owned {
+		give = " " + c_unhold(em, keep) + c_drop_stmt(em, tty, "zgt_ss")
 	}
 	return out + give + " zgt_sl; })"
 }
@@ -18939,8 +19153,16 @@ fn c_map_set(mut &em: Emitter, target: ast.Expr, idx: ast.Expr, rhs: ast.Expr, t
 	# lowering `h[0]` as a read left that buffer shared with `g`.
 	tgt := c_lvalue(em, target, c_nosub())
 	k := c_expr(em, idx, c_nosub())
+
+	# a key this statement built is nobody's until zrt_map_set takes it, so it is held across
+	# the value (c_hold), which is evaluated after it
+	keep := em.rel_cnames.len()
+	mut hold := ""
+	if c_owns_value(idx) and c_runs_code(rhs) {
+		hold = c_hold(em, c_map_key_ty(tty), "zgt_mk")
+	}
 	v := c_fit_copied(em, "the value written into this map", c_map_val_ty(tty), rhs, c_nosub())
-	return f"{ind}{{ {kc} zgt_mk = {k}; {vc} zgt_mv = {v}; zrt_map_set(&({tgt}), &zgt_mk, &zgt_mv); }}\n"
+	return f"{ind}{{ {kc} zgt_mk = {k}; {hold}{vc} zgt_mv = {v}; {c_unhold(em, keep)}zrt_map_set(&({tgt}), &zgt_mk, &zgt_mv); }}\n"
 }
 
 # c_map_method lowers `m.len()` and `m.has(k)`. Both take the map's ADDRESS, which is the
@@ -18997,12 +19219,18 @@ fn c_map_method(mut &em: Emitter, target: ast.Expr, meth: str, args: list[ast.Ex
 
 		kt := c_keyed_elem(tty)
 		check.chk_slot_fits(em, f"a member of this {ast.ty_name(tty)}", kt, args[0])
-		k := c_expr(em, args[0], sb)
-		return f"({{ {bind}{c_type(kt)} zgt_mk = {k}; zrt_map_has({recv}, &zgt_mk); }})" if place
+		return f"({{ {bind}{c_type(kt)} zgt_mk = {c_expr(em, args[0], sb)}; zrt_map_has({recv}, &zgt_mk); }})" if place
 
-		# the same release as `len`'s, and for the same reason
+		# the same release as `len`'s, and for the same reason — and the receiver is held
+		# across the key (c_hold), which is evaluated after it is bound
+		keep := em.rel_cnames.len()
+		mut hold := ""
+		if give != "" and c_runs_code(args[0]) {
+			hold = c_hold(em, tty, "zgt_mx")
+		}
+		k := c_expr(em, args[0], sb)
 		hr := c_tmp(em, "zgt_mr")
-		return f"({{ {bind}{c_type(kt)} zgt_mk = {k}; bool {hr} = zrt_map_has({recv}, &zgt_mk); {give}{hr}; }})"
+		return f"({{ {bind}{hold}{c_type(kt)} zgt_mk = {k}; {c_unhold(em, keep)}bool {hr} = zrt_map_has({recv}, &zgt_mk); {give}{hr}; }})"
 	}
 
 	# TWO ANSWERS BEHIND A NAME THIS FUNCTION DOES NOT LOWER. `insert`, `remove` and `get` are
@@ -19439,9 +19667,103 @@ fn c_render_join(ind: str, piece: str, owned: bool) -> str {
 	return f"{ind}{{ const char *o = s; const char *p = {piece}; s = zrt_str_concat(s, p); zrt_str_release(o); zrt_str_release(p); }}\n"
 }
 
-# c_render_close is the same for the last piece, which is a literal and is RETURNED.
-fn c_render_close(tail: str) -> str {
-	return f"    {{ const char *o = s; const char *r = zrt_str_concat(s, \"{tail}\"); zrt_str_release(o); return r; }}\n"
+# c_render_close is the same for the last piece, which is a literal and is RETURNED. A held
+# accumulator (c_render_open) comes off the cleanup stack here, before the one line that gives
+# it back: nothing between the two can leave.
+fn c_render_close(tail: str, held: bool) -> str {
+	mut off := ""
+	if held {
+		off = "zrt_forget(1); "
+	}
+	return f"    {{ const char *o = s; const char *r = zrt_str_concat(s, \"{tail}\"); {off}zrt_str_release(o); return r; }}\n"
+}
+
+# c_render_open declares a renderer's accumulator, and HOLDS it when a part rendered after it
+# can run the program's own code (#311). A generated renderer is plain C outside every scope
+# the emitter tracks, so `s` had no owner but the `return` at the end: a part whose `display`
+# raised left the text built so far with nobody to give it back.
+#
+# THE CLEANUP IS HANDED `&s` AND READS IT WHEN IT RUNS, which is what makes one registration
+# serve an accumulator every join reassigns. A join binds the piece before it touches `s`
+# (c_render_join), so at every point a part can abort `s` is the cell the last join left and
+# the piece is still the callee's — there is no state in which the cleanup and a join's own
+# release name the same cell.
+#
+# It is written by hand rather than through c_hold because nothing here is on the emitter's
+# pending list to take off again: the registration is one line and c_render_close's is the
+# other, and every body goes through the pair.
+fn c_render_open(mut &em: Emitter, ind: str, first: str, held: bool) -> str {
+	out := f"{ind}const char *s = {first};\n"
+	return out if not held
+
+	return out + f"{ind}zrt_defer({c_drop_thunk(em, ast.Ty.TStr)}, &s);\n"
+}
+
+# c_render_runs is whether rendering a value of this type can run the program's own code, and
+# so whether it can abort. It asks c_render_of's questions in c_render_of's order: a box
+# renders through its table, a type that declares `display` or `debug` through that method,
+# and both are the program's; a `str` and a scalar are a runtime leaf; and a composite is
+# whatever its parts are. `seen` is the composites already being asked about, so a type that
+# reaches itself — a self-recursive enum — is answered by its other parts.
+fn c_render_runs(mut &em: Emitter, t: ast.Ty, mut &seen: list[str]) -> bool {
+	return true if c_is_spec_name(em, c_named_of(t))
+
+	if meth := c_render_override(em, t) {
+		return meth != ""
+	}
+	return false if c_is_str(t) or not c_has_parts(em, t)
+
+	key := c_render_key(em, t)
+	for n in seen {
+		return false if n == key
+	}
+	seen.append(key)
+
+	for p in c_render_parts(em, t) {
+		return true if c_render_runs(em, p, seen)
+	}
+	return false
+}
+
+# c_render_holds is the question a renderer body asks of the parts it is about to join.
+fn c_render_holds(mut &em: Emitter, parts: list[ast.Ty]) -> bool {
+	mut seen: list[str] = []
+	for p in parts {
+		return true if c_render_runs(em, p, seen)
+	}
+	return false
+}
+
+# c_render_parts is the types a composite's renderer renders, one per c_render_*_body.
+fn c_render_parts(mut &em: Emitter, t: ast.Ty) -> list[ast.Ty] {
+	return [c_list_elem(t)] if c_is_list(t)
+	return [c_arr_elem(t)] if c_is_arr(t)
+	return [c_map_key_ty(t), c_map_val_ty(t)] if c_is_map(t)
+	return [c_set_elem(t)] if c_is_set(t)
+	return ast.ty_tuple_elems(t) if c_is_tuple(t)
+	return [c_opt_elem(t)] if ast.ty_is_opt(t)
+	return [c_either_left(t), c_either_right(t)] if c_is_carrier(t)
+
+	nm := c_named_of(t)
+	mut out: list[ast.Ty] = []
+	mut i := 0
+	if c_is_enum_ty(em, t) {
+		for i < em.vf_variant.len() {
+			if em.vf_enum[i] == nm {
+				out.append(em.vf_ty[i])
+			}
+			i = i + 1
+		}
+		return out
+	}
+
+	for i < em.fld_struct.len() {
+		if em.fld_struct[i] == nm {
+			out.append(em.fld_ty[i])
+		}
+		i = i + 1
+	}
+	return out
 }
 
 # differs is where the length comes from and how a slot is reached, which is two lines.
@@ -19461,12 +19783,13 @@ fn c_render_list_body(mut &em: Emitter, t: ast.Ty) -> str {
 		slot = "v.v[i]"
 	}
 
-	mut out := "    const char *s = zrt_str_dup(\"[\");\n"
+	held := c_render_holds(em, [et])
+	mut out := c_render_open(em, "    ", "zrt_str_dup(\"[\")", held)
 	out = out + f"    for (size_t i = 0; i < (size_t)({n}); i++) {{\n"
 	out = out + "        if (i > 0) " + c_render_join("", "\", \"", false)
 	out = out + c_render_join("        ", c_render_of(em, et, slot, true), true)
 	out = out + "    }\n"
-	return out + c_render_close("]")
+	return out + c_render_close("]", held)
 }
 
 # A MAP RENDERS AS ITS LITERAL, `{k: v}`, in INSERTION ORDER — the order the language pins for
@@ -19478,14 +19801,15 @@ fn c_render_map_body(mut &em: Emitter, t: ast.Ty) -> str {
 	ks := f"(*({c_type(kt)}*)zrt_map_key_at(&v, i))"
 	vs := f"(*({c_type(vt)}*)zrt_map_val_at(&v, i))"
 
-	mut out := "    const char *s = zrt_str_dup(\"{\");\n"
+	held := c_render_holds(em, [kt, vt])
+	mut out := c_render_open(em, "    ", "zrt_str_dup(\"{\")", held)
 	out = out + "    for (size_t i = 0; i < zrt_map_len(&v); i++) {\n"
 	out = out + "        if (i > 0) " + c_render_join("", "\", \"", false)
 	out = out + c_render_join("        ", c_render_of(em, kt, ks, true), true)
 	out = out + c_render_join("        ", "\": \"", false)
 	out = out + c_render_join("        ", c_render_of(em, vt, vs, true), true)
 	out = out + "    }\n"
-	return out + c_render_close("}")
+	return out + c_render_close("}", held)
 }
 
 # c_render_set_body is the map's body with the value half dropped: `{1, 2}`, in insertion
@@ -19495,17 +19819,19 @@ fn c_render_set_body(mut &em: Emitter, t: ast.Ty) -> str {
 	et := c_set_elem(t)
 	es := f"(*({c_type(et)}*)zrt_map_key_at(&v, i))"
 
-	mut out := "    const char *s = zrt_str_dup(\"{\");\n"
+	held := c_render_holds(em, [et])
+	mut out := c_render_open(em, "    ", "zrt_str_dup(\"{\")", held)
 	out = out + "    for (size_t i = 0; i < zrt_map_len(&v); i++) {\n"
 	out = out + "        if (i > 0) " + c_render_join("", "\", \"", false)
 	out = out + c_render_join("        ", c_render_of(em, et, es, true), true)
 	out = out + "    }\n"
-	return out + c_render_close("}")
+	return out + c_render_close("}", held)
 }
 
 fn c_render_tuple_body(mut &em: Emitter, t: ast.Ty) -> str {
 	es := ast.ty_tuple_elems(t)
-	mut out := "    const char *s = zrt_str_dup(\"(\");\n"
+	held := c_render_holds(em, es)
+	mut out := c_render_open(em, "    ", "zrt_str_dup(\"(\")", held)
 	mut i := 0
 	for i < es.len() {
 		if i > 0 {
@@ -19514,7 +19840,7 @@ fn c_render_tuple_body(mut &em: Emitter, t: ast.Ty) -> str {
 		out = out + c_render_join("    ", c_render_of(em, es[i], f"v.f{strconv.to_string(i, 10)}", true), true)
 		i = i + 1
 	}
-	return out + c_render_close(")")
+	return out + c_render_close(")", held)
 }
 
 # A CARRIER RENDERS WHAT IT HOLDS, and an absent optional renders `nil` — the word the program
@@ -19531,14 +19857,16 @@ fn c_render_carrier_body(mut &em: Emitter, t: ast.Ty) -> str {
 	# plus the rendered payload on the floor.
 	lt := c_either_left(t)
 	rt := c_either_right(t)
+	rheld := c_render_holds(em, [rt])
+	lheld := c_render_holds(em, [lt])
 	mut out := "    if (v.tag != 0) {\n"
-	out = out + "        const char *s = zrt_str_dup(\"Right(\");\n"
+	out = out + c_render_open(em, "        ", "zrt_str_dup(\"Right(\")", rheld)
 	out = out + c_render_join("        ", c_render_of(em, rt, "v.err", true), true)
-	out = out + "    " + c_render_close(")")
+	out = out + "    " + c_render_close(")", rheld)
 	out = out + "    }\n"
-	out = out + "    const char *s = zrt_str_dup(\"Left(\");\n"
+	out = out + c_render_open(em, "    ", "zrt_str_dup(\"Left(\")", lheld)
 	out = out + c_render_join("    ", c_render_of(em, lt, c_res_val(em, t, "v"), true), true)
-	return out + c_render_close(")")
+	return out + c_render_close(")", lheld)
 }
 
 # A SUM RENDERS BY TAG THEN PAYLOAD: `E.A` for a variant that carries nothing, `E.B(3)` for one
@@ -19560,10 +19888,12 @@ fn c_render_enum_body(mut &em: Emitter, en: str) -> str {
 
 fn c_render_variant(mut &em: Emitter, en: str, vn: str) -> str {
 	mut ps: list[str] = []
+	mut tys: list[ast.Ty] = []
 	mut i := 0
 	for i < em.vf_variant.len() {
 		if em.vf_enum[i] == en and em.vf_variant[i] == vn {
 			ty := em.vf_ty[i]
+			tys.append(ty)
 			mut slot := f"v.u.{vn}.f{strconv.to_string(em.vf_index[i], 10)}"
 
 			# A BOXED PAYLOAD IS A POINTER — the auto-boxing a self-recursive enum gets — so
@@ -19587,7 +19917,8 @@ fn c_render_variant(mut &em: Emitter, en: str, vn: str) -> str {
 	# returned it as one expression, so it was invisible to a change keyed on the `s` shape —
 	# and every intermediate cell, plus every rendered payload, was dropped on the floor.
 	# `print Shape.Line(3)` allocated three cells and released none.
-	mut out := f"        const char *s = {lit};\n"
+	held := c_render_holds(em, tys)
+	mut out := c_render_open(em, "        ", lit, held)
 	out = out + c_render_join("        ", "\"(\"", false)
 	mut j := 0
 	for j < ps.len() {
@@ -19597,28 +19928,29 @@ fn c_render_variant(mut &em: Emitter, en: str, vn: str) -> str {
 		out = out + c_render_join("        ", ps[j], true)
 		j = j + 1
 	}
-	return out + "    " + c_render_close(")")
+	return out + "    " + c_render_close(")", held)
 }
 
 # A PRODUCT RENDERS BY ITS FIELDS, named: `P(x: 1, y: "a")` is the constructor a reader would
 # write with the names a reader would have to count without.
 fn c_render_struct_body(mut &em: Emitter, sn: str) -> str {
-	mut out := f"    const char *s = zrt_str_dup(\"{c_ft_written(em, sn)}(\");\n"
-	mut first := true
+	mut tys: list[ast.Ty] = []
+	mut joins := ""
 	mut i := 0
 	for i < em.fld_struct.len() {
 		if em.fld_struct[i] == sn {
-			if not first {
-				out = out + c_render_join("    ", "\", \"", false)
+			if tys.len() > 0 {
+				joins = joins + c_render_join("    ", "\", \"", false)
 			}
-			first = false
+			tys.append(em.fld_ty[i])
 			fnm := em.fld_name[i]
-			out = out + c_render_join("    ", f"\"{fnm}: \"", false)
-			out = out + c_render_join("    ", c_render_of(em, em.fld_ty[i], f"v.zg_{fnm}", true), true)
+			joins = joins + c_render_join("    ", f"\"{fnm}: \"", false)
+			joins = joins + c_render_join("    ", c_render_of(em, em.fld_ty[i], f"v.zg_{fnm}", true), true)
 		}
 		i = i + 1
 	}
-	return out + c_render_close(")")
+	held := c_render_holds(em, tys)
+	return c_render_open(em, "    ", f"zrt_str_dup(\"{c_ft_written(em, sn)}(\")", held) + joins + c_render_close(")", held)
 }
 
 # --- an f-string hole with a tail (GRAMMAR#interp) ----------------------------------------
@@ -19750,7 +20082,34 @@ fn c_into_says(want: ast.Ty) -> str {
 # the array's element type rather than the first element's.
 fn c_arr_lit(mut &em: Emitter, where: str, want: ast.Ty, e: ast.Expr, sb: Subst) -> str {
 	et := c_arr_elem(want)
-	elems := c_elem_exprs(em, e, et, sb)
+	es := c_listlit_elems(em, e)
+
+	# HELD AS A TUPLE'S ELEMENTS ARE (c_tuple_lit, #312), and for the same reason: the array is
+	# a compound literal, so an element built before one that aborts belongs to nothing.
+	last := c_last_code(es)
+	mut need := false
+	mut k := 0
+	for k < last {
+		if c_part_owns(em, et, es[k]) {
+			need = true
+		}
+		k = k + 1
+	}
+
+	keep := em.rel_cnames.len()
+	mut pre := ""
+	mut elems: list[str] = []
+	mut j := 0
+	for j < es.len() {
+		mut v := c_fit_copied(em, check.chk_elem_says(j + 1), et, es[j], sb)
+		if need {
+			v = c_part_bind(em, pre, et, v, j < last and c_part_owns(em, et, es[j]))
+		}
+		elems.append(v)
+		j = j + 1
+	}
+	unhold := c_unhold(em, keep)
+
 	n := c_arr_len(em, want)
 	if elems.len() != n {
 		check.chk_at(em, rule.Rule.ArrayLitLen, f"{where} takes {strconv.to_string(n, 10)} element(s) and this literal has {strconv.to_string(elems.len(), 10)} — an array's length is part of its type, so the two have to agree")
@@ -19774,7 +20133,9 @@ fn c_arr_lit(mut &em: Emitter, where: str, want: ast.Ty, e: ast.Expr, sb: Subst)
 		out = out + elems[i]
 		i = i + 1
 	}
-	return out + "}}"
+	return out + "}}" if not need
+
+	return "({ " + pre + unhold + out + "}}; })"
 }
 
 # --- the fixed-size array (GRAMMAR#array-type) -------------------------------------------
@@ -19944,7 +20305,24 @@ fn c_tuple_lit(mut &em: Emitter, elems: list[ast.Expr], sb: Subst) -> str {
 		tys.append(c_infer(em, e))
 	}
 
+	# AN ELEMENT THAT OWNS SOMETHING IS HELD ACROSS THE ONES AFTER IT (c_hold, #312). A C
+	# compound literal has no storage until every initialiser has answered, so `(word(1),
+	# boom(1))` left the first cell with nobody to give it back. Where that can happen the
+	# elements are bound to temporaries in source order and the literal is written from the
+	# names; a tuple with nothing to hold renders the bare literal it always did.
+	last := c_last_code(elems)
+	mut need := false
+	mut k := 0
+	for k < last {
+		if c_part_owns(em, tys[k], elems[k]) {
+			need = true
+		}
+		k = k + 1
+	}
+
 	name := c_tuple_name(em, tys)
+	keep := em.rel_cnames.len()
+	mut pre := ""
 	mut out := f"({name}){{"
 	mut i := 0
 	for i < elems.len() {
@@ -19955,10 +20333,16 @@ fn c_tuple_lit(mut &em: Emitter, elems: list[ast.Expr], sb: Subst) -> str {
 		# each element is COPIED into the tuple, like a struct's constructor argument: the
 		# tuple owns what it holds, and `(a, 0)` used to store `a`'s own list header, so a
 		# write through `t.0` was read back through `a`
-		out = out + c_copied(em, tys[i], elems[i], sb)
+		mut v := c_copied(em, tys[i], elems[i], sb)
+		if need {
+			v = c_part_bind(em, pre, tys[i], v, i < last and c_part_owns(em, tys[i], elems[i]))
+		}
+		out = out + v
 		i = i + 1
 	}
-	return out + "}"
+	return out + "}" if not need
+
+	return "({ " + pre + c_unhold(em, keep) + out + "}; })"
 }
 
 # c_fieldref lowers `x.name`. A field whose name is a NUMBER is a tuple element — GRAMMAR
@@ -20883,6 +21267,109 @@ fn c_pend_release(mut &em: Emitter, local: str, thunk: str, ind: str) -> str {
 	em.rel_cnames.append(local)
 	em.rel_fns.append(thunk)
 	return f"{ind}zrt_defer({thunk}, &{local});\n"
+}
+
+# c_hold puts a TEMPORARY an expression owns on the cleanup stack until c_unhold, and it is the
+# one way an expression holds a value across something that can abort (#309). A lowering that
+# binds an owned value to a C temporary and gives it back on a later line of the same statement
+# expression has an abort between the two jump over that line: `word(2) + boom(1)` bound the
+# left cell, `boom` raised, and the release after `zrt_str_concat` was never reached.
+#
+# So the temporary is registered where it is bound, and the pair is used like this:
+#
+#     keep := em.rel_cnames.len()
+#     ... render the held operand, then bind it:  `T tmp = <rendered>; ` + c_hold(em, t, tmp)
+#     ... render and bind everything evaluated after it
+#     ... c_unhold(em, keep), then the give-back the lowering already wrote
+#
+# THE GIVE-BACK STAYS WHERE IT WAS. c_unhold takes the registration off without running it
+# (zrt_forget), so the path that does not abort pays a push and a pop and releases inline, as
+# before; only an abort — or a `?`, a `return`, a `break` leaving from inside a later operand —
+# runs the cleanup, and those never reach the inline line. Exactly one of the two happens.
+#
+# THE LATER OPERANDS ARE RENDERED BETWEEN THE TWO CALLS, not before c_hold, and that is not a
+# matter of taste: the held name is on the pending list while they are rendered, which is what
+# makes an early exit inside one of them unwind (c_needs_fn_unwind, c_needs_loop_unwind). A
+# `?` rendered before the hold would return past a registration naming a dead frame.
+#
+# The cleanup is handed the ADDRESS of the temporary and reads it when it runs, so the same
+# call serves a C local that is reassigned while it is held — a renderer's accumulator — and a
+# value still being built, as long as the storage is in a state its drop accepts at every
+# abort point. It answers "" for a type that owns nothing, and c_unhold answers "" when
+# nothing was held, so a caller writes both unconditionally.
+fn c_hold(mut &em: Emitter, t: ast.Ty, tmp: str) -> str {
+	th := c_drop_thunk(em, t)
+	return "" if th == ""
+
+	return c_hold_with(em, th, tmp)
+}
+
+# c_hold_with is c_hold told the thunk, for what has no element kind to name one by: a channel
+# end (c_chan_defer_thunk), or a cell with a release of its own.
+fn c_hold_with(mut &em: Emitter, thunk: str, tmp: str) -> str {
+	em.used_rt = true
+	em.rel_cnames.append(tmp)
+	em.rel_fns.append(thunk)
+	return f"zrt_defer({thunk}, &{tmp}); "
+}
+
+# c_unhold ends every hold taken since `keep`, in one pop.
+fn c_unhold(mut &em: Emitter, keep: int) -> str {
+	n := em.rel_cnames.len() - keep
+	return "" if n <= 0
+
+	c_scope_forget(em, keep)
+	return f"zrt_forget({strconv.to_string(n, 10)}); "
+}
+
+# c_runs_code is whether evaluating this operand runs anything at all, which is the one
+# question a hold asks of what comes AFTER the temporary: a literal or a plain name is read
+# where it stands (c_order_trivial), so there is no point between the bind and the give-back
+# at which control could leave, and nothing is registered. It is deliberately not a "cannot
+# abort" analysis — a call, an index, an operator, a field are all taken to be able to.
+fn c_runs_code(e: ast.Expr) -> bool {
+	return not c_order_trivial(e)
+}
+
+# c_last_code is the index of the last part of a run that runs code, or -1. A value built out
+# of parts — a tuple, an array, a struct, a variant — holds a part only while one after it can
+# still abort, so the parts in front of this index are the ones a hold is asked about and the
+# part at it, bound last of those that matter, never is.
+fn c_last_code(es: list[ast.Expr]) -> int {
+	mut i := es.len() - 1
+	for i >= 0 {
+		return i if c_runs_code(es[i])
+		i = i - 1
+	}
+	return -1
+}
+
+# c_part_owns is whether one part of a value under construction, once bound to its temporary,
+# is holding something nobody else will give back (#312). A part is COPIED into the value it
+# joins, so a plain name counts — the temporary holds the copy, not the name's own storage —
+# and a literal does not: it names no storage and its cell, if it has one, is immortal.
+fn c_part_owns(mut &em: Emitter, t: ast.Ty, e: ast.Expr) -> bool {
+	lit := match e {
+		Expr.EIdent(_, _, _) => false
+		_ => c_order_trivial(e)
+	}
+	return false if lit
+
+	return c_drop_thunk(em, t) != ""
+}
+
+# c_part_bind binds one rendered part of a C compound literal to a temporary of its own, in
+# the order the parts were written, and holds it when asked (c_hold). `pre` collects the
+# declarations the literal is then written after. A struct's and a variant's parts are bound by
+# c_ordered already; this is the same binding for the two literals that had none — a tuple and
+# an array — and it is only taken when a part has to be held.
+fn c_part_bind(mut &em: Emitter, mut &pre: str, t: ast.Ty, rendered: str, held: bool) -> str {
+	tmp := c_tmp(em, "zgt_pt")
+	pre = pre + c_ord_decl(tmp, rendered)
+	if held {
+		pre = pre + c_hold(em, t, tmp)
+	}
+	return tmp
 }
 
 # c_drop_thunk is the `void (*)(void *)` a value of this type is given back through — the
@@ -24330,7 +24817,7 @@ fn c_emit_unit_as(prog0: ast.File, own0: ast.File, ft: FileTypes, ms: Mods, whol
 	# is what makes that invariant hold for a multi-unit program, at the place it already lives,
 	# and it is what lets the declaration passes below go back to reading the WHOLE program.
 	seen := diags.len()
-	mut em := Emitter([], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], false, false, false, false, [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], 0, [], 0, [], [], false, "", "", [], [], ast.Ty.TVoid, 0, "", 0, 0, 0, 0, "", diags, 0, 0, [], [], [], [], [], false, 0, false, "", 0, false, false, [], [], [], [], [], [], [], [], [], [], [], "", want_lints, [], [], [], [], [], [], [], [], [], [], [], [], false, 0, [], [], "", c_nosub(), [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], false, ast.no_index(), [], [], [], [], [], [], [], [], [], [], [], [])
+	mut em := Emitter([], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], false, false, false, false, [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], 0, [], 0, [], [], false, "", "", [], [], ast.Ty.TVoid, 0, "", 0, 0, 0, 0, "", diags, 0, 0, [], [], [], [], [], false, 0, false, "", 0, false, false, [], [], [], [], [], [], [], [], [], [], [], "", want_lints, [], [], [], [], [], [], [], [], [], [], [], [], false, 0, [], [], "", c_nosub(), [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], false, ast.no_index(), [], [], [], [], [], [], [], [], [], [], [], [], false)
 
 	# ASSIGNED, NOT PASSED. Every argument above is a zero value, and `layering` asserts that
 	# — it lines the call up with the fields by KIND, which only works while nothing in it

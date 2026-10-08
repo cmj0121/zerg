@@ -430,6 +430,27 @@ void zrt_defer(void (*fn)(void *env), void *env);
  * zrt_scope_mark. This is the normal (non-abort) scope-exit path. */
 void zrt_unwind_to(size_t mark);
 
+/* zrt_forget pops the last n cleanups WITHOUT running them. It is the normal-path end of a
+ * temporary an expression holds across a later operand: the temporary is registered with
+ * zrt_defer where it is bound, so an abort in between gives it back, and once the operand
+ * has answered the expression gives it back itself on the next line - the registration is
+ * simply taken off. The caller owes that everything pushed since has been unwound, which
+ * a balanced expression guarantees; zrt_unwind_to is the exit that runs what it pops. */
+void zrt_forget(size_t n);
+
+/* zrt_defer_release is the `void (*)(void *)` adapter for a refcounted CELL held in a
+ * temporary: zrt_defer hands a cleanup the ADDRESS of what it registered, and zrt_release
+ * takes the cell. It is what holds a boxed enum payload while the payloads after it are
+ * evaluated, as zrt_defer_chan_release holds a channel end. */
+void zrt_defer_release(void *p);
+
+/* zrt_defer_dyn_free is the same adapter for a spec cell whose PAYLOAD HAS AN OWNER OF ITS
+ * OWN: the cleanup frees the storage alone (zrt_dyn_free), where zrt_defer_release would run
+ * the payload's teardown too. It is what holds the cell a dispatcher was handed while the
+ * member it calls runs - the member takes the payload by value and gives that back itself,
+ * on an abort as on a return. */
+void zrt_defer_dyn_free(void *p);
+
 /* zrt_handler_push links a frame as the innermost abort handler, recording the
  * current cleanup-stack height in frame->mark. The caller must then arm
  * frame->buf with setjmp in its own activation. A plain handler REPORTS an abort's

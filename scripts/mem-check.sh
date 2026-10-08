@@ -1278,6 +1278,158 @@ fn main() {
 }
 ZG
 
+# --- a spec method called on a box ----------------------------------------------------
+# The call hands the member a copy of the cell, and the member drops the `this` it was given.
+# A dispatcher that then released the cell's payload as well dropped it twice per call (#313),
+# and the second drop writes into storage already given back. Nothing promises what that does
+# without a sanitizer: here it ended the run on a signal, which is `RUN` below. The use after
+# free is NAMED by `sanitize-corpus`; this is the half a checkout without the corpus has.
+#
+# One round makes the call every way a box is reached: through a name, twice and then read;
+# on a receiver nobody named; on an element by index and by a loop's binding; on a field; and
+# through members that answer an owned `str` and the payload's own list. The payload holds a
+# list built from the round number, so there is something counted to drop. The seed has no
+# spec as a type, so this is `zerg` alone.
+case_run spec_box_calls no no <<'ZG'
+spec Shape {
+	fn area() -> int
+	fn name() -> str
+	fn names() -> list[str]
+}
+
+struct Lab {
+	pub parts: list[str]
+}
+
+struct Holder {
+	pub sh: Shape
+	pub n: int
+}
+
+impl Shape for Lab {
+	fn area() -> int {
+		return this.parts.len()
+	}
+
+	fn name() -> str {
+		return this.parts[0] + "!"
+	}
+
+	fn names() -> list[str] {
+		return this.parts
+	}
+}
+
+fn ml(n: int) -> Shape {
+	return Lab([str(n) + "l", str(n) + "m"])
+}
+
+fn main() {
+	mut n := 0
+	mut i := 0
+	r := rounds()
+	for i < r {
+		y := ml(i)
+		n = n + y.area()
+		n = n + y.area()
+		print y
+		n = n + ml(i).area()
+		xs := [ml(i), ml(i + 1)]
+		n = n + xs[0].area() + xs[0].area()
+		for x in xs {
+			n = n + x.area()
+		}
+		h := Holder(ml(i), i)
+		n = n + h.sh.area() + h.sh.area() + h.n
+		n = n + bytearray(y.name()).len() + bytearray(y.name()).len()
+		n = n + y.names().len() + y.names().len()
+		i = i + 1
+	}
+	print n
+}
+ZG
+
+# --- a composite of spec boxes, rendered ----------------------------------------------
+# A composite's renderer shows a box through the spec's render dispatcher, and that dispatcher
+# was declared only where a box was rendered on its own — so a program whose one rendering of
+# the spec was a list of them called a function nothing had declared, and `cc` said so (#314).
+# No box is printed on its own here, on purpose: one `print` of a bare box would declare the
+# dispatcher and this would build without the fix.
+#
+# `Wrap` is the shape with no composite printed at all. It implements the spec and holds a box
+# of it, so its own renderer — written for its witness table whether or not anyone asks for
+# it — reaches the dispatcher. The seed prints no composite and has no spec as a type.
+case_run printed_spec_boxes no no <<'ZG'
+spec Shape {
+	fn area() -> int
+}
+
+struct Sq {
+	pub s: int
+	pub tags: list[str]
+}
+
+struct Lab {
+	pub parts: list[str]
+}
+
+struct Wrap {
+	pub inner: Shape
+	pub tag: str
+}
+
+impl Shape for Sq {
+	fn area() -> int {
+		return this.s * this.s
+	}
+}
+
+impl Shape for Lab {
+	fn area() -> int {
+		return this.parts.len()
+	}
+}
+
+impl Shape for Wrap {
+	fn area() -> int {
+		return this.inner.area() + bytearray(this.tag).len()
+	}
+}
+
+impl Lab {
+	fn display() -> str {
+		return f"<{this.parts[0]}>"
+	}
+}
+
+fn mk(n: int) -> Shape {
+	return Sq(n, [str(n) + "t"])
+}
+
+fn ml(n: int) -> Shape {
+	return Lab([str(n) + "l"])
+}
+
+fn mw(n: int) -> Shape {
+	return Wrap(ml(n), str(n) + "w")
+}
+
+fn main() {
+	mut n := 0
+	mut i := 0
+	r := rounds()
+	for i < r {
+		print [ml(i), mk(i)]
+		xs := [mk(i), mw(i)]
+		print xs
+		print (ml(i), i, mk(i))
+		n = n + xs.len() + mw(i).area()
+		i = i + 1
+	}
+	print n
+}
+ZG
+
 if [ "$fail" -ne 0 ]; then
 	printf '\nmem-check: a value outlives the scope that made it\n' >&2
 	printf 'mem-check: the sources, the C and the binaries are kept in %s\n' "$WORK" >&2

@@ -14327,12 +14327,19 @@ fn c_spec_disp_register(mut &em: Emitter, sp: str, meth: str) -> str {
 		i = i + 1
 	}
 
+	# THE CELL IS HELD ACROSS THE CALL (#318). The member runs the program's code and can abort,
+	# and the line after the call is then never reached: the member's own frame gives the payload
+	# back, and the storage it was read out of had nobody. The cleanup is the same free the next
+	# line writes — the storage alone, for the reason above — and it comes off unrun when the
+	# member answers.
 	call := f"((const {c_spec_vt_type(sp)} *)zrt_dyn_vt({cell}))->{meth}({xs})"
+	mut hold := ""
 	mut give := ""
 	if not byref {
-		give = "    zrt_dyn_free(zg_self);\n"
+		hold = "    zrt_defer(zrt_defer_dyn_free, &zg_self);\n"
+		give = "    zrt_forget(1);\n    zrt_dyn_free(zg_self);\n"
 	}
-	mut out := f"static {c_type(rty)} {dn}({ps}) {{\n"
+	mut out := f"static {c_type(rty)} {dn}({ps}) {{\n" + hold
 	if em.sig_hasret[row] {
 		out = out + f"    {c_type(rty)} zg_r = {call};\n" + give + "    return zg_r;\n"
 	}

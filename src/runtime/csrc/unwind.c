@@ -101,6 +101,10 @@ void zrt_defer_release(void *p) {
 	zrt_release(*(void **)p);
 }
 
+void zrt_defer_dyn_free(void *p) {
+	zrt_dyn_free(*(void **)p);
+}
+
 void zrt_handler_push(zrt_frame *frame) {
 	frame->mark = g_tls.len;
 	frame->prev = g_tls.handler;

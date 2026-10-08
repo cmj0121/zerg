@@ -444,6 +444,13 @@ void zrt_forget(size_t n);
  * evaluated, as zrt_defer_chan_release holds a channel end. */
 void zrt_defer_release(void *p);
 
+/* zrt_defer_dyn_free is the same adapter for a spec cell whose PAYLOAD HAS AN OWNER OF ITS
+ * OWN: the cleanup frees the storage alone (zrt_dyn_free), where zrt_defer_release would run
+ * the payload's teardown too. It is what holds the cell a dispatcher was handed while the
+ * member it calls runs - the member takes the payload by value and gives that back itself,
+ * on an abort as on a return. */
+void zrt_defer_dyn_free(void *p);
+
 /* zrt_handler_push links a frame as the innermost abort handler, recording the
  * current cleanup-stack height in frame->mark. The caller must then arm
  * frame->buf with setjmp in its own activation. A plain handler REPORTS an abort's

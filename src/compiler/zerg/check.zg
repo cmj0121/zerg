@@ -3059,12 +3059,14 @@ pub fn chk_needs_type(mut &em: emit.Emitter, name: str, ival: ast.Expr) -> bool 
 	return true
 }
 
-# chk_no_slot is the same rule met from the form, where no position said what it is. A binding
-# is where a reader usually writes one, and it is not the only place — `print []`, `xs == []`,
-# an element, a tuple component. A typed position builds the literal at its own type before
-# this lowering is asked (emit.c_fit_copied, and `return []` through it), so what arrives here
-# arrived with nothing (#343). A bare `[]` as an `if` or `match` arm arrives here too: the arm
-# supplies no element type.
+# chk_no_slot is the same rule met from the other side: the FORM, lowered where no position
+# said what it is. A binding is where a reader usually writes one, and it is not the only
+# place — `print []`, `xs == []`, `{:}.len()`, an element, a tuple component, an argument that
+# only a type parameter describes. A typed position builds the literal at its own type before
+# the form's lowering is ever asked (emit.c_copied, and `return []` through c_fit_copied), so
+# what arrives here arrived with nothing (#343), and it is refused rather than built as a map
+# of `int` to `int` that the rest of the program then reads as something else (#332). A bare
+# `[]` or `{:}` as an `if` or `match` arm arrives here too: the arm supplies no type.
 pub fn chk_no_slot(mut &em: emit.Emitter, what: str) {
 	chk_typeless(em, "this expression", what, "x")
 }

@@ -2274,6 +2274,311 @@ fn main() {
 }
 ZG
 
+# A KEY COPIED OUT OF A NAME (#340). A map literal copies a key it reads from something that
+# owns it — a name, a parameter, a field, an element — and the copy sat in a C temporary
+# nothing had registered while the entry's value was evaluated. The key is in the entry whose
+# value raises and in an earlier one, alone and beside another named key; the value is a
+# plain one, a text and a list; and the literal is bound with and without its type, assigned,
+# returned, passed, written as an element and as another map's value, and used as a receiver.
+# No shape here asks `in` anything, so this case and the one below it fail apart.
+case_abort abort_map_key no <<'ZG'
+struct H {
+	pub key: str
+	pub n: int
+}
+
+fn sbad(n: int, k: int) -> str {
+	raise "s" if k > 0
+	return word(n)
+}
+
+fn size(m: map[str, int]) -> int {
+	return m.len()
+}
+
+fn made(key: str, k: int) -> map[str, int] {
+	return {key: bad(k)}
+}
+
+fn bound(i: int, k: int) -> int {
+	key := word(i)
+	m := {key: bad(k)}
+	return m.len()
+}
+
+fn bound_typed(i: int, k: int) -> int {
+	key := word(i)
+	m: map[str, int] = {key: bad(k)}
+	return m.len()
+}
+
+fn of_param(key: str, k: int) -> int {
+	m := {key: bad(k)}
+	return m.len()
+}
+
+fn param(i: int, k: int) -> int {
+	return of_param(word(i), k)
+}
+
+fn later_entry(i: int, k: int) -> int {
+	key := word(i)
+	m := {"a": 0, key: bad(k)}
+	return m.len() - 1
+}
+
+fn earlier_entry(i: int, k: int) -> int {
+	key := word(i)
+	m := {key: 1, "b": bad(k)}
+	return m.len() - 1
+}
+
+fn field_key(i: int, k: int) -> int {
+	h := H(word(i), 1)
+	m := {h.key: bad(k)}
+	return m.len()
+}
+
+fn indexed_key(i: int, k: int) -> int {
+	xs := [word(i), word(i + 1)]
+	m := {xs[0]: bad(k)}
+	return m.len()
+}
+
+fn two_named(i: int, k: int) -> int {
+	key := word(i)
+	other := word(i + 1)
+	m := {key: bad(0), other: bad(k)}
+	return m.len() - 1
+}
+
+fn str_value(i: int, k: int) -> int {
+	key := word(i)
+	m := {key: sbad(i + 1, k)}
+	return m.len()
+}
+
+fn list_value(i: int, k: int) -> int {
+	key := word(i)
+	m := {key: mk(bad(k))}
+	return m.len()
+}
+
+fn assigned(i: int, k: int) -> int {
+	key := word(i)
+	mut m: map[str, int] = {"a": 1}
+	m = {key: bad(k)}
+	return m.len()
+}
+
+fn returned(i: int, k: int) -> int {
+	key := word(i)
+	m := made(key, k)
+	return m.len()
+}
+
+fn argument(i: int, k: int) -> int {
+	key := word(i)
+	return size({key: bad(k)})
+}
+
+fn in_a_list(i: int, k: int) -> int {
+	key := word(i)
+	xs := [{key: bad(k)}]
+	return xs.len()
+}
+
+fn in_a_map(i: int, k: int) -> int {
+	key := word(i)
+	m := {"a": {key: bad(k)}}
+	return m.len()
+}
+
+fn receiver(i: int, k: int) -> int {
+	key := word(i)
+	return {key: bad(k)}.len()
+}
+
+fn main() {
+	mut n := 0
+	mut i := 0
+	r := rounds()
+	for i < r {
+		n = n + both(bound, i) + both(bound_typed, i) + both(param, i)
+		n = n + both(later_entry, i) + both(earlier_entry, i)
+		n = n + both(field_key, i) + both(indexed_key, i) + both(two_named, i)
+		n = n + both(str_value, i) + both(list_value, i)
+		n = n + both(assigned, i) + both(returned, i) + both(argument, i)
+		n = n + both(in_a_list, i) + both(in_a_map, i) + both(receiver, i)
+		i = i + 1
+	}
+	print n
+}
+ZG
+
+# THE VALUE `in` LOOKS FOR (#335). `v in xs` copied a text it only had to read and gave the
+# copy to nobody, where nothing raises at all — so most of this case runs outside a `guard`.
+# The value is a name, a text built in place, a field, an element, a concatenation, a branch
+# and a loop variable; the container is a list, a map and a set, each under a name and as
+# the value of a call, and a set built where it is asked. EVERY ANSWER IS READ: `yes` raises
+# on a wrong one, present and absent alike, and nothing catches it, so a fix that stops
+# copying and reads the wrong text is a `RUN` failure and not a count that happens to
+# balance. The last part is the value that raises, and a test followed by a part that
+# raises, through `both` — the twin there is the half that leaked.
+#
+# What is NOT here: the same text handed to `has`, which is a method's argument and still
+# leaks. A case that has to tolerate that counts nothing.
+case_abort in_value no <<'ZG'
+struct H {
+	pub key: str
+}
+
+fn mkl(n: int) -> list[str] {
+	return [word(n), word(n + 1)]
+}
+
+fn mkm(n: int) -> map[str, int] {
+	return {word(n): n, word(n + 1): n}
+}
+
+fn mks(n: int) -> set[str] {
+	return set([word(n), word(n + 1)])
+}
+
+fn sbad(n: int, k: int) -> str {
+	raise "s" if k > 0
+	return word(n)
+}
+
+fn yes(got: bool, at: str) -> int {
+	raise at if not got
+	return 1
+}
+
+fn over_list(i: int) -> int {
+	xs := mkl(i)
+	k := word(i)
+	far := word(i + 9)
+	h := H(word(i + 1))
+	ys := [word(i), word(i + 9)]
+	mut n := yes(k in xs, "a name, in a list")
+	n = n + yes(word(i + 1) in xs, "a text built in place, in a list")
+	n = n + yes(h.key in xs, "a field, in a list")
+	n = n + yes(ys[0] in xs, "an element, in a list")
+	n = n + yes(str(i) + "abcdefghijklmnop" in xs, "a concatenation, in a list")
+	n = n + yes((if i % 2 == 0 { k } else { word(i + 1) }) in xs, "a branch, in a list")
+	n = n + yes(k in mkl(i), "a name, in a list nobody named")
+	n = n + yes(word(i) in mkl(i), "a text built in place, in a list nobody named")
+	n = n + yes(not (far in xs), "an absent name, in a list")
+	n = n + yes(not (word(i + 9) in xs), "an absent text built in place, in a list")
+	n = n + yes(not (ys[1] in mkl(i)), "an absent element, in a list nobody named")
+	for w in ys {
+		n = n + yes((w in xs) == (w == k), "a loop variable, in a list")
+	}
+	return n
+}
+
+fn over_map(i: int) -> int {
+	m := mkm(i)
+	k := word(i)
+	far := word(i + 9)
+	h := H(word(i + 1))
+	ys := [word(i), word(i + 9)]
+	mut n := yes(k in m, "a name, in a map")
+	n = n + yes(word(i + 1) in m, "a text built in place, in a map")
+	n = n + yes(h.key in m, "a field, in a map")
+	n = n + yes(ys[0] in m, "an element, in a map")
+	n = n + yes(str(i) + "abcdefghijklmnop" in m, "a concatenation, in a map")
+	n = n + yes((if i % 2 == 0 { k } else { word(i + 1) }) in m, "a branch, in a map")
+	n = n + yes(k in mkm(i), "a name, in a map nobody named")
+	n = n + yes(word(i) in mkm(i), "a text built in place, in a map nobody named")
+	n = n + yes(not (far in m), "an absent name, in a map")
+	n = n + yes(not (word(i + 9) in m), "an absent text built in place, in a map")
+	n = n + yes(not (ys[1] in mkm(i)), "an absent element, in a map nobody named")
+	for w in ys {
+		n = n + yes((w in m) == (w == k), "a loop variable, in a map")
+	}
+	return n
+}
+
+fn over_set(i: int) -> int {
+	s := mks(i)
+	k := word(i)
+	far := word(i + 9)
+	h := H(word(i + 1))
+	ys := [word(i), word(i + 9)]
+	mut n := yes(k in s, "a name, in a set")
+	n = n + yes(word(i + 1) in s, "a text built in place, in a set")
+	n = n + yes(h.key in s, "a field, in a set")
+	n = n + yes(ys[0] in s, "an element, in a set")
+	n = n + yes(str(i) + "abcdefghijklmnop" in s, "a concatenation, in a set")
+	n = n + yes((if i % 2 == 0 { k } else { word(i + 1) }) in s, "a branch, in a set")
+	n = n + yes(k in mks(i), "a name, in a set nobody named")
+	n = n + yes(word(i) in mks(i), "a text built in place, in a set nobody named")
+	n = n + yes(k in set([word(i), word(i + 1)]), "a name, in a set built in place")
+	n = n + yes(not (far in s), "an absent name, in a set")
+	n = n + yes(not (word(i + 9) in s), "an absent text built in place, in a set")
+	n = n + yes(not (ys[1] in mks(i)), "an absent element, in a set nobody named")
+	n = n + yes(not (far in set([word(i), word(i + 1)])), "an absent name, in a set built in place")
+	for w in ys {
+		n = n + yes((w in s) == (w == k), "a loop variable, in a set")
+	}
+	return n
+}
+
+fn raises_list(i: int, k: int) -> int {
+	xs := mkl(i)
+	return yes(sbad(i, k) in xs, "a value that may raise, in a list")
+}
+
+fn raises_map(i: int, k: int) -> int {
+	m := mkm(i)
+	return yes(sbad(i, k) in m, "a value that may raise, in a map")
+}
+
+fn raises_set(i: int, k: int) -> int {
+	s := mks(i)
+	return yes(sbad(i, k) in s, "a value that may raise, in a set")
+}
+
+fn raises_list_rvalue(i: int, k: int) -> int {
+	return yes(sbad(i, k) in mkl(i), "a value that may raise, in a list nobody named")
+}
+
+fn raises_map_rvalue(i: int, k: int) -> int {
+	return yes(sbad(i, k) in mkm(i), "a value that may raise, in a map nobody named")
+}
+
+fn raises_set_rvalue(i: int, k: int) -> int {
+	return yes(sbad(i, k) in mks(i), "a value that may raise, in a set nobody named")
+}
+
+fn then_raises(i: int, k: int) -> int {
+	xs := mkl(i)
+	return yes((word(i) in xs) and bad(k) == 0, "a built text, then a part that may raise")
+}
+
+fn named_then_raises(i: int, k: int) -> int {
+	m := mkm(i)
+	key := word(i)
+	return yes((key in m) and bad(k) == 0, "a name, then a part that may raise")
+}
+
+fn main() {
+	mut n := 0
+	mut i := 0
+	r := rounds()
+	for i < r {
+		n = n + over_list(i) + over_map(i) + over_set(i)
+		n = n + both(raises_list, i) + both(raises_map, i) + both(raises_set, i)
+		n = n + both(raises_list_rvalue, i) + both(raises_map_rvalue, i) + both(raises_set_rvalue, i)
+		n = n + both(then_raises, i) + both(named_then_raises, i)
+		i = i + 1
+	}
+	print n
+}
+ZG
+
 # --- a counted value a container takes, and an exit taken while one is being built ------
 # The cases above are leaks, and a count is the whole of what this gate was written to read.
 # The ones below are not: a container that takes a value it does not own gives it back a
@@ -2295,10 +2600,9 @@ ZG
 # These are for `zerg` alone. The seed has no map literal, no `set` and no closure value, and
 # on the early-exit shapes it is not the oracle: it leaves the pushed elements live itself.
 #
-# What is NOT here: a channel inside any holder, which is not counted in or out at all; the
-# arguments of a call, a `spawn` or a `defer` (#326); and `v in <container>` for a text built
-# at run time, which leaks the key it retains. Each is a defect of its own, and a case that
-# has to tolerate one counts nothing.
+# What is NOT here: a channel inside any holder, which is not counted in or out at all, and
+# the arguments of a call, a `spawn` or a `defer` (#326). Each is a defect of its own, and a
+# case that has to tolerate one counts nothing.
 
 # A MAP ASSIGNED THROUGH A KEY SOMETHING ELSE OWNS (#327). `m[k] = v` handed the map the
 # caller's own text. A key the map did not have was then given back by both; one it already

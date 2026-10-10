@@ -19152,14 +19152,19 @@ fn c_map_set(mut &em: Emitter, target: ast.Expr, idx: ast.Expr, rhs: ast.Expr, t
 	# any other: `h[0]["z"] = 3` edits a map header that lives inside `h`'s buffer, and
 	# lowering `h[0]` as a read left that buffer shared with `g`.
 	tgt := c_lvalue(em, target, c_nosub())
-	k := c_expr(em, idx, c_nosub())
 
-	# a key this statement built is nobody's until zrt_map_set takes it, so it is held across
-	# the value (c_hold), which is evaluated after it
+	# THE KEY ARRIVES OWNED, as a map literal's does (c_into): zrt_map_set takes it over, and
+	# gives the incoming one back when the key is already there — so a key read out of a name
+	# is copied, or the map ends up holding, or releasing, the caller's own cell (#327).
+	kt := c_map_key_ty(tty)
+	k := c_into(em, kt, idx, c_nosub())
+
+	# so the key is nobody's until zrt_map_set takes it, whether this statement built it or
+	# copied it, and it is held across the value (c_hold), which is evaluated after it
 	keep := em.rel_cnames.len()
 	mut hold := ""
-	if c_owns_value(idx) and c_runs_code(rhs) {
-		hold = c_hold(em, c_map_key_ty(tty), "zgt_mk")
+	if c_part_owns(em, kt, idx) and c_runs_code(rhs) {
+		hold = c_hold(em, kt, "zgt_mk")
 	}
 	v := c_fit_copied(em, "the value written into this map", c_map_val_ty(tty), rhs, c_nosub())
 	return f"{ind}{{ {kc} zgt_mk = {k}; {hold}{vc} zgt_mv = {v}; {c_unhold(em, keep)}zrt_map_set(&({tgt}), &zgt_mk, &zgt_mv); }}\n"

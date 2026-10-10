@@ -21493,32 +21493,22 @@ fn c_let_str(mut &em: Emitter, name: str, eff: ast.Ty, is_mut: bool, is_const: b
 fn c_let_list(mut &em: Emitter, name: str, eff: ast.Ty, is_mut: bool, is_const: bool, ival: ast.Expr, ind: str) -> str {
 	em.used_rt = true
 
-	# as in c_let: the initializer names what was in scope BEFORE this binding
+	# A LITERAL IS REGISTERED BEFORE ITS ELEMENTS ARE RENDERED, because that is the order of the
+	# C: the `zrt_defer` stands in front of the pushes, which is what gives the list back when an
+	# element aborts. An element rendered first saw a pending list without this binding on it,
+	# so a `?`, a `return`, a `break` or a `continue` inside one left as if nothing were
+	# registered — past a record naming a dead frame, with every element already pushed (#328).
+	#
+	# The NAME still enters scope last: as in c_let, the initializer names what was in scope
+	# BEFORE this binding, so the C name is minted first and the row is added after.
 	if c_is_listlit(ival) {
-		et := c_type(c_list_elem(eff))
-		vals := c_elem_exprs(em, ival, c_list_elem(eff), c_nosub())
-		c_add_var(em, name, eff, is_mut, is_const)
-		cname := c_var_cname(em, name)
-		mut out := f"{ind}zrt_list {cname}; zrt_list_init(&{cname}, sizeof({et}), &{c_elem_vt(em, c_list_elem(eff))});\n"
+		elem := c_list_elem(eff)
+		cname := c_fresh_cname(em, name)
+		mut out := f"{ind}zrt_list {cname}; zrt_list_init(&{cname}, sizeof({c_type(elem)}), &{c_elem_vt(em, elem)});\n"
 		out = out + c_pend_drop(em, eff, cname, ind)
-
-		# a FILL evaluates its value once (c_fill_pushes); `vals` above already holds the N
-		# rendered copies for every other literal, and this is the one road where the count
-		# and the value have to be taken apart again
-		mut filled := ""
-		match ival {
-			Expr.EFill(_, _) => {
-				if vals.len() > 1 {
-					filled = c_fill_pushes(em, cname, et, c_list_elem(eff), vals[0], vals.len(), ind)
-				}
-			}
-			_ => {
-				nop
-			}
-		}
-		return out + filled if filled != ""
-
-		return out + c_pushes_strs(cname, et, vals, ind)
+		out = out + c_pushes(em, cname, elem, ival, ind)
+		c_add_var_named(em, name, eff, cname, is_mut, is_const)
+		return out
 	}
 
 	# Anything else — another list, a call's result — binds through the one copy rule, the

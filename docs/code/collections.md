@@ -15,8 +15,9 @@ The `map` key requirement above is the intended one; this phase a key — and a 
 same question — is restricted to **`int`** or **`str`** (see [Keys](#keys--eq-free-hash-explicit) below).
 
 A **set has no literal**: `{1}` cannot be told from a one-statement block, so it is built through its
-**constructor** — `set([1, 2])` from a list, and `set()` where a type says what it holds
-(`s: set[int] = set()`). Written where nothing says, `set()` is _E4100_. It is a `map` whose value nobody
+**constructor** — `set([1, 2])` from a list, and `set()` at a
+[typed position](../core/types.md#typed-positions), whose type says what it holds (`s: set[int] = set()`,
+`return set()`). Written where nothing says, `set()` is _E4100_. It is a `map` whose value nobody
 wrote: the same hashing, the same insertion order, the same value semantics, and it renders as `{1, 2}`.
 
 Richer shapes are compositions, not new built-ins. `list[byte]` is the raw byte sequence (indexable, may

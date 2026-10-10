@@ -158,7 +158,11 @@ itself:
 - **(a) a literal's type.** An **untyped literal** adopts the type of the position it lands in, and is
   computed in it (Numeric literals, below).
 - **(b) a composite's type.** A **composite literal with nothing to speak for it** — `[]`, `{:}`, and the
-  fill form `[v; N]` choosing between a `list` and a `[T; N]` array.
+  fill form `[v; N]` choosing between a `list` and a `[T; N]` array. An empty `{:}` is built at the type of
+  the typed position it lands in. A place that is not one gives it nothing — a branch of an `if` or a
+  `match`, a tuple's element, an element of `x := [{:}]`, the operand of `print` — and it is refused
+  there: _E3034 this expression gives the empty map `{:}`, which has no type of its own_, unless a declared
+  type around it reports the mismatch first.
 - **(c) a closure's parameter types.** A closure's **omitted `: type`**, taken from the function type it
   is checked against; one that never meets an expected type is an error.
 - **(d) a carrier's payload type.** A value, an `Err` or `nil` entering a `T?`, `Result[T]` or

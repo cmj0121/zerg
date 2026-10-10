@@ -18961,7 +18961,16 @@ fn c_set_ctor(mut &em: Emitter, et: ast.Ty, src: ast.Expr, sb: Subst) -> str {
 
 	give := c_in_give(em, src, st, sl)
 	head := f"zrt_map {sm}; zrt_map_init(&{sm}, sizeof({ec}), sizeof(bool), &{vtn}); {c_type(st)} {sl} = {c_expr(em, src, sb)};"
-	loop := f" size_t {sn} = zrt_list_len(&{sl}); for (size_t {si} = 0; {si} < {sn}; {si}++) {{ {ec} zgt_sk = (*({ec} *)zrt_list_at_ref(&{sl}, {si})); bool zgt_sv = true; zrt_map_set(&{sm}, &zgt_sk, &zgt_sv); }}"
+
+	# EACH MEMBER ARRIVES AS A COPY (#329). The list goes on owning its elements — a named one
+	# is read again, and one this expression owns is dropped whole by `give` — and zrt_map_set
+	# takes its key over, giving back the incoming one when the member is already there. A
+	# member read out of the list and handed in as it stood was one count with two owners.
+	mut at := f"(*({ec} *)zrt_list_at_ref(&{sl}, {si}))"
+	if c_needs_copy(em, et) {
+		at = c_copy_of(em, et, at)
+	}
+	loop := f" size_t {sn} = zrt_list_len(&{sl}); for (size_t {si} = 0; {si} < {sn}; {si}++) {{ {ec} zgt_sk = {at}; bool zgt_sv = true; zrt_map_set(&{sm}, &zgt_sk, &zgt_sv); }}"
 
 	return f"({{ {head}{loop}{give} {sm}; }})"
 }

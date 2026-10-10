@@ -2296,9 +2296,9 @@ ZG
 # on the early-exit shapes it is not the oracle: it leaves the pushed elements live itself.
 #
 # What is NOT here: a channel inside any holder, which is not counted in or out at all; the
-# arguments of a call, a `spawn` or a `defer` (#326); `v in <container>` for a text built at
-# run time, which leaks the key it retains; and an empty `{:}` anywhere but a typed
-# declaration. Each is a defect of its own, and a case that has to tolerate one counts nothing.
+# arguments of a call, a `spawn` or a `defer` (#326); and `v in <container>` for a text built
+# at run time, which leaks the key it retains. Each is a defect of its own, and a case that
+# has to tolerate one counts nothing.
 
 # A MAP ASSIGNED THROUGH A KEY SOMETHING ELSE OWNS (#327). `m[k] = v` handed the map the
 # caller's own text. A key the map did not have was then given back by both; one it already
@@ -2806,6 +2806,347 @@ fn main() {
 	}
 	print n
 }
+ZG
+
+# --- a literal with no type of its own, at a position that has one (#332) -----------------
+#
+# A SILENTLY WRONG ANSWER, which is the one kind of defect nothing else here was written for.
+# A map literal took its key and value types from its entries, so an empty `{:}` anywhere but
+# a typed binding was built as a table of integers: a `str` key was hashed and compared by
+# where it lives, the same key written twice made two entries, a read through an equal key
+# found neither, and the map gave back neither its keys nor its values. No sanitizer sees
+# that, the seed builds none of these programs, and the gate that compares what a program
+# PRINTS reads the private corpus — where each position is a line of its own.
+#
+# WHAT THIS GATE CAN HOLD OF IT is the answer as well as the count. Every position asks its
+# map the question and the round RAISES, naming each position that answered wrong, so a wrong
+# answer is a `RUN` failure here and not a number nobody read; the keys and values a wrong
+# table leaves behind are the per-round count, for a fix that gets the answer and loses the
+# release. The read is made only of a map holding one entry, so a wrong table is reported and
+# does not end the round at the first position it meets.
+#
+# ONE PROGRAM, WRITTEN ONCE, FOR EACH TYPE. `typed_positions` puts a type, the literal under
+# test and another value of that type into the same list of positions; the case supplies
+# `count`, which asks the question, and `want`, the answer. The cases differ in what the wrong
+# table gets wrong: a `str` key over plain values, the same over values that are counted, a
+# literal that HAS an entry and read its value type from it (`{"a": 1}` where a float is
+# wanted), and `set()`, which was refused at every position but a typed binding (E4100).
+#
+# What is NOT here: `{:}` where no position says what it holds — a branch of an `if` or a
+# `match`, a tuple element, an argument only a type parameter describes — which is refused
+# by name and held by `reject`.
+typed_positions() {
+	local name=$1 ty=$2 lit=$3 other=$4
+	# THROUGH A FILE, not a pipe: the right-hand side of a pipe is a subshell, and a case run
+	# in one keeps its verdict and its place in the count to itself.
+	{
+		cat
+		sed -e "s|@T@|$ty|g" -e "s|@L@|$lit|g" -e "s|@N@|$other|g" <<'ZG'
+struct H {
+	pub m: @T@
+}
+
+struct D {
+	pub n: int
+	pub m: @T@ = @L@
+}
+
+struct K {
+	pub n: int
+}
+
+enum E {
+	No
+	Has(@T@)
+}
+
+spec Taker {
+	fn take(q: @T@) -> int
+}
+
+impl D {
+	fn pass(q: @T@) -> int {
+		return count(q) * this.n
+	}
+}
+
+impl Taker for K {
+	fn take(q: @T@) -> int {
+		return count(q) * this.n
+	}
+}
+
+fn check(mut &bad: list[str], what: str, n: int) {
+	if n != want() {
+		bad.append(what + " gave " + str(n))
+	}
+}
+
+fn told(bad: list[str]) -> str {
+	mut all := ""
+	for b in bad {
+		all = all + b + "; "
+	}
+	return all
+}
+
+fn same(q: @T@) -> @T@ {
+	return q
+}
+
+fn dflt(q: @T@ = @L@) -> @T@ {
+	return q
+}
+
+fn with_t[T](q: @T@, w: T) -> @T@ {
+	return q
+}
+
+fn made() -> @T@ {
+	return @L@
+}
+
+fn some() -> @T@? {
+	return @L@
+}
+
+fn none() -> @T@? {
+	return nil
+}
+
+fn first(xs: list[@T@]) -> @T@ {
+	return xs[0]
+}
+
+fn at1(mm: map[int, @T@]) -> @T@ {
+	return mm[1]
+}
+
+fn inside(e: E) -> int {
+	return match e {
+		E.Has(m) => count(m)
+		_ => 0
+	}
+}
+
+fn work(q: @T@, o: chan[int]<-) {
+	o <- count(q)
+}
+
+fn deferred(o: chan[int]<-) {
+	defer work(@L@, o)
+}
+
+fn bindings(mut &bad: list[str]) {
+	typed: @T@ = @L@
+	check(bad, "a typed binding", count(typed))
+
+	mut x: @T@ = @N@
+	x = @L@
+	check(bad, "an assignment", count(x))
+
+	mut h := H(@N@)
+	h.m = @L@
+	check(bad, "an assignment to a field", count(h.m))
+
+	mut xs: list[@T@] = [@N@]
+	xs[0] = @L@
+	check(bad, "an assignment to an element", count(xs[0]))
+
+	mut mm: map[int, @T@] = {1: @N@}
+	mm[1] = @L@
+	mm[2] = @L@
+	check(bad, "a map write over a key", count(mm[1]))
+	check(bad, "a map write of a new key", count(mm[2]))
+
+	mut ys: list[@T@] = []
+	ys.append(@L@)
+	check(bad, "an appended element", count(ys[0]))
+}
+
+fn arguments(mut &bad: list[str]) {
+	check(bad, "an argument", count(@L@))
+	check(bad, "a named argument", count(m: @L@))
+	d := D(1)
+	check(bad, "a method's argument", d.pass(@L@))
+	t: Taker = K(1)
+	check(bad, "a spec method's argument", t.take(@L@))
+	f := fn (q: @T@) -> @T@ {
+		return q
+	}
+	check(bad, "a closure's argument", count(f(@L@)))
+	g := same
+	check(bad, "a function value's argument", count(g(@L@)))
+	check(bad, "an argument beside a type parameter's", count(with_t(@L@, 1)))
+	o := chan[int](1)
+	deferred(o)
+	if n := <-o {
+		check(bad, "an argument a defer keeps", n)
+	}
+	check(bad, "a parameter's default", count(dflt()))
+	check(bad, "a field's default", count(D(1).m))
+}
+
+fn constructions(mut &bad: list[str]) {
+	check(bad, "a struct field", count(H(@L@).m))
+	check(bad, "a named struct field", count(D(m: @L@, n: 1).m))
+	check(bad, "a variant's payload", inside(E.Has(@L@)))
+	hs: list[H] = [H(@L@)]
+	check(bad, "a field in a list element", count(hs[0].m))
+	es: list[E] = [E.Has(@L@)]
+	check(bad, "a payload in a list element", inside(es[0]))
+
+	xs: list[@T@] = [@L@]
+	check(bad, "a list element", count(xs[0]))
+	ys: list[@T@] = [@N@, @L@]
+	check(bad, "a later list element", count(ys[1]))
+	zs := [@N@, @L@]
+	check(bad, "a list element typed by the first", count(zs[1]))
+	fs: list[@T@] = [@L@; 2]
+	check(bad, "a filled list's element", count(fs[1]))
+	arr: [@T@; 1] = [@L@]
+	check(bad, "an array element", count(arr[0]))
+	check(bad, "an element of a list argument", count(first([@L@])))
+
+	mm: map[int, @T@] = {1: @L@}
+	check(bad, "a map value", count(mm[1]))
+	nn: map[int, @T@] = {1: @N@, 2: @L@}
+	check(bad, "a later map value", count(nn[2]))
+	oo := {1: @N@, 2: @L@}
+	check(bad, "a map value typed by the first", count(oo[2]))
+	check(bad, "a value of a map argument", count(at1({1: @L@})))
+}
+
+fn answers(mut &bad: list[str]) {
+	check(bad, "a return", count(made()))
+	mut bound := made()
+	check(bad, "a return, bound", count(bound))
+	f := fn () -> @T@ {
+		return @L@
+	}
+	check(bad, "a closure's return", count(f()))
+	if v := some() {
+		check(bad, "an optional return", count(v))
+	}
+	o: @T@? = @L@
+	if v := o {
+		check(bad, "an optional binding", count(v))
+	}
+	x := none() ?? @L@
+	check(bad, "a fallback", count(x))
+	y: @T@ = none() ?? @L@
+	check(bad, "a fallback at a typed binding", count(y))
+}
+
+fn sends(mut &bad: list[str]) {
+	ch := chan[@T@](2)
+	ch <- @L@
+	if v := <-ch {
+		check(bad, "a send", count(v))
+	}
+	select {
+		ch <- @L@ => {
+			nop
+		}
+	}
+	if v := <-ch {
+		check(bad, "a send in a select", count(v))
+	}
+	o := chan[int](1)
+	spawn work(@L@, o)
+	if n := <-o {
+		check(bad, "a spawned call's argument", n)
+	}
+}
+
+fn main() {
+	mut i := 0
+	r := rounds()
+	for i < r {
+		mut bad: list[str] = []
+		bindings(bad)
+		arguments(bad)
+		constructions(bad)
+		answers(bad)
+		sends(bad)
+		raise told(bad) if bad.len() > 0
+		i = i + 1
+	}
+	print i
+}
+ZG
+	} >"$WORK/$name.body"
+	case_run "$name" no yes <"$WORK/$name.body"
+}
+
+typed_positions slot_map 'map[str, int]' '{:}' '{"a": 1}' <<'ZG'
+fn word(n: int) -> str {
+	return str(n) + "abcdefghijklmnop"
+}
+
+fn want() -> int {
+	return 12
+}
+
+fn count(m: map[str, int]) -> int {
+	mut c := m
+	k := word(1)
+	c[word(1)] = 1
+	c[word(1)] = 2
+	return c.len() * 10 if c.len() != 1
+	return 10 + c[k]
+}
+
+ZG
+
+typed_positions slot_map_owned 'map[str, list[int]]' '{:}' '{"a": [1]}' <<'ZG'
+fn word(n: int) -> str {
+	return str(n) + "abcdefghijklmnop"
+}
+
+fn mkl(n: int) -> list[int] {
+	return [n, n + 1]
+}
+
+fn want() -> int {
+	return 15
+}
+
+fn count(m: map[str, list[int]]) -> int {
+	mut c := m
+	k := word(1)
+	c[word(1)] = mkl(1)
+	c[word(1)] = mkl(5)
+	return c.len() * 10 if c.len() != 1
+	v := c[k]
+	return 10 + v[0]
+}
+
+ZG
+
+typed_positions slot_literal 'map[str, float]' '{"a": 1}' '{"a": 2.5}' <<'ZG'
+fn want() -> int {
+	return 15
+}
+
+fn count(m: map[str, float]) -> int {
+	half := m["a"] + 0.5
+	return 15 if half == 1.5
+	return 5 if half == 0.5
+	return 0
+}
+
+ZG
+
+typed_positions slot_set 'set[str]' 'set()' 'set(["a"])' <<'ZG'
+fn want() -> int {
+	return 0
+}
+
+fn count(m: set[str]) -> int {
+	return m.len() * 10 + int("a" in m)
+}
+
 ZG
 
 if [ "$fail" -ne 0 ]; then

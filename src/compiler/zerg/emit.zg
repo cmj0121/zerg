@@ -16202,17 +16202,27 @@ fn c_assign(mut &em: Emitter, lhs: ast.Expr, rhs: ast.Expr, ind: str) -> str {
 	#
 	# The address is taken ONCE, for the reason c_assign_dropping takes it once: `lv` may be a
 	# list index whose subscript arithmetic must not be computed twice around a release.
+	#
+	# THE NEW LIST IS NOBODY'S UNTIL IT IS STORED, so it is held (c_hold) while an element after
+	# the first can still leave — by an abort, a `?`, a `return`, a `break` — or the buffer and
+	# every element already pushed stay behind. The elements are rendered between the hold and
+	# its c_unhold, which is what makes an early exit inside one of them unwind it.
 	if c_is_list(lt) and c_is_listlit(rhs) {
 		em.used_rt = true
 
-		et := c_type(c_list_elem(lt))
+		elem := c_list_elem(lt)
+		et := c_type(elem)
 		ct := c_type(lt)
 		lp := c_tmp(em, "zgt_lp")
 		nv := c_tmp(em, "zgt_nl")
 		mut out := ind + "{ " + ct + " *" + lp + " = &(" + lv + "); " + ct + " " + nv + "; "
-		out = out + f"zrt_list_init(&{nv}, sizeof({et}), &{c_elem_vt(em, c_list_elem(lt))});\n"
-		out = out + c_pushes(em, nv, et, rhs, ind)
-		return out + ind + c_drop_stmt(em, lt, f"(*{lp})") + " *" + lp + " = " + nv + "; }\n"
+		out = out + f"zrt_list_init(&{nv}, sizeof({et}), &{c_elem_vt(em, elem)});\n"
+		keep := em.rel_cnames.len()
+		if c_needs_order(c_listlit_elems(em, rhs), 1) {
+			out = out + ind + c_hold(em, lt, nv) + "\n"
+		}
+		out = out + c_pushes(em, nv, elem, rhs, ind)
+		return out + ind + c_unhold(em, keep) + c_drop_stmt(em, lt, f"(*{lp})") + " *" + lp + " = " + nv + "; }\n"
 	}
 
 	# Every other assignment copies through the one rule — including a list, which used to
@@ -16343,14 +16353,22 @@ fn c_fill_pushes(mut &em: Emitter, target: str, et: str, vty: ast.Ty, rendered: 
 	return out + ind + "}\n"
 }
 
-# c_pushes emits a zrt_list_push per element of a list literal.
-fn c_pushes(mut &em: Emitter, target: str, et: str, lit: ast.Expr, ind: str) -> str {
+# c_pushes emits a zrt_list_push per element of a list literal, into a list that is already
+# initialised. Each element is rendered AT the list's element type and COPIED where it names
+# somebody else's storage (c_elem_exprs): a push owns what it is handed, so `xs = [v]` pushing
+# `v` as it stood left one count with two owners — the same for `xs = [xs[0], xs[0]]`, which
+# reads the list it replaces.
+fn c_pushes(mut &em: Emitter, target: str, elem: ast.Ty, lit: ast.Expr, ind: str) -> str {
+	et := c_type(elem)
+	vals := c_elem_exprs(em, lit, elem, c_nosub())
+
+	# a FILL evaluates its value once (c_fill_pushes); `vals` holds the N rendered copies for
+	# every other literal, and this is where the count and the value are taken apart again
 	mut filled := ""
 	match lit {
-		Expr.EFill(v, n) => {
-			cnt := c_fill_elems(em, v, n).len()
-			if cnt > 1 {
-				filled = c_fill_pushes(em, target, et, c_infer(em, v), c_expr(em, v, c_nosub()), cnt, ind)
+		Expr.EFill(_, _) => {
+			if vals.len() > 1 {
+				filled = c_fill_pushes(em, target, et, elem, vals[0], vals.len(), ind)
 			}
 		}
 		_ => {
@@ -16359,17 +16377,7 @@ fn c_pushes(mut &em: Emitter, target: str, et: str, lit: ast.Expr, ind: str) -> 
 	}
 	return filled if filled != ""
 
-	return c_pushes_of(em, target, et, c_listlit_elems(em, lit), ind)
-}
-
-fn c_pushes_of(mut &em: Emitter, target: str, et: str, elems: list[ast.Expr], ind: str) -> str {
-	mut out := ""
-	mut i := 0
-	for i < elems.len() {
-		out = out + ind + "{ " + et + " zgt_le = " + c_expr(em, elems[i], c_nosub()) + "; zrt_list_push(&" + target + ", &zgt_le); }\n"
-		i = i + 1
-	}
-	return out
+	return c_pushes_strs(target, et, vals, ind)
 }
 
 # c_const_globals declares each module constant as a C global and records its type, so

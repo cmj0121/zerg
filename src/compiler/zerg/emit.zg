@@ -19074,10 +19074,11 @@ fn c_map_lit(mut &em: Emitter, ks: list[ast.Expr], vs: list[ast.Expr], sb: Subst
 # the order they were written.
 #
 # TWO THINGS ARE HELD WHILE IT IS BUILT (c_hold, #312), because two things are owned by
-# nothing: a key this entry built, until zrt_map_set takes it — held across the entry's value,
-# as c_map_set holds one — and the map itself once it has an entry in it, held across every
-# later key and value. A map is droppable with any number of entries, and an empty one owns
-# nothing, so the registration goes on after the first set.
+# nothing: a key this entry built or copied out of a name (c_part_owns, #340), until
+# zrt_map_set takes it — held across the entry's value, as c_map_set holds one — and the map
+# itself once it has an entry in it, held across every later key and value. A map is droppable
+# with any number of entries, and an empty one owns nothing, so the registration goes on after
+# the first set.
 fn c_map_lit_at(mut &em: Emitter, kt: ast.Ty, vt: ast.Ty, ks: list[ast.Expr], vs: list[ast.Expr], sb: Subst) -> str {
 	# A TYPE THAT IS NOT ONE HAS NO TABLE. `?` is spelled `int64_t` by c_type's fallback, so a
 	# position that only LOOKS typed — a type parameter solved from the `{:}` itself — would
@@ -19104,7 +19105,7 @@ fn c_map_lit_at(mut &em: Emitter, kt: ast.Ty, vt: ast.Ty, ks: list[ast.Expr], vs
 		mk := c_into(em, kt, ks[i], sb)
 		kkeep := em.rel_cnames.len()
 		mut khold := ""
-		if c_owns_value(ks[i]) and c_runs_code(vs[i]) {
+		if c_part_owns(em, kt, ks[i]) and c_runs_code(vs[i]) {
 			khold = c_hold(em, kt, "zgt_mk")
 		}
 		mv := c_fit_copied(em, "a value of this map literal", vt, vs[i], sb)

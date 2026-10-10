@@ -2034,6 +2034,540 @@ fn main() {
 }
 ZG
 
+# --- a counted value a container takes, and an exit taken while one is being built ------
+# The cases above are leaks, and a count is the whole of what this gate was written to read.
+# The ones below are not: a container that takes a value it does not own gives it back a
+# second time, and a release run against a frame that is gone writes where it should not.
+# Only a sanitizer NAMES either, and the one gate that runs a sanitizer reads the private
+# corpus (`sanitize-corpus`), which is where each of these is pinned by name.
+#
+# WHAT A PLAIN BINARY CAN STILL SHOW is narrower, and it is all that is claimed here. A value
+# given back twice is a block the allocator hands to the next request while its first owner
+# is still reading it, so every shape reads its SOURCE back after the store and after one
+# more allocation of the same size, and raises when the text is no longer its own; a set is
+# asked for each member it was built from. A second `free` of one block the platform's
+# allocator may also refuse outright, which ends the run on a signal. Both are `RUN` failures
+# and both depend on what the allocator does with a freed block — a hold, not a proof. The
+# counts are the part that does not depend on it: a value nobody named is stored beside each
+# named one, so a fix that counts what the container already owned is a per-round leak, and
+# an exit that skips an unwind leaves what was already pushed live.
+#
+# These are for `zerg` alone. The seed has no map literal, no `set` and no closure value, and
+# on the early-exit shapes it is not the oracle: it leaves the pushed elements live itself.
+#
+# What is NOT here: a channel inside any holder, which is not counted in or out at all; the
+# arguments of a call, a `spawn` or a `defer` (#326); `v in <container>` for a text built at
+# run time, which leaks the key it retains; and an empty `{:}` anywhere but a typed
+# declaration. Each is a defect of its own, and a case that has to tolerate one counts nothing.
+
+# A MAP ASSIGNED THROUGH A KEY SOMETHING ELSE OWNS (#327). `m[k] = v` handed the map the
+# caller's own text. A key the map did not have was then given back by both; one it already
+# had was given back on the spot, under the name still reading it. The key is a name, a field,
+# an element, a parameter and a loop variable, and each is stored through more than once.
+case_run held_map_key no no <<'ZG'
+struct K {
+	pub f: str
+}
+
+fn word(n: int) -> str {
+	return str(n) + "abcdefghijklmnop"
+}
+
+fn same(got: str, n: int) -> int {
+	raise "a key was changed by the store it was used for" if got != word(n)
+	return 1
+}
+
+fn by_name(i: int) -> int {
+	mut m: map[str, int] = {:}
+	key := word(i)
+	m[key] = 1
+	later := word(i + 1)
+	return m.len() + same(key, i) + same(later, i + 1)
+}
+
+fn twice(i: int) -> int {
+	mut m: map[str, int] = {:}
+	key := word(i)
+	m[key] = 1
+	m[key] = 2
+	later := word(i + 1)
+	return m.len() + m[key] + same(key, i) + same(later, i + 1)
+}
+
+fn by_field(i: int) -> int {
+	mut m: map[str, int] = {:}
+	w := K(word(i))
+	m[w.f] = 1
+	m[w.f] = 2
+	later := word(i + 1)
+	return m.len() + same(w.f, i) + same(later, i + 1)
+}
+
+fn by_element(i: int) -> int {
+	mut m: map[str, int] = {:}
+	xs := [word(i), word(i + 1)]
+	m[xs[0]] = 1
+	m[xs[0]] = 2
+	later := word(i + 2)
+	return m.len() + same(xs[0], i) + same(later, i + 2)
+}
+
+fn store(key: str) -> int {
+	mut m: map[str, int] = {:}
+	m[key] = 1
+	m[key] = 2
+	return m.len()
+}
+
+fn by_parameter(i: int) -> int {
+	key := word(i)
+	n := store(key)
+	later := word(i + 1)
+	return n + same(key, i) + same(later, i + 1) + store(word(i + 2))
+}
+
+fn by_loop_variable(i: int) -> int {
+	mut m: map[str, int] = {:}
+	xs := [word(i), word(i + 1), word(i)]
+	for k in xs {
+		m[k] = 1
+	}
+	later := word(i + 2)
+	return m.len() + same(xs[0], i) + same(xs[2], i) + same(later, i + 2)
+}
+
+fn unnamed(i: int) -> int {
+	mut m: map[str, int] = {:}
+	m[word(i)] = 1
+	m[word(i)] = 2
+	m[word(i + 1)] = 3
+	return m.len()
+}
+
+fn main() {
+	mut n := 0
+	mut i := 0
+	r := rounds()
+	for i < r {
+		n = n + by_name(i) + twice(i) + by_field(i) + by_element(i)
+		n = n + by_parameter(i) + by_loop_variable(i) + unnamed(i)
+		i = i + 1
+	}
+	print n
+}
+ZG
+
+# A SET BUILT FROM A LIST (#329). Each member moved out of the list uncounted and the list
+# gave its own back, so the set held text that was gone; its length still came out right. The
+# list is a literal, a name, a field, a parameter and one nobody named, and a member written
+# twice goes down the path that drops the surplus one — which is why each has to arrive owned.
+case_run held_set_item no no <<'ZG'
+struct H {
+	pub xs: list[str]
+}
+
+fn word(n: int) -> str {
+	return str(n) + "abcdefghijklmnop"
+}
+
+fn words(n: int) -> list[str] {
+	return [word(n), word(n + 1)]
+}
+
+fn same(got: str, n: int) -> int {
+	raise "a list was changed by the set built from it" if got != word(n)
+	return 1
+}
+
+fn holds(s: set[str], n: int) -> int {
+	mut found := 0
+	for w in s {
+		if w == word(n) {
+			found = found + 1
+		}
+	}
+	raise "a set lost a member it was built from" if found != 1
+	return 1
+}
+
+fn from_literal(i: int) -> int {
+	s := set([word(i), word(i + 1)])
+	later := words(i + 2)
+	return s.len() + holds(s, i) + holds(s, i + 1) + later.len()
+}
+
+fn from_named(i: int) -> int {
+	xs := words(i)
+	s := set(xs)
+	later := words(i + 2)
+	return s.len() + same(xs[0], i) + same(xs[1], i + 1) + holds(s, i + 1) + later.len()
+}
+
+fn from_unnamed(i: int) -> int {
+	s := set(words(i))
+	later := words(i + 2)
+	return s.len() + holds(s, i) + holds(s, i + 1) + later.len()
+}
+
+fn from_field(i: int) -> int {
+	h := H(words(i))
+	s := set(h.xs)
+	later := words(i + 2)
+	return s.len() + same(h.xs[0], i) + holds(s, i) + later.len()
+}
+
+fn size(xs: list[str]) -> int {
+	s := set(xs)
+	return s.len()
+}
+
+fn from_parameter(i: int) -> int {
+	xs := words(i)
+	n := size(xs)
+	later := words(i + 2)
+	return n + same(xs[1], i + 1) + size(words(i + 4)) + later.len()
+}
+
+fn duplicate(i: int) -> int {
+	xs := [word(i), word(i), word(i + 1)]
+	s := set(xs)
+	t := set([word(i + 2), word(i + 2)])
+	later := words(i + 3)
+	return s.len() + t.len() + same(xs[0], i) + same(xs[1], i) + holds(s, i) + holds(t, i + 2) + later.len()
+}
+
+fn main() {
+	mut n := 0
+	mut i := 0
+	r := rounds()
+	for i < r {
+		n = n + from_literal(i) + from_named(i) + from_unnamed(i)
+		n = n + from_field(i) + from_parameter(i) + duplicate(i)
+		i = i + 1
+	}
+	print n
+}
+ZG
+
+# A LIST LITERAL ASSIGNED. `xs = [v]` pushed `v` as written where `xs := [v]` copies what it
+# borrows, and `xs = [xs[0], xs[0]]` read the old list into the new one uncounted and dropped
+# the old one under it. The literal is assigned as written, as a fill and through a field, for
+# each element type that is counted: text, a list, a map, a struct that owns, a spec box and a
+# closure.
+case_run held_list_elem no no <<'ZG'
+struct P {
+	pub name: str
+	pub xs: list[int]
+}
+
+spec Shape {
+	fn area() -> int
+}
+
+struct Sq {
+	pub tag: str
+	pub side: int
+}
+
+impl Shape for Sq {
+	fn area() -> int {
+		return this.side + bytearray(this.tag).len()
+	}
+}
+
+struct HStr {
+	pub xs: list[str]
+}
+
+struct HStruct {
+	pub xs: list[P]
+}
+
+fn word(n: int) -> str {
+	return str(n) + "abcdefghijklmnop"
+}
+
+fn mkl(n: int) -> list[int] {
+	return [n, n + 1]
+}
+
+fn mkm(n: int) -> map[str, str] {
+	return {"k": word(n)}
+}
+
+fn mkp(n: int) -> P {
+	return P(word(n), mkl(n))
+}
+
+fn mkb(n: int) -> Shape {
+	return Sq(word(n), n)
+}
+
+fn mkf(n: int) -> fn (int) -> int {
+	xs := [n, n]
+	return fn (a: int) -> int {
+		return a + xs[0]
+	}
+}
+
+fn same(got: str, n: int) -> int {
+	raise "a value was changed by the list it was put in" if got != word(n)
+	return 1
+}
+
+fn texts(i: int) -> int {
+	v := word(i)
+	mut xs: list[str] = [word(i + 1)]
+	xs = [v]
+	mut n := same(xs[0], i)
+	xs = [v; 2]
+	n = n + same(xs[1], i)
+	mut h := HStr([word(i + 2)])
+	h.xs = [v]
+	n = n + same(h.xs[0], i)
+	xs = [word(i + 3), v, word(i + 4)]
+	later := word(i + 5)
+	return n + same(xs[1], i) + same(v, i) + same(later, i + 5)
+}
+
+fn itself(i: int) -> int {
+	mut xs := [word(i), word(i + 1)]
+	xs = [xs[0], xs[0]]
+	later := word(i + 2)
+	return same(xs[0], i) + same(xs[1], i) + same(later, i + 2)
+}
+
+fn lists(i: int) -> int {
+	v := mkl(i)
+	mut xs: list[list[int]] = [mkl(i + 1)]
+	xs = [v]
+	xs = [v; 2]
+	xs = [xs[0], xs[1]]
+	later := mkl(i + 2)
+	raise "a list was changed by the list it was put in" if xs[1][0] != i or v[1] != i + 1
+	return xs.len() + later.len()
+}
+
+fn maps(i: int) -> int {
+	v := mkm(i)
+	mut xs: list[map[str, str]] = [mkm(i + 1)]
+	xs = [v]
+	xs = [v; 2]
+	later := mkm(i + 2)
+	return same(xs[1]["k"], i) + same(v["k"], i) + later.len()
+}
+
+fn structs(i: int) -> int {
+	v := mkp(i)
+	mut xs: list[P] = [mkp(i + 1)]
+	xs = [v]
+	mut h := HStruct([mkp(i + 2)])
+	h.xs = [v; 2]
+	later := mkp(i + 3)
+	return same(xs[0].name, i) + same(h.xs[1].name, i) + same(v.name, i) + later.xs.len()
+}
+
+fn boxes(i: int) -> int {
+	v := mkb(i)
+	mut xs: list[Shape] = [mkb(i + 1)]
+	xs = [v]
+	xs = [v; 2]
+	later := mkb(i + 2)
+	raise "a box was changed by the list it was put in" if xs[1].area() != v.area()
+	return later.area() - i
+}
+
+fn closures(i: int) -> int {
+	v := mkf(i)
+	mut xs: list[fn (int) -> int] = [mkf(i + 1)]
+	xs = [v]
+	xs = [v; 2]
+	f := xs[1]
+	later := mkf(i + 2)
+	raise "a closure was changed by the list it was put in" if f(1) != v(1)
+	return later(0) - i
+}
+
+fn main() {
+	mut n := 0
+	mut i := 0
+	r := rounds()
+	for i < r {
+		n = n + texts(i) + itself(i) + lists(i) + maps(i) + structs(i) + boxes(i) + closures(i)
+		i = i + 1
+	}
+	print n
+}
+ZG
+
+# AND THE LIST IT IS BUILDING. The new list was held by nothing until the assignment was done,
+# so a later element that left — a `?`, a `?? break`, a raise under a `guard` — left it and
+# what it already held behind. This one is a count and nothing else.
+case_run assigned_exit no no <<'ZG'
+fn mkl(n: int) -> list[int] {
+	return [n, n + 1]
+}
+
+fn may(k: int) -> int? {
+	return nil if k > 0
+	return 5
+}
+
+fn bad(k: int) -> int {
+	raise "bad" if k > 0
+	return 0
+}
+
+fn leaves(i: int, k: int) -> int? {
+	mut xs: list[list[int]] = [mkl(i)]
+	xs = [mkl(i), mkl(may(k)?), mkl(i + 2)]
+	return xs.len()
+}
+
+fn breaks(i: int, k: int) -> int {
+	mut n := 0
+	for j in 0..2 {
+		mut xs: list[list[int]] = [mkl(i + j)]
+		xs = [mkl(i), mkl((may(k) ?? break)), mkl(i + 2)]
+		n = n + xs.len()
+	}
+	return n
+}
+
+fn aborts(i: int, k: int) -> int {
+	mut xs: list[list[int]] = [mkl(i)]
+	xs = [mkl(i), mkl(bad(k)), mkl(i + 2)]
+	return xs.len()
+}
+
+fn main() {
+	mut n := 0
+	mut i := 0
+	r := rounds()
+	for i < r {
+		n = n + (leaves(i, 1) ?? 1) + (leaves(i, 0) ?? 0) + breaks(i, 1) + breaks(i, 0)
+		n = n + (guard { aborts(i, 1) } ?? 1) + (guard { aborts(i, 0) } ?? 0)
+		i = i + 1
+	}
+	print n
+}
+ZG
+
+# AN EARLY EXIT INSIDE AN ELEMENT OF `xs := [...]` (#328). The binding was registered for
+# release before its elements were rendered and counted as pending only after, so an exit
+# written inside an element left without unwinding it: the registration stayed behind, naming
+# a frame that was gone, and the elements already pushed were given back by nobody. `a`, `b`
+# and `c` choose which element leaves, so one function is the exit in first, middle and last
+# position and the path where nothing leaves; an earlier binding that owns something made a
+# function exit unwind and hid the fault, and did not hide it for a loop exit.
+case_run literal_exit no no <<'ZG'
+fn word(n: int) -> str {
+	return str(n) + "abcdefghijklmnop"
+}
+
+fn mkl(n: int) -> list[int] {
+	return [n, n + 1]
+}
+
+fn may(k: int) -> int? {
+	return nil if k > 0
+	return 5
+}
+
+fn mayr(k: int) -> Result[int] {
+	return Either.Right(ValueError("neg")) if k > 0
+	return Either.Left(5)
+}
+
+fn q_opt(a: int, b: int, c: int) -> int? {
+	xs := [mkl(may(a)?), mkl(may(b)?), mkl(may(c)?)]
+	return xs.len()
+}
+
+fn q_opt_pre(a: int, b: int, c: int) -> int? {
+	keep := mkl(9)
+	xs := [mkl(may(a)?), mkl(may(b)?), mkl(may(c)?)]
+	return xs.len() + keep.len()
+}
+
+fn q_res(a: int, b: int, c: int) -> Result[int] {
+	xs := [mkl(mayr(a)?), mkl(mayr(b)?), mkl(mayr(c)?)]
+	return Either.Left(xs.len())
+}
+
+fn ret(a: int, b: int, c: int) -> int {
+	xs := [mkl((may(a) ?? return -1)), mkl((may(b) ?? return -2)), mkl((may(c) ?? return -3))]
+	return xs.len()
+}
+
+fn brk(a: int, b: int, c: int) -> int {
+	mut n := 0
+	for i in 0..3 {
+		xs := [mkl((may(a) ?? break)), mkl((may(b) ?? break)), mkl((may(c) ?? break))]
+		n = n + xs.len() + i
+	}
+	return n
+}
+
+fn brk_pre(a: int, b: int, c: int) -> int {
+	mut n := 0
+	for i in 0..3 {
+		keep := mkl(9)
+		xs := [mkl((may(a) ?? break)), mkl((may(b) ?? break)), mkl((may(c) ?? break))]
+		n = n + xs.len() + keep.len() + i
+	}
+	return n
+}
+
+fn cont(a: int, b: int, c: int) -> int {
+	mut n := 0
+	for i in 0..3 {
+		n = n + i + 1
+		xs := [mkl((may(a) ?? continue)), mkl((may(b) ?? continue)), mkl((may(c) ?? continue))]
+		n = n + xs.len()
+	}
+	return n
+}
+
+fn texts(a: int, b: int, c: int) -> int? {
+	xs := [word(may(a)?), word(may(b)?), word(may(c)?)]
+	return xs.len()
+}
+
+fn scoped(a: int, b: int, c: int) -> int? {
+	mut n := 0
+	with [mkl(may(a)?), mkl(may(b)?), mkl(may(c)?)] as xs {
+		n = xs.len()
+	}
+	return n
+}
+
+fn opt(f: fn (int, int, int) -> int?) -> int {
+	return (f(1, 0, 0) ?? 1) + (f(0, 1, 0) ?? 2) + (f(0, 0, 1) ?? 3) + (f(0, 0, 0) ?? 4)
+}
+
+fn res(f: fn (int, int, int) -> Result[int]) -> int {
+	return (f(1, 0, 0) ?? 1) + (f(0, 1, 0) ?? 2) + (f(0, 0, 1) ?? 3) + (f(0, 0, 0) ?? 4)
+}
+
+fn plain(f: fn (int, int, int) -> int) -> int {
+	return f(1, 0, 0) + f(0, 1, 0) + f(0, 0, 1) + f(0, 0, 0)
+}
+
+fn main() {
+	mut n := 0
+	mut i := 0
+	r := rounds()
+	for i < r {
+		n = n + opt(q_opt) + opt(q_opt_pre) + res(q_res) + opt(texts) + opt(scoped)
+		n = n + plain(ret) + plain(brk) + plain(brk_pre) + plain(cont)
+		i = i + 1
+	}
+	print n
+}
+ZG
+
 if [ "$fail" -ne 0 ]; then
 	printf '\nmem-check: a value outlives the scope that made it\n' >&2
 	printf 'mem-check: the sources, the C and the binaries are kept in %s\n' "$WORK" >&2

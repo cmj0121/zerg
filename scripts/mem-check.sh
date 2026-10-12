@@ -886,6 +886,43 @@ fn round() {
 
 	indexed := one(7)[0]
 	expect(indexed)
+
+	# a receive takes the copy the send moved in, and gives it back. The sender's own
+	# name is a different count: draining the copy must leave that name intact.
+	inbox := chan[E](1)
+	carried := mk(7)
+	inbox <- E.Has(carried)
+	close(inbox)
+
+	for m in inbox {
+		got := match m {
+			E.Has(ch) => ch
+			E.None    => mk(0)
+		}
+		expect(got)
+	}
+
+	pipe := chan[chan[int]](1)
+	reply := mk(7)
+	pipe <- reply
+	close(pipe)
+
+	for once in pipe {
+		expect(once)
+	}
+
+	nest := chan[chan[int]](1)
+	inner := mk(7)
+	nest <- inner
+	raise "nested receive" if (<-((<-nest)!) ?? 0) != 7
+
+	sel := chan[chan[int]](1)
+	held := mk(7)
+	sel <- held
+
+	select {
+		got := <-sel => expect(got)
+	}
 }
 
 fn main() {

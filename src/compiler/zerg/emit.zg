@@ -6825,6 +6825,12 @@ fn c_needs_copy(mut &em: Emitter, t: ast.Ty) -> bool {
 	# nothing but literals behaves exactly as it did.
 	return true if c_is_str(t)
 
+	# A CHANNEL END IS A COUNTED HANDLE. A second name is a holder count (#333): storing the
+	# raw pointer frees the channel under the holder, or leaks the count when the holder was
+	# the one that should have given it back. A plain call argument stays a borrow — c_arg
+	# renders one without a copy, and c_fn does not release the parameter.
+	return true if ast.ty_is_chan(t)
+
 	# A CARRIER owns WHICHEVER SIDE IT HOLDS — that is what `if v := c { … }` retaining what
 	# it binds already says — so it owes a copy exactly when either side does. Answering
 	# `false` here is what made `got := <-c` a second name for one reference: the value was
@@ -6954,6 +6960,16 @@ fn c_copy_of(mut &em: Emitter, t: ast.Ty, x: str) -> str {
 
 	# and a function's is the one global pair, for the reason c_fnptr_helpers gives
 	return f"zg_copy_fnptr({x})" if c_is_fn(t)
+
+	# a channel end's count, by its own direction. The vtable a list of them reads is emitted
+	# where the kind is asked (c_chan_vt); this is the copy a field, a deref and a carrier
+	# spell directly. used_conc is set here, where a copy is actually spelled, and not by that
+	# vtable: an empty list of channels links chan.c either way and must not switch the
+	# scheduler on by itself.
+	if ast.ty_is_chan(t) {
+		em.used_conc = true
+		return f"{c_chan_copy_fn(c_chan_dir(t))}({x})"
+	}
 
 	return c_ty_helper("copy", c_named_of(t)) + "(" + x + ")"
 }
@@ -7125,6 +7141,19 @@ fn c_elem_kind(mut &em: Emitter, t: ast.Ty) -> str {
 	# each element as it was pushed, released none of them, and an unshared copy of the buffer
 	# gave two buffers one reference between them.
 	return "str" if c_is_str(t)
+
+	# A channel end is the same shape of answer, and it has to come BEFORE the empty return:
+	# c_named_of of a `TChan` is "", so a `list[chan[int]]` took `zg_listvt` and memcpy'd the
+	# pointer. A receive-only end is its own kind because its release is not the sender's.
+	if ast.ty_is_chan(t) {
+		mut k := "chan"
+		if c_chan_dir(t) == 2 {
+			k = "chanrx"
+		}
+		c_chan_vt(em, k)
+		return k
+	}
+
 	return "" if not c_needs_copy(em, t)
 	return c_tuple_cname(ast.ty_tuple_elems(t)) if c_is_tuple(t)
 	return c_arr_cname(c_arr_elem(t), c_arr_key(t)) if c_is_arr(t)
@@ -7138,6 +7167,33 @@ fn c_elem_kind(mut &em: Emitter, t: ast.Ty) -> str {
 	return "fnptr" if c_is_fn(t)
 
 	return c_named_of(t)
+}
+
+# c_chan_vt emits the element trio for one channel direction, once. It lives in the on-demand
+# stream rather than the runtime prelude: the prelude is every program that touches the
+# runtime, and a channel's trio is only a program that holds one in a container. The two
+# directions are two kinds because a receive-only end is released with zrt_chan_release and a
+# send-capable end with zrt_chan_sender_release — one thunk cannot be both.
+#
+# IT DOES NOT SET used_conc. Emitting the trio is not using the scheduler, and an empty
+# `list[chan[int]]` must not grow a main shim it does not need. A copy that actually runs sets
+# the flag itself (c_copy_of).
+fn c_chan_vt(mut &em: Emitter, k: str) {
+	return if c_name_in(em.refvt_done, k)
+
+	em.refvt_done.append(k)
+	em.used_rt = true
+	mut cp := "zrt_chan_sender_copy"
+	mut dr := "zrt_chan_sender_release"
+	if k == "chanrx" {
+		cp = "zrt_chan_copy"
+		dr = "zrt_chan_release"
+	}
+	mut out := "static void " + c_ty_helper("elemcopy", k) + "(void *dst, const void *src) {\n"
+	out = out + "    *(zrt_chan**)dst = " + cp + "((zrt_chan*)*(const zrt_chan* const*)src);\n}\n"
+	out = out + "static void " + c_ty_helper("elemdrop", k) + "(void *elem) { " + dr + "(*(zrt_chan**)elem); }\n"
+	out = out + "static const zrt_elem_vt " + c_ty_helper("listvt", k) + " = {" + c_ty_helper("elemcopy", k) + ", " + c_ty_helper("elemdrop", k) + "};\n\n"
+	em.res_decls.append(out)
 }
 
 # The vtable carries BOTH halves. It used to carry only the copy, with the note that a drop
@@ -7230,6 +7286,9 @@ fn c_drop_fn(mut &em: Emitter, t: ast.Ty) -> str {
 	return "zrt_map_drop" if c_is_map(t) or c_is_set(t)
 	return "zrt_str_release" if c_is_str(t)
 
+	# by value, like the str: the runtime takes the handle, and the direction is the end's own
+	return c_chan_release_fn(c_chan_dir(t)) if ast.ty_is_chan(t)
+
 	# the tuple's, named after the SHAPE the way its copy is — c_tuple_decl generates the
 	# pair together, under this same question asked as c_needs_copy
 	return f"{c_tuple_cname(ast.ty_tuple_elems(t))}_drop" if c_is_tuple(t) and c_needs_copy(em, t)
@@ -7258,7 +7317,7 @@ fn c_drop_arg(mut &em: Emitter, t: ast.Ty, place: str) -> str {
 	# str spelling) taking the CELL. Handing it `&place` released the address of the variable
 	# holding the cell, which is the defect this function was written to stop being written by
 	# hand — and a spec value is the third type to need it.
-	return place if c_is_str(t) or c_is_ref_box(t) or c_is_spec_name(em, c_named_of(t))
+	return place if c_is_str(t) or c_is_ref_box(t) or c_is_spec_name(em, c_named_of(t)) or ast.ty_is_chan(t)
 
 	return "&" + place
 }
@@ -13499,6 +13558,12 @@ fn c_arg(mut &em: Emitter, fname: str, idx: int, pos: int, a: ast.Expr, sb: Subs
 	# parameter, and a reader who met both was told two things about one argument.
 	if ast.ty_is_chan(em.pr_ty[row]) {
 		c_chan_check(em, c_infer(em, a), em.pr_ty[row], check.chk_slot_says(fname, pos))
+
+		# A CHANNEL ARGUMENT STAYS A BORROW. c_fit_copied would count it now that a channel
+		# needs a copy, and the callee does not give a parameter back (c_fn) — the count would
+		# be one nobody releases. The slot is still checked; only the copy is skipped.
+		check.chk_slot_fits(em, check.chk_slot_says(fname, pos), em.pr_ty[row], a)
+		return c_expr(em, a, sb)
 	}
 	return c_fit_copied(em, check.chk_slot_says(fname, pos), em.pr_ty[row], a, sb)
 }
@@ -14035,6 +14100,13 @@ fn c_args_typed(mut &em: Emitter, ftys: list[ast.Ty], args: list[ast.Expr], sb: 
 			# differs is only where the convention was read from — the type, not the table.
 			check.chk_ref_arg(em, "", i + 1, args[i])
 			val = f"&({c_lvalue(em, args[i], sb)})"
+		} else if i < ftys.len() and ast.ty_is_chan(ftys[i]) {
+			# the same borrow c_arg makes for a named call. A function VALUE has no parameter
+			# table, and copying here would leak: the callee's channel parameter is not released.
+			where := f"argument {strconv.to_string(i + 1, 10)} of this call"
+			c_chan_check(em, c_infer(em, args[i]), ftys[i], where)
+			check.chk_slot_fits(em, where, ftys[i], args[i])
+			val = c_expr(em, args[i], sb)
 		} else if i < ftys.len() {
 			val = c_fit_copied(em, f"argument {strconv.to_string(i + 1, 10)} of this call", ftys[i], args[i], sb)
 		} else {
@@ -17966,7 +18038,8 @@ fn c_lambda(mut &em: Emitter, ps: list[ast.Param], has_ret: bool, ret: ast.Ty, b
 # reference and never runs again. A closure runs again: passing `e->f0` uncopied made the
 # SECOND call read a string the first had freed. That is a use-after-free this compiler has
 # had for as long as it has had closures, and no gate could see it because the corpus only
-# ever called one once.
+# ever called one once. A channel capture is the one parameter c_fn does not release, so the
+# thunk does not copy one per call; the environment's teardown gives that count back.
 fn c_closure(mut &em: Emitter, name: str, cps: list[ast.Param], ps: list[ast.Param], has_ret: bool, ret: ast.Ty, vals: list[str]) -> str {
 	tag := strconv.to_string(em.lam_n, 10)
 	em.lam_n = em.lam_n + 1
@@ -17985,9 +18058,13 @@ fn c_closure(mut &em: Emitter, name: str, cps: list[ast.Param], ps: list[ast.Par
 		}
 
 		# a COPY per call, for the reason in the header: the callee gives every by-value
-		# parameter back, and this environment is read again the next time it is called
+		# parameter back, and this environment is read again the next time it is called.
+		# A CHANNEL IS NOT ONE OF THEM. Its parameter is a borrow (c_fn does not release it),
+		# and the environment's one count is given back by the teardown below. Copying per
+		# call would be a count nobody releases; the capture itself was already counted when
+		# the closure was built (c_copied).
 		mut arg := f"e->{fi}"
-		if c_needs_copy(em, cps[i].ty) {
+		if c_needs_copy(em, cps[i].ty) and not ast.ty_is_chan(cps[i].ty) {
 			arg = c_copy_of(em, cps[i].ty, arg)
 		}
 		unpack = unpack + arg
@@ -20660,12 +20737,11 @@ fn c_field_of_temp(mut &em: Emitter, target: ast.Expr, tgt: str, tt: ast.Ty, fld
 }
 
 # c_taken is a value read out of storage that is about to be given back, made the reader's
-# own: copied when it owns anything, and COUNTED when it is a channel end. A channel is not a
-# copy type — c_needs_copy says no, because copying one is a count and not a duplicate — so
-# asking c_needs_copy alone bit-took the handle and then dropped the struct or list holding
-# it, which released the count the reader was now using: `c3 := mkh(3).ch` received from a
-# freed channel (#23). The count is taken by the SLOT's direction, because that is the one
-# the holder's drop gives back.
+# own: copied when it owns anything, and COUNTED when it is a channel end. The channel arm
+# stays in front of the generic copy. Both would count, and counting twice would leak the end
+# the reader is now using: `c3 := mkh(3).ch` received from a freed channel when the take was
+# missing (#23), and a second take is the other way to get the count wrong. The count is taken
+# by the SLOT's direction, because that is the one the holder's drop gives back.
 fn c_taken(mut &em: Emitter, t: ast.Ty, x: str) -> str {
 	if ast.ty_is_chan(t) {
 		em.used_conc = true
@@ -21269,11 +21345,13 @@ fn c_let_chan(mut &em: Emitter, name: str, eff: ast.Ty, is_mut: bool, is_const: 
 # agree: a parameter is released here exactly when the call copied it there, or the callee
 # gives back a reference the caller never handed over.
 #
-# A CHANNEL is deliberately not one of these. Passing a handle moves no count
-# (docs/code/coroutine.md, pinned by conc_chan_dir), so a channel parameter is a borrow —
-# which is why c_arg does not copy one either — and a channel BINDING has a release with a
-# direction in it, which c_let_chan registers itself. The temporary a borrow leaves behind
-# is the caller's problem, and is where c_owned_args comes in.
+# A CHANNEL PARAMETER IS NOT REGISTERED HERE, and the exclusion is at c_fn rather than in
+# this function. A call borrows the caller's handle (c_arg), so the parameter owes no count
+# back; releasing it would free the caller's channel. A binding that OWNS a copied count
+# still comes through here — `if v := o` on a `chan[int]?` copies the payload (c_res_taken)
+# and this release is what gives that copy back. A channel BINDING made with `:=` has a
+# direction in its release, which c_let_chan registers itself. The temporary a borrow leaves
+# behind is the caller's problem, and is where c_owned_args comes in.
 fn c_pend_drop(mut &em: Emitter, t: ast.Ty, cname: str, ind: str) -> str {
 	th := c_drop_thunk(em, t)
 	return "" if th == ""
@@ -22355,11 +22433,16 @@ fn c_fn(mut &em: Emitter, fn_d: ast.FnDecl) -> str {
 			# own and owes it back, exactly as a binding made in the body does. A `mut &`
 			# parameter is the CALLER's storage handed over to be written, and owns nothing.
 			#
+			# A CHANNEL PARAMETER IS THE EXCEPTION. A call borrows the handle (c_arg), and a
+			# `spawn` drop gives the capture back itself — the parameter releasing it too would
+			# be the second free. The exclusion is here and not inside c_pend_drop: an `if v :=`
+			# binding of a copied channel end still owes that function a release.
+			#
 			# A `spawn`/`defer` env is the same rule read from the other side: the env field
 			# is handed over WITHOUT a further copy, because the env is giving up its own
 			# reference — so the callee dropping it is what frees the capture, and the two
 			# together are why a captured list is not leaked by either.
-			if not pm.is_ref {
+			if not pm.is_ref and not ast.ty_is_chan(pm.ty) {
 				pdefer = pdefer + c_pend_drop(em, pm.ty, pc, "    ")
 			}
 			if pm.is_ref {

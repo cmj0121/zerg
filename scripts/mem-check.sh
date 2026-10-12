@@ -695,6 +695,209 @@ fn main() {
 }
 ZG
 
+# --- a channel held by something else --------------------------------------------------
+# A channel end is a counted handle. Storing one in a holder — a list, a map, a struct, a
+# returned value — takes a count of its own, and that holder gives it back. A call argument
+# does not: the callee borrows the caller's handle for the call. The seed has no concurrency,
+# so this case has no second compiler to agree with.
+case_run chan_holder no yes <<'ZG'
+fn mk(n: int) -> chan[int] {
+	c := chan[int](1)
+	c <- n
+	return c
+}
+
+fn expect(c: chan[int]) {
+	v := <-c ?? 0
+	raise "channel held the wrong value" if v != 7
+}
+
+fn keep(c: chan[int]) {
+}
+
+fn one(n: int) -> list[chan[int]] {
+	c := chan[int](1)
+	c <- n
+	return [c]
+}
+
+fn twice() -> fn () -> int {
+	c := chan[int](2)
+	c <- 7
+	c <- 7
+	return fn () -> int {
+		return <-c ?? 0
+	}
+}
+
+fn some(n: int) -> chan[int]? {
+	c := mk(n)
+	return c
+}
+
+fn put(mut &x: chan[int], y: chan[int]) {
+	x = y
+}
+
+fn pass(c: chan[int]) -> int {
+	return <-c ?? 0
+}
+
+fn give(n: int) -> chan[int] {
+	return mk(n)
+}
+
+fn src() -> <-chan[int] {
+	return mk(7)
+}
+
+fn worker(c: chan[int]<-) {
+	c <- 7
+}
+
+struct W {
+	pub c: chan[int]
+}
+
+enum E {
+	Has(chan[int])
+	None
+}
+
+fn round() {
+	xs := one(7)
+	c0 := xs[0]
+	expect(c0)
+
+	f := twice()
+	raise "closure" if f() != 7
+	raise "closure again" if f() != 7
+
+	if c1 := some(7) {
+		expect(c1)
+	} else {
+		raise "optional return"
+	}
+
+	mut a := mk(1)
+	v := mk(7)
+	a = v
+	expect(a)
+
+	mut b := mk(1)
+	w := mk(7)
+	put(b, w)
+	expect(b)
+
+	missing: chan[int]? = nil
+	u := mk(7)
+	d0 := missing ?? u
+	expect(d0)
+
+	present: chan[int]? = mk(7)
+	d1 := present ?? mk(1)
+	expect(d1)
+
+	held := mk(7)
+	from_block := {
+		k := 1
+		held
+	}
+	expect(from_block)
+
+	k := 1
+	arm := mk(7)
+	from_match := match k {
+		1 => arm
+		_ => mk(2)
+	}
+	expect(from_match)
+
+	named := mk(7)
+	box := Ref(named)
+	from_box := deref(box)
+	expect(from_box)
+
+	fresh := Ref(mk(7))
+	left := deref(fresh)
+	right := deref(fresh)
+	expect(left)
+	keep(right)
+
+	listed := [mk(7)]
+	expect(listed[0])
+
+	mapped := {"a": mk(7)}
+	expect(mapped["a"])
+
+	tup := (mk(7), 1)
+	expect(tup.0)
+
+	arr: [chan[int]; 1] = [mk(7)]
+	expect(arr[0])
+
+	st := W(mk(7))
+	expect(st.c)
+
+	taken := W(mk(7)).c
+	expect(taken)
+
+	en := E.Has(mk(7))
+	from_enum := match en {
+		E.Has(ch) => ch
+		E.None    => mk(0)
+	}
+	expect(from_enum)
+
+	opt: chan[int]? = mk(7)
+	if c2 := opt {
+		expect(c2)
+	} else {
+		raise "optional binding"
+	}
+
+	cell := Ref(mk(7))
+	expect(deref(cell))
+
+	own := mk(7)
+	alias := own
+	expect(alias)
+
+	borrowed := mk(7)
+	raise "borrowed argument" if pass(borrowed) != 7
+
+	fv := pass
+	called := mk(7)
+	raise "function value" if fv(called) != 7
+
+	gave := give(7)
+	expect(gave)
+
+	both := mk(7)
+	bag := [both]
+	expect(bag[0])
+
+	rx := src()
+	raise "narrowed return" if (<-rx ?? 0) != 7
+
+	spawned := chan[int](1)
+	spawn worker(spawned)
+	expect(spawned)
+
+	indexed := one(7)[0]
+	expect(indexed)
+}
+
+fn main() {
+	mut i := 0
+	r := rounds()
+	for i < r {
+		round()
+		i = i + 1
+	}
+}
+ZG
+
 # --- a closure environment -------------------------------------------------------------
 # One environment per construction, and the closure may outlive the scope that made it —
 # which is what closing over a value is for, and why the scope cannot be what frees it.

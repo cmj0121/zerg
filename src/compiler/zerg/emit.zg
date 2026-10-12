@@ -6899,7 +6899,13 @@ fn c_needs_copy(mut &em: Emitter, t: ast.Ty) -> bool {
 # (c_is_borrow), can be a second name for something.
 fn c_copied(mut &em: Emitter, t: ast.Ty, e: ast.Expr, sb: Subst) -> str {
 	rendered := c_expr(em, e, sb)
+
+	# A channel `if` whose branches all name handles is not a borrow and hands over no
+	# count (c_ternary). The line below would store that pointer raw, and the holder —
+	# a struct field, a list element — gives it back, which releases the name's own count.
+	return c_copy_of(em, t, rendered) if ast.ty_is_chan(t) and not c_chan_hands(e)
 	return rendered if not c_is_borrow(e) or not c_needs_copy(em, t)
+
 	return c_copy_of(em, t, rendered)
 }
 
@@ -17351,8 +17357,25 @@ fn c_recv(mut &em: Emitter, ch: ast.Expr, sb: Subst) -> str {
 	cty := c_infer(em, ch)
 
 	c_chan_op_check(em, cty, 0)
+
 	elem := ast.ty_chan_elem(cty)
-	return f"{c_recv_helper(em, elem)}({c_expr(em, ch, sb)})"
+	helper := c_recv_helper(em, elem)
+	rendered := c_expr(em, ch, sb)
+
+	# A NAME IS A BORROW and the receive only reads it. An owned handle — a call's
+	# result, a force's copy (`<-((<-cc)!)`), a channel built for this receive — is
+	# this expression's, and nothing after the receive is in a position to give that
+	# count back. The hold covers the helper's raise: a crash close longjmps past
+	# the release on the next line.
+	return f"{helper}({rendered})" if not c_chan_hands(ch)
+
+	cn := c_tmp(em, "zgt_ch")
+	vn := c_tmp(em, "zgt_rv")
+	dir := c_chan_dir(cty)
+	keep := em.rel_cnames.len()
+	hold := c_hold_with(em, c_chan_defer_thunk(dir), cn)
+	ot := c_opt_cname(elem)
+	return f"({{ zrt_chan *{cn} = {rendered}; {hold}{ot} {vn} = {helper}({cn}); {c_unhold(em, keep)}{c_chan_release_fn(dir)}({cn}); {vn}; }})"
 }
 
 # c_recv_helper registers one element type's receive helper and answers its name.
@@ -17716,6 +17739,7 @@ fn c_select(mut &em: Emitter, arms: list[ast.SelArm], ind: str, loop: bool) -> s
 	em.used_conc = true
 
 	in2 := ind + "    "
+	in3 := in2 + "    "
 	mut n := 0
 	mut has_def := "false"
 
@@ -17836,7 +17860,21 @@ fn c_select(mut &em: Emitter, arms: list[ast.SelArm], ind: str, loop: bool) -> s
 			c_nx_bind(em, em.env_names.len() - 1, a.bind_line, a.bind_col, ast.NK_LOCAL)
 		}
 		c_live_restore(em, entry)
-		out = out + c_block(em, a.body, in2 + "    ")
+
+		# A receive arm's slot holds the value the runtime just moved in. The arm's
+		# binding is that slot, so giving the slot back at the arm's end is what gives
+		# the binding back — the same mark a `return` from the arm unwinds through.
+		if a.op == 0 and c_drop_thunk(em, elems[k - 1]) != "" {
+			am := c_new_mark(em)
+			depth := em.rel_cnames.len()
+			out = out + in3 + f"size_t {am} = zrt_scope_mark();\n"
+			out = out + c_pend_drop(em, elems[k - 1], f"zgt_rv{tag}_{k - 1}", in3)
+			out = out + c_block(em, a.body, in3)
+			out = out + in3 + f"zrt_unwind_to({am});\n"
+			c_scope_forget(em, depth)
+		} else {
+			out = out + c_block(em, a.body, in3)
+		}
 		c_scope_close(em, arm_scope)
 		if acc_set {
 			c_live_merge(em, acc)
@@ -21004,7 +21042,28 @@ fn c_forchan(mut &em: Emitter, var: str, iter: ast.Expr, t: ast.Ty, body: list[a
 	}
 	out = out + in2 + et + " " + cv + ";\n"
 	out = out + in2 + "while (zrt_chan_recv(" + cit + ", &" + cv + ") == 0) {\n"
-	out = out + c_loop_block(em, body, in2 + "    ")
+
+	# THE RECEIVED VALUE IS THIS ITERATION'S. The send moved an owned copy into the
+	# channel, and the runtime writes those bytes into this slot. A value that owns
+	# something is given back before the next receive overwrites it; a `break` or a
+	# `return` unwinds the same mark. A scalar owes nothing, and that loop stays the
+	# assignment it was.
+	if c_drop_thunk(em, elem) == "" {
+		out = out + c_loop_block(em, body, in2 + "    ")
+	} else {
+		in3 := in2 + "    "
+		entry := c_live_save(em)
+		markv := c_new_mark(em)
+		depth := em.rel_cnames.len()
+		saved := c_loop_enter(em, markv)
+		out = out + in3 + f"size_t {markv} = zrt_scope_mark();\n"
+		out = out + c_pend_drop(em, elem, cv, in3)
+		out = out + c_block(em, body, in3)
+		out = out + in3 + f"zrt_unwind_to({markv});\n"
+		c_scope_forget(em, depth)
+		c_live_merge(em, entry)
+		c_loop_leave(em, saved)
+	}
 	out = out + in2 + "}\n"
 
 	# The close reason is read BEFORE the handle is given back, and the release sits between

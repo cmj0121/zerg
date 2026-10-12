@@ -2160,7 +2160,7 @@ fn c_args_after(mut &em: Emitter, fty: ast.Ty, args: list[ast.Expr], sb: Subst) 
 pub fn c_fn_params(t: ast.Ty) -> list[ast.Ty] {
 	return match c_unmark(t) {
 		Ty.TFn(ps, _) => ps
-		_             => []
+		_             => c_tys_none()
 	}
 }
 
@@ -12053,9 +12053,9 @@ fn c_recv_args(mut &em: Emitter, key: str, target: ast.Expr, args: list[ast.Expr
 # WERE DROPPED — `f([a, b])` silently passed an empty list. Nothing said so, which made it
 # the worst kind of wrong: a program that ran and was simply not what was written.
 #
-# An empty literal keeps the zeroed form. It carries no element type of its own, so the
-# one that fits comes from the declaration it initializes, and the binding and field paths
-# already supply it.
+# An empty literal carries no element type of its own. A typed position builds it at the
+# destination's type (c_fit_copied) and never arrives here; one that nothing typed is
+# refused by name (c_list_lit), rather than lowered to a zero-byte list cc then rejects.
 # It takes its element type from the FIRST element, which is what a literal with no
 # destination has to do. Where there IS a destination the declared type is better, and
 # c_fit_copied supplies it — see c_list_build.
@@ -12073,8 +12073,18 @@ fn c_fill_lit(mut &em: Emitter, v: ast.Expr, n: ast.Expr, sb: Subst) -> str {
 	elems := c_fill_elems(em, v, n)
 	cnt := elems.len()
 
-	# nothing to share: zero copies is the empty list, and one is a literal of one element,
-	# which evaluates v exactly once already
+	# Zero copies is an empty list of v's type, which v still names (`[1; 0]`). c_list_lit
+	# would refuse it: that function sees no elements and no destination. A fill whose
+	# value is itself an untyped `[]` has nothing to name, and that refusal is the one.
+	if cnt == 0 {
+		ety := c_infer(em, v)
+		return c_list_lit(em, elems, sb) if c_is_unknown(ety)
+
+		em.used_rt = true
+		return f"zg_empty_list(sizeof({c_type(ety)}), &{c_elem_vt(em, ety)})"
+	}
+
+	# one copy is a literal of one element, which evaluates v exactly once already
 	return c_list_lit(em, elems, sb) if cnt < 2
 
 	em.used_rt = true
@@ -12099,8 +12109,39 @@ fn c_fill_lit(mut &em: Emitter, v: ast.Expr, n: ast.Expr, sb: Subst) -> str {
 	return out + " zgt_ll; })"
 }
 
+# c_no_slot records the refusal and answers C that is thrown away with it. A finding stops
+# the build before cc (cmd/diag.zg), so the placeholder never has to typecheck.
+fn c_no_slot(mut &em: Emitter, what: str, zero: str) -> str {
+	check.chk_no_slot(em, what)
+	return zero
+}
+
+# The seed cannot infer `[]` inside a match arm, and zerg refuses that form by name
+# (c_list_lit): nothing in the arm supplies an element type. A typed binding is how an
+# empty list of a known element is spelled. One helper per element type, because a match
+# arm is where each of them would otherwise have been written.
+fn c_tys_none() -> list[ast.Ty] {
+	mut out: list[ast.Ty] = []
+	return out
+}
+
+fn c_pats_none() -> list[ast.Pat] {
+	mut out: list[ast.Pat] = []
+	return out
+}
+
+fn c_strs_none() -> list[str] {
+	mut out: list[str] = []
+	return out
+}
+
+fn c_exprs_none() -> list[ast.Expr] {
+	mut out: list[ast.Expr] = []
+	return out
+}
+
 fn c_list_lit(mut &em: Emitter, elems: list[ast.Expr], sb: Subst) -> str {
-	return "(zrt_list){0}" if elems.len() == 0
+	return c_no_slot(em, "the empty list `[]`", "(zrt_list){0}") if elems.len() == 0
 
 	# COPIED, and this is the untyped twin of the rule c_elem_exprs states for a literal that
 	# HAS a declared element type to render at. A push owns what it is handed — the buffer's
@@ -14628,7 +14669,7 @@ fn c_pat_payload(pt: ast.Pat) -> list[ast.Pat] {
 	return match pt {
 		Pat.PVariant(_, _, ps, _, _) => ps
 		Pat.PAs(inner, _, _, _) => c_pat_payload(inner)
-		_ => []
+		_ => c_pats_none()
 	}
 }
 
@@ -14916,7 +14957,7 @@ fn c_arm_cond_in(mut &em: Emitter, a: ast.Arm, s: str, st: ast.Ty, sb: Subst) ->
 fn c_tuple_elems(t: ast.Ty) -> list[ast.Ty] {
 	return match t {
 		Ty.TTuple(ts) => ts
-		_             => []
+		_             => c_tys_none()
 	}
 }
 
@@ -15130,7 +15171,7 @@ fn c_pat_is_or(pt: ast.Pat) -> bool {
 fn c_pat_or_alts(pt: ast.Pat) -> list[ast.Pat] {
 	return match pt {
 		Pat.POr(ps) => ps
-		_           => []
+		_           => c_pats_none()
 	}
 }
 
@@ -15175,7 +15216,7 @@ fn c_pat_children(pt: ast.Pat) -> list[ast.Pat] {
 		Pat.PTuple(ps) => ps
 		Pat.POr(ps) => ps
 		Pat.PAs(inner, _, _, _) => [inner]
-		_ => []
+		_ => c_pats_none()
 	}
 }
 
@@ -15196,14 +15237,14 @@ fn c_pat_struct_name(pt: ast.Pat) -> str {
 fn c_pat_struct_fields(pt: ast.Pat) -> list[str] {
 	return match pt {
 		Pat.PStruct(_, fs, _, _) => fs
-		_ => []
+		_ => c_strs_none()
 	}
 }
 
 fn c_pat_struct_pats(pt: ast.Pat) -> list[ast.Pat] {
 	return match pt {
 		Pat.PStruct(_, _, ps, _) => ps
-		_ => []
+		_ => c_pats_none()
 	}
 }
 
@@ -15239,7 +15280,7 @@ fn c_pat_is_list(pt: ast.Pat) -> bool {
 fn c_pat_list_elems(pt: ast.Pat) -> list[ast.Pat] {
 	return match pt {
 		Pat.PList(ps, _, _, _, _) => ps
-		_ => []
+		_ => c_pats_none()
 	}
 }
 
@@ -15277,7 +15318,7 @@ fn c_pat_is_tuple(pt: ast.Pat) -> bool {
 fn c_pat_tuple_elems(pt: ast.Pat) -> list[ast.Pat] {
 	return match pt {
 		Pat.PTuple(ps) => ps
-		_ => []
+		_ => c_pats_none()
 	}
 }
 
@@ -16017,7 +16058,7 @@ pub fn c_listlit_elems(mut &em: Emitter, e: ast.Expr) -> list[ast.Expr] {
 	return match e {
 		Expr.EListLit(elems) => elems
 		Expr.EFill(v, n) => c_fill_elems(em, v, n)
-		_ => []
+		_ => c_exprs_none()
 	}
 }
 
@@ -18110,7 +18151,7 @@ fn c_stmts_free(e: ast.Expr) -> list[str] {
 		Expr.EGuard(body) => c_body_free([], body)
 		Expr.EBlock(body) => c_body_free([], body)
 		Expr.EUnsafe(body) => c_body_free([], body)
-		_ => []
+		_ => c_strs_none()
 	}
 }
 

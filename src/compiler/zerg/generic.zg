@@ -161,8 +161,15 @@ fn gen_parts(apps: list[ast.TyApp], t: ast.Ty) -> list[ast.Ty] {
 		Ty.TPtr(e) => [e]
 		Ty.TUnsafe(e) => [e]
 		Ty.TFn(ps, r) => gen_fn_parts(ps, r)
-		_ => []
+		_ => gen_parts_none()
 	}
+}
+
+# The seed cannot infer `[]` inside a match arm; see ast.expr_parts_none. The `return []`
+# above stays: a function declared `-> list[ast.Ty]` is a typed position.
+fn gen_parts_none() -> list[ast.Ty] {
+	mut out: list[ast.Ty] = []
+	return out
 }
 
 # a function type's parts are its parameters and then its result, which is the order they

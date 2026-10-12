@@ -231,7 +231,7 @@ shipping compiler rather than a part of it (the line
 | `E3031` | this expression's value is past what an `int` holds, so it cannot be measured against …               |
 | `E3032` | this function's answer is …, and this gives …                                                         |
 | `E3033` | cannot bind … to a … binding: `…`                                                                     |
-| `E3034` | the binding `…` gives …, which has no type of its own                                                 |
+| `E3034` | the binding `…`, or this expression, gives …, which has no type of its own                            |
 | `E3035` | `type … = …` names no type                                                                            |
 | `E3036` | a struct field or an enum payload is …, and this gives …                                              |
 | `E3037` | cannot assign … to …, which holds …                                                                   |

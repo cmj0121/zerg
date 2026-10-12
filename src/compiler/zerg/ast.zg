@@ -2241,7 +2241,7 @@ pub fn pat_exprs(p: Pat) -> list[Expr] {
 		Pat.PTuple(ps) => pat_exprs_all(ps)
 		Pat.POr(ps) => pat_exprs_all(ps)
 		Pat.PAs(inner, _, _, _) => pat_exprs(inner)
-		_ => []
+		_ => expr_parts_none()
 	}
 }
 
@@ -2945,10 +2945,16 @@ pub fn ty_name(t: Ty) -> str {
 # The parser needs them to read the directional forms and the emitter needs them on nearly
 # every lowering path; a type is a type, and one pair is what keeps the two from drifting.
 # ty_tuple_elems is a tuple's element types, or an empty list for anything else.
+# The seed cannot infer `[]` inside a match arm; see expr_parts_none.
+fn tys_none() -> list[Ty] {
+	mut out: list[Ty] = []
+	return out
+}
+
 pub fn ty_tuple_elems(t: Ty) -> list[Ty] {
 	return match t {
 		Ty.TTuple(es) => es
-		_             => []
+		_             => tys_none()
 	}
 }
 

@@ -230,6 +230,12 @@ fn pkg_identity(p: test_pkg.Pkg) -> str {
 # built on a one-file module IS that module — `json.zg` is among the files — and an import of it
 # reached from anywhere else in this program must land on these sources rather than on a second
 # copy of the same file.
+# A bare `[]` in a match arm has no element type. The binding is a typed position.
+fn units_none() -> list[unit.Unit] {
+	mut out: list[unit.Unit] = []
+	return out
+}
+
 pub fn pkg_units(p: test_pkg.Pkg, files: list[str]) -> list[unit.Unit] {
 	# THE IDENTITY IS THE LOCATION, so both of these are one. `seen` and `Unit.name` compare
 	# where a module's files are (#67); handing them the import path a reader would type made
@@ -371,7 +377,7 @@ fn run_pkg(root: str, p: test_pkg.Pkg, only: str, secs: int, mut &passed: int, m
 	}
 	units := match res {
 		Either.Left(u)  => u
-		Either.Right(_) => []
+		Either.Right(_) => units_none()
 	}
 	unit.link_units(units, drv, bin, TEST_JOBS)
 

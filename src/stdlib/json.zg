@@ -172,8 +172,14 @@ pub fn as_int(v: Val) -> int {
 pub fn as_list(v: Val) -> list[Val] {
 	return match v {
 		Val.Arr(xs) => xs
-		_           => []
+		_           => as_list_none()
 	}
+}
+
+# A bare `[]` in a match arm has no element type. The binding below is a typed position.
+fn as_list_none() -> list[Val] {
+	mut out: list[Val] = []
+	return out
 }
 
 ## is_null reports whether this value is JSON `null` — which is also what a missing key

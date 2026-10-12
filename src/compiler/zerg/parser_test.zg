@@ -59,8 +59,14 @@ fn where(e: ast.Expr) -> str {
 fn call_args(e: ast.Expr) -> list[ast.Expr] {
 	return match e {
 		Expr.ECall(_, xs, _, _, _) => xs
-		_ => []
+		_ => exprs_none()
 	}
+}
+
+# The seed cannot infer `[]` inside a match arm; see ast.expr_parts_none.
+fn exprs_none() -> list[ast.Expr] {
+	mut out: list[ast.Expr] = []
+	return out
 }
 
 fn pat_where(p: ast.Pat) -> str {
@@ -87,8 +93,13 @@ fn pats_where(ps: list[ast.Pat]) -> str {
 fn match_arms(e: ast.Expr) -> list[ast.Arm] {
 	return match e {
 		Expr.EMatch(_, arms) => arms
-		_ => []
+		_ => arms_none()
 	}
+}
+
+fn arms_none() -> list[ast.Arm] {
+	mut out: list[ast.Arm] = []
+	return out
 }
 
 fn stmt_where(s: ast.Stmt) -> str {

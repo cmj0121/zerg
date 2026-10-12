@@ -7291,6 +7291,57 @@ fn main() {
 }
 EOF
 
+# --- an empty list that no position types -----------------------------------------
+#
+# `x := []` is already refused, in refuse-check. These are the same literal where
+# the missing type is not a binding's: each one used to lower to `(zrt_list){0}` and cc
+# reported it against generated C. A typed position (`xs: list[int] = []`, `return []`
+# from `-> list[int]`) still builds. A bare `[]` as an if or match arm is refused too,
+# because the arm supplies no element type; adopting the other arm is a different rule.
+
+reject printing-an-empty-list E3034 'the empty list' <<'EOF'
+fn main() {
+	print []
+}
+EOF
+
+reject comparing-with-an-empty-list E3034 'the empty list' <<'EOF'
+fn main() {
+	xs := [1]
+	print xs == []
+}
+EOF
+
+reject a-list-of-an-empty-list E3034 'the empty list' <<'EOF'
+fn main() {
+	xs := [[]]
+	print xs.len()
+}
+EOF
+
+reject a-tuple-holding-an-empty-list E3034 'the empty list' <<'EOF'
+fn main() {
+	t := (1, [])
+	print t.0
+}
+EOF
+
+reject a-fill-of-an-empty-list E3034 'the empty list' <<'EOF'
+fn main() {
+	xs := [[]; 2]
+	print xs.len()
+}
+EOF
+
+reject assigning-a-tuple-holding-an-empty-list E3034 'the empty list' <<'EOF'
+fn main() {
+	mut a := 0
+	mut b: list[int] = []
+	(a, b) = (1, [])
+	print a
+}
+EOF
+
 # --- nil is not a value ------------------------------------------------------------
 #
 # Two forms ANSWER nil and neither says so on its face: a `fn` with no `-> type`

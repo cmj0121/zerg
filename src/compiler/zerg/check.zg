@@ -3055,8 +3055,23 @@ pub fn chk_needs_type(mut &em: emit.Emitter, name: str, ival: ast.Expr) -> bool 
 	what := chk_typeless_form(ival)
 	return false if what == ""
 
-	chk_at(em, rule.Rule.BindingHasNoType, f"the binding `{name}` gives {what}, which has no type of its own — a type must come from somewhere, so write it on the left: `{name}: T = …`")
+	chk_typeless(em, f"the binding `{name}`", what, name)
 	return true
+}
+
+# chk_no_slot is the same rule met from the form, where no position said what it is. A binding
+# is where a reader usually writes one, and it is not the only place — `print []`, `xs == []`,
+# an element, a tuple component. A typed position builds the literal at its own type before
+# this lowering is asked (emit.c_fit_copied, and `return []` through it), so what arrives here
+# arrived with nothing (#343). A bare `[]` as an `if` or `match` arm arrives here too: the arm
+# supplies no element type.
+pub fn chk_no_slot(mut &em: emit.Emitter, what: str) {
+	chk_typeless(em, "this expression", what, "x")
+}
+
+# chk_typeless is the one sentence both of them say.
+fn chk_typeless(mut &em: emit.Emitter, who: str, what: str, name: str) {
+	chk_at(em, rule.Rule.BindingHasNoType, f"{who} gives {what}, which has no type of its own — a type must come from somewhere, so write it on the left: `{name}: T = …`")
 }
 
 # chk_no_nil_value is THE rule that `nil` is not a value, and it is ONE function because it

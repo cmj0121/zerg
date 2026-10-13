@@ -321,10 +321,11 @@ byte)` compiles to a truncation and cc warns about the generated C. `zerg` refus
   required signature and a provided method, and nothing else — a spec carries behaviour. The
   seed reads `type Item` and `BITS: int` inside one and carries on; `zerg` refuses both by
   name. (A member that is neither, like `SIZE := 4096`, the seed does turn away.)
-- **A call that WRITES its type arguments is accepted in its multi-argument shape.**
-  `pairup[str, int]("k", 9)` builds here; `zerg` refuses it, because GRAMMAR makes a postfix
-  `[ … ]` always an index and a generic takes its type from its arguments. The
-  one-argument shape (`id[int](7)`) the seed does turn away, for a reason of its own.
+- **A call that WRITES its type arguments is accepted on a generic.**
+  `pairup[str, int]("k", 9)` builds here, and so does the one-argument `id[int](7)` when `id`
+  is a generic; `zerg` refuses both, because GRAMMAR makes a postfix `[ … ]` always an index
+  and a generic takes its type from its arguments. On a function that is not a generic the
+  seed does turn the one-argument shape away, for a reason of its own.
 - **A BARE VARIANT is accepted AS A VALUE.** GRAMMAR says an enum puts its own name into the
   value namespace and not its variants', so a variant is reached through its enum —
   `Color.Red`. The seed reads that form and does not require it, so `Red` alone still

@@ -3322,14 +3322,26 @@ fn c_spec_cname(name: str) -> str {
 # — and a `,` or a space between two arguments. Each becomes `_`, which cannot collide with a
 # Zerg name: the whole result lives under the `zgg_` prefix, off the flat space a program can
 # reach.
+#
+# THOSE FIVE WERE A LIST OF THE KEYS SEEN SO FAR, and a key is spelled with a TYPE's name: a
+# function type adds `(`, `)`, `-` and `>`, an optional `?`, an array `;`, and each passed
+# through into a C identifier — `zgg_elemcopy_Ref_fn(int)_->_int_` (#339). So the rule is
+# stated the other way round: a byte C allows in an identifier is kept, and any other is
+# spelled by its code, which keeps `int?` and `int;` apart where a second `_` would not.
 fn c_cname_byte(b: byte) -> str {
-	mut one: list[byte] = []
-	if b == b'$' or b == b'[' or b == b']' or b == b',' or b == b' ' {
-		one.append(b'_')
-	} else {
-		one.append(b)
-	}
+	return "_" if b == b'$' or b == b'[' or b == b']' or b == b',' or b == b' '
+	return "_x" + strconv.to_string(int(b), 16) if not c_is_cident_byte(b)
+
+	mut one: list[byte] = [b]
 	return str(one)
+}
+
+fn c_is_cident_byte(b: byte) -> bool {
+	return true if b >= b'a' and b <= b'z'
+	return true if b >= b'A' and b <= b'Z'
+	return true if b >= b'0' and b <= b'9'
+
+	return b == b'_'
 }
 
 # c_sig_seen is `c_name_in(em.sig_names, key)` without the copy. `c_name_in` takes its list

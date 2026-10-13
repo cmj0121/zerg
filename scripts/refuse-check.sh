@@ -2113,6 +2113,63 @@ fn main() {
 }
 EOF
 
+# A SPEC NOTHING IMPLEMENTS (#317). The witness table is written from an `impl`, so with none
+# there is no table type, and the two dispatchers that name it reached cc. The spec is still a
+# type — a parameter that is never called through builds — so what is refused is the call and
+# the rendering. A parameterized spec is refused at the type: an application's own C type is
+# written per `impl` too, and `Conv[int]` being implemented says nothing for `Conv[str]`.
+expect "$ZERG" a-call-through-a-spec-nothing-implements E9118 'a call to `area` through the spec `Shape`' <<'EOF'
+spec Shape {
+	fn area() -> int
+}
+
+fn one(x: Shape) -> int {
+	return x.area()
+}
+
+fn main() {
+	print 1
+}
+EOF
+
+expect "$ZERG" rendering-a-spec-nothing-implements E9118 'rendering a value of the spec `Shape`' <<'EOF'
+spec Shape {
+	fn area() -> int
+}
+
+fn one(x: Shape) {
+	print x
+}
+
+fn main() {
+	print 1
+}
+EOF
+
+expect "$ZERG" an-application-nothing-implements E9118 'names the spec `Conv[str]`' <<'EOF'
+spec Conv[T] {
+	fn to() -> T
+}
+
+struct A {
+	pub n: int
+}
+
+impl Conv[int] for A {
+	fn to() -> int {
+		return this.n
+	}
+}
+
+fn one(x: Conv[str]) -> int {
+	return 3
+}
+
+fn main() {
+	print 1
+}
+EOF
+
 # A LIST IS NEVER AN ARRAY — ONLY A LITERAL IS CONTEXT-TYPED (docs/code/collections.md). The
 # rule used to be written on the two TYPES, so every `list[T]` meeting a `[T; N]` slot passed the
 # checker and cc was the one to refuse it: a `match` or an `if` whose arms are list literals

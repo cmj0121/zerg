@@ -74,6 +74,12 @@ and `g is En` reads that same table. A box is a counted cell that owns its paylo
 independent cell — a spec value is a **value** — and it is given back when its scope ends, like every other
 owned value.
 
+> **[not yet]** A spec **nothing implements** has no witness table, since the table is written from an
+> `impl`. It is still a type — `fn go(g: Greet)`, a field, a `list[Greet]` and `g is En` compile with no
+> implementer — but a call or a rendering through it is _E9118 NotImplemented: a call to `hello` through the
+> spec `Greet` while nothing implements it_. A parameterized spec is narrower: `c: Conv[str]` beside only an
+> `impl Conv[int] for A` is `E9118` at the type itself.
+
 A box **renders**. The witness table carries a rendering beside the copy and the drop, filled with the
 payload's own — so `print sk` on a `Sink` shows the `Stderr` or the `Chan` it holds, and a `list[Shape]`
 prints each element as its own type.

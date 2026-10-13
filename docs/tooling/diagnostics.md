@@ -521,6 +521,7 @@ shipping compiler rather than a part of it (the line
 | `E9111` | an array length reached through an import                                                             |
 | `E9112` | the array method `…`                                                                                  |
 | `E9117` | a slice of an array — its length is part of its type                                                  |
+| `E9118` | a spec value called or rendered, or an application named, while nothing implements it                 |
 
 They are reported the moment a file is **read**, before its imports are scanned — scanning
 them parses, and a parser handed unreadable text can only say something untrue about it.

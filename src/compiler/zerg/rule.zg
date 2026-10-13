@@ -590,6 +590,14 @@ pub enum Rule {
 	NotYetListPatternRestBinding = 9110
 	NotYetArrayLenImported = 9111
 	NotYetArrayMethod = 9112
+
+	# a spec value CALLED or RENDERED when nothing implements the spec, and a parameterized
+	# spec's application named as a type when nothing implements that application. The
+	# witness table a box carries is declared from an `impl` — each slot is the spec's member
+	# seated on one target — so a spec with none has no table type, and what named it
+	# reached cc. No value could be such a type yet, which is why this is a form waiting and
+	# not a mistake.
+	NotYetSpecTypeNoImpl = 9118
 }
 
 # rule_code is the text a rule is reported under — the `E2004` a gate pins and a reader looks

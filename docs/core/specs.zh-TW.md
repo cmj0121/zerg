@@ -55,6 +55,11 @@ op 完全一樣。因此**沒有 object-safety gate**：一個 spec **永遠可�
 cell,它擁有自己的 payload:複製它會建出一個獨立的 cell——spec 值是一個**值**——而且它會在作用域結束時被還回去,
 和其他每一個被擁有的值一樣。
 
+> **[not yet]** **沒有任何實作**的 spec 沒有見證表,因為那張表是從 `impl` 寫出來的。它仍然是型別——
+> `fn go(g: Greet)`、欄位、`list[Greet]` 與 `g is En` 在沒有實作者時都能編譯——但透過它呼叫或 render 是
+> _E9118 NotImplemented: a call to `hello` through the spec `Greet` while nothing implements it_。參數化的
+> spec 更窄:只有 `impl Conv[int] for A` 時,`c: Conv[str]` 在型別本身就是 `E9118`。
+
 box 會 **render**。見證表在 copy 與 drop 旁邊帶著一個 rendering,填的是 payload 自己的那一份——所以 `print sk`
 對一個 `Sink` 會顯示它裝著的 `Stderr` 或 `Chan`,而 `list[Shape]` 會把每個元素印成它自己的型別。
 

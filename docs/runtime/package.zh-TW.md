@@ -512,8 +512,9 @@ normal build compiles none_，兩者都帶位置。E3084 不會進一步說「�
 > **[not yet]** 上述之外還有三件事：把 doc 範例當測試跑、benchmark，以及**同時跑兩個測試**
 > ——測試是循序的，`ctx.parallel()` 還沒建，等它落地時，共用同一個 fixture 的測試將共用同一份實例。
 >
-> 已經建好的部分裡唯一的缺口是對**複合型別**的主張：`assert xs == ys` 比較兩個 list 是 `E9057`，所以這類主張要透過
-> 某個能把它化約成 scalar 的東西來寫（[Spec 與泛型](../core/specs.zh-TW.md)）。
+> 已經建好的部分裡唯一的缺口是對兩個 **list** 的主張：`assert xs == ys` 能比，而它的訊息得把兩邊都渲染出來，
+> `str` 對 list 做不到（`E4011`）——所以這類主張寫成 `assert (xs == ys)`，它回報原始碼文字而不帶值。
+> map、set、tuple 與宣告出來的型別可以直接主張。
 
 ### Target 條件式檔案
 

@@ -289,9 +289,12 @@ tag 的 bytes 重讀——而且它天然吸收 baked-in 值給不了的不連�
 tuple 的結果是 **first-class**——可存、可傳、可解構——所以多重回傳不需要任何額外機制
 （見 [模式比對](../code/control-flow.zh-TW.md)）。
 
-> **[not yet]** 這段文字說 tuple 免費就有的那兩件事,一件都沒建。tuple 上的 `==` 是
-> _E9057 NotImplemented: `==` on a `(int, int)` — structural equality over a container is unbuilt, and a
-> container has no declaration to derive it on_:上面的組成繼承規則已是規格,而缺的是無名形式上的那個衍生。
+`==` 與 `!=` 就是這條規則建出來的樣子：`(1, "a") == (1, "a")` 逐個部分比較，而裝著一個沒有 `Eq` 的部分的
+tuple 會因為那個部分被拒絕（`E4020`）。
+
+> **[not yet]** `Hash` 是這條規則還沒建的那一半：拿 tuple 當 map key 是 _E9052
+> NotImplemented: a map key of type (int, int) — it needs `Hash`, and this compiler has one for `int` and
+> for `str`_。
 > **解構**已經建好,而且是讀回一個 tuple 的日常方式——`(a, b) := two()`。沒有括號的 `a, b := two()` 不是一個
 > 形式:GRAMMAR#bind-target 導出的 tuple 形狀是帶括號的,所以逗號上報的是標點(_E2005 expected a newline or
 > `;` to separate statements, found `,`_)。

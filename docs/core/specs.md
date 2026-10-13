@@ -495,13 +495,10 @@ is refused by name. Everything else is a spec a type **opts into**, a generic bo
   dispatched, not derived by negating `==`. A type with **no `Eq` impl cannot be compared** — `==` on it
   is a compile error, never a silent structural default.
 
-  > **[not yet]** A **container** cannot gain one at all, which is the rule met from a direction it has no
-  > answer for: `xs == ys` over two `list`s, two `map`s or two tuples is _E9057 NotImplemented: `==` on a
-  > `list[int]` — structural equality over a container is unbuilt, and a container has no declaration to
-  > derive it on_. What the unnamed forms are owed is under Types' parts-inheritance rule — a tuple has
-  > `Eq` exactly when every part has it — and that derivation is the unbuilt half. Compare the elements
-  > you mean to compare meanwhile. [Format](../runtime/format.md) asked the same question of a different
-  > verb and answered it: a composite RENDERS structurally, and comparing one is what is still owed.
+  An **unnamed form** — a `list`, a `map`, a `set`, a tuple, an array — has no declaration to derive on
+  and nothing a program could write, so it has `Eq` by Types' parts-inheritance rule: exactly when every
+  part has it. `xs == ys` over two `list[int]`s compares, a `list[N]` meets a `T: Eq` bound when `N` does,
+  and its `!=` is the negation — an unnamed form wrote no `ne` to dispatch to.
 
 Zerg has **no instance-identity test** between two values: under copy-by-value distinct values are
 distinct instances and there's no aliasing, so "same instance?" would be meaningful only for a channel —

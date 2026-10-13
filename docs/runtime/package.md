@@ -640,9 +640,10 @@ matter of compiling more files rather than of relaxing a visibility rule.
 > `parallel` on a Context_), and when it lands
 > tests sharing a fixture will share one instance of it.
 >
-> A claim over a **composite** is the one gap inside what is built: `assert xs == ys` over two lists is
-> `E9057`, so such a claim is made through something that reduces it to a scalar
-> ([Specs & Generics](../core/specs.md)).
+> A claim over two **lists** is the one gap inside what is built: `assert xs == ys` compares, and its
+> message has to render both, which `str` over a list does not (`E4011`) — so such a claim is written
+> `assert (xs == ys)`, which reports its source text and no values. A map, a set, a tuple and a declared
+> type are claimed directly.
 
 ### Target-conditional files
 

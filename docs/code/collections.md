@@ -166,14 +166,14 @@ materializing a `str` only when it keeps a token.
 
 `list` walks in index order; `map`/`set` in **insertion order** — deterministic, no hash-ordering surprise.
 Iterating reads each element **by value** (elidable to read-only by-ref); to edit in place, bind `mut x`
-(a by-ref, requiring the collection be `mut`). The intended structural equality is that `list`s compare
-**in order** and `map`s / `set`s compare **order-insensitively** (insertion order governs iteration, never
-equality).
+(a by-ref, requiring the collection be `mut`). Two collections of one type compare with `==` / `!=`:
+`list`s compare **in order**, and `map`s / `set`s compare **order-insensitively** (insertion order governs
+iteration, never equality). Each element is compared by its own `==`, so a collection compares exactly
+when what it holds does: over a `list[N]` whose `N` has no `Eq` it is _E4020 `==` on a list[N], which
+compares its N: a N has no `Eq`_. The two sides are one type, and a literal is typed by its own elements —
+`bs == [1, 2]` over a `list[byte]` is `E3046`, and `xs == []` is `E3034`.
 
-> **[not yet]** Container equality is unbuilt: comparing two `list`s or two `map`s with `==` / `!=` is
-> _E9057 NotImplemented: `==` on a list[int] — structural equality over a container is unbuilt, and a
-> container has no declaration to derive it on_. Only **`str ==`** compares. `for mut x` over a collection
-> is **[not yet]** for **every** element type, POD included:
+> **[not yet]** `for mut x` over a collection is unbuilt for **every** element type, POD included:
 > `for mut x in ys` is `E9025` whatever `ys` holds, so the second line of the example below is not a program.
 
 ```text

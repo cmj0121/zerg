@@ -147,14 +147,14 @@ semantics，而唯讀情況維持**零拷貝**；COW 是與 copy-elision、move 
 ## 順序與相等性
 
 `list` 依索引序走訪；`map`／`set` 依**插入序**——有決定性、不會有 hash 亂序的驚嚇。走訪時**以值讀取每個元素**（可
-elide 成唯讀 by-ref）；要就地改就綁 `mut x`（一個 by-ref，要求 collection 是 `mut`）。預期的結構相等性是：`list`
-**依序**比，`map`／`set` **與順序無關**（插入序決定 iteration，永遠不會決定相等）。
+elide 成唯讀 by-ref）；要就地改就綁 `mut x`（一個 by-ref，要求 collection 是 `mut`）。同一個型別的兩個 collection
+用 `==` / `!=` 比較：`list` **依序**比，`map`／`set` **與順序無關**（插入序決定 iteration，永遠不會決定相等）。
+每個元素用它自己的 `==` 比，所以 collection 恰在它裝的東西能比時能比：`N` 沒有 `Eq` 的 `list[N]` 是
+_E4020 `==` on a list[N], which compares its N: a N has no `Eq`_。兩邊是同一個型別，而 literal 由它自己的元素定型——
+對 `list[byte]` 寫 `bs == [1, 2]` 是 `E3046`，`xs == []` 是 `E3034`。
 
-> **[not yet]** 容器相等性尚未建置：今天用 `==` / `!=` 比較兩個 `list` 或兩個 `map` 是
-> _E9057 NotImplemented: `==` on a list[int] — structural equality over a container is unbuilt, and a container
-> has no declaration to derive it on_。只有 **`str ==`** 能比。`for mut x` 走訪一個
-> collection 對**每一種**元素型別都是 **[not yet]**、包含 POD：不論 `ys` 裝什麼，`for mut x in ys` 都是 `E9025`，
-> 所以下面範例的第二行不是一個程式。
+> **[not yet]** `for mut x` 走訪一個 collection 對**每一種**元素型別都還沒建、包含 POD：不論 `ys` 裝什麼，
+> `for mut x in ys` 都是 `E9025`，所以下面範例的第二行不是一個程式。
 
 ```text
 for x in xs { total = total + x }         # 讀取

@@ -1863,6 +1863,48 @@ fn main() {
 }
 EOF
 
+# THE SAME TOKENS OVER A BINDING ARE AN INDEX (#308), so this is decided where the name can be
+# looked up and no longer in the parser, which refused `fs[i](1)` along with it. What is held
+# here is that the refusal survived the move: on a generic, which is the declaration the form
+# was written for; inside a generic, where the type argument is a type parameter; and on a
+# function indexed by a local. That last one differs from a program that builds by one line —
+# a local list of the same name, which is a binding and shadows the function. The seed
+# instantiates a generic from a written type argument, so the two on a generic are its gap.
+reject explicit-type-args-on-a-generic E2035 'writes a call' seed-gap <<'EOF'
+fn id[T](x: T) -> T {
+	return x
+}
+
+fn main() {
+	print id[int](7)
+}
+EOF
+
+reject explicit-type-args-inside-a-generic E2035 'writes a call' seed-gap <<'EOF'
+fn id[T](x: T) -> T {
+	return x
+}
+
+fn wrap[T](x: T) -> T {
+	return id[T](x)
+}
+
+fn main() {
+	print wrap(3)
+}
+EOF
+
+reject explicit-type-args-with-no-local-of-that-name E2035 'writes a call' <<'EOF'
+fn fs(x: int) -> int {
+	return x
+}
+
+fn main() {
+	i := 0
+	print fs[i](1)
+}
+EOF
+
 # THE MULTI-ARGUMENT SHAPE, which never looked like an index at all — a comma is what
 # settles the bracket. It is the same rule and it is refused in the same place.
 reject explicit-type-args-multi E2035 seed-gap <<'EOF'

@@ -59,11 +59,12 @@ type, and this position gives it none_.
 > has no `make`_ — the member lookup that resolves a qualified name lives on the call path, and the bare-name
 > path never learned it. So a cross-module function can be called, but not bound, passed, or stored.
 >
-> **[not yet]** Two forms that share the indexed-callee shape are still unbuilt: a call through a function
-> VALUE held in a container, `fs[0](x)`, and an optional method call, `p?.m(…)`. The third one left the
-> language: an explicit type argument at a use site — `id[int](7)` — is no longer a form, since a postfix
-> bracket is always an index ([Grammar](../surface/grammar.md)), and it is refused by name — _E2035
-> `id[int](…)` writes a call's type arguments, and a postfix `[ … ]` is an index_.
+> **[not yet]** One form that shares the indexed-callee shape is still unbuilt: an optional method call,
+> `p?.m(…)`. A call through a function VALUE held in a container is built — `fs[0](x)`, and `fs[i](x)` at an
+> index that is a name. An explicit type argument at a use site — `id[int](7)` — left the language: a postfix
+> bracket is always an index ([Grammar](../surface/grammar.md)), so where `id` is a function rather than a
+> binding it is refused by name — _E2035 `id[int](…)` writes a call's type arguments, and a postfix `[ … ]` is
+> an index_.
 >
 > **And it is not coming back under another spelling.** A generic takes its type from its ARGUMENTS, and
 > where inference is not enough a **typed binding** steers it — `xs: list[int] = empty()`. Reopening the

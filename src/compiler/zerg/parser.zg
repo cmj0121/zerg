@@ -4483,9 +4483,6 @@ fn parse_unary(mut &p: Parser) -> ast.Expr {
 	return parse_postfix(p)
 }
 
-# index_base_name / index_type_name take an `EIndex` apart for the one shape that is not a
-# subscript: `id[int]` as the callee of a call. Both answer "" for anything else, which is
-# what leaves every other indexed callee refused by name.
 # is_opt_chain is whether a callee came from `?.` — the one callee shape that is still
 # refused, because what it needs is not a way to call an expression but a CONDITIONAL call
 # whose result is an optional (GRAMMAR group 8).
@@ -4501,20 +4498,6 @@ fn is_opt_chain(e: ast.Expr) -> bool {
 	return match e {
 		Expr.EOptChain(_, _, _, _) => true
 		_ => false
-	}
-}
-
-fn index_base_name(e: ast.Expr) -> str {
-	return match e {
-		Expr.EIndex(b, _) => ident_name(b)
-		_ => ""
-	}
-}
-
-fn index_type_name(e: ast.Expr) -> str {
-	return match e {
-		Expr.EIndex(_, i) => ident_name(i)
-		_ => ""
 	}
 }
 
@@ -4629,22 +4612,17 @@ fn parse_postfix(mut &p: Parser) -> ast.Expr {
 			#
 			# The shape is still in hand here, which is why the refusal belongs in the parser
 			# rather than downstream of the name it threw away.
-			# EXPLICIT TYPE ARGUMENTS ARE NOT A FORM. `id[int](7)` reaches here as an INDEX
-			# of `id`, and the only way to tell that subscript from a type argument list is to
-			# know what `id` is — which is a symbol table, in the parser, for one form.
-			# GRAMMAR settled it the other way: a postfix `[ … ]` is ALWAYS an index, and a
-			# generic call takes its type from its arguments.
+			# EXPLICIT TYPE ARGUMENTS ARE NOT A FORM, and this is not where that is said.
+			# `id[int](7)` reaches here as an INDEX of `id`, and so does `fs[i](1)`: the same
+			# tokens, and the only way to tell a subscript from a type argument is to know what
+			# the base is — which is a symbol table. This used to refuse both, so a list of
+			# functions could be called at `0` and at `i + 0` and not at `i` (#308). Both are now
+			# the call through a value below, and the emitter, which has the table, names the one
+			# whose base was never a binding (emit.c_no_type_args).
 			#
-			# The shape is still in hand here, so this is where it is named. Downstream there
-			# is only a name that was thrown away.
+			# GRAMMAR settled the form itself: a postfix `[ … ]` is ALWAYS an index, and a
+			# generic call takes its type from its arguments.
 			mut tyargs: list[ast.Ty] = []
-			if name == "" {
-				base := index_base_name(e)
-				tn := index_type_name(e)
-				if base != "" and tn != "" {
-					p_written_type_args(p, base, tn)
-				}
-			}
 
 			# A CALLEE THAT IS NOT A NAME IS AN EXPRESSION, and GRAMMAR#postfix already says
 			# so: `(` is a postfix operator on whatever precedes it. `fs[0](1)` calls the
@@ -4680,8 +4658,8 @@ fn parse_postfix(mut &p: Parser) -> ast.Expr {
 
 # p_type_arg_call is the MULTI-argument shape of a form the language does not have —
 # `base[A, B](args)`, entered once a comma has settled that the bracket is not an index.
-# `id[int](7)` is the one-argument shape, refused where the postfix loop recovers it; this
-# is the same refusal for the shape that never looked like an index at all.
+# `id[int](7)` is the one-argument shape, which reaches the emitter as a call through an
+# index; this one reaches it as a call carrying its type arguments, and is refused there too.
 #
 # GRAMMAR settled it: a postfix `[ … ]` is ALWAYS an index, and a generic call takes its
 # type from its arguments. Telling the two apart in a parser needs to know what `base` is,
@@ -4690,12 +4668,11 @@ fn p_type_arg_call(mut &p: Parser, base: ast.Expr, first: ast.Expr) -> ast.Expr 
 	name := ident_name(base)
 	tn := ident_name(first)
 
-	# A BUILT-IN TYPE is not a generic call. `map[K, V](…)` names a TYPE and its arguments
-	# are the type's own, which is the one thing `[ … ]` after a name still means — so the
-	# refusal it earns is the one about a constructor, downstream, and not this one.
-	if not p_builtin_type_ctor(name) {
-		p_written_type_args(p, name, tn + ", …")
-	}
+	# THE REFUSAL IS THE EMITTER'S (emit.c_written_type_args), for both shapes. This one is
+	# settled by its comma and could be named here, but the one-argument shape cannot — its
+	# tokens are an index whenever the base is a binding (#308) — and a rule said in two
+	# places is two rules. So the call is built with what was written, and the stage that
+	# can tell the shapes apart names them both.
 
 	# THE SEPARATOR AT THE TOP OF THE LOOP, because the first argument arrived as `first` and
 	# there is no element below it to follow. It is the same rule and the same reader of it
@@ -4712,17 +4689,11 @@ fn p_type_arg_call(mut &p: Parser, base: ast.Expr, first: ast.Expr) -> ast.Expr 
 	return ast.Expr.ECall(name, parse_call_args(p), tyargs, at.0, at.1)
 }
 
-# p_written_type_args is the one complaint both shapes earn. `id[int](7)` is recovered from
-# an index in the postfix loop and `pairup[str, int](…)` never looked like one, but they are
-# the same form and a code answers to a rule rather than to a shape.
-fn p_written_type_args(mut &p: Parser, name: str, tn: str) {
-	raise p_diag(p, rule.Rule.TypeArgsAsIndex, f"`{name}[{tn}](…)` writes a call's type arguments, and a postfix `[ … ]` is an index — a generic takes its type from the arguments, so write `{name}(…)`")
-}
-
 # p_builtin_type_ctor names the built-in TYPES whose `[ … ]` is the type's own arguments
 # rather than a call's. GRAMMAR#base-type gives them type-args; they are not generic
-# functions and a program cannot declare one.
-fn p_builtin_type_ctor(name: str) -> bool {
+# functions and a program cannot declare one. The emitter asks it too, for the call that
+# wrote type arguments after one of these names.
+pub fn p_builtin_type_ctor(name: str) -> bool {
 	return name == "map" or name == "set" or name == "list" or name == "chan" or name == "ptr" or name == "array" or name == "range"
 }
 

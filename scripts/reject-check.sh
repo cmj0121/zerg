@@ -7342,6 +7342,60 @@ fn main() {
 }
 EOF
 
+# AS A BRANCH OR AN ARM (#342). A branch is typed by what it holds and not by the slot the whole
+# expression fills, so the literal has nothing to read an element type from — wherever the
+# result then goes, a `return` or a typed binding. It used to build a list of zero-byte
+# elements: every later append wrote nothing, and the program printed `[0, 0]`. Each case
+# appends afterwards, which is the read that was wrong.
+reject an-empty-list-in-an-if-branch E3034 'the empty list' <<'EOF'
+fn pick(k: int) -> list[int] {
+	return if k == 2 { [] } else { [9] }
+}
+
+fn main() {
+	mut xs := pick(2)
+	xs.append(1)
+	xs.append(2)
+	print xs
+}
+EOF
+
+reject an-empty-list-in-an-else-branch E3034 'the empty list' <<'EOF'
+fn main() {
+	k := 2
+	mut xs: list[int] = if k != 2 { [9] } else { [] }
+	xs.append(1)
+	print xs
+}
+EOF
+
+reject an-empty-list-in-a-match-arm E3034 'the empty list' <<'EOF'
+fn main() {
+	k := 1
+	mut xs: list[str] = match k {
+		1 => []
+		_ => ["z"]
+	}
+	xs.append(str(k) + "!")
+	print xs
+}
+EOF
+
+reject an-empty-list-in-the-last-match-arm E3034 'the empty list' <<'EOF'
+fn pick(k: int) -> list[str] {
+	return match k {
+		3 => ["z"]
+		_ => []
+	}
+}
+
+fn main() {
+	mut xs := pick(1)
+	xs.append("a")
+	print xs
+}
+EOF
+
 # AN EMPTY MAP WHERE NO POSITION SAYS WHAT IT HOLDS (#332). `x := {:}` was always turned away;
 # the same literal one step further from a declared type was not. It was built as a table of
 # integers and handed to whatever asked, so a `map[str, int]` taken from a branch compared its

@@ -50,7 +50,7 @@ collection can modify its elements**.
 
 > **[not yet]** Of the growth methods named above, only `append` is built: `insert` and `remove` are each
 > refused by name on both `list` and `map`, and each container answers with its own code — _E9056
-> NotImplemented: the list method `insert` — this compiler has `len` and `append`_ and _NotImplemented: the
+> NotImplemented: the list method `insert` — this compiler has `len`, `append` and `get`_ and _NotImplemented: the
 > list method `remove`_ on a `list`, _E9100 NotImplemented: the container method `insert`_ and _E9100
 > NotImplemented: the container method `remove`_ on a `map`. So a collection grows at its end and does not shrink
 > at all. Each name is quoted rather than described, because each container's code is split by a list of
@@ -118,11 +118,10 @@ first := xs[0]                 # aborts if empty
 name  := m.get(id) ?? "anon"   # checked, then default
 ```
 
-> **[not yet]** The checked path does not exist: `xs.get(i)` is _E9056 NotImplemented: the list method
-> `get`_ and `m.get(k)` is _E9100
-> NotImplemented: the container method `get`_, so the `m.get(id) ?? "anon"` line above does not compile and
-> indexing — which aborts — is the only way into a container. Expected absence is therefore not a question a
-> program can ask; it is one it has to head off with `k in m` before indexing.
+`get` is built on both. `xs.get(i)` answers the element where `i` names one and nothing where it does not, a
+negative `i` included, and `m.get(k)` answers the value or nothing — so the `m.get(id) ?? "anon"` line above
+reads a map with no `k in m` in front of it, and neither form aborts. What comes back is a **copy**, as every
+optional a program holds is. A `set` has no `get`: `has` is the whole of what it can be asked.
 
 ## Slicing — read-only subranges
 

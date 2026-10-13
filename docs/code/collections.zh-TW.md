@@ -47,7 +47,7 @@ reference-counted 的部分被共享（見 [值與記憶體](../core/memory.zh-T
 
 > **[not yet]** 上面點名的增長 method 裡只有 `append` 建置了：`insert` 與 `remove` 在 `list` 與 `map` 上都會被
 > 指名拒絕，而且兩種容器各自回答自己的代碼——`list` 上是 _E9056 NotImplemented: the list method `insert` — this
-> compiler has `len` and `append`_ 與 _NotImplemented: the list method `remove`_,`map` 上是
+> compiler has `len`, `append` and `get`_ 與 _NotImplemented: the list method `remove`_,`map` 上是
 > _E9100 NotImplemented: the container method `insert`_ 與 _E9100 NotImplemented: the container method `remove`_。所以一個
 > collection 只能從尾端增長、完全不能縮短。每個名字都是引用而非描述,因為每個容器的代碼都是靠一份名字清單
 > 分成兩半——`E9056` 與 `E9100` 都一樣，一半是即將到來的形式、另一半是語言沒有的 method——而
@@ -106,9 +106,10 @@ first := xs[0]                 # 空的話 abort
 name  := m.get(id) ?? "anon"   # 檢查後給預設
 ```
 
-> **[not yet]** 檢查路徑並不存在：`xs.get(i)` 是 _E9056 NotImplemented: the list method `get`_,而 `m.get(k)`
-> 是 _E9100 NotImplemented: the container method `get`_，所以上面那行 `m.get(id) ?? "anon"` 編不過，而會 abort 的索引是進入容器的唯一途徑。於是「預期內
-> 的不存在」不是程式問得出口的問題，而是它必須在索引之前先用 `k in m` 迴避掉的事。
+`get` 在兩者上都已建置。`xs.get(i)` 在 `i` 指得到元素時回答那個元素、指不到時回答空值（負的 `i` 也是），
+`m.get(k)` 回答那個值或空值——所以上面那行 `m.get(id) ?? "anon"` 不需要先寫 `k in m` 就能讀一個 map，而且
+兩種形式都不會 abort。拿回來的是一份**副本**，程式持有的每個 optional 都是如此。`set` 沒有 `get`：`has`
+就是能問它的全部。
 
 ## 切片——唯讀子區間
 

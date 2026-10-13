@@ -8312,6 +8312,102 @@ EOF
 # helper said "three different sentences" while answering five, and the two it had not
 # counted were the two with no code. A comment cannot count a function's branches; a gate
 # that asks which codes nothing provokes can.
+# AN UNNAMED FORM COMPARES BY ITS PARTS (#295), so what is refused is the PART that cannot be
+# compared, and the sentence names it beside the form the reader wrote — a `list[N]` has no
+# declaration to put a `derive` on, and `N` does. Each class of part keeps the code it has
+# on its own: a declared type with no `Eq`, a carrier, an identity. The second case is three
+# forms deep, which is the walk and not the first step of it.
+reject equality-over-a-list-of-no-eq E4020 'on a list[N], which compares its N' <<'EOF'
+struct N {
+	pub n: int
+}
+
+fn main() {
+	print [N(1)] == [N(1)]
+}
+EOF
+
+reject equality-over-a-nested-part-of-no-eq E4020 'on a map[str, list[(int, N)]], which compares its N' <<'EOF'
+struct N {
+	pub n: int
+}
+
+fn main() {
+	a := {"k": [(1, N(1))]}
+	print a != a
+}
+EOF
+
+reject equality-over-a-list-of-carriers E4038 'on a list[int?], which compares its int?' <<'EOF'
+fn main() {
+	a: list[int?] = [1, nil]
+	print a == a
+}
+EOF
+
+reject equality-over-a-tuple-of-channels E4034 'which compares its chan[int]' <<'EOF'
+fn main() {
+	a := (1, chan[int](1))
+	print a == a
+}
+EOF
+
+# THE BOUND IS THE SAME QUESTION, asked at the call: a `list[N]` meets `T: Eq` exactly when
+# `N` does, and the case beside it in the corpus is the one that does.
+reject a-list-of-no-eq-does-not-meet-the-bound E4010 '`list[N]` does not implement `Eq`' <<'EOF'
+struct N {
+	pub n: int
+}
+
+fn same[T: Eq](a: T, b: T) -> bool {
+	return a == b
+}
+
+fn main() {
+	print same([N(1)], [N(1)])
+}
+EOF
+
+# A DERIVED `Eq` OVER A FIELD THAT IS A FORM asks the form, which asks its parts.
+reject a-derived-eq-over-a-list-of-no-eq E4020 'on a list[N], which compares its N' <<'EOF'
+struct N {
+	pub n: int
+}
+
+#[derive(Eq)]
+struct W {
+	pub ns: list[N]
+}
+
+fn main() {
+	print W([N(1)]) == W([N(1)])
+}
+EOF
+
+# THE TWO SIDES ARE ONE TYPE. A literal is typed by its own elements and not by the operand
+# beside it, so a `list[byte]` and `[1, 2]` are two kinds of value, and an empty literal has
+# nothing to be typed by at all.
+reject equality-with-a-literal-of-another-element E3046 'cannot compare list[byte] and list[int]' <<'EOF'
+fn main() {
+	bs: list[byte] = [1, 2]
+	print bs == [1, 2]
+}
+EOF
+
+reject equality-with-an-empty-literal E3034 'the empty list' <<'EOF'
+fn main() {
+	xs := [1]
+	print xs == []
+}
+EOF
+
+# AND AN ORDERING IS NOT AN EQUALITY: no unnamed form has one.
+reject ordering-over-two-lists E3044 'these are list[int] and list[int]' <<'EOF'
+fn main() {
+	print [1] < [2]
+}
+EOF
+
 reject equality-on-a-carrier E4038 <<'EOF'
 fn main() {
 	a: Either[int, str] = Either.Left(1)

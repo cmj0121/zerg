@@ -1153,6 +1153,88 @@ fn main() {
 }
 ZG
 
+# --- two unnamed forms compared -----------------------------------------------------------
+# `==` and `!=` over a list, a map, a set, a tuple and an array READ both sides and keep
+# neither. An operand somebody else holds is looked at where it stands; one the expression
+# made — a call's result, a literal — is given back once the answer is in hand, whichever
+# way the answer went and however early the walk stopped. A part with an `Eq` is handed two
+# copies, which its `eq` owns. A wrong answer aborts. The seed compares no container, so it
+# is zerg only.
+case_run container_equality no no <<'ZG'
+#[derive(Eq)]
+struct P {
+	pub s: str
+	pub xs: list[int]
+}
+
+fn word(n: int) -> str {
+	return str(n) + "!"
+}
+
+fn words(n: int) -> list[str] {
+	return [word(n), word(n + 1)]
+}
+
+fn same[T: Eq](a: T, b: T) -> bool {
+	return a == b
+}
+
+fn round(n: int) {
+	xs := words(n)
+	ys := words(n)
+
+	raise "two equal lists compared unequal" if xs != ys
+	raise "two lists a call answered compared unequal" if words(n) != words(n)
+	raise "two different lists compared equal" if words(n) == words(n + 1)
+	raise "a list and a literal compared unequal" if xs != [word(n), word(n + 1)]
+	raise "a list and a shorter one compared equal" if xs == [word(n)]
+	raise "a held list was taken by the comparison" if xs[1] != word(n + 1)
+
+	raise "two equal nested lists compared unequal" if [words(n), words(n)] != [xs, ys]
+	raise "two different nested lists compared equal" if [words(n), words(n)] == [xs, words(n + 2)]
+
+	m := {word(n): words(n), word(n + 1): words(n + 1)}
+	k := {word(n + 1): words(n + 1), word(n): words(n)}
+	j := {word(n + 1): words(n + 1), word(n): words(n + 5)}
+
+	raise "two equal maps compared unequal" if m != k
+	raise "two different maps compared equal" if m == j
+	raise "a map and a map a literal made compared unequal" if m != {word(n): words(n), word(n + 1): words(n + 1)}
+
+	raise "two equal sets compared unequal" if set(xs) != set([word(n + 1), word(n)])
+	raise "two different sets compared equal" if set(xs) == set([word(n)])
+
+	t := (n, word(n), words(n))
+
+	raise "two equal tuples compared unequal" if t != (n, word(n), words(n))
+	raise "two different tuples compared equal" if t == (n, word(n), words(n + 1))
+	raise "a tuple differing in its first part compared equal" if t == (n + 1, word(n), words(n))
+
+	a: [str; 2] = [word(n), word(n + 1)]
+	b: [str; 2] = [word(n), word(n + 2)]
+
+	raise "two different arrays compared equal" if a == b
+	raise "an array compared unequal to itself" if a != a
+
+	ps := [P(word(n), [n]), P(word(n + 1), [n, n])]
+
+	raise "two equal lists of a declared type compared unequal" if ps != [P(word(n), [n]), P(word(n + 1), [n, n])]
+	raise "two different lists of a declared type compared equal" if ps == [P(word(n), [n]), P(word(n + 1), [n])]
+
+	raise "the bound answered wrong" if not same(xs, words(n))
+	raise "the bound answered wrong for two different lists" if same(m, j)
+}
+
+fn main() {
+	mut i := 0
+	r := rounds()
+	for i < r {
+		round(i)
+		i = i + 1
+	}
+}
+ZG
+
 # --- a closure environment -------------------------------------------------------------
 # One environment per construction, and the closure may outlive the scope that made it —
 # which is what closing over a value is for, and why the scope cannot be what frees it.

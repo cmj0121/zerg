@@ -935,6 +935,87 @@ fn main() {
 }
 ZG
 
+# --- a value received out of a channel -------------------------------------------------
+# A send moves an owned copy into the channel, and whoever takes it out owns it. A `for … in`
+# over a channel and a `select` receive arm each wrote that value into a slot and never gave
+# it back, so every element received was one allocation kept (#325, #336). Both an element
+# that is one allocation (a `str`) and one that owns another (a `list[int]`) are walked and
+# bound; the walk is over a channel a call answered, the arm over one a name holds, inside a
+# `for select` as well as a single `select`. A wrong element aborts.
+case_run chan_received no yes <<'ZG'
+fn word(n: int) -> str {
+	return str(n) + "!"
+}
+
+fn pair(n: int) -> list[int] {
+	return [n, n + 1]
+}
+
+fn lists(n: int) -> chan[list[int]] {
+	c := chan[list[int]](2)
+	c <- pair(n)
+	c <- pair(n + 1)
+	close(c)
+	return c
+}
+
+fn words(n: int) -> chan[str] {
+	c := chan[str](2)
+	c <- word(n)
+	c <- word(n + 1)
+	close(c)
+	return c
+}
+
+fn round(n: int) {
+	mut t := 0
+	for xs in lists(n) {
+		t = t + xs[1]
+	}
+	raise "a walked channel of lists gave the wrong elements" if t != n + n + 3
+
+	mut u := ""
+	for s in words(n) {
+		u = u + s
+	}
+	raise "a walked channel of strs gave the wrong elements" if u != word(n) + word(n + 1)
+
+	c := chan[str](1)
+	c <- word(n)
+	select {
+		v := <-c => {
+			raise "a select arm bound the wrong str" if v != word(n)
+		}
+	}
+
+	d := chan[list[int]](1)
+	d <- pair(n)
+	select {
+		v := <-d => {
+			raise "a select arm bound the wrong list" if v[1] != n + 1
+		}
+	}
+
+	e := words(n)
+	mut seen := ""
+	for select {
+		v := <-e => {
+			seen = seen + v
+		}
+	}
+	raise "a looped select arm bound the wrong strs" if seen != word(n) + word(n + 1)
+}
+
+fn main() {
+	mut i := 0
+	r := rounds()
+	for i < r {
+		round(i)
+		i = i + 1
+	}
+}
+ZG
+
 # --- a closure environment -------------------------------------------------------------
 # One environment per construction, and the closure may outlive the scope that made it —
 # which is what closing over a value is for, and why the scope cannot be what frees it.

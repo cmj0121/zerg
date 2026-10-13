@@ -496,7 +496,6 @@ shipping compiler rather than a part of it (the line
 | `E9052` | a map key of type …                                                                                   |
 | `E9054` | `#[derive(…)]`                                                                                        |
 | `E9056` | the list method `…`                                                                                   |
-| `E9057` | structural equality over a container                                                                  |
 | `E9061` | `in` over … compares its elements for equality, and this compiler does not write that comparison      |
 | `E9062` | `in` over … — a range's members are found by comparing its bounds                                     |
 | `E9063` | `…` is part of the fixed-width ladder                                                                 |
@@ -642,6 +641,11 @@ one because a method was keyed by its NAME; the key now folds in the parameteriz
 which is what `docs/core/specs.md` already made the implementation's identity. A code in `E9xxx` retires the
 day its form is built, and this is that day.
 
+**One retired because an unnamed form compares (#295).** `E9057` refused `==` over a `list`, a `map` or a
+tuple, on the ground that a container has no declaration to derive an `Eq` on. It needs none: an unnamed
+form has `Eq` when every part has it, so what is refused now is the part, under the code that part
+already had — `E4020` for a declared type with no `Eq`, `E4038` for a carrier, `E4034` for an identity.
+
 **One retired with its rule rather than to another range.** `E2060` refused a declared type whose
 name did not begin with a capital, and that rule was the whole of how the language separated its
 two namespaces — a capitalised name was a type, a lower-case one a value. The rule is gone: a name
@@ -747,6 +751,7 @@ name now is the prelude rule (`E2061`), which is about the name rather than abou
 | `E9064` | —       | the form was built: `set[T]`, its constructor and its members          |
 | `E9010` | —       | the form was built: a named argument, in a call and a construction     |
 | `E9068` | —       | the form was built: `nil` names an optional's absent side              |
+| `E9057` | —       | the form was built: an unnamed form compares by its parts              |
 | `E9036` | `E4111` | not an unbuilt form: a `spec` member is never `unsafe`                 |
 
 **One of them moved nowhere**, and it is the only row whose second column is empty. `E3047`

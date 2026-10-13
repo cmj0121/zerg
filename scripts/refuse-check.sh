@@ -725,22 +725,6 @@ fn main() {
 }
 EOF
 
-# THE OTHER TWO CONTAINERS. `==` over a list is cased below; a tuple and a map are the same
-# rule and were pinned by nothing, and docs/core/types.md names the tuple one on its own.
-expect "$ZERG" equality-over-a-tuple E9057 'on a (int, int)' <<'EOF'
-fn main() {
-	print (1, 2) == (1, 2)
-}
-EOF
-
-expect "$ZERG" equality-over-a-map E9057 'on a map' <<'EOF'
-fn main() {
-	a: map[str, int] = {"x": 1}
-	b: map[str, int] = {"x": 1}
-	print a == b
-}
-EOF
-
 # A SPEC THE PRELUDE PROMISES AND NOBODY DECLARES. `E3013` is cased for one name; the chapters
 # name six more, and `Hash` is the one a reader meets first through `map` keys.
 expect "$ZERG" impl-hash-no-such-spec E3013 'no spec named `Hash`' <<'EOF'
@@ -759,15 +743,9 @@ fn main() {
 }
 EOF
 
-expect "$ZERG" equality-over-a-container E9057 <<'EOF'
-fn main() {
-	print [1, 2] == [1, 2]
-}
-EOF
-
 # A CHANNEL AND A CARRIER are not values to compare, and both used to slip past the guard —
-# a `chan` fell to the numeric path and compared two POINTERS. They are here beside the
-# container because one predicate answers all three, and it is the same one `T: Eq` asks.
+# a `chan` fell to the numeric path and compared two POINTERS. One predicate answers both,
+# and it is the same one `T: Eq` asks.
 
 expect "$ZERG" equality-on-a-channel E4034 <<'EOF'
 fn main() {

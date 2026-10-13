@@ -133,7 +133,10 @@ carrier 的情形也在內(`x: float? = i` 印出 `5`;`Left(300)` 放進 `Result
 
 - **(a) 字面量的型別。** **未定型字面量**採用它所落位置的型別,並**在該型別中計算**(見下方「數值字面量」)。
 - **(b) 複合值的型別。** **沒有元素能為自己發言的複合字面量**——`[]`、`{:}`,以及在 `list` 與 `[T; N]` 陣列
-  之間做選擇的填充形式 `[v; N]`。
+  之間做選擇的填充形式 `[v; N]`。空的 `{:}` 會以它所落的 typed position 的型別建出來。不是 typed position
+  的地方什麼也不給它——`if` 或 `match` 的分支、tuple 的元素、`x := [{:}]` 的元素、`print` 的運算元——在那裡它
+  會被拒絕:_E3034 this expression gives the empty map `{:}`, which has no type of its own_,除非外層宣告的
+  型別先回報了不相符。
 - **(c) closure 的參數型別。** closure **省略的 `: type`**,取自它被檢查所對的那個函式型別;從未遇到期望型別
   的省略型 closure 是錯誤。
 - **(d) carrier 的 payload 型別。** 值、`Err` 或 `nil` 進入 `T?`、`Result[T]`、`Either[X, Y]`——payload 是同一個

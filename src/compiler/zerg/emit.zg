@@ -6897,7 +6897,19 @@ fn c_needs_copy(mut &em: Emitter, t: ast.Ty) -> bool {
 # A freshly built value — a call's result, a constructor, a literal — is already nobody
 # else's, so copying it would only cost. Only a name, or a field or an element read out of one
 # (c_is_borrow), can be a second name for something.
+#
+# A MAP LITERAL IS BUILT AT `t`, and here because this is where every typed position ends —
+# c_fit_copied and c_into both do, a declared binding included — and where the few lowerings
+# that render at a type of their own begin. The literal's own type is read off its FIRST
+# entry (c_map_lit_ty) and an empty one has none, so left to c_expr an empty `{:}` was a table
+# of `int` to `int` wherever it landed: a `str` key hashed and compared by address, neither
+# key nor value dropped (#332). `{"a": 1}` written into a `map[str, float]` stored an
+# integer's bits by the same road. The rule was written in c_let alone, which is why a typed
+# binding was the one position that was right. The empty set has the same nothing to read.
 fn c_copied(mut &em: Emitter, t: ast.Ty, e: ast.Expr, sb: Subst) -> str {
+	return c_map_lit_as(em, t, e, sb) if c_is_map(t) and c_is_maplit(e)
+	return c_set_empty(em, c_set_elem(t)) if c_is_set(t) and c_is_empty_set_ctor(e) and not c_is_unknown(c_set_elem(t))
+
 	rendered := c_expr(em, e, sb)
 
 	# A channel `if` whose branches all name handles is not a borrow and hands over no
@@ -19051,6 +19063,8 @@ fn c_map_lit_as(mut &em: Emitter, want: ast.Ty, lit: ast.Expr, sb: Subst) -> str
 }
 
 fn c_map_lit(mut &em: Emitter, ks: list[ast.Expr], vs: list[ast.Expr], sb: Subst) -> str {
+	return c_no_slot(em, "the empty map `{:}`", "(zrt_map){0}") if ks.len() == 0
+
 	kt := c_map_key_ty(c_map_lit_ty(em, ks, vs))
 	vt := c_map_val_ty(c_map_lit_ty(em, ks, vs))
 	return c_map_lit_at(em, kt, vt, ks, vs, sb)
@@ -19065,6 +19079,11 @@ fn c_map_lit(mut &em: Emitter, ks: list[ast.Expr], vs: list[ast.Expr], sb: Subst
 # later key and value. A map is droppable with any number of entries, and an empty one owns
 # nothing, so the registration goes on after the first set.
 fn c_map_lit_at(mut &em: Emitter, kt: ast.Ty, vt: ast.Ty, ks: list[ast.Expr], vs: list[ast.Expr], sb: Subst) -> str {
+	# A TYPE THAT IS NOT ONE HAS NO TABLE. `?` is spelled `int64_t` by c_type's fallback, so a
+	# position that only LOOKS typed — a type parameter solved from the `{:}` itself — would
+	# build the table #332 is about and say nothing.
+	return c_no_slot(em, "the empty map `{:}`", "(zrt_map){0}") if c_is_unknown(kt) or c_is_unknown(vt)
+
 	em.used_rt = true
 
 	vtn := c_map_vt(em, kt, vt)
@@ -19181,8 +19200,7 @@ fn c_set_call(mut &em: Emitter, args: list[ast.Expr], sb: Subst) -> str {
 
 # c_set_arg_elem is the element type `set(xs)` answers, and the one place that says what the
 # constructor takes. An EMPTY `set()` has no element to read and is refused by name: the type
-# would have to come from the position it lands in, which is the rule `{:}` has and this form
-# does not.
+# comes from the position it lands in (c_into), so one that reaches here landed in none.
 fn c_set_arg_elem(mut &em: Emitter, args: list[ast.Expr]) -> ast.Ty {
 	# ONE RAISE, three sentences. The three ways of writing the constructor wrongly are one
 	# rule — `set` takes one list — and three raise sites would be three rules under one
@@ -21321,37 +21339,15 @@ fn c_let(mut &em: Emitter, name: str, ty: ast.Ty, has_type: bool, is_mut: bool, 
 		# mistake both would name and one mistake earns one message.
 		reported := check.chk_needs_type(em, name, ival)
 		eff = c_infer(em, ival)
-		if not reported {
-			check.chk_no_nil_value(em, eff, check.chk_binding_says(name))
+
+		# and a form that was refused is not lowered: the lowering has the same thing to say
+		# about it (c_no_slot), in other words, at the same place
+		if reported {
+			c_add_var(em, name, eff, is_mut, is_const)
+			return ""
 		}
-	}
 
-	# A MAP LITERAL takes its shape from the declaration. `c_map_lit_ty` reads the entries,
-	# so an EMPTY `{:}` sized its value slot as int64_t: `mut m: map[str, P] = {:}` then
-	# `m["a"] = P(3,4)` silently read back a TRUNCATED value, and a carrier value was a cc
-	# error instead. The declared type is what the map is built with when one is written.
-	if has_type and c_is_map(eff) and c_is_maplit(ival) {
-		# the literal is rendered BEFORE the binding enters scope, like every other
-		# initializer here: an entry naming `name` means the OLD binding — a shadowed
-		# outer one, or the one this declaration re-declares — never the new variable
-		mval := c_map_lit_as(em, eff, ival, c_nosub())
-		c_add_var(em, name, eff, is_mut, is_const)
-
-		# AND THE REGISTRATION, which this arm returned without for as long as it existed.
-		# `m := {"a": 1}` falls to the bottom of this function and is registered there;
-		# `m: map[str, int] = {"a": 1}` came here and was not, so an ANNOTATION was the
-		# difference between a map that gives its entry table back and one that does not.
-		# The carrier arm below records the same omission being closed on its own slot.
-		return c_let_decl(em, c_var_cname(em, name), eff, mval, ind)
-	}
-
-	# AN EMPTY SET TAKES ITS ELEMENT FROM THE DECLARATION, the same way an empty map literal
-	# takes its two. `set()` has no argument to read a type out of, which is exactly why the
-	# constructor alone cannot answer it — and a position that says `set[int]` can.
-	if has_type and c_is_set(eff) and c_is_empty_set_ctor(ival) {
-		sval := c_set_empty(em, c_set_elem(eff))
-		c_add_var(em, name, eff, is_mut, is_const)
-		return c_let_decl(em, c_var_cname(em, name), eff, sval, ind)
+		check.chk_no_nil_value(em, eff, check.chk_binding_says(name))
 	}
 
 	return c_let_list(em, name, eff, is_mut, is_const, ival, ind) if c_is_list(eff)

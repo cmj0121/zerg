@@ -7342,6 +7342,152 @@ fn main() {
 }
 EOF
 
+# AN EMPTY MAP WHERE NO POSITION SAYS WHAT IT HOLDS (#332). `x := {:}` was always turned away;
+# the same literal one step further from a declared type was not. It was built as a table of
+# integers and handed to whatever asked, so a `map[str, int]` taken from a branch compared its
+# keys by where they live — a wrong answer, from a program that compiled in silence. A branch
+# is typed by what it holds and not by the slot the whole expression fills, so the literal has
+# nothing to read a type from in either an `if` or a `match`, wherever the result then goes.
+# The seed has had this rule all along, which is how the loss reads from here.
+reject an-empty-map-in-an-if-branch E3034 'the empty map `{:}`' <<'EOF'
+fn main() {
+	k := 2
+	x: map[str, int] = if k == 2 { {:} } else { {"a": 1} }
+	print x.len()
+}
+EOF
+
+reject an-empty-map-in-an-else-branch E3034 'the empty map `{:}`' <<'EOF'
+fn main() {
+	k := 2
+	x: map[str, int] = if k != 2 { {"a": 1} } else { {:} }
+	print x.len()
+}
+EOF
+
+reject an-empty-map-in-a-branch-passed-on E3034 'the empty map `{:}`' <<'EOF'
+fn size(m: map[str, int]) -> int {
+	return m.len()
+}
+
+fn main() {
+	k := 2
+	print size(if k == 2 { {:} } else { {"a": 1} })
+}
+EOF
+
+reject an-empty-map-in-a-match-arm E3034 'the empty map `{:}`' <<'EOF'
+fn main() {
+	k := 2
+	x: map[str, int] = match k {
+		2 => {:}
+		_ => {"a": 1}
+	}
+	print x.len()
+}
+EOF
+
+reject an-empty-map-in-the-last-match-arm E3034 'the empty map `{:}`' <<'EOF'
+fn main() {
+	k := 2
+	x: map[str, int] = match k {
+		3 => {"a": 1}
+		_ => {:}
+	}
+	print x.len()
+}
+EOF
+
+reject an-empty-map-in-a-match-returned E3034 'the empty map `{:}`' <<'EOF'
+fn pick(k: int) -> map[str, int] {
+	return match k {
+		2 => {:}
+		_ => {"a": 1}
+	}
+}
+
+fn main() {
+	print pick(2).len()
+}
+EOF
+
+# A TUPLE ELEMENT, AND AN ELEMENT OF A LITERAL NOBODY TYPED. The tuple's own type is read from
+# its elements and so is an untyped list's, map's or fill's, which leaves this one unread —
+# also when the tuple is then assigned to names that do have types.
+reject an-empty-map-in-a-tuple E3034 'the empty map `{:}`' <<'EOF'
+fn main() {
+	t := (1, {:})
+	print t.0
+}
+EOF
+
+reject an-empty-map-in-a-tuple-assigned E3034 'the empty map `{:}`' <<'EOF'
+fn main() {
+	mut a: int = 0
+	mut b: map[str, int] = {"a": 1}
+	(a, b) = (1, {:})
+	print a + b.len()
+}
+EOF
+
+reject an-empty-map-in-an-untyped-list E3034 'the empty map `{:}`' <<'EOF'
+fn main() {
+	xs := [{:}]
+	print xs.len()
+}
+EOF
+
+reject an-empty-map-in-an-untyped-map E3034 'the empty map `{:}`' <<'EOF'
+fn main() {
+	mm := {1: {:}}
+	print mm.len()
+}
+EOF
+
+reject an-empty-map-in-an-untyped-fill E3034 'the empty map `{:}`' <<'EOF'
+fn main() {
+	xs := [{:}; 2]
+	print xs.len()
+}
+EOF
+
+# AN ARGUMENT ONLY A TYPE PARAMETER DESCRIBES. `T` is solved FROM the argument, so the
+# parameter is not a position that gives one a type — and the typed binding the call's answer
+# lands in is too late to.
+reject an-empty-map-for-a-type-parameter E3034 'the empty map `{:}`' <<'EOF'
+fn same[T](q: T) -> T {
+	return q
+}
+
+fn main() {
+	x: map[str, int] = same({:})
+	print x.len()
+}
+EOF
+
+# AND WHERE THERE IS NO POSITION AT ALL: printed, asked a question, walked. Each of these
+# built, and each answered as a map of integers would.
+reject an-empty-map-printed E3034 'the empty map `{:}`' <<'EOF'
+fn main() {
+	print {:}
+}
+EOF
+
+reject an-empty-map-as-a-receiver E3034 'the empty map `{:}`' <<'EOF'
+fn main() {
+	print {:}.len()
+}
+EOF
+
+reject an-empty-map-walked E3034 'the empty map `{:}`' <<'EOF'
+fn main() {
+	for v in {:} {
+		print v
+	}
+	print 0
+}
+EOF
+
 # --- nil is not a value ------------------------------------------------------------
 #
 # Two forms ANSWER nil and neither says so on its face: a `fn` with no `-> type`

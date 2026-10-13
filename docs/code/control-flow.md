@@ -43,7 +43,9 @@ _E3020 an `if` expression answers ONE type, and its branches give int and float_
 `nil` branch is the exception, and not one: it carries no type to disagree with, so
 `x: int? = if c { 1 } else { nil }` is a carrier taking a value on one side and absence on the
 other. Every other branch brings its own type, a literal included — a branch is not a typed
-position for its sibling, the same way one match arm is not one for the next.
+position for its sibling, the same way one match arm is not one for the next. An empty `{:}` has no
+type to bring, so as a branch or an arm it is _E3034 this expression gives the empty map `{:}`, which has
+no type of its own_ — bind it to a typed name first and yield the name.
 
 That `nil` branch lowers as **absent**: the fit into the carrier is distributed over the branches, so each
 spelling enters the carrier on its own and `x: int? = if c { 1 } else { nil }` with a false `c` is empty —

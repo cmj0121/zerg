@@ -33,7 +33,9 @@ then 區塊內**:`x` 不在 `else` 的作用域、也不在 `if` 之後。它是
 **每個分支必須產出相同型別**,而兩個構造用同一句話說它——_E3020 an `if` expression answers ONE type, and its
 branches give int and float_,與 `match` 的 `E3021` 並排。`nil` 分支是例外,而它其實不算例外:它沒有型別可以不一致,所以
 `x: int? = if c { 1 } else { nil }` 是一個 carrier,一邊拿值、一邊拿缺席。其他每個分支都自帶型別,literal 也不
-例外——一個分支不是它兄弟的 typed position,就像一個 match arm 不是下一個 arm 的一樣。
+例外——一個分支不是它兄弟的 typed position,就像一個 match arm 不是下一個 arm 的一樣。空的 `{:}` 沒有型別
+可帶,所以當分支或 arm 時它是 _E3034 this expression gives the empty map `{:}`, which has no type of its
+own_——先把它綁到一個寫了型別的名字,再產出那個名字。
 
 那個 `nil` 分支降階成**缺席**:填入 carrier 的動作被分配到各個分支上,每一種拼法各自進入 carrier,所以 `c` 為假時
 `x: int? = if c { 1 } else { nil }` 是空的——`x ?? 99` 回答 `99`。過去它把整個三元式當成單一個 present payload 包

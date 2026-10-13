@@ -3882,6 +3882,98 @@ fn main() {
 }
 EOF
 
+# A FIELD STEP IS A STEP (#337). The question was put to index steps only, so a field read
+# out of a map's element was stepped over and the index under it reads from a name: cc said
+# "expression is not assignable" for an `int` field and "cannot take the address of an
+# rvalue" for a `str` one, which is why two field types are held. The longer path, the map
+# reached through a list, and the leaf of a tuple target are the same step further in.
+reject store-to-a-field-of-a-map-element E3012 'cannot store through a map index' <<'EOF'
+struct P {
+	pub n: int
+}
+
+fn main() {
+	mut m := {"k": P(1)}
+	m["k"].n = 2
+	print m["k"].n
+}
+EOF
+
+reject store-to-a-str-field-of-a-map-element E3012 'cannot store through a map index' <<'EOF'
+struct P {
+	pub s: str
+}
+
+fn main() {
+	mut m := {1: P("a")}
+	m[1].s = "z"
+	print m[1].s
+}
+EOF
+
+reject store-to-a-field-path-of-a-map-element E3012 'cannot store through a map index' <<'EOF'
+struct Q {
+	pub n: int
+}
+
+struct P {
+	pub q: Q
+}
+
+fn main() {
+	mut m := {"k": P(Q(1))}
+	m["k"].q.n = 2
+	print m["k"].q.n
+}
+EOF
+
+reject store-to-a-field-of-a-map-element-in-a-list E3012 'cannot store through a map index' <<'EOF'
+struct P {
+	pub n: int
+}
+
+fn main() {
+	mut ms := [{"k": P(1)}]
+	ms[0]["k"].n = 2
+	print ms[0]["k"].n
+}
+EOF
+
+reject store-to-a-field-of-a-map-element-in-a-tuple-target E3012 'cannot store through a map index' <<'EOF'
+struct P {
+	pub n: int
+}
+
+fn main() {
+	mut m := {"k": P(1)}
+	mut a := 0
+	(a, m["k"].n) = (1, 2)
+	print a + m["k"].n
+}
+EOF
+
+# AND A STEP IS ASKED ABOUT ITSELF (#338). A subrange reads from a place and is not one: it
+# is the list the slice built, and the assignment took that list's address.
+reject store-to-a-slice E3012 'cannot store through a slice' <<'EOF'
+fn main() {
+	mut xs := [1, 2]
+	xs[0..1] = [3]
+	print xs.len()
+}
+EOF
+
+reject store-to-a-slice-of-a-field E3012 'cannot store through a slice' <<'EOF'
+struct P {
+	pub xs: list[str]
+}
+
+fn main() {
+	mut p := P(["a", "b"])
+	p.xs[0..1] = ["c"]
+	print p.xs.len()
+}
+EOF
+
 # --- a match answers one type ----------------------------------------------------
 #
 # The whole match took its type from the FIRST arm, the only one anything looked at, so a

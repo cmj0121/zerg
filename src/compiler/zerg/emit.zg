@@ -11105,9 +11105,15 @@ fn c_is_literal_expr(e: ast.Expr) -> bool {
 	}
 }
 
+# c_is_slice is "this expression is a subrange": an index whose key is a range. It answers a
+# list the slice built, so it is a value however much it reads as a place.
+pub fn c_is_slice(e: ast.Expr) -> bool {
+	return c_is_index(e) and c_is_range(c_index_key(e))
+}
+
 pub fn c_place_why(mut &em: Emitter, e: ast.Expr) -> str {
 	return "a map index" if c_is_map_index(em, e)
-	return "a slice" if c_is_index(e) and c_is_range(c_index_key(e))
+	return "a slice" if c_is_slice(e)
 	return "a literal" if c_is_literal_expr(e)
 	return "a call result" if c_ident_name(e) == "" and not c_is_lvalue(e)
 

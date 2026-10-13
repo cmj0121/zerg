@@ -1109,15 +1109,33 @@ pub fn chk_callsite(mut &em: emit.Emitter, key: str, args: list[ast.Expr], what:
 # statement expression this compiler wrote. Every index on the path has to be a place,
 # which is the same question `mut &` asks of an argument and a mutating method asks of its
 # receiver — a write to a copy is not a write, and all three are that sentence.
+#
+# A FIELD STEP IS ASKED TOO, and a step is asked about ITSELF. `m["k"].n = 2` passed because
+# the question was put to index steps only: the field was stepped over, and the index under
+# it reads from `m`, which is a place (#337). `xs[0..1] = [3]` passed because a subrange
+# reads from a place and is not one — it is the fresh list the slice built (#338). Both
+# reached cc.
+#
+# A path with no name under it at all — `mk().n = 2` — stays chk_assignable's: it is not a
+# store through a value, it is a target that was never a place.
 fn chk_store_path(mut &em: emit.Emitter, e: ast.Expr) {
 	tgt := chk_store_target(e)
 	return if not emit.c_is_index(e) and not c_is_fieldref(e)
 
-	if emit.c_is_index(e) and not emit.c_is_place(em, tgt) {
-		chk_at(em, rule.Rule.StoreThroughValue, f"cannot store through {emit.c_place_why(em, tgt)} — it is a value rather than a place, so the write would land on a copy; bind it to a name first")
+	if emit.c_is_slice(e) {
+		chk_store_through(em, e)
+		return
+	}
+
+	if not emit.c_is_place(em, tgt) and (emit.c_is_index(e) or chk_root_name(e) != "") {
+		chk_store_through(em, tgt)
 		return
 	}
 	chk_store_path(em, tgt)
+}
+
+fn chk_store_through(mut &em: emit.Emitter, e: ast.Expr) {
+	chk_at(em, rule.Rule.StoreThroughValue, f"cannot store through {emit.c_place_why(em, e)} — it is a value rather than a place, so the write would land on a copy; bind it to a name first")
 }
 
 # chk_str_not_indexable is the language's rule that a str has no subscript.

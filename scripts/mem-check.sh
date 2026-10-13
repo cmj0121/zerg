@@ -1016,6 +1016,66 @@ fn main() {
 }
 ZG
 
+# --- a Ref of a type whose name is not a C identifier ----------------------------------
+# The helpers a `Ref` copies and drops its payload with are named after the payload's type,
+# and a type's name is spelled with more than a C identifier allows: a function type has
+# `(`, `)`, `-` and `>`, a tuple its parentheses, an optional `?`, an array `;`. Each went
+# into the helper's name as written and cc reported the C (#339). A function, a closure, a
+# list of functions, a tuple that owns a str and a list, an optional and an array are each
+# boxed and read back; a wrong answer aborts. The seed has no closure value, so it is zerg
+# only.
+case_run ref_payloads no no <<'ZG'
+fn word(n: int) -> str {
+	return str(n) + "!"
+}
+
+fn inc(n: int) -> int {
+	return n + 1
+}
+
+fn round(n: int) {
+	rf := Ref(inc)
+	f := deref(rf)
+	raise "a Ref of a function called the wrong one" if f(n) != n + 1
+
+	rc := Ref(
+		fn (k: int) -> int {
+			return k + n
+		}
+	)
+	g := deref(rc)
+	raise "a Ref of a closure lost what it captured" if g(1) != n + 1
+
+	rl := Ref([inc])
+	fs := deref(rl)
+	raise "a Ref of a list of functions called the wrong one" if fs[0](n) != n + 1
+
+	rt := Ref((word(n), [n, n + 1]))
+	t := deref(rt)
+
+	raise "a Ref of a tuple read back the wrong str" if t.0 != word(n)
+	raise "a Ref of a tuple read back the wrong list" if t.1[1] != n + 1
+
+	o: str? = word(n)
+	ro := Ref(o)
+	raise "a Ref of an optional read back the wrong value" if (deref(ro) ?? "") != word(n)
+
+	a: [int; 2] = [n, n + 1]
+	ra := Ref(a)
+	b := deref(ra)
+	raise "a Ref of an array read back the wrong elements" if b[0] + b[1] != n + n + 1
+}
+
+fn main() {
+	mut i := 0
+	r := rounds()
+	for i < r {
+		round(i)
+		i = i + 1
+	}
+}
+ZG
+
 # --- a closure environment -------------------------------------------------------------
 # One environment per construction, and the closure may outlive the scope that made it —
 # which is what closing over a value is for, and why the scope cannot be what frees it.

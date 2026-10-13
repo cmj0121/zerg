@@ -398,12 +398,9 @@ _E4089 `P` has no associated value `NOPE`_,而那句話取代的是一次外漏:
   _E3017 `P` does not implement `ne`, which `Eq` requires_——因為 `!=` 是被分派的,不是靠對 `==` 取反導出的。
   一個**沒有 `Eq` impl 的型別不能被比較**——對它用 `==` 是編譯錯誤、絕非靜默的結構化 default。
 
-  > **[not yet]** 一個**容器**根本取得不到它,而這正是那條規則從一個它答不上來的方向被碰到:兩個 `list`、兩個
-  > `map` 或兩個 tuple 的 `xs == ys` 是 _E9057 NotImplemented: `==` on a `list[int]` — structural equality over
-  > a container is unbuilt, and a container has no declaration to derive it on_。無名形式該有的東西在
-  > 〈型別〉的「由組成部分繼承」規則底下——一個 tuple 恰在它每個部分都有 `Eq` 時有 `Eq`——而沒建出來的正是那個
-  > 推導。在那之前,請比較你真正想比較的那些元素。[格式化](../runtime/format.zh-TW.md) 把同一個問題換一個動詞
-  > 問過並且答了:複合值會**結構化渲染**,而比較一個複合值才是還欠著的那件事。
+  一個**無名形式**——`list`、`map`、`set`、tuple、array——沒有宣告可以 derive，程式也寫不出什麼給它，所以它靠
+  〈型別〉的「由組成部分繼承」規則取得 `Eq`：恰在它每個部分都有時。兩個 `list[int]` 的 `xs == ys` 能比，
+  `list[N]` 在 `N` 滿足時滿足 `T: Eq` bound，而它的 `!=` 就是取反——無名形式沒有寫下可以分派的 `ne`。
 
 Zerg **不設兩值之間的 instance-identity 測試**：copy-by-value 下值的副本本就是不同 instance、且無 aliasing，
 「同一個 instance？」只對 channel 有意義——太 narrow、不值得一個運算子。相等在型別 opt-in 之處是**結構性**的 `Eq`。

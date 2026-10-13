@@ -344,10 +344,12 @@ carry is behavior of its **own** — no inherent methods, no hand-written `spec`
 result is **first-class** — stored, passed, or destructured — so multiple return needs no separate
 mechanism ([Pattern matching](../code/control-flow.md)).
 
-> **[not yet]** Neither of the two things this paragraph gives a tuple for free is built. `==` on a tuple
-> is _E9057 NotImplemented: `==` on a `(int, int)` — structural equality over a container is unbuilt, and a
-> container has no declaration to derive it on_: the parts-inheritance rule above is specified and the
-> derivation over an unnamed form is what is missing.
+`==` and `!=` are that rule built: `(1, "a") == (1, "a")` compares part by part, and a tuple holding a
+part with no `Eq` is refused for that part (`E4020`).
+
+> **[not yet]** `Hash` is the half of the rule that is not built: a tuple as a map key is _E9052
+> NotImplemented: a map key of type (int, int) — it needs `Hash`, and this compiler has one for `int` and
+> for `str`_.
 > **Destructuring** is built and is the ordinary way to read one — `(a, b) := two()`. The unparenthesized
 > `a, b := two()` is not a form: GRAMMAR#bind-target derives the tuple shape with its brackets, so what the
 > comma reports is punctuation (_E2005 expected a newline or `;` to separate statements, found `,`_).

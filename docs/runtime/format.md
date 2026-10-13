@@ -45,8 +45,9 @@ declaration. `print`, a format hole and `str(…)` all consult the override, and
 > | `T?`                | the value, or `nil`                                                                |
 > | `Either[X, Y]`      | `Left(1)` / `Right(…)` — tag, then payload                                         |
 >
-> A composite has no structural **equality**, which is the same question asked of a different verb: `xs ==
-ys` over two lists is `E9057` ([Specs & Generics](../core/specs.md)). Rendering is derived and comparing
+> Structural **equality** is the same question asked of a different verb, and it has a different answer:
+> an unnamed form compares by its parts, and a declared type only once it has an `Eq`
+> ([Specs & Generics](../core/specs.md)). Rendering is derived for every composite and comparing
 > is not — the two are separate decisions, and the reason is that a rendering is a view while an equality
 > is a claim about the values.
 >

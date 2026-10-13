@@ -3753,14 +3753,10 @@ fn parse_jump_guard(mut &p: Parser, jump: ast.Stmt) -> ast.Stmt {
 #
 # ONLY A COMPARISON COMES APART, NEVER A CALL. `assert contains(xs, 3)` reports its source
 # text and no values: taking its arguments apart would hand the message a `list` to render,
-# and a composite has no rendering here (E4011 / E9059). A comparison cannot reach that hole
-# from the same direction — a container has no `==` either (E9057) — so the two holes very
-# nearly line up. NEARLY: a `#[derive(Eq)]` struct compares and does NOT render, so
-# `assert p == q` over one is E9059 against a program that is otherwise fine. That is a hole
-# `testing.assert_eq` had for the same reason — its own `f"{a} != {b}"` was E9059 too, and
-# reported inside src/stdlib/testing.zg, at a line the reader had not written. What changes
-# here is that the diagnostic points at their own. Closing it needs a structural Display,
-# which is a language feature and not this form's to invent.
+# and `str` over a list is the bytes bridge rather than a rendering (E4011). A comparison
+# reaches that hole from the other side: two lists compare and a list does not render, so
+# `assert xs == ys` is E4011 against a program that is otherwise fine, reported at the
+# reader's own line. A map, a set, a tuple and a declared type render, and are claimed.
 #
 # THE VALUES ARE INTERPOLATED, NEVER `str()`-ed. The two spellings are one rendering in this
 # compiler, and they are NOT one in the seed: `str(x)` over a type parameter is _cannot build

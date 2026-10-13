@@ -9516,6 +9516,10 @@ fn c_binexpr(mut &em: Emitter, oper: str, a: ast.Expr, b: ast.Expr, sb: Subst) -
 	if c_is_cmp_op(oper) {
 		return c_eq_call(em, oper, a, b, sb) if (oper == "==" or oper == "!=") and c_has_eq(em, ta)
 
+		# AN UNNAMED FORM HAS IT FROM ITS PARTS (docs/core/types.md): there is no declaration
+		# to derive on and nothing a program could write, so it is written here.
+		return c_eq_parts(em, oper, a, b, ta, sb) if (oper == "==" or oper == "!=") and c_is_unnamed(ta) and c_eq_legal(em, ta) and ast.ty_eq(ta, c_infer(em, b))
+
 		# AND ORDERING COMES FROM `Ord`, the same way. `less` is the one method the spec
 		# requires (docs/core/specs.md) and the other three orderings are written out of it
 		# here rather than required of an implementer.
@@ -9598,11 +9602,158 @@ fn c_operand(mut &em: Emitter, pair_is_float: bool, e: ast.Expr, sb: Subst) -> s
 # A scalar and a `str` have it from the language. A declared type has it from an `Eq` impl,
 # derived or written. Nothing else does: a carrier is not a value until it is unwrapped, and a
 # channel is an identity the language never gave an equality to.
+#
+# AN UNNAMED FORM has it exactly when every part has it — the parts-inheritance rule of
+# docs/core/types.md, which is the one way a type with no declaration can have anything.
 fn c_eq_legal(mut &em: Emitter, t: ast.Ty) -> bool {
 	return false if c_is_carrier(t) or c_is_identity(t)
+	return c_is_unknown(c_eq_bad_part(em, t)) if c_is_unnamed(t)
 	return c_has_eq(em, t) if c_is_aggregate(em, t)
 
 	return true
+}
+
+# c_is_unnamed is the forms that have no declaration: a list, a map, a set, a tuple and an
+# array. What each can do it has from its parts.
+fn c_is_unnamed(t: ast.Ty) -> bool {
+	return c_is_list(t) or c_is_map(t) or c_is_set(t) or c_is_tuple(t) or c_is_arr(t)
+}
+
+# c_eq_compared is the parts of an unnamed form its `==` compares. A map's KEYS are not among
+# them: a key is found in the other map by the hash and the equality the map was built with,
+# which is the comparison `m[k]` already makes.
+fn c_eq_compared(t: ast.Ty) -> list[ast.Ty] {
+	return [c_list_elem(t)] if c_is_list(t)
+	return [c_map_val_ty(t)] if c_is_map(t)
+	return c_tuple_tys(t) if c_is_tuple(t)
+	return [c_arr_elem(t)] if c_is_arr(t)
+
+	mut none: list[ast.Ty] = []
+	return none
+}
+
+# c_eq_bad_part is the first part, depth first, that `==` means nothing on — or TUnknown when
+# every part compares. It answers a TYPE and not a bool because the refusal names it: what a
+# reader of `xs == ys` over a `list[P]` has to change is `P`.
+fn c_eq_bad_part(mut &em: Emitter, t: ast.Ty) -> ast.Ty {
+	for part in c_eq_compared(t) {
+		if c_is_unnamed(part) {
+			bad := c_eq_bad_part(em, part)
+			return bad if not c_is_unknown(bad)
+		} else if not c_eq_legal(em, part) {
+			return part
+		}
+	}
+	return ast.Ty.TUnknown
+}
+
+# c_eq_parts lowers `a == b` / `a != b` over two values of one unnamed form. A `list` and an
+# array compare in order, a tuple part by part, and a `map` or a `set` without regard to the
+# order things were put in (docs/code/collections.md).
+#
+# `!=` IS THE NEGATION, and the parts are always asked `==`. A declared type's `ne` is
+# dispatched rather than derived, but that is a statement about the type that wrote one: an
+# unnamed form wrote nothing, and two lists differ exactly when they are not equal.
+#
+# EACH OPERAND IS BOUND ONCE, in source order, and one this expression made is held across
+# everything after it and given back when the answer is in hand — a part's `eq` is the
+# program's own code and may abort. One somebody else holds is read where it stands.
+fn c_eq_parts(mut &em: Emitter, oper: str, a: ast.Expr, b: ast.Expr, t: ast.Ty, sb: Subst) -> str {
+	em.used_rt = true
+
+	n := c_tmp(em, "zgt_eq")
+	la := n + "a"
+	lb := n + "b"
+	rv := n + "r"
+	ct := c_type(t)
+	oa := c_owns_value(a) and c_needs_copy(em, t)
+	ob := c_owns_value(b) and c_needs_copy(em, t)
+
+	keep := em.rel_cnames.len()
+	mut head := f"{ct} {la} = {c_expr(em, a, sb)}; "
+	if oa {
+		head = head + c_hold(em, t, la)
+	}
+	head = head + f"{ct} {lb} = {c_expr(em, b, sb)}; "
+	if ob {
+		head = head + c_hold(em, t, lb)
+	}
+	test := c_eq_places(em, t, la, lb)
+	mut give := c_unhold(em, keep)
+	if ob {
+		give = give + c_drop_stmt(em, t, lb) + " "
+	}
+	if oa {
+		give = give + c_drop_stmt(em, t, la) + " "
+	}
+
+	mut neg := ""
+	if oper == "!=" {
+		neg = "!"
+	}
+	return f"({{ {head}bool {rv} = {neg}{test}; {give}{rv}; }})"
+}
+
+# c_eq_places is the comparison itself, over two C names that hold the two values. It reads
+# and keeps nothing: every part is looked at where it lies.
+#
+# THE WALK STOPS AT THE FIRST DIFFERENCE, and two of different lengths never start one.
+fn c_eq_places(mut &em: Emitter, t: ast.Ty, ca: str, cb: str) -> str {
+	n := c_tmp(em, "zgt_eq")
+	rv := n + "r"
+	iv := n + "i"
+	nv := n + "n"
+	xa := n + "x"
+	xb := n + "y"
+	bt := c_type(ast.Ty.TBool)
+
+	if c_is_tuple(t) {
+		tys := c_tuple_tys(t)
+		mut out := f"({{ {bt} {rv} = true; "
+		mut i := 0
+		for i < tys.len() {
+			fi := f"f{strconv.to_string(i, 10)}"
+			et := c_type(tys[i])
+			out = out + f"if ({rv}) {{ {et} {xa} = {ca}.{fi}; {et} {xb} = {cb}.{fi}; {rv} = {c_eq_pair(em, tys[i], xa, xb)}; }} "
+			i = i + 1
+		}
+		return out + f"{rv}; }})"
+	}
+	if c_is_arr(t) {
+		e := c_arr_elem(t)
+		et := c_type(e)
+		return f"({{ {bt} {rv} = true; for (int64_t {iv} = 0; {rv} && {iv} < {c_arr_key(t)}; {iv}++) {{ {et} {xa} = {ca}.v[{iv}]; {et} {xb} = {cb}.v[{iv}]; {rv} = {c_eq_pair(em, e, xa, xb)}; }} {rv}; }})"
+	}
+	if c_is_list(t) {
+		e := c_list_elem(t)
+		et := c_type(e)
+		return f"({{ size_t {nv} = zrt_list_len(&{ca}); {bt} {rv} = {nv} == zrt_list_len(&{cb}); for (size_t {iv} = 0; {rv} && {iv} < {nv}; {iv}++) {{ {et} {xa} = *({et} *)zrt_list_at_ref(&{ca}, {iv}); {et} {xb} = *({et} *)zrt_list_at_ref(&{cb}, {iv}); {rv} = {c_eq_pair(em, e, xa, xb)}; }} {rv}; }})"
+	}
+
+	# a SET is its members and nothing else, so being the same size and holding every member
+	# of the other is the whole of it
+	head := f"({{ size_t {nv} = zrt_map_len(&{ca}); {bt} {rv} = {nv} == zrt_map_len(&{cb}); for (size_t {iv} = 0; {rv} && {iv} < {nv}; {iv}++) {{ "
+	return head + f"{rv} = zrt_map_has(&{cb}, zrt_map_key_at(&{ca}, {iv})); }} {rv}; }})" if c_is_set(t)
+
+	# and a MAP is its pairs: the same key has to be there, holding an equal value
+	v := c_map_val_ty(t)
+	vt := c_type(v)
+	pv := n + "p"
+	return head + f"void *{pv} = zrt_map_get(&{cb}, zrt_map_key_at(&{ca}, {iv})); {rv} = {pv} != NULL; if ({rv}) {{ {vt} {xa} = *({vt} *)zrt_map_val_at(&{ca}, {iv}); {vt} {xb} = *({vt} *)({pv}); {rv} = {c_eq_pair(em, v, xa, xb)}; }} }} {rv}; }})"
+}
+
+# c_eq_pair compares one part with its opposite number, AS THE `==` A PROGRAM WOULD WRITE
+# BETWEEN THEM. The two C names are bound as two names of the part's type and the operator is
+# handed back to c_expr, so a str goes through strcmp, a declared type through its `eq` with
+# the copies that call owes, and a nested form comes back here — from the one place that
+# already decides each of those.
+fn c_eq_pair(mut &em: Emitter, t: ast.Ty, xa: str, xb: str) -> str {
+	outer := c_scope_open(em)
+	c_env_row(em, xa, t, xa, false, false)
+	c_env_row(em, xb, t, xb, false, false)
+	out := c_expr(em, ast.Expr.EBinary("==", ast.Expr.EIdent(xa, 0, 0), ast.Expr.EIdent(xb, 0, 0)), c_nosub())
+	c_scope_close(em, outer)
+	return out
 }
 
 # c_eq_call lowers `a == b` / `a != b` on a type with an Eq impl as the CALL THE PROGRAMMER
@@ -9651,18 +9802,14 @@ fn c_ord_call(mut &em: Emitter, oper: str, a: ast.Expr, b: ast.Expr, sb: Subst) 
 	return c_holding_recv(em, ast.Expr.EUnary("not", ast.Expr.EMethod(a, "less", [b], 0, 0)), sb)
 }
 
-# c_eq_refuse names what is missing, and there are four different sentences under one gap —
-# the comment here said three while the function answered five, and two of the five had no
-# code, which is how a rule stays unpinnable: nothing in the file counts its own branches.
-# The fifth turned out to be a rule the checker already owned, and is gone.
+# c_eq_refuse names what is missing, one sentence to a class of type.
 #
 # A CHANNEL or a FUNCTION is an identity rather than a value, and a CARRIER may hold nothing
-# to compare — both permanent answers of the language rather than gaps. Equality on a
-# CONTAINER is
-# docs/code/collections.md's `[not yet]` — a container is not a declaration, so there is
-# nothing to decorate and no impl a program could write for it. Equality on a NAMED type
-# exists the moment it has an `Eq`, so that one is an instruction rather than a refusal, and
-# it is the only one of the four that tells the reader what to type.
+# to compare — both permanent answers of the language rather than gaps. Equality on a NAMED
+# type exists the moment it has an `Eq`, so that one is an instruction rather than a refusal,
+# and it is the one that tells the reader what to type. An UNNAMED form — a list, a map, a
+# tuple — is none of these and has no sentence of its own: it compares by its parts, so what
+# it is refused for is the part, in that part's class.
 # It REPORTS rather than answering a sentence, and that is what buys the place: it used to
 # be `raise c_eq_says(…)`, so five rules about an expression the emitter is standing on said
 # nothing about where it was. The channel is the same one every checked rule uses, and the
@@ -9681,21 +9828,31 @@ fn c_eq_refuse(mut &em: Emitter, oper: str, t: ast.Ty) {
 	# one outcome a refusal must never have. `in` is such a caller.
 	return if c_is_order_op(oper)
 
+	# AN UNNAMED FORM IS REFUSED FOR THE PART THAT CANNOT BE COMPARED, named beside the form
+	# the reader wrote: what `xs == ys` over a `list[P]` is missing is `P`'s `Eq`, and a
+	# sentence about the list would send them to a declaration that does not exist.
+	if c_is_unnamed(t) {
+		bad := c_eq_bad_part(em, t)
+		c_eq_refuse_part(em, oper, f"{ast.ty_name(t)}, which compares its {ast.ty_name(bad)}", bad)
+		return
+	}
+	c_eq_refuse_part(em, oper, ast.ty_name(t), t)
+}
+
+# c_eq_refuse_part reports the one of the three classes `t` is in, under the subject the
+# reader wrote — `t` itself, or the unnamed form `t` is a part of.
+fn c_eq_refuse_part(mut &em: Emitter, oper: str, subject: str, t: ast.Ty) {
 	nm := ast.ty_name(t)
 	if c_is_identity(t) {
-		check.chk_at(em, rule.Rule.IdentityHasNoEquality, c_eq_says(oper, nm, f"a {nm} is an identity rather than a value, which the language gives no equality", "compare something it carries", "look for something it carries instead"))
+		check.chk_at(em, rule.Rule.IdentityHasNoEquality, c_eq_says(oper, subject, f"a {nm} is an identity rather than a value, which the language gives no equality", "compare something it carries", "look for something it carries instead"))
 		return
 	}
 	if c_is_carrier(t) {
-		check.chk_at(em, rule.Rule.OptionalCompare, c_eq_says(oper, nm, f"a {nm} may hold no value, so there is nothing to compare", "unwrap it first with `??`, `!` or `if v := …`", "look in a collection whose elements are values, or for what they carry"))
-		return
-	}
-	if not c_is_struct_name(em, c_named_of(t)) and not c_is_enum_ty(em, t) {
-		check.chk_at(em, rule.Rule.NotYetContainerEquality, c_eq_says(oper, nm, f"NotImplemented: structural equality over a {nm} is unbuilt, and a container has no declaration to derive it on (docs/core/types.md)", "compare the elements you mean to compare", "look for the elements you mean to compare"))
+		check.chk_at(em, rule.Rule.OptionalCompare, c_eq_says(oper, subject, f"a {nm} may hold no value, so there is nothing to compare", "unwrap it first with `??`, `!` or `if v := …`", "look in a collection whose elements are values, or for what they carry"))
 		return
 	}
 
-	check.chk_at(em, rule.Rule.EqRequired, c_eq_says(oper, nm, f"a {nm} has no `Eq`, and there is no structural equality by default", f"add `#[derive(Eq)]` to the type or write `impl Eq for {nm}`", f"add `#[derive(Eq)]` to the type or write `impl Eq for {nm}`"))
+	check.chk_at(em, rule.Rule.EqRequired, c_eq_says(oper, subject, f"a {nm} has no `Eq`, and there is no structural equality by default", f"add `#[derive(Eq)]` to the type or write `impl Eq for {nm}`", f"add `#[derive(Eq)]` to the type or write `impl Eq for {nm}`"))
 }
 
 # c_eq_says writes one of those four findings in the words of the OPERATOR THE READER WROTE.
@@ -10120,11 +10277,10 @@ fn c_in_value(mut &em: Emitter, elem: ast.Ty, x: ast.Expr, sb: Subst) -> str {
 # c_in_elem_owes_eq is whether the element type is one a PROGRAM could give an `==` and has
 # not. A declared struct or enum is: it has a declaration to decorate and `#[derive(Eq)]` is
 # the answer. A container is not — there is nothing to decorate, and no impl a program could
-# write for it — so its missing `==` is this compiler's gap and not the author's. That is the
-# same line c_eq_refuse draws between E4020 and E9057, asked here of the ELEMENT — and it is
-# the LAST of the four c_eq_refuse draws, not the only one. The comment used to call it "the
-# same line", singular, which read as a parity claim and was the reason the two classes above
-# it — an identity and a carrier — were never asked of an element at all.
+# write for it — so what `in` does not do over one is this compiler's gap and not the
+# author's. It is the LAST of the lines c_eq_refuse draws, not the only one. The comment used
+# to call it "the same line", singular, which read as a parity claim and was the reason the
+# two classes above it — an identity and a carrier — were never asked of an element at all.
 fn c_in_elem_owes_eq(mut &em: Emitter, elem: ast.Ty) -> bool {
 	return false if c_has_eq(em, elem)
 

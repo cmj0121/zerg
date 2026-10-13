@@ -10059,7 +10059,7 @@ fn c_in_container(mut &em: Emitter, x: ast.Expr, set: ast.Expr, st: ast.Ty, sb: 
 	bt := c_type(ast.Ty.TBool)
 	et := c_type(elem)
 
-	give := c_in_give(em, set, st, sv)
+	mut give := c_in_give(em, set, st, sv)
 
 	# the set is bound FIRST, so one this expression owns is held across the value looked for
 	keep := em.rel_cnames.len()
@@ -10067,8 +10067,14 @@ fn c_in_container(mut &em: Emitter, x: ast.Expr, set: ast.Expr, st: ast.Ty, sb: 
 	if give != "" and c_runs_code(x) {
 		head = head + c_hold(em, st, sv)
 	}
-	head = head + f"{et} {kv} = {c_fit_copied(em, "the value looked for by `in`", elem, x, sb)}; "
+	head = head + f"{et} {kv} = {c_in_value(em, elem, x, sb)}; "
 	head = head + c_unhold(em, keep)
+
+	# and what the value owns goes back straight after the test, which is the last thing to
+	# read it: nothing runs between its binding and here, so it is never registered
+	if c_owns_value(x) and c_needs_copy(em, elem) {
+		give = f" {c_drop_stmt(em, elem, kv)}{give}"
+	}
 
 	return f"({{ {head}{bt} {rv} = zrt_map_has(&{sv}, &{kv});{give} {rv}; }})" if c_is_map(st) or c_is_set(st)
 
@@ -10080,6 +10086,21 @@ fn c_in_container(mut &em: Emitter, x: ast.Expr, set: ast.Expr, st: ast.Ty, sb: 
 	# the LENGTH is read once: zrt_list_len is a call into another translation unit, so asking
 	# it in the condition is one call per element rather than one for the loop
 	return f"({{ {head}{bt} {rv} = false; size_t {nv} = zrt_list_len(&{sv}); for (size_t {iv} = 0; {iv} < {nv}; {iv}++) {{ if ({c_in_eq(at, kv, elem)}) {{ {rv} = true; break; }} }}{give} {rv}; }})"
+}
+
+# c_in_value renders the value `in` looks for. THE TEST READS IT AND KEEPS NOTHING — a list
+# compares it and zrt_map_has hashes it — so a value somebody else holds is read where it
+# stands, as `m.has(k)`, `m[k]` and a compared str are, and only one this expression made is
+# its own to give back (#335). It used to arrive through c_fit_copied whatever it was, which
+# COPIES a borrow for the slot that will keep it: `k in xs` retained `k`'s cell and nothing
+# released it. A borrow needs none of what c_fit_copied does besides — it is not a literal that
+# adopts the element type, and its fit is still checked here.
+fn c_in_value(mut &em: Emitter, elem: ast.Ty, x: ast.Expr, sb: Subst) -> str {
+	where := "the value looked for by `in`"
+	return c_fit_copied(em, where, elem, x, sb) if not c_is_borrow(x)
+
+	check.chk_slot_fits(em, where, elem, x)
+	return c_expr(em, x, sb)
 }
 
 # c_in_elem_owes_eq is whether the element type is one a PROGRAM could give an `==` and has
@@ -19074,10 +19095,11 @@ fn c_map_lit(mut &em: Emitter, ks: list[ast.Expr], vs: list[ast.Expr], sb: Subst
 # the order they were written.
 #
 # TWO THINGS ARE HELD WHILE IT IS BUILT (c_hold, #312), because two things are owned by
-# nothing: a key this entry built, until zrt_map_set takes it — held across the entry's value,
-# as c_map_set holds one — and the map itself once it has an entry in it, held across every
-# later key and value. A map is droppable with any number of entries, and an empty one owns
-# nothing, so the registration goes on after the first set.
+# nothing: a key this entry built or copied out of a name (c_part_owns, #340), until
+# zrt_map_set takes it — held across the entry's value, as c_map_set holds one — and the map
+# itself once it has an entry in it, held across every later key and value. A map is droppable
+# with any number of entries, and an empty one owns nothing, so the registration goes on after
+# the first set.
 fn c_map_lit_at(mut &em: Emitter, kt: ast.Ty, vt: ast.Ty, ks: list[ast.Expr], vs: list[ast.Expr], sb: Subst) -> str {
 	# A TYPE THAT IS NOT ONE HAS NO TABLE. `?` is spelled `int64_t` by c_type's fallback, so a
 	# position that only LOOKS typed — a type parameter solved from the `{:}` itself — would
@@ -19104,7 +19126,7 @@ fn c_map_lit_at(mut &em: Emitter, kt: ast.Ty, vt: ast.Ty, ks: list[ast.Expr], vs
 		mk := c_into(em, kt, ks[i], sb)
 		kkeep := em.rel_cnames.len()
 		mut khold := ""
-		if c_owns_value(ks[i]) and c_runs_code(vs[i]) {
+		if c_part_owns(em, kt, ks[i]) and c_runs_code(vs[i]) {
 			khold = c_hold(em, kt, "zgt_mk")
 		}
 		mv := c_fit_copied(em, "a value of this map literal", vt, vs[i], sb)

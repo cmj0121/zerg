@@ -4016,6 +4016,34 @@ fn main() {
 }
 EOF
 
+# --- the checked index asks about one thing --------------------------------------
+#
+# `get` is built on a list and on a map, so what is left to turn away is the program's own
+# mistake: an argument count that is not one, said in the container's own word, and a `get`
+# on a set — which has membership and nothing to hand back, so the name is not one it answers.
+
+reject list-get-takes-one-index E4116 'asks about one index, and this gives 0' <<'EOF'
+fn main() {
+	xs := [1]
+	print xs.get() ?? 0
+}
+EOF
+
+reject map-get-takes-one-key E4116 'asks about one key, and this gives 2' <<'EOF'
+fn main() {
+	m := {"a": 1}
+	print m.get("a", "b") ?? 0
+}
+EOF
+
+reject set-has-no-get E3134 'the method `get` on a set[int]' <<'EOF'
+fn main() {
+	s := set([1, 2])
+	print s.has(1)
+	print s.get(1)
+}
+EOF
+
 # --- a match answers one type ----------------------------------------------------
 #
 # The whole match took its type from the FIRST arm, the only one anything looked at, so a

@@ -1076,6 +1076,83 @@ fn main() {
 }
 ZG
 
+# --- the checked index ------------------------------------------------------------------
+# `xs.get(i)` and `m.get(k)` answer an optional that OWNS a copy of the element, so every
+# consumer gives one back: `??`, a binding, a discarded statement, `if v := …`, a return. The
+# receiver is a name, a call's result and a literal; the map's key is a name and a str the
+# expression built, which the lookup only reads. An absent index or key answers nothing and
+# allocates nothing. A wrong answer aborts, and a list read with `get` must not share its
+# buffer with the list it came from. The seed copies no map, so it is zerg only.
+case_run checked_get no no <<'ZG'
+fn word(n: int) -> str {
+	return str(n) + "!"
+}
+
+fn words(n: int) -> list[str] {
+	return [word(n), word(n + 1)]
+}
+
+struct P {
+	pub n: int
+	pub s: str
+}
+
+fn first(xs: list[str]) -> str? {
+	return xs.get(0)
+}
+
+fn round(n: int) {
+	xs := words(n)
+
+	raise "a list `get` answered the wrong element" if (xs.get(1) ?? "") != word(n + 1)
+	raise "a list `get` past the end answered an element" if (xs.get(2) ?? "none") != "none"
+	raise "a list `get` at a negative index answered an element" if (xs.get(-1) ?? "none") != "none"
+
+	a := xs.get(0)
+	raise "a bound list `get` answered the wrong element" if (a ?? "") != word(n)
+	xs.get(1)
+	if v := xs.get(0) {
+		raise "an unwrapped list `get` answered the wrong element" if v != word(n)
+	}
+
+	raise "a `get` on a list a call answered was wrong" if (words(n).get(0) ?? "") != word(n)
+	raise "a `get` on a list a call answered found an element past the end" if (words(n).get(9) ?? "none") != "none"
+	raise "a returned `get` was wrong" if (first(xs) ?? "") != word(n)
+
+	mut ls := [[n], [n + 1]]
+	mut got := ls.get(0) ?? []
+	got.append(7)
+	raise "a list read with `get` shared its buffer with the list it came from" if ls[0].len() != 1
+
+	ps := [P(n, word(n))]
+	if p := ps.get(0) {
+		raise "a struct read with `get` was wrong" if p.s != word(n)
+	}
+
+	m := {word(n): word(n + 1), word(n + 2): word(n + 3)}
+
+	raise "a map `get` answered the wrong value" if (m.get(word(n)) ?? "") != word(n + 1)
+	raise "a map `get` of an absent key answered a value" if (m.get(word(n + 9)) ?? "anon") != "anon"
+
+	k := word(n + 2)
+	b := m.get(k)
+
+	raise "a bound map `get` answered the wrong value" if (b ?? "") != word(n + 3)
+	raise "a map `get` took the key it was asked with" if k != word(n + 2)
+
+	raise "a `get` on a map literal was wrong" if ({word(n): [n, n]}.get(word(n)) ?? []).len() != 2
+}
+
+fn main() {
+	mut i := 0
+	r := rounds()
+	for i < r {
+		round(i)
+		i = i + 1
+	}
+}
+ZG
+
 # --- a closure environment -------------------------------------------------------------
 # One environment per construction, and the closure may outlive the scope that made it —
 # which is what closing over a value is for, and why the scope cannot be what frees it.

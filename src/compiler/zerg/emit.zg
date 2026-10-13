@@ -8582,12 +8582,12 @@ fn c_carrier_method_unknown(mut &em: Emitter, tty: ast.Ty, meth: str) -> str {
 # this list by walking up from the raise while the lines are bindings, so a comment or a blank
 # line between them hides every name above it. The comment goes here, where the walk stops.
 fn c_list_method_unknown(mut &em: Emitter, meth: str) -> str {
-	collection := meth == "insert" or meth == "remove" or meth == "get" or meth == "slice" or meth == "retain"
+	collection := meth == "insert" or meth == "remove" or meth == "slice" or meth == "retain"
 	adapters := meth == "map" or meth == "filter" or meth == "fold"
 	unbuilt := collection or adapters
-	return c_diag(em, rule.Rule.NotYetListMethod, f"NotImplemented: the list method `{meth}` — this compiler has `len` and `append` (docs/code/collections.md)") if unbuilt
+	return c_diag(em, rule.Rule.NotYetListMethod, f"NotImplemented: the list method `{meth}` — this compiler has `len`, `append` and `get` (docs/code/collections.md)") if unbuilt
 
-	return c_diag(em, rule.Rule.ListMethodUnknown, f"the list method `{meth}` — a list answers `len` and `append`, and is read with `xs[i]`")
+	return c_diag(em, rule.Rule.ListMethodUnknown, f"the list method `{meth}` — a list answers `len`, `append` and `get`, and is read with `xs[i]`")
 }
 
 # c_twice_in_file_says is the sentence for a name declared twice IN ONE FILE, which is one of
@@ -11675,6 +11675,8 @@ fn c_list_method_on(mut &em: Emitter, tgt: str, meth: str, args: list[ast.Expr],
 	# there cannot get past this line. `len` is the only read-only method, so everything
 	# that reaches this point writes through its receiver — which is what decides whether
 	# the receiver is lowered as a place.
+	return c_list_get(em, tgt, args, tty, sb) if meth == "get"
+
 	raise c_list_method_unknown(em, meth) if not c_meth_mutates(meth)
 
 	if meth == "append" {
@@ -11685,6 +11687,45 @@ fn c_list_method_on(mut &em: Emitter, tgt: str, meth: str, args: list[ast.Expr],
 		return "({ " + et + " zgt_le = " + el + "; zrt_list_push(&(" + tgt + "), &zgt_le); })"
 	}
 	return tgt
+}
+
+# c_list_get lowers `xs.get(i)`: the CHECKED index (docs/code/collections.md). It answers a
+# `T?` — the element where `i` names one, and absent where it does not, a negative `i`
+# included — so it never aborts, which is the whole difference from `xs[i]`.
+#
+# THE ELEMENT IS COPIED OUT. `xs[i]` is a read of a slot the list still owns, and an optional
+# is a value of its own: it is bound, handed to `??`, returned, and it outlives the list it
+# was read from. So the carrier owns what it holds, like every other carrier an expression
+# builds.
+fn c_list_get(mut &em: Emitter, tgt: str, args: list[ast.Expr], tty: ast.Ty, sb: Subst) -> str {
+	c_get_arity(em, "index", args.len())
+	c_list_index_int(em, args[0])
+
+	elem := c_list_elem(tty)
+	oty := ast.Ty.TOpt(elem)
+	cn := c_opt_name(em, elem)
+	lp := c_tmp(em, "zgt_gl")
+	iv := c_tmp(em, "zgt_gi")
+	r := c_tmp(em, "zgt_gr")
+	slot := f"(*({c_type(elem)}*)zrt_list_at_ref({lp}, (size_t){iv}))"
+
+	mut out := f"({{ zrt_list *{lp} = &({tgt}); int64_t {iv} = {c_expr(em, args[0], sb)}; {cn} {r};"
+	out = out + f" if ({iv} >= 0 && (size_t){iv} < zrt_list_len({lp})) {{ {c_res_mark_left(r)} {c_res_put(em, oty, r, c_get_copy(em, elem, slot))} }}"
+	return out + f" else {{ {c_res_mark_right(r)} }} {r}; }})"
+}
+
+# c_get_copy is the element as the carrier takes it: a copy where the type owns something,
+# and the slot's own bits where it does not — an `int` has no copy to call.
+fn c_get_copy(mut &em: Emitter, t: ast.Ty, slot: str) -> str {
+	return c_copy_of(em, t, slot) if c_needs_copy(em, t)
+
+	return slot
+}
+
+# c_get_arity is the one thing both `get`s ask of their arguments: there is one, and `what`
+# says whether it is a list's index or a map's key.
+fn c_get_arity(mut &em: Emitter, what: str, n: int) {
+	raise c_diag(em, rule.Rule.GetTakesOneArgument, f"`get` asks about one {what}, and this gives {strconv.to_string(n, 10)}") if n != 1
 }
 
 # c_ident_name is the name a bare identifier expression spells, or "" for anything else.
@@ -15693,10 +15734,10 @@ fn c_infer_methcall(mut &em: Emitter, target: ast.Expr, meth: str, args: list[as
 	meth := c_meth_resolved(em, recv, c_gen_meth_resolved(em, recv, meth, target, args))
 	return match c_meth_kind(em, tty, meth) {
 		MethKind.MRender  => ast.Ty.TStr
-		MethKind.MList    => c_list_method_ret(em, meth)
+		MethKind.MList    => c_list_method_ret(em, meth, tty)
 		MethKind.MArr     => c_arr_method_ret(em, meth)
 		MethKind.MPtr     => c_ptr_method_ret(em, meth, tty)
-		MethKind.MMap     => c_map_method_ret(meth)
+		MethKind.MMap     => c_map_method_ret(meth, tty)
 		MethKind.MErr     => c_err_method_ret(em, meth)
 		MethKind.MCarrier => c_carrier_method_ret(em, tty, meth)
 		MethKind.MSpec    => c_lookup_sig_ret(em, c_sig_key(recv, meth))
@@ -15752,24 +15793,33 @@ fn c_list_method_rv(mut &em: Emitter, target: ast.Expr, meth: str, args: list[as
 	# still owns, and releasing it frees a buffer the entry still points at. c_is_place names
 	# this shape already, by excluding it from being a place.
 	borrowed := c_is_map_index(em, target)
+	answers := meth == "len" or meth == "get"
 
-	return f"({{ zrt_list {ln} = {src}; {inner}; }})" if borrowed and meth != "len"
-	return f"({{ zrt_list {ln} = {src}; {inner}; zrt_list_drop(&{ln}); }})" if meth != "len"
+	return f"({{ zrt_list {ln} = {src}; {inner}; }})" if borrowed and not answers
+	return f"({{ zrt_list {ln} = {src}; {inner}; zrt_list_drop(&{ln}); }})" if not answers
 
+	# `get` answers too, and what it answers is a copy of its own — so it is held across the
+	# drop exactly as the length is, under the type it has
+	mut rt := "int64_t"
+	if meth == "get" {
+		rt = c_opt_name(em, c_list_elem(tty))
+	}
 	rn := c_tmp(em, "zgt_t")
-	return f"({{ zrt_list {ln} = {src}; int64_t {rn} = {inner}; {rn}; }})" if borrowed
-	return f"({{ zrt_list {ln} = {src}; int64_t {rn} = {inner}; zrt_list_drop(&{ln}); {rn}; }})"
+	return f"({{ zrt_list {ln} = {src}; {rt} {rn} = {inner}; {rn}; }})" if borrowed
+	return f"({{ zrt_list {ln} = {src}; {rt} {rn} = {inner}; zrt_list_drop(&{ln}); {rn}; }})"
 }
 
-fn c_map_method_ret(meth: str) -> ast.Ty {
+fn c_map_method_ret(meth: str, tty: ast.Ty) -> ast.Ty {
 	return ast.Ty.TInt if meth == "len"
 	return ast.Ty.TBool if meth == "has"
+	return ast.Ty.TOpt(c_map_val_ty(tty)) if meth == "get" and c_is_map(tty)
 
 	return ast.Ty.TNil
 }
 
-fn c_list_method_ret(mut &em: Emitter, meth: str) -> ast.Ty {
+fn c_list_method_ret(mut &em: Emitter, meth: str, tty: ast.Ty) -> ast.Ty {
 	return ast.Ty.TInt if meth == "len"
+	return ast.Ty.TOpt(c_list_elem(tty)) if meth == "get"
 	raise c_list_method_unknown(em, meth) if meth != "append"
 
 	return ast.Ty.TNil
@@ -19519,7 +19569,9 @@ fn c_map_method(mut &em: Emitter, target: ast.Expr, meth: str, args: list[ast.Ex
 		return f"({{ {bind}{hold}{c_type(kt)} zgt_mk = {k}; {c_unhold(em, keep)}bool {hr} = zrt_map_has({recv}, &zgt_mk); {give}{hr}; }})"
 	}
 
-	# TWO ANSWERS BEHIND A NAME THIS FUNCTION DOES NOT LOWER. `insert`, `remove` and `get` are
+	return c_map_get(em, recv, bind, give, args, tty, sb) if meth == "get" and c_is_map(tty)
+
+	# TWO ANSWERS BEHIND A NAME THIS FUNCTION DOES NOT LOWER. `insert` and `remove` are
 	# docs/code/collections.md's `[not yet]`: the chapter specifies them, so each retires the
 	# day it is built. Any other name is a method the LANGUAGE does not give a keyed container,
 	# and there is no day on which it does.
@@ -19531,10 +19583,58 @@ fn c_map_method(mut &em: Emitter, target: ast.Expr, meth: str, args: list[ast.Ex
 	# and is what a reader following the number would otherwise land on; `make method-gaps`
 	# reads these sentences out of the chapters, and two codes sharing one is a collision it
 	# reports rather than a wording nobody notices.
-	unbuilt := meth == "insert" or meth == "remove" or meth == "get"
+	unbuilt := meth == "insert" or meth == "remove"
 	raise c_diag(em, rule.Rule.NotYetMapMethod, f"NotImplemented: the container method `{meth}` on a {ast.ty_name(tty)} (docs/code/collections.md)") if unbuilt
 
-	raise c_diag(em, rule.Rule.MapMethodUnknown, f"the method `{meth}` on a {ast.ty_name(tty)} — it answers `len` and `has`")
+	raise c_diag(em, rule.Rule.MapMethodUnknown, f"the method `{meth}` on a {ast.ty_name(tty)} — it answers {c_keyed_answers(tty)}")
+}
+
+# c_keyed_answers names what a keyed container answers. A map has a value to hand back and a
+# set has only membership, so `get` is a map's.
+fn c_keyed_answers(tty: ast.Ty) -> str {
+	return "`len`, `has` and `get`" if c_is_map(tty)
+
+	return "`len` and `has`"
+}
+
+# c_map_get lowers `m.get(k)`: the checked index of a map. It answers a `V?`, absent where
+# `m[k]` would abort with a KeyError, and the value is COPIED out for c_list_get's reason.
+#
+# `recv`, `bind` and `give` are c_map_method's: the receiver as an address, the binding that
+# gives an rvalue one, and the release of that binding where it is ours. The receiver is held
+# across the key (c_hold), which is evaluated after it is bound and may abort.
+fn c_map_get(mut &em: Emitter, recv: str, bind: str, give: str, args: list[ast.Expr], tty: ast.Ty, sb: Subst) -> str {
+	c_get_arity(em, "key", args.len())
+
+	kt := c_map_key_ty(tty)
+	vt := c_map_val_ty(tty)
+	check.chk_slot_fits(em, f"a key of this {ast.ty_name(tty)}", kt, args[0])
+
+	keep := em.rel_cnames.len()
+	mut hold := ""
+	if give != "" and c_runs_code(args[0]) {
+		hold = c_hold(em, tty, "zgt_mx")
+	}
+
+	k := c_expr(em, args[0], sb)
+
+	oty := ast.Ty.TOpt(vt)
+	cn := c_opt_name(em, vt)
+	kn := c_tmp(em, "zgt_gk")
+	r := c_tmp(em, "zgt_gr")
+	slot := f"(*({c_type(vt)}*)zrt_map_index({recv}, &{kn}))"
+
+	# A KEY THIS EXPRESSION BUILT IS ITS OWN TO GIVE BACK. The lookup only reads it, so a key
+	# read out of a name stays that name's and one a call answered has nobody else: `m.get(
+	# word(9))` kept the str it looked up with.
+	mut kgive := ""
+	if c_owns_value(args[0]) {
+		kgive = c_drop_stmt(em, kt, kn) + " "
+	}
+
+	mut out := f"({{ {bind}{hold}{c_type(kt)} {kn} = {k}; {c_unhold(em, keep)}{cn} {r};"
+	out = out + f" if (zrt_map_has({recv}, &{kn})) {{ {c_res_mark_left(r)} {c_res_put(em, oty, r, c_get_copy(em, vt, slot))} }}"
+	return out + f" else {{ {c_res_mark_right(r)} }} {kgive}{give}{r}; }})"
 }
 
 fn c_index_target(e: ast.Expr) -> ast.Expr {

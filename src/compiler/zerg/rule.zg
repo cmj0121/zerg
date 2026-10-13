@@ -444,6 +444,9 @@ pub enum Rule {
 	# check and vouch for it in the body — a use-after-return behind entirely safe signatures.
 	RawPointerOutsideUnsafe = 4115
 
+	# `get` is the checked index, and it asks about ONE thing: a list's index or a map's key.
+	GetTakesOneArgument = 4116
+
 	# an optional has two sides and a `match` over one covers both, the way it covers an
 	# Either's two and a bool's two. `nil` names the absent side; a name binds the present one.
 	MatchMissingNil = 4103

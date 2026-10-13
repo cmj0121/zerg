@@ -461,6 +461,7 @@ shipping compiler rather than a part of it (the line
 | `E4113` | an `unsafe fn` — the group is the only unsafe context a declaration sits in                           |
 | `E4114` | `unsafe` written as part of a type                                                                    |
 | `E4115` | a raw `ptr` named outside an `unsafe { … }` group                                                     |
+| `E4116` | `get` asks about one index or key, and this gives …                                                   |
 | `E5001` | this entry file declares no `fn main`                                                                 |
 | `E5002` | cannot resolve import `…`, and where it was looked for                                                |
 | `E5007` | `…` is a module this build compiles and this module did not import                                    |

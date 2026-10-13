@@ -437,6 +437,7 @@ seed 全程維持句子比對:代碼是語言的契約,而 seed 是建置正式�
 | `E4113` | 一個 `unsafe fn`——group 是宣告唯一能待的 unsafe context                                               |
 | `E4114` | 把 `unsafe` 寫進型別裡                                                                                |
 | `E4115` | 在 `unsafe { … }` group 外指名 raw `ptr`                                                              |
+| `E4116` | `get` 問的是一個索引或 key,而這裡給了 …                                                               |
 | `E5001` | 這個進入點檔案沒有宣告 `fn main`                                                                      |
 | `E5002` | 無法解析 import `…`,以及它到哪裡找過                                                                  |
 | `E5007` | `…` 是這次建置編進來、而本 module 沒有 import 的 module                                               |

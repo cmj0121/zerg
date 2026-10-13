@@ -12304,14 +12304,13 @@ fn c_list_build(mut &em: Emitter, ety: ast.Ty, elems: list[ast.Expr], typed: boo
 }
 
 # c_call_written is what is left of a call that WROTE its type arguments. The form is gone —
-# GRAMMAR makes a postfix `[ … ]` always an index, and the parser refuses `id[int](7)` — so
-# the only brackets that still reach here are a BUILT-IN TYPE's own, from `map[K, V](…)`,
-# which names a type rather than instantiating a generic.
-#
-# The branch that reported a written argument on a non-template went with the form: with the
-# parser refusing it, no call can arrive here naming something that is not generic.
+# GRAMMAR makes a postfix `[ … ]` always an index — and this is where the multi-argument shape
+# is told so (c_no_type_arg_list). The only brackets that go on from here are a BUILT-IN
+# TYPE's own, from `map[K, V](…)`, which names a type rather than instantiating a generic.
 fn c_call_written(mut &em: Emitter, name: str, args: list[ast.Expr], ts: list[ast.Ty], l: int, c: int, sb: Subst) -> str {
 	return c_call(em, name, args, l, c, sb) if ts.len() == 0
+
+	c_no_type_arg_list(em, name, ts)
 
 	if em.want_index and c_is_generic(em, name) {
 		c_nx_use(em, l, c, name, c_nx_template(em, name))
@@ -12335,6 +12334,8 @@ fn c_call_written(mut &em: Emitter, name: str, args: list[ast.Expr], ts: list[as
 # it. Both have to instantiate, because the specialization's signature is what carries the
 # return type, and both have to pick the SAME one.
 fn c_infer_call_written(mut &em: Emitter, name: str, args: list[ast.Expr], ts: list[ast.Ty]) -> ast.Ty {
+	c_no_type_arg_list(em, name, ts)
+
 	# It stays SILENT where the emit side reports: a written type argument on a name that is
 	# not generic is one mistake, and one diagnostic is what it should produce.
 	return c_lookup_sig_ret(em, c_instantiate_at(em, name, ts)) if ts.len() > 0 and c_is_generic(em, name)
@@ -12363,6 +12364,7 @@ fn c_named_arg_misplaced(mut &em: Emitter, nm: str) -> str {
 }
 
 fn c_call_val(mut &em: Emitter, callee: ast.Expr, args: list[ast.Expr], sb: Subst) -> str {
+	c_no_type_args(em, callee)
 	fty := c_infer(em, callee)
 	raise c_diag(em, rule.Rule.CalleeNotAFunction, f"`{ast.expr_kind(callee)}` is a {ast.ty_name(fty)} and this calls it — a callee that is not a name has to be a function VALUE (GRAMMAR#postfix)") if not c_is_fn(fty)
 
@@ -15594,7 +15596,7 @@ fn c_infer_node(mut &em: Emitter, e: ast.Expr) -> ast.Ty {
 		Expr.EUnary(oper, x) => c_infer_unary(em, oper, x)
 		Expr.EBinary(oper, a, b) => c_infer_binary(em, oper, a, b)
 		Expr.ECall(name, args, ts, _, _) => c_infer_call_written(em, name, args, ts)
-		Expr.ECallVal(callee, _) => c_fn_ret(c_infer(em, callee))
+		Expr.ECallVal(callee, _) => c_infer_call_val(em, callee)
 
 		# the name decides WHICH parameter, never WHAT TYPE — so the type is the value's, and
 		# a named argument answers whatever it would have answered written positionally
@@ -15927,6 +15929,50 @@ fn c_block_tail_name(st: ast.Stmt) -> str {
 		Expr.EIdent(n, _, _) => n
 		_ => ""
 	}
+}
+
+# c_no_type_args names the single-argument `id[int](7)`, which arrives as a call through the
+# INDEX `id[int]`. Its tokens are the ones `fs[i](1)` has, and what tells them apart is what
+# the base is: a binding is indexed and its element is called, and a function was never a
+# container, so its bracket was a type argument list. A local shadows a function by existing
+# (c_is_bound), the same order c_infer_ident reads a name in.
+#
+# Anything else is left to say what it already says — a base nobody declared is an undefined
+# name, and it is not this rule's to rename.
+fn c_no_type_args(mut &em: Emitter, callee: ast.Expr) {
+	return if not c_is_index(callee)
+
+	base := c_ident_name(c_index_target(callee))
+	tn := c_ident_name(c_index_key(callee))
+
+	return if base == "" or tn == "" or c_is_bound(em, base)
+	return if not c_is_free_fn(em, base) and not c_is_generic(em, base)
+
+	c_written_type_args(em, base, tn)
+}
+
+# c_written_type_args is the ONE refusal both shapes earn. `pairup[str, int](…)` arrives as a
+# call carrying the types it wrote, and `id[int](7)` as a call through an index; they are the
+# same form, and a code answers to a rule rather than to a shape.
+fn c_written_type_args(mut &em: Emitter, name: str, tn: str) {
+	raise c_diag(em, rule.Rule.TypeArgsAsIndex, f"`{name}[{tn}](…)` writes a call's type arguments, and a postfix `[ … ]` is an index — a generic takes its type from the arguments, so write `{name}(…)`")
+}
+
+# c_no_type_arg_list is the multi-argument shape, which a comma settled in the parser. A
+# BUILT-IN TYPE is not a generic call: `map[K, V](…)` names a TYPE and its arguments are the
+# type's own, which is the one thing `[ … ]` after a name still means — so the refusal it
+# earns is the one about a constructor, and not this one.
+fn c_no_type_arg_list(mut &em: Emitter, name: str, ts: list[ast.Ty]) {
+	return if ts.len() == 0 or parser.p_builtin_type_ctor(name)
+
+	c_written_type_args(em, name, ast.ty_name(ts[0]) + ", …")
+}
+
+# a call through a value is typed by what its callee answers — asked after the same question
+# c_call_val asks, because inference reaches a statement before its lowering does
+fn c_infer_call_val(mut &em: Emitter, callee: ast.Expr) -> ast.Ty {
+	c_no_type_args(em, callee)
+	return c_fn_ret(c_infer(em, callee))
 }
 
 fn c_infer_ident(mut &em: Emitter, n: str) -> ast.Ty {

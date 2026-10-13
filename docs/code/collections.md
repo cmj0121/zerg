@@ -158,7 +158,8 @@ materializing a `str` only when it keeps a token.
 > nothing here makes a map's element different. A **slice**, a **call result** and a **literal** are not
 > waiting for anything, because a subrange is a read-only value and a written value has no storage at all:
 > _E4081 `append` MUTATES its list, and `a slice` is a value rather than a place — bind it to a name
-> first_. And a map
+> first_. A store asks the same question of its target: `m["a"].n = 2` and `xs[0..1] = [3]` are _E3012
+> cannot store through a map index_ and _… a slice_ — set the whole element (`m["a"] = v`) instead. And a map
 > is built with the literal and not by calling its type: `map[str, int](…)` is _E9067 NotImplemented:
 > `map[…](…)` as a constructor — this compiler builds an empty map with the literal `{:}`_.
 

@@ -138,7 +138,8 @@ semantics，而唯讀情況維持**零拷貝**；COW 是與 copy-elision、move 
 > rather than a place_。list index 本來就是位置——`xs[0].append(3)` 會就地修改——而這裡沒有任何東西讓 map 的
 > 元素有所不同。**slice**、**呼叫結果**與**字面量**則不在等任何東西，因為子範圍是唯讀值，而寫下來的值根本
 > 沒有儲存空間：_E4081 `append` MUTATES its list, and `a slice` is a value rather than a place — bind it to
-> a name first_。而 map 用字面量建、不是
+> a name first_。賦值對它的目標問同一個問題：`m["a"].n = 2` 與 `xs[0..1] = [3]` 是 _E3012 cannot store
+> through a map index_ 與 _… a slice_——改成設定整個元素（`m["a"] = v`）。而 map 用字面量建、不是
 > 呼叫它的型別：`map[str, int](…)` 是 _E9067 NotImplemented: `map[…](…)` as a constructor — this compiler
 > builds an empty map with the literal `{:}`_。
 

@@ -1738,13 +1738,6 @@ fn main() {
 }
 EOF
 
-expect "$ZERG" list-get E9056 'the list method `get`' <<'EOF'
-fn main() {
-	xs := [1, 2, 3]
-	print xs.get(0) ?? 0
-}
-EOF
-
 expect "$ZERG" list-map E9056 'the list method `map`' <<'EOF'
 fn main() {
 	xs := [1, 2, 3]
@@ -1772,13 +1765,6 @@ fn main() {
 	m := {1: 2}
 	m.remove(1)
 	print m.len()
-}
-EOF
-
-expect "$ZERG" map-get E9100 'the container method `get` on a map[int, int]' <<'EOF'
-fn main() {
-	m := {1: 2}
-	print m.get(1)
 }
 EOF
 

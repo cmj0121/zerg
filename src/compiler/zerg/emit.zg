@@ -6054,6 +6054,8 @@ fn c_check_type_name(mut &em: Emitter, nm: str, s: Site) {
 	# object-safety gate — "a spec is ALWAYS usable as a type" — so nothing about the members
 	# it declares is asked at a type position; what a box cannot serve is refused at the CALL.
 	if c_is_type_name(em, nm) or c_is_spec_name(em, nm) {
+		c_spec_ty_implemented(em, nm, site)
+
 		# THE NAME RESOLVES, AND THAT IS ONLY HALF THE QUESTION. A type flattens into one
 		# program-wide space here, so resolving says the declaration EXISTS and says nothing
 		# about whether this module may write it, or whether the declaration doing the writing
@@ -14459,6 +14461,8 @@ fn c_spec_call_check(mut &em: Emitter, sp: str, meth: str, key: str) {
 # the box; it is what the payload pointer comes out of, and the slot takes that pointer where
 # the member's `this` is.
 fn c_spec_disp_register(mut &em: Emitter, sp: str, meth: str) -> str {
+	c_spec_no_impl(em, sp, f"a call to `{meth}` through")
+
 	dn := c_spec_cname(f"specdisp${sp}${meth}")
 	for n in em.svt_names {
 		return dn if n == dn
@@ -23653,6 +23657,8 @@ fn c_spec_render_register(mut &em: Emitter, key: str, target: str) -> str {
 # and answers a FRESH string the caller gives back, which is what every other rendering
 # answers.
 fn c_spec_render_disp(mut &em: Emitter, sp: str, inner: str) -> str {
+	c_spec_no_impl(em, sp, "rendering a value of")
+
 	dn := c_spec_cname(f"specrenderdisp${sp}")
 	for n in em.svt_names {
 		return f"{dn}({inner})" if n == dn
@@ -24258,6 +24264,38 @@ fn c_build_spec_vts(mut &em: Emitter, f: ast.File) {
 			c_spec_vt_register(em, f.specs[at], ip)
 		}
 	}
+}
+
+# c_spec_implemented is whether any `impl` names this spec KEY, application included: one
+# `impl Conv[int] for A` declares nothing for `Conv[str]`.
+fn c_spec_implemented(mut &em: Emitter, key: str) -> bool {
+	mut i := 0
+	for i < em.impl_on.len() {
+		return true if em.impl_on[i] == key
+		i = i + 1
+	}
+	return false
+}
+
+# c_spec_no_impl refuses what a spec nothing implements cannot lower (#317). The table type is
+# written per `impl` (c_spec_vt_typedef), so with none there is no table to dispatch through,
+# and the two dispatchers named a type nothing declared. `what` says which use it was.
+#
+# The spec is still a TYPE: `fn one(x: Shape)`, a field, a `list[Shape]` and `x is Sq` all
+# lower without the table and are left alone. A parameterized spec is the exception, because
+# an application's own C type is written per `impl` too (c_spec_typedefs) — `x: Conv[str]`
+# beside an `impl Conv[int] for A` cannot even be spelled.
+fn c_spec_no_impl(mut &em: Emitter, key: str, what: str) {
+	return if c_spec_implemented(em, key)
+
+	raise c_diag(em, rule.Rule.NotYetSpecTypeNoImpl, f"NotImplemented: {what} the spec `{key}` while nothing implements it — the table a spec value carries is built from an `impl`, and `{key}` has none, so no value could be one (docs/core/specs.md)")
+}
+
+# c_spec_ty_implemented is the type position's half: only an APPLICATION, for the reason above.
+fn c_spec_ty_implemented(mut &em: Emitter, nm: str, site: str) {
+	return if not c_is_spec_name(em, nm) or not c_is_applied(nm)
+
+	c_spec_no_impl(em, nm, f"{site} names")
 }
 
 # c_impls reports whether a named type implements a named spec.

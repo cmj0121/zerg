@@ -9305,8 +9305,8 @@ EOF
 #
 # Both arrived from `refuse-check.sh` with #74, and both are half of a site that used to
 # answer two questions under one number. The other halves ARE unbuilt forms and stayed there:
-# a list whose elements carry an `Eq` this compiler does not call (`E9061`), and a range of
-# `str` whose bounds C's `>=` cannot be handed (`E9062`).
+# a list whose elements carry an `Eq` — built since (#358), so that number is retired — and a
+# range of `str` whose bounds C's `>=` cannot be handed (`E9062`).
 #
 # So each of these names its SENTENCE as well as its code, which is what the second assertion
 # asks for where one case of a rule has to be told from another. Here the other case is not in
@@ -9321,6 +9321,36 @@ struct P {
 fn main() {
 	ps := [P(1)]
 	print str(P(2) in ps)
+}
+EOF
+
+# AN UNNAMED ELEMENT IS REFUSED FOR ITS PART, in that part's class — the answer `==` gives two
+# of them, in the words of `in`: the source contains no `==`, and no `xs == ys` to be told
+# about. Each names the form the reader looks in and the part they have to change.
+reject in-over-a-list-of-lists-of-no-eq E4020 '`in` over a collection of list[P] compares its elements for equality, and a P has no `Eq`' <<'EOF'
+struct P {
+	pub x: int
+}
+
+fn main() {
+	pss := [[P(1)]]
+	print str([P(1)] in pss)
+}
+EOF
+
+reject in-over-a-list-of-lists-of-carriers E4038 '`in` over a collection of list[int?] compares its elements for equality, and a int? may hold no value' <<'EOF'
+fn main() {
+	xss: list[list[int?]] = [[1]]
+	xs: list[int?] = [1]
+	print str(xs in xss)
+}
+EOF
+
+reject in-over-a-list-of-tuples-of-channels E4034 '`in` over a collection of (int, chan[int]) compares its elements for equality' <<'EOF'
+fn main() {
+	ch := chan[int](1)
+	ts := [(1, ch)]
+	print str((1, ch) in ts)
 }
 EOF
 

@@ -1235,6 +1235,71 @@ fn main() {
 }
 ZG
 
+# --- `in` over a list whose elements compare by their parts -------------------------------
+# `x in xs` asks each element the `==` a program would write, so the value looked for and a
+# list a call answered are this expression's to give back, whichever way the answer went and
+# wherever the walk stopped; a list somebody else holds is read where it stands. An element
+# with an `Eq` is handed two copies, which its `eq` owns. A wrong answer aborts. The seed
+# reads no `in` over a list, so it is zerg only.
+case_run in_over_parts no no <<'ZG'
+#[derive(Eq)]
+struct P {
+	pub s: str
+	pub xs: list[int]
+}
+
+fn word(n: int) -> str {
+	return str(n) + "!"
+}
+
+fn words(n: int) -> list[str] {
+	return [word(n), word(n + 1)]
+}
+
+fn rows(n: int) -> list[list[str]] {
+	return [words(n), words(n + 2), words(n + 4)]
+}
+
+fn round(n: int) {
+	xss := rows(n)
+	w := words(n + 2)
+
+	raise "a held list was not found" if not (w in xss)
+	raise "a list a call answered was not found" if not (words(n + 4) in xss)
+	raise "a list that is not there was found" if words(n + 1) in xss
+	raise "a literal was not found" if not ([word(n), word(n + 1)] in xss)
+	raise "a list was not found in one a call answered" if not (w in rows(n))
+	raise "a list was found in one a call answered" if words(n + 9) in rows(n)
+	raise "a held list was taken by the test" if xss[1] != w
+
+	ts := [(n, word(n)), (n + 1, word(n + 1))]
+
+	raise "a tuple was not found" if not ((n + 1, word(n + 1)) in ts)
+	raise "a tuple that is not there was found" if (n, word(n + 1)) in ts
+
+	ms := [{word(n): words(n)}, {word(n + 1): words(n + 1)}]
+
+	raise "a map was not found" if not ({word(n + 1): words(n + 1)} in ms)
+	raise "a map that is not there was found" if {word(n + 1): words(n)} in ms
+
+	ps := [P(word(n), [n]), P(word(n + 1), [n, n])]
+	p := P(word(n + 1), [n, n])
+
+	raise "a held value of a declared type was not found" if not (p in ps)
+	raise "a made value of a declared type was not found" if not (P(word(n), [n]) in ps)
+	raise "a value of a declared type that is not there was found" if P(word(n), [n, n]) in ps
+}
+
+fn main() {
+	mut i := 0
+	r := rounds()
+	for i < r {
+		round(i)
+		i = i + 1
+	}
+}
+ZG
+
 # --- a closure environment -------------------------------------------------------------
 # One environment per construction, and the closure may outlive the scope that made it —
 # which is what closing over a value is for, and why the scope cannot be what frees it.

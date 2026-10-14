@@ -638,12 +638,23 @@ const char *zrt_real_path(const char *path) {
 	return out;
 }
 
+/* sys_name_cmp orders two entries of a list[str] by strcmp, for qsort. */
+static int sys_name_cmp(const void *a, const void *b) {
+	return strcmp(*(const char *const *)a, *(const char *const *)b);
+}
+
 /* zrt_listdir returns the entry NAMES directly under path (no "." or "..", no recursion,
  * not path-prefixed) as a list[str], or an empty list when path is not a readable
  * directory — a missing directory is an answer here, not an abort, since the caller is
  * probing a search path. The names are sorted, because a compiler that reads a directory
  * must not let the filesystem's order decide its output: the emitted C has to be
- * reproducible for the self-host fixpoint to mean anything. */
+ * reproducible for the self-host fixpoint to mean anything.
+ *
+ * THE SORT IS ONE PASS AFTER THE READ. It used to insert each name into its place as readdir
+ * answered it, on the reading that a directory read is small — a module's files. A tool also
+ * lists directories it did not make (the language server reads the one above a buffer, which
+ * may be $TMPDIR), and insertion over readdir's order is quadratic: forty thousand entries
+ * took seconds (#361). strcmp is still the order, so nothing that reads the answer moves. */
 zrt_list zrt_listdir(const char *path) {
 	zrt_list l;
 	zrt_list_init(&l, sizeof(const char *), &zrt_str_elem_vt);
@@ -660,23 +671,13 @@ zrt_list zrt_listdir(const char *path) {
 		char       *p = (char *)zrt_ref_payload(zrt_ref_alloc(n + 1, NULL));
 		memcpy(p, e->d_name, n + 1);
 		const char *s = p; /* rc=1, owned by the list */
-		/* insertion sort into the list: a directory read is small (a module's files), and
-		 * this keeps the ordering guarantee in one place instead of a second pass. */
-		size_t i = zrt_list_len(&l);
 		zrt_list_push(&l, &s);
-		while (i > 0) {
-			const char **prev = (const char **)zrt_list_at(&l, i - 1);
-			const char **cur  = (const char **)zrt_list_at(&l, i);
-			if (strcmp(*prev, *cur) <= 0) {
-				break;
-			}
-			const char *tmp = *prev;
-			*prev           = *cur;
-			*cur            = tmp;
-			i--;
-		}
 	}
 	closedir(d);
+	size_t n = zrt_list_len(&l);
+	if (n > 1) {
+		qsort(zrt_list_at(&l, 0), n, sizeof(const char *), sys_name_cmp);
+	}
 	return l;
 }
 

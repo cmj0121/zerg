@@ -2687,24 +2687,32 @@ fn main() {
 }
 EOF
 
-# and a STRUCT ELEMENT THAT CARRIES AN `Eq`, which is the unbuilt half of that site:
-# collections.md specifies `x in xs`, the impl is there to be called, and this compiler does
-# not call it — so the day it does, this case goes. Its sibling is the same program with the
-# `Eq` left off, which is the program's own gap rather than this compiler's, and that one is
-# a rejection in reject-check.sh under `E3118`.
-expect "$ZERG" in-over-a-list-of-structs-with-eq E9061 <<'EOF'
-#[derive(Eq)]
-struct P {
-	pub x: int
+# A MAP AND A SET ARE ASKED BY HASH, and an aggregate key has none here whatever its equality
+# is — the same gap a map BUILT with one is refused for, under the same number. A parameter is
+# the one place such a map can be named without being built, so `in` is where it is met. Each
+# case names its WORD: the two differ in nothing else, and a program holding a set contains no
+# map for a reader to go looking for.
+expect "$ZERG" in-over-a-map-keyed-by-a-list E9052 'a map key of type list[int]' <<'EOF'
+fn has(m: map[list[int], int], k: list[int]) -> bool {
+	return k in m
 }
 
 fn main() {
-	ps := [P(1)]
-	print str(P(2) in ps)
+	print 1
 }
 EOF
 
-# AND THE THREE THAT ARE NOT AN AGGREGATE, each pinned to the SENTENCE rather than only to
+expect "$ZERG" in-over-a-set-of-tuples E9052 'a set element of type (int, int)' <<'EOF'
+fn has(s: set[(int, int)], k: (int, int)) -> bool {
+	return k in s
+}
+
+fn main() {
+	print 1
+}
+EOF
+
+# AND THE TWO THAT ARE NOT AN AGGREGATE, each pinned to the SENTENCE rather than only to
 # the code. `in` asks the equality rule, and the rule used to answer in the words of `==` — an
 # operator the source does not contain — and to offer `??` / `!` / `if v := …`, three
 # unwrappings that can be written where a value is compared and nowhere at an `in` whose
@@ -2723,13 +2731,6 @@ fn main() {
 	ch := chan[int](1)
 	cs.append(ch)
 	print str(ch in cs)
-}
-EOF
-
-expect "$ZERG" in-over-a-list-of-lists E9061 '`in` over list[list[int]] compares its elements for equality' <<'EOF'
-fn main() {
-	xs: list[list[int]] = [[1]]
-	print str([1] in xs)
 }
 EOF
 

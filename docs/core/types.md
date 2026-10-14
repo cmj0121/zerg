@@ -345,7 +345,9 @@ result is **first-class** — stored, passed, or destructured — so multiple re
 mechanism ([Pattern matching](../code/control-flow.md)).
 
 `==` and `!=` are that rule built: `(1, "a") == (1, "a")` compares part by part, and a tuple holding a
-part with no `Eq` is refused for that part (`E4020`).
+part with no `Eq` is refused for that part (`E4020`). So are `<` `<=` `>` `>=`: `(1, 2) < (1, 3)` is
+`true`, the first part that differs decides, and a part with no `Ord` — a `float`, or a type with an `Eq`
+and no `Ord` — is refused for that part (`E3044`). A `list`, a `map` and a `set` have no order.
 
 > **[not yet]** `Hash` is the half of the rule that is not built: a tuple as a map key is _E9052
 > NotImplemented: a map key of type (int, int) — it needs `Hash`, and this compiler has one for `int` and

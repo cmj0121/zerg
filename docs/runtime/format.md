@@ -56,6 +56,11 @@ declaration. `print`, a format hole and `str(…)` all consult the override, and
 > not get the map's sentence about `len` and `has` for a rendering, and none of the four can disagree with
 > the other three about a value.
 >
+> **One conversion is not a rendering, and wears the same name.** `str(…)` over a `list[byte]` or a
+> `list[rune]` is the bridge back from `bytearray(s)` / `runearray(s)`: it reads the buffer as characters, and
+> a hole lowers through it. So `f"{bs}"` is the text `hi` while `print bs` shows `[104, 105]`. A list of
+> anything else has no text to be, and renders as `[1, 2]` from all four.
+>
 > **The class that renders nowhere says so in one sentence.** A **channel** and a **function value** are an
 > identity rather than a value — the same class `==` is refused on, _E4034_ — so there are no parts to
 > render and nothing is coming: _E4076 a … is an identity rather than a value, and the language gives it no

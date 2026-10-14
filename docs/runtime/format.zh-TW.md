@@ -47,6 +47,10 @@ method 會在宣告處被拒絕。`print`、格式洞與 `str(…)` 都會採用
 > override、再落到結構化渲染,所以 `map` 不會為了一個渲染而拿到 map 那句關於 `len` 與 `has` 的話,而這四者之間
 > 也不可能對同一個值講出不一樣的答案。
 >
+> **有一個轉換不是渲染,卻用同一個名字。** 對 `list[byte]` 或 `list[rune]` 做 `str(…)`,是從 `bytearray(s)` /
+> `runearray(s)` 回來的那座橋:它把緩衝區當成字元來讀,而洞正是透過它 lower 的。所以 `f"{bs}"` 是文字 `hi`,
+> `print bs` 顯示的則是 `[104, 105]`。其他元素型別的 list 沒有文字可當,四種拼法都把它渲染成 `[1, 2]`。
+>
 > **哪裡都渲染不出來的那一類,用一句話說清楚。** **channel** 與**函式值**是身分而不是值——就是 `==` 被拒絕的那
 > 同一類,_E4034_——所以沒有部分可以拿來渲染,也沒有東西在路上:四種拼法都得到 _E4076 a … is an identity rather
 > than a value, and the language gives it no rendering_。**nil** 是第三種答案,因為 nil 根本不是一個值:沒有

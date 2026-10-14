@@ -640,10 +640,9 @@ matter of compiling more files rather than of relaxing a visibility rule.
 > `parallel` on a Context_), and when it lands
 > tests sharing a fixture will share one instance of it.
 >
-> A claim over two **lists** is the one gap inside what is built: `assert xs == ys` compares, and its
-> message has to render both, which `str` over a list does not (`E4011`) — so such a claim is written
-> `assert (xs == ys)`, which reports its source text and no values. A map, a set, a tuple and a declared
-> type are claimed directly.
+> A claim over two containers is inside what is built: `assert xs == ys` compares two lists, maps, sets or
+> tuples and reports both sides when they differ. `assert (xs == ys)` is the same test reporting its source
+> text and no values, for a claim whose operands are too long to read.
 
 ### Target-conditional files
 

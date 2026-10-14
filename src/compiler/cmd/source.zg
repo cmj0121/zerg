@@ -1005,6 +1005,14 @@ fn load_with(file: str, mod: str, own: list[str], root_dir: str, mut &seen: list
 # a walk per file. Without the stop this runs to the filesystem root, and one directory
 # somebody keeps scratch files in turns every keystroke into two hundred program loads.
 #
+# WHEN NO LEVEL HOLDS SOURCE THE CLIMB STILL REACHES THE ROOT, and that is kept on purpose. A
+# scratch file in `$TMPDIR/x/` lists `$TMPDIR` and every directory above it on each check,
+# because nothing on the way says where a project ends: there is no manifest
+# (docs/runtime/package.md) and the server is handed no workspace root it reads. What each
+# level costs is one listing, which is a readdir and a single sort since zrt_listdir stopped
+# inserting (#361) — small beside the check the climb is for. A bound has to come from one of
+# those two missing things, and belongs here the day either exists (#364).
+#
 # The FIRST candidate that reaches the buffer wins — sorted order within a level, nearest
 # level first — so the answer never depends on the filesystem, and a program that reaches
 # the buffer through only part of the tree is still enough: what the buffer needs is its own

@@ -1819,8 +1819,8 @@ fn main() {
 EOF
 
 # `format` IS THE SAME DOOR. Its substitute is `f"{x}"`, which lowers through the `str(…)`
-# arm this file's E4011 case pins, so a composite is refused there too — one case, because
-# what is being asserted is that the split reaches all three renderings and not only two.
+# arm — one case, because what is being asserted is that the split reaches all three
+# renderings and not only two.
 expect "$ZERG" list-format E9107 'no spec-less rendering to fall back on' <<'EOF'
 fn main() {
 	xs := [1, 2]
@@ -2509,17 +2509,6 @@ fn main() {
 }
 EOF
 
-
-# `str(…)` over a list bridges bytes or code points. Without the element check it reinterpreted any
-# buffer as characters: `f"{xs}"` on a `list[int]` printed the low byte of each element,
-# and on a `list[list[int]]` printed the low bytes of a heap POINTER. `print xs` refuses a
-# composite; this let the same value out through an f-string hole.
-expect "$ZERG" render-a-list-of-ints E4011 <<'EOF'
-fn main() {
-	xs: list[int] = [65, 66, 67]
-	print(f"{xs}")
-}
-EOF
 
 # L301: the snapshot semantics of a captured argument. It is here rather than in the reject
 # list because the program is CORRECT — this is the one thing in the language a competent

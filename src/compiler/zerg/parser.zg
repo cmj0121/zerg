@@ -3752,11 +3752,9 @@ fn parse_jump_guard(mut &p: Parser, jump: ast.Stmt) -> ast.Stmt {
 # temporary of its own first, and the condition tests the temporaries.
 #
 # ONLY A COMPARISON COMES APART, NEVER A CALL. `assert contains(xs, 3)` reports its source
-# text and no values: taking its arguments apart would hand the message a `list` to render,
-# and `str` over a list is the bytes bridge rather than a rendering (E4011). A comparison
-# reaches that hole from the other side: two lists compare and a list does not render, so
-# `assert xs == ys` is E4011 against a program that is otherwise fine, reported at the
-# reader's own line. A map, a set, a tuple and a declared type render, and are claimed.
+# text and no values: a call's arguments are not what the claim is about, and a message
+# listing them would bury the one line that is. A comparison's two sides are, and every form
+# that compares renders — a list, a map, a set, a tuple, a declared type — so each is claimed.
 #
 # THE VALUES ARE INTERPOLATED, NEVER `str()`-ed. The two spellings are one rendering in this
 # compiler, and they are NOT one in the seed: `str(x)` over a type parameter is _cannot build

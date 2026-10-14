@@ -8401,10 +8401,38 @@ fn main() {
 }
 EOF
 
-# AND AN ORDERING IS NOT AN EQUALITY: no unnamed form has one.
+# AND AN ORDERING IS NOT AN EQUALITY. A list, a map and a set have none, whatever they hold;
+# a tuple and an array order by their parts, and one with a part that does not is refused for
+# that part — a `float`, whose NaN breaks a total order, and a declared type with an `Eq` and
+# no `Ord`, which is the pair a reader is most likely to think is enough. The part is named
+# depth first, so a nested one is found inside the tuple holding it.
 reject ordering-over-two-lists E3044 'these are list[int] and list[int]' <<'EOF'
 fn main() {
 	print [1] < [2]
+}
+EOF
+
+reject ordering-over-a-tuple-with-a-float E3044 'orders two (int, float) part by part, and a float has no `Ord`' <<'EOF'
+fn main() {
+	print (1, 2.5) < (1, 3.5)
+}
+EOF
+
+reject ordering-over-a-tuple-of-eq-only E3044 'and a P has no `Ord`' <<'EOF'
+#[derive(Eq)]
+struct P {
+	pub x: int
+}
+
+fn main() {
+	print (1, P(1)) >= (1, P(2))
+}
+EOF
+
+reject ordering-over-a-nested-part-of-no-order E3044 'and a bool has no `Ord`' <<'EOF'
+fn main() {
+	a: [(int, bool); 2] = [(1, true), (2, false)]
+	print a < a
 }
 EOF
 

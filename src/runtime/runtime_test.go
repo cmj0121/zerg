@@ -1811,3 +1811,65 @@ static void near_miss(void) {
 
 int main(void) { return zrt_main_run_nil(near_miss); }
 `
+
+// TestListdirScales holds zrt_listdir to one sort over the whole read. It built its sorted
+// answer by inserting each name as readdir gave it, which is quadratic in the directory, and
+// a tool lists directories it did not make: the language server reads the one above a
+// buffer, and under a crowded $TMPDIR that was tens of thousands of entries and seconds per
+// listing (#361).
+//
+// The directory is written here in an order that is not sorted, so the read has work to do,
+// and the driver checks the answer is every name in strcmp order — the order the fixpoint
+// depends on. The FLOOR is a wall-clock bound far above what one sort takes and far below
+// what the insertion took at this size; the build is outside it.
+func TestListdirScales(t *testing.T) {
+	const entries = 30000
+	const floor = 2 * time.Second
+
+	dir := t.TempDir()
+	for i := 0; i < entries; i++ {
+		// a stride coprime to the count visits every index once, out of order
+		name := fmt.Sprintf("f%06d", (i*7919)%entries)
+		if err := os.WriteFile(filepath.Join(dir, name), nil, 0o644); err != nil {
+			t.Fatalf("write entry: %v", err)
+		}
+	}
+
+	bin := buildCore(t, "listdir_scales", fmt.Sprintf(listdirScalesC, dir))
+	start := time.Now()
+	out, code := runBounded(t, bin, "", 60*time.Second)
+	took := time.Since(start)
+	if code != 0 {
+		t.Fatalf("exit=%d, out=%q", code, out)
+	}
+	if want := fmt.Sprintf("%d sorted\n", entries); out != want {
+		t.Fatalf("out=%q, want %q", out, want)
+	}
+	t.Logf("listing %d entries took %v", entries, took)
+	if took > floor {
+		t.Errorf("listing %d entries took %v, want under %v", entries, took, floor)
+	}
+}
+
+// listdirScalesC lists one directory and reports how many names came back and whether each
+// is strictly after the one before it.
+const listdirScalesC = `
+#include <stdio.h>
+#include <string.h>
+#include "zergrt.h"
+
+int main(void) {
+    zrt_list l = zrt_listdir(%q);
+    size_t n = zrt_list_len(&l);
+    for (size_t i = 1; i < n; i++) {
+        const char *a = *(const char **)zrt_list_at(&l, i - 1);
+        const char *b = *(const char **)zrt_list_at(&l, i);
+        if (strcmp(a, b) >= 0) {
+            printf("out of order at %%zu\n", i);
+            return 1;
+        }
+    }
+    printf("%%zu sorted\n", n);
+    return 0;
+}
+`

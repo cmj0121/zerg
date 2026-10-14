@@ -172,11 +172,9 @@ fn test_contains_multibyte() {
 
 # --- split ----------------------------------------------------------------------------
 #
-# TWO LISTS CANNOT BE CLAIMED EQUAL WITH THEIR VALUES SHOWN — `assert xs == ys` has to render
-# both and `str` over a list does not (E4011) — so no claim here is made about a split's result
-# directly. Every one of them goes back through `join` with a separator the input does not
-# contain, which shows the value that was wrong and happily doubles as the split/join round
-# trip.
+# NO CLAIM HERE IS MADE ABOUT A SPLIT'S RESULT DIRECTLY. Every one of them goes back through
+# `join` with a separator the input does not contain, which shows the value that was wrong on
+# one line and happily doubles as the split/join round trip.
 
 #[test]
 fn test_split_ordinary() {

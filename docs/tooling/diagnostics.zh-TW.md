@@ -340,7 +340,6 @@ seed 全程維持句子比對:代碼是語言的契約,而 seed 是建置正式�
 | `E4008` | `…` has been instantiated … times and is still asking for more                                        |
 | `E4009` | the type parameter `…` of `…` is not decided by this call                                             |
 | `E4010` | `…` does not implement `…`, which `…`'s type parameter `…` is bounded by                              |
-| `E4011` | `str(…)` over a list bridges bytes or code points, and this is …                                      |
 | `E4012` | `…(…)` converts a value, and … may not have one                                                       |
 | `E4013` | an enum converts to `int`                                                                             |
 | `E4014` | `….of(n)` 反推判別值,而 enum `…` 帶 payload,所以它的 tag 是不透明的                                   |
@@ -601,6 +600,11 @@ list」做 `x in xs`：相等性明明在，卻沒有人呼叫它。現在 `in` 
 是同樣那三個代碼。`map` 與 `set` 問的是雜湊而不是 `==`，而聚合型別的 key 沒有雜湊：那一半從來不是這個代碼的
 缺口，答案是 `E9052`，也就是用那種 key 建 map 時本來就有的號碼。
 
+**有一個退場，是因為它說的那條規則從來不是語言的（#359）。** `E4011` 拒絕對「不是 bytes 也不是 code
+points 的 list」做 `str(xs)` 與 `f"{xs}"`，理由是 composite 沒有渲染。自從結構式渲染建好之後，每個
+composite 都有了，`print xs` 與 `xs.display()` 也都在用；只剩走 `str(…)` 的那兩種寫法還在拒絕。現在它們會
+渲染，就像 `docs/runtime/format.md` 說四種寫法都會的那樣，這也讓 `assert xs == ys` 能回報它的兩邊。
+
 **有一個是跟著它的規則一起退場，而不是搬到另一個區段。** `E2060` 拒絕一個名字不以大寫開頭的型別宣告，
 而那條規則就是這個語言分開兩個命名空間的全部依據——大寫的名字是型別，小寫的是值。那條規則已經沒有了：
 名字不決定一個東西是什麼，建構與呼叫由程式**宣告了什麼**來分辨。它沒有接替的號碼，因為沒有接替的規則；
@@ -706,6 +710,7 @@ list」做 `x in xs`：相等性明明在，卻沒有人呼叫它。現在 `in` 
 | `E9068` | —       | 形式建好了:`nil` 指名 optional 的缺席那一側              |
 | `E9057` | —       | 形式建好了:無名形式靠它的組成部分比較                    |
 | `E9061` | —       | 形式建好了:對 list 做 `in` 問的是元素的 `==`             |
+| `E4011` | —       | 不是規則:list 在 `str(…)` 裡的渲染和 `print` 一樣        |
 | `E9036` | `E4111` | 不是未建置的形式:一個 `spec` 成員永遠不是 `unsafe`       |
 
 **其中一個哪裡都沒去**,而它是唯一第二欄是空的那一列。`E3047` 回報的是「一個 `type X = Y` 上的前綴運算子」——

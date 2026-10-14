@@ -332,7 +332,6 @@ pub enum Rule {
 	GenericInstantiationDepth = 4008
 	TypeParamUndecided = 4009
 	TypeParamBoundUnmet = 4010
-	StrOfListElement = 4011
 	ConvOfOptional = 4012
 	EnumConvOnlyInt = 4013
 	OfOnPayloadEnum = 4014

@@ -496,7 +496,6 @@ shipping compiler rather than a part of it (the line
 | `E9052` | a map key of type …                                                                                   |
 | `E9054` | `#[derive(…)]`                                                                                        |
 | `E9056` | the list method `…`                                                                                   |
-| `E9061` | `in` over … compares its elements for equality, and this compiler does not write that comparison      |
 | `E9062` | `in` over … — a range's members are found by comparing its bounds                                     |
 | `E9063` | `…` is part of the fixed-width ladder                                                                 |
 | `E9066` | `del …` on a CHANNEL                                                                                  |
@@ -646,6 +645,12 @@ tuple, on the ground that a container has no declaration to derive an `Eq` on. I
 form has `Eq` when every part has it, so what is refused now is the part, under the code that part
 already had — `E4020` for a declared type with no `Eq`, `E4038` for a carrier, `E4034` for an identity.
 
+**And one because `in` asks that comparison (#358).** `E9061` refused `x in xs` over a list of containers
+or of a declared type carrying an `Eq`: the equality was there and nothing called it. `in` calls it now, so
+an unnamed element is refused for its part, under those same three codes. A `map` or a `set` is asked by
+hash and not by `==`, and an aggregate key has none: that half was never this code's gap and answers as
+`E9052`, the number a map built with such a key already had.
+
 **One retired with its rule rather than to another range.** `E2060` refused a declared type whose
 name did not begin with a capital, and that rule was the whole of how the language separated its
 two namespaces — a capitalised name was a type, a lower-case one a value. The rule is gone: a name
@@ -752,6 +757,7 @@ name now is the prelude rule (`E2061`), which is about the name rather than abou
 | `E9010` | —       | the form was built: a named argument, in a call and a construction     |
 | `E9068` | —       | the form was built: `nil` names an optional's absent side              |
 | `E9057` | —       | the form was built: an unnamed form compares by its parts              |
+| `E9061` | —       | the form was built: `in` over a list asks its elements' `==`           |
 | `E9036` | `E4111` | not an unbuilt form: a `spec` member is never `unsafe`                 |
 
 **One of them moved nowhere**, and it is the only row whose second column is empty. `E3047`

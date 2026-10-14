@@ -9833,6 +9833,12 @@ fn c_eq_refuse(mut &em: Emitter, oper: str, t: ast.Ty) {
 	# sentence about the list would send them to a declaration that does not exist.
 	if c_is_unnamed(t) {
 		bad := c_eq_bad_part(em, t)
+
+		# `in` already says it compares the elements, so the form alone is its subject
+		if oper == "in" {
+			c_eq_refuse_part(em, oper, ast.ty_name(t), bad)
+			return
+		}
 		c_eq_refuse_part(em, oper, f"{ast.ty_name(t)}, which compares its {ast.ty_name(bad)}", bad)
 		return
 	}
@@ -10189,24 +10195,31 @@ fn c_in_container(mut &em: Emitter, x: ast.Expr, set: ast.Expr, st: ast.Ty, sb: 
 
 	elem := c_in_elem_ty(st)
 
-	# an AGGREGATE has no `==` C can write, and TWO different rules answer for that. A declared
-	# struct or enum carrying no `Eq` is the PROGRAM's gap — the same finding `a == b` reports,
-	# closed by the same `#[derive(Eq)]`. Everything else here HAS an equality the language
-	# means `in` to use and this compiler does not call: a declared type that carries an `Eq`
-	# (which the one sentence below used to tell it had none, in as many words), and a
-	# CONTAINER, whose structural equality is docs/code/collections.md's `[not yet]` rather
-	# than anything its author left out.
+	# an AGGREGATE has no `==` C can write, so its comparison is the one `a == b` makes between
+	# two of them: a declared type's `eq`, and an unnamed form part by part. A declared struct
+	# or enum carrying no `Eq` is the PROGRAM's gap — the same finding `a == b` reports, closed
+	# by the same `#[derive(Eq)]`.
 	#
-	# NEITHER SENTENCE NAMES `==` ANY MORE. The rule `in` asks is the equality rule, and saying
-	# so is right; quoting the OPERATOR is not, because `x in xs` contains no `==` and a reader
-	# told about one goes looking through their own file for it.
-	if c_is_aggregate(em, elem) {
+	# A MAP AND A SET DO NOT COMPARE, THEY HASH, and an aggregate has no hash here whatever its
+	# equality is. That is the gap a map keyed by one already has a sentence and a number for, so
+	# it is asked of the one function that owns both rather than given a second pair.
+	#
+	# NO SENTENCE NAMES `==`. The rule `in` asks is the equality rule, and saying so is right;
+	# quoting the OPERATOR is not, because `x in xs` contains no `==` and a reader told about one
+	# goes looking through their own file for it.
+	cmp := c_is_aggregate(em, elem)
+	if cmp {
+		if c_is_map(st) {
+			c_hashed_check(em, elem, "a map key")
+		}
+		if c_is_set(st) {
+			c_hashed_check(em, elem, "a set element")
+		}
 		raise c_diag(em, rule.Rule.InElemNoEq, f"`in` over {ast.ty_name(st)} compares its elements for equality, and {ast.ty_name(elem)} has none: add `#[derive(Eq)]` to it or write `impl Eq for {ast.ty_name(elem)}`") if c_in_elem_owes_eq(em, elem)
-
-		raise c_diag(em, rule.Rule.NotYetInOverNoEq, f"NotImplemented: `in` over {ast.ty_name(st)} compares its elements for equality, and this compiler does not write that comparison for {ast.ty_name(elem)} (GRAMMAR#cmp-expr)")
 	}
 
-	# WHAT IS LEFT IS NOT AN AGGREGATE, AND `in` STILL CANNOT COMPARE ALL OF IT. `in` compares
+	# WHAT IS LEFT HAS A DECLARATION OR NEEDS NONE, AND `in` STILL CANNOT COMPARE ALL OF IT — an
+	# unnamed form with a part of no equality, and two classes that are no aggregate. `in` compares
 	# its elements with `==` — the two sentences above say so in as many words — so whether that
 	# comparison MEANS anything is `==`'s question, and c_eq_legal is the one function that
 	# answers it. This rule asked c_is_aggregate instead, which is a different question by two
@@ -10221,6 +10234,10 @@ fn c_in_container(mut &em: Emitter, x: ast.Expr, set: ast.Expr, st: ast.Ty, sb: 
 	# defect #74 exists to undo, and `c_eq_refuse` is where both sentences live.
 	if not c_eq_legal(em, elem) {
 		c_eq_refuse(em, "in", elem)
+
+		# and an unnamed form is not handed on to be compared: its parts would be asked the same
+		# question again, in the words of an operator nobody wrote
+		return "false" if cmp
 	}
 
 	n := c_tmp(em, "zgt_in")
@@ -10231,32 +10248,52 @@ fn c_in_container(mut &em: Emitter, x: ast.Expr, set: ast.Expr, st: ast.Ty, sb: 
 	et := c_type(elem)
 
 	mut give := c_in_give(em, set, st, sv)
+	owns := c_owns_value(x) and c_needs_copy(em, elem)
 
-	# the set is bound FIRST, so one this expression owns is held across the value looked for
+	# the set is bound FIRST, so one this expression owns is held across the value looked for —
+	# and across the test as well when the test is the program's own `eq`, which may abort
 	keep := em.rel_cnames.len()
 	mut head := f"{c_type(st)} {sv} = {c_expr(em, set, sb)}; "
-	if give != "" and c_runs_code(x) {
+	if give != "" and (cmp or c_runs_code(x)) {
 		head = head + c_hold(em, st, sv)
 	}
 	head = head + f"{et} {kv} = {c_in_value(em, elem, x, sb)}; "
-	head = head + c_unhold(em, keep)
+	if cmp and owns {
+		head = head + c_hold(em, elem, kv)
+	}
 
 	# and what the value owns goes back straight after the test, which is the last thing to
-	# read it: nothing runs between its binding and here, so it is never registered
-	if c_owns_value(x) and c_needs_copy(em, elem) {
+	# read it
+	if owns {
 		give = f" {c_drop_stmt(em, elem, kv)}{give}"
 	}
 
-	return f"({{ {head}{bt} {rv} = zrt_map_has(&{sv}, &{kv});{give} {rv}; }})" if c_is_map(st) or c_is_set(st)
-
 	iv := n + "i"
+	nv := n + "n"
 	at := f"(*({et} *)zrt_list_at_ref(&{sv}, {iv}))"
 
-	nv := n + "n"
+	# THE VALUE LOOKED FOR IS ON THE LEFT of each comparison, as it is on the left of `in`: a
+	# written `eq` is the program's own code, and `x in xs` asks it `x.eq(e)` of every element.
+	# The comparison is rendered while both are held, so an exit from inside it unwinds them.
+	mut test := c_in_eq(at, kv, elem)
+	if cmp {
+		ev := n + "e"
+		test = f"({{ {et} {ev} = {at}; {c_eq_pair(em, elem, kv, ev)}; }})"
+	}
+
+	# a test that runs nothing is not held across: the holds end where they always did
+	mut early := c_unhold(em, keep)
+	mut late := ""
+	if cmp {
+		late = " " + early
+		early = ""
+	}
+
+	return f"({{ {head}{early}{bt} {rv} = zrt_map_has(&{sv}, &{kv});{give} {rv}; }})" if c_is_map(st) or c_is_set(st)
 
 	# the LENGTH is read once: zrt_list_len is a call into another translation unit, so asking
 	# it in the condition is one call per element rather than one for the loop
-	return f"({{ {head}{bt} {rv} = false; size_t {nv} = zrt_list_len(&{sv}); for (size_t {iv} = 0; {iv} < {nv}; {iv}++) {{ if ({c_in_eq(at, kv, elem)}) {{ {rv} = true; break; }} }}{give} {rv}; }})"
+	return f"({{ {head}{early}{bt} {rv} = false; size_t {nv} = zrt_list_len(&{sv}); for (size_t {iv} = 0; {iv} < {nv}; {iv}++) {{ if ({test}) {{ {rv} = true; break; }} }}{late}{give} {rv}; }})"
 }
 
 # c_in_value renders the value `in` looks for. THE TEST READS IT AND KEEPS NOTHING — a list
@@ -10276,11 +10313,8 @@ fn c_in_value(mut &em: Emitter, elem: ast.Ty, x: ast.Expr, sb: Subst) -> str {
 
 # c_in_elem_owes_eq is whether the element type is one a PROGRAM could give an `==` and has
 # not. A declared struct or enum is: it has a declaration to decorate and `#[derive(Eq)]` is
-# the answer. A container is not — there is nothing to decorate, and no impl a program could
-# write for it — so what `in` does not do over one is this compiler's gap and not the
-# author's. It is the LAST of the lines c_eq_refuse draws, not the only one. The comment used
-# to call it "the same line", singular, which read as a parity claim and was the reason the
-# two classes above it — an identity and a carrier — were never asked of an element at all.
+# the answer. An unnamed form is not — there is nothing to decorate, and no impl a program
+# could write for it — so it is refused for the PART that has none, by c_eq_refuse.
 fn c_in_elem_owes_eq(mut &em: Emitter, elem: ast.Ty) -> bool {
 	return false if c_has_eq(em, elem)
 
@@ -10305,9 +10339,8 @@ fn c_in_give(mut &em: Emitter, set: ast.Expr, st: ast.Ty, sv: str) -> str {
 	return f" {c_drop_fn(em, st)}(&{sv});"
 }
 
-# c_in_eq compares one element with the value looked for, the way `==` does it — a str through
-# strcmp, everything else with C's own `==`. Written here rather than routed through c_binexpr
-# because that one takes EXPRESSIONS and both sides of this are already-rendered C.
+# c_in_eq compares one element with the value looked for, the way `==` does it for what C can
+# compare — a str through strcmp, a scalar with C's own `==`. An aggregate is c_eq_pair's.
 fn c_in_eq(at: str, kv: str, elem: ast.Ty) -> str {
 	return f"strcmp({at}, {kv}) == 0" if c_is_str(elem)
 

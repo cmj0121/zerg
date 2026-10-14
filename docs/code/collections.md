@@ -94,12 +94,16 @@ Indexing mirrors the force-vs-check split of `!` / `?`:
   element type like a value entering any other [typed position](../core/types.md#typed-positions), so
   `72 in bytearray(…)` is a byte.
 
-> **[not yet]** `x in xs` is built only for the element types this compiler writes a `==` for. A
-> container element, or a declared type that already carries an `Eq`, is not one of them: `P(1) in [P(1)]`
-> is _E9061 NotImplemented: `in` over list[P] compares its elements for equality, and this compiler does
-> not write that comparison for P_. That is [container equality](#order--equality)'s gap reached through
-> `in`, and it retires with it. An element type carrying **no** `Eq` is a different answer — `E3118`, which
-> the program closes itself by writing `#[derive(Eq)]` on the type.
+> **A list is scanned with the `==` its element has**, whatever the element is: a declared type through its
+> `Eq`, and a container, a tuple or an array [by its parts](#order--equality) — so `[3] in [[1, 2], [3]]` is
+> `true`. The value looked for stands on the left of each comparison, the way it stands on the left of `in`,
+> and the scan stops at the first match. An element type carrying **no** `Eq` is _E3118_, which the program
+> closes itself by writing `#[derive(Eq)]` on the type; an unnamed element with such a part is refused for
+> that part (_E4020_).
+>
+> **[not yet]** A `map` or a `set` hashes instead, and only an `int` or a `str` has a `Hash` here: `k in m`
+> for a `map[list[int], V]` is _E9052 NotImplemented: a map key of type list[int] — it needs `Hash`_, the
+> refusal that map already meets where it is built.
 >
 > **Every one of these says `in`, and none of them says `==`.** The rule `in` asks IS the equality rule —
 > which is why the codes are shared with `a == b` rather than doubled — but a program containing `x in xs`

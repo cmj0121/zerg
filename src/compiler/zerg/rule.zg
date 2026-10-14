@@ -533,7 +533,6 @@ pub enum Rule {
 	NotYetMapKeyType = 9052
 	NotYetDerive = 9054
 	NotYetListMethod = 9056
-	NotYetInOverNoEq = 9061
 	NotYetInOverType = 9062
 	NotYetFixedWidthLadder = 9063
 	NotYetDelChannel = 9066

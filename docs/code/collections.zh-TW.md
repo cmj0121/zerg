@@ -86,11 +86,14 @@ collection 也能拿來當 key。
   map 是**雜湊**——同一個問題、不同的代價——而被找的那個值會像進入任何其他
   [有型別的位置](../core/types.zh-TW.md#有型別的位置typed-positions)一樣去符合元素型別，所以 `72 in bytearray(…)` 是一個 byte。
 
-> **[not yet]** `x in xs` 只對這個編譯器寫得出 `==` 的元素型別建置了。容器元素、以及已經帶著 `Eq` 的宣告型別都不
-> 在其中：`P(1) in [P(1)]` 是 _E9061 NotImplemented: `in` over list[P] compares its elements for equality,
-> and this compiler does not write that comparison for P_。那是[順序與相等性](#順序與相等性)那個缺口從 `in` 這一
-> 側看過去的樣子，也會跟它一起退場。元素型別**沒有** `Eq` 則是另一個答案——`E3118`，那個缺口是程式自己用
-> `#[derive(Eq)]` 補上的。
+> **list 是用元素自己的 `==` 掃的**，不論元素是什麼：宣告型別走它的 `Eq`，而容器、tuple 或陣列則
+> [靠它的組成部分](#順序與相等性)——所以 `[3] in [[1, 2], [3]]` 是 `true`。被找的那個值站在每次比較的左邊，就像它
+> 站在 `in` 的左邊一樣，而且掃到第一個相符就停。元素型別**沒有** `Eq` 是 _E3118_，那個缺口是程式自己用
+> `#[derive(Eq)]` 補上的；無名元素若有這樣的部分，被拒絕的是那個部分（_E4020_）。
+>
+> **[not yet]** `map` 與 `set` 用的是雜湊，而這裡只有 `int` 與 `str` 有 `Hash`：對一個 `map[list[int], V]` 做
+> `k in m` 是 _E9052 NotImplemented: a map key of type list[int] — it needs `Hash`_，也就是那個 map 在被建出來
+> 的地方本來就會遇到的拒絕。
 >
 > **這些訊息每一個都說 `in`，沒有一個說 `==`。** `in` 問的規則**就是**相等性規則——所以代碼跟 `a == b` 共用而不是
 > 各生一份——但一支寫著 `x in xs` 的程式裡沒有 `==`，訊息引用一個不在檔案裡的運算子，只會讓讀者回去翻自己的檔案找

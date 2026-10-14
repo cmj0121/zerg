@@ -3423,8 +3423,22 @@ pub fn chk_binary(mut &em: emit.Emitter, oper: str, ta: ast.Ty, tb: ast.Ty, ea: 
 		# lowers the operator onto the `less` that impl provides.
 		return if ast.ty_eq(ta, tb) and emit.c_has_ord(em, ta)
 
-		if chk_wrong_num(ta) or chk_wrong_num(tb) {
-			chk_at(em, rule.Rule.OpWantsOrdered, f"operator `{oper}` orders two numbers or two strs, and these are {ast.ty_name(ta)} and {ast.ty_name(tb)}")
+		# AND A TUPLE OR AN ARRAY, which orders by its parts when every part orders
+		# (docs/core/types.md). One that does not is refused for the part, which is what the
+		# reader has to change: a sentence about the tuple would name a declaration nobody wrote.
+		# It is the same rule as the numbers', so it is the same report with a different subject.
+		mut why := f"two numbers or two strs, and these are {ast.ty_name(ta)} and {ast.ty_name(tb)}"
+		if ast.ty_eq(ta, tb) and emit.c_is_ordered_form(ta) {
+			bad := emit.c_ord_bad_part(em, ta)
+			return if emit.c_is_unknown(bad)
+
+			why = f"two {ast.ty_name(ta)} part by part, and a {ast.ty_name(bad)} has no `Ord`"
+		} else if not chk_wrong_num(ta) and not chk_wrong_num(tb) {
+			why = ""
+		}
+
+		if why != "" {
+			chk_at(em, rule.Rule.OpWantsOrdered, f"operator `{oper}` orders {why}")
 			return
 		}
 

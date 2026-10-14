@@ -1345,6 +1345,55 @@ fn main() {
 }
 ZG
 
+# --- two tuples or arrays ordered by their parts ------------------------------------------
+# `<` over a tuple binds each operand once and walks the parts until one differs, so a tuple
+# a call answered is this expression's to give back whichever way it ended, and a held one is
+# read where it stands. A part with an `Ord` is handed copies, which its `less` owns. A wrong
+# answer aborts. The seed orders no tuple, so it is zerg only.
+case_run tuple_order no no <<'ZG'
+#[derive(Eq, Ord)]
+struct P {
+	pub s: str
+}
+
+# the same width at every n, so the order of two words is the order of their numbers
+fn word(n: int) -> str {
+	return str(n + 1000) + "!"
+}
+
+fn pair(n: int, m: int) -> (str, str) {
+	return (word(n), word(m))
+}
+
+fn round(n: int) {
+	t := pair(n, n + 1)
+
+	raise "a held tuple ordered wrong" if not (t < pair(n, n + 2))
+	raise "two tuples a call answered ordered wrong" if pair(n, n + 2) <= pair(n, n + 1)
+	raise "an equal tuple was less" if t < pair(n, n + 1)
+	raise "an equal tuple was not at least" if not (t >= pair(n, n + 1))
+	raise "a held tuple was taken by the test" if t.1 != word(n + 1)
+
+	ps := (P(word(n)), word(n))
+	raise "a part with an Ord ordered wrong" if not ((P(word(n)), word(n)) < (P(word(n + 1)), word(n)))
+	raise "a held tuple of a declared type ordered wrong" if ps > (P(word(n)), word(n + 1))
+
+	a: [str; 2] = [word(n), word(n + 1)]
+	b: [str; 2] = [word(n), word(n + 2)]
+	raise "two arrays ordered wrong" if not (a < b)
+	raise "an array was less than itself" if a < a
+}
+
+fn main() {
+	mut i := 0
+	r := rounds()
+	for i < r {
+		round(i)
+		i = i + 1
+	}
+}
+ZG
+
 # --- a closure environment -------------------------------------------------------------
 # One environment per construction, and the closure may outlive the scope that made it —
 # which is what closing over a value is for, and why the scope cannot be what frees it.

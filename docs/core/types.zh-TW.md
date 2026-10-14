@@ -290,7 +290,9 @@ tuple 的結果是 **first-class**——可存、可傳、可解構——所以�
 （見 [模式比對](../code/control-flow.zh-TW.md)）。
 
 `==` 與 `!=` 就是這條規則建出來的樣子：`(1, "a") == (1, "a")` 逐個部分比較，而裝著一個沒有 `Eq` 的部分的
-tuple 會因為那個部分被拒絕（`E4020`）。
+tuple 會因為那個部分被拒絕（`E4020`）。`<` `<=` `>` `>=` 也一樣：`(1, 2) < (1, 3)` 是 `true`，由第一個不同的
+部分決定，而沒有 `Ord` 的部分——`float`，或有 `Eq` 卻沒有 `Ord` 的型別——會因為那個部分被拒絕（`E3044`）。
+`list`、`map` 與 `set` 沒有順序。
 
 > **[not yet]** `Hash` 是這條規則還沒建的那一半：拿 tuple 當 map key 是 _E9052
 > NotImplemented: a map key of type (int, int) — it needs `Hash`, and this compiler has one for `int` and

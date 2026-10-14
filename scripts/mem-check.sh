@@ -1300,6 +1300,51 @@ fn main() {
 }
 ZG
 
+# --- a list rendered through `str(…)` and a hole -----------------------------------------
+# `str(xs)` and `f"{xs}"` reach the renderer `print xs` uses, so a list a call answered is this
+# expression's to give back once the text is built, and the text is the caller's: each is
+# compared, concatenated or measured and then dropped. A held list is rendered in place and
+# read afterwards. An `assert` over two lists binds both sides whether or not it holds; one
+# that fails is the corpus case's, where the text is read. The seed renders no list, so it is
+# zerg only.
+case_run list_in_a_hole no no <<'ZG'
+fn word(n: int) -> str {
+	return str(n) + "!"
+}
+
+fn words(n: int) -> list[str] {
+	return [word(n), word(n + 1)]
+}
+
+fn claim(a: list[str], b: list[str]) -> int {
+	assert a == b
+	return 1
+}
+
+fn round(n: int) {
+	xs := words(n)
+
+	raise "a held list rendered wrong" if str(xs) != f"[\"{word(n)}\", \"{word(n + 1)}\"]"
+	raise "a list a call answered rendered wrong" if str(words(n)) != str(xs)
+	raise "a hole rendered wrong" if f"<{words(n)}>" != "<" + str(xs) + ">"
+	raise "a held list was taken by the rendering" if xs[1] != word(n + 1)
+	raise "a nested list rendered wrong" if f"{[words(n), xs]}" != f"[{xs}, {xs}]"
+	raise "a list of ints rendered wrong" if str([n, n + 1]) != f"[{n}, {n + 1}]"
+
+	raise "two equal lists were claimed unequal" if claim(xs, words(n)) != 1
+	assert words(n) == xs
+}
+
+fn main() {
+	mut i := 0
+	r := rounds()
+	for i < r {
+		round(i)
+		i = i + 1
+	}
+}
+ZG
+
 # --- a closure environment -------------------------------------------------------------
 # One environment per construction, and the closure may outlive the scope that made it —
 # which is what closing over a value is for, and why the scope cannot be what frees it.

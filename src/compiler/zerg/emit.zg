@@ -9525,6 +9525,10 @@ fn c_binexpr(mut &em: Emitter, oper: str, a: ast.Expr, b: ast.Expr, sb: Subst) -
 		# here rather than required of an implementer.
 		return c_ord_call(em, oper, a, b, sb) if c_is_order_op(oper) and c_has_ord(em, ta)
 
+		# and a TUPLE or an ARRAY has it from its parts as it has `==`, compared in order with the
+		# first part that differs deciding (docs/core/types.md)
+		return c_eq_parts(em, oper, a, b, ta, sb) if c_is_order_op(oper) and c_is_ordered_form(ta) and c_is_unknown(c_ord_bad_part(em, ta)) and ast.ty_eq(ta, c_infer(em, b))
+
 		# EQUALITY and ORDERING are two questions. `c_eq_legal` answers the first — and is
 		# the same answer the `T: Eq` bound gives, which is the point of it being one
 		# function. An ORDERING additionally has nothing on any aggregate WITHOUT an `Ord`,
@@ -9649,7 +9653,8 @@ fn c_eq_bad_part(mut &em: Emitter, t: ast.Ty) -> ast.Ty {
 
 # c_eq_parts lowers `a == b` / `a != b` over two values of one unnamed form. A `list` and an
 # array compare in order, a tuple part by part, and a `map` or a `set` without regard to the
-# order things were put in (docs/code/collections.md).
+# order things were put in (docs/code/collections.md). It lowers the four ORDERINGS over a
+# tuple or an array too, which bind their operands the same way and differ only in the test.
 #
 # `!=` IS THE NEGATION, and the parts are always asked `==`. A declared type's `ne` is
 # dispatched rather than derived, but that is a statement about the type that wrote one: an
@@ -9678,7 +9683,7 @@ fn c_eq_parts(mut &em: Emitter, oper: str, a: ast.Expr, b: ast.Expr, t: ast.Ty, 
 	if ob {
 		head = head + c_hold(em, t, lb)
 	}
-	test := c_eq_places(em, t, la, lb)
+	test := c_parts_test(em, oper, t, la, lb)
 	mut give := c_unhold(em, keep)
 	if ob {
 		give = give + c_drop_stmt(em, t, lb) + " "
@@ -9687,11 +9692,102 @@ fn c_eq_parts(mut &em: Emitter, oper: str, a: ast.Expr, b: ast.Expr, t: ast.Ty, 
 		give = give + c_drop_stmt(em, t, la) + " "
 	}
 
-	mut neg := ""
-	if oper == "!=" {
-		neg = "!"
+	return f"({{ {head}bool {rv} = {test}; {give}{rv}; }})"
+}
+
+# c_parts_test is the comparison an operator asks of two bound values. The four orderings are
+# written out of ONE `less`, as `Ord`'s are (c_ord_call): under a total order `a <= b` is
+# `not (b < a)`, so each operand is read once whichever was asked.
+fn c_parts_test(mut &em: Emitter, oper: str, t: ast.Ty, la: str, lb: str) -> str {
+	return c_eq_places(em, t, la, lb) if oper == "=="
+	return "!" + c_eq_places(em, t, la, lb) if oper == "!="
+	return c_ord_less(em, t, la, lb) if oper == "<"
+	return c_ord_less(em, t, lb, la) if oper == ">"
+	return "!" + c_ord_less(em, t, lb, la) if oper == "<="
+
+	return "!" + c_ord_less(em, t, la, lb)
+}
+
+# c_is_ordered_form is the unnamed forms that order by their parts: a tuple and an array, the
+# two docs/core/types.md gives `Ord`. A list, a map and a set have none, whatever they hold.
+pub fn c_is_ordered_form(t: ast.Ty) -> bool {
+	return c_is_tuple(t) or c_is_arr(t)
+}
+
+# c_ord_bad_part is the first part, depth first, that has no order — or TUnknown when every
+# part has one. A part orders when it is an integer of any width, a `str`, a declared type with
+# an `Ord`, or a tuple or an array whose own parts do. A `float` does not: a NaN breaks a total
+# order, which is why it sits out `Ord` (docs/core/specs.md).
+pub fn c_ord_bad_part(mut &em: Emitter, t: ast.Ty) -> ast.Ty {
+	mut parts: list[ast.Ty] = []
+	if c_is_tuple(t) {
+		parts = c_tuple_tys(t)
+	} else if c_is_arr(t) {
+		parts.append(c_arr_elem(t))
 	}
-	return f"({{ {head}bool {rv} = {neg}{test}; {give}{rv}; }})"
+	for part in parts {
+		if c_is_ordered_form(part) {
+			bad := c_ord_bad_part(em, part)
+			return bad if not c_is_unknown(bad)
+		} else if not c_ord_scalar(em, part) {
+			return part
+		}
+	}
+	return ast.Ty.TUnknown
+}
+
+fn c_ord_scalar(mut &em: Emitter, t: ast.Ty) -> bool {
+	return true if c_is_str(t) or c_has_ord(em, t)
+
+	cls := c_scalar_class(t)
+	return cls == SC_SIGNED or cls == SC_UNSIGNED
+}
+
+# c_ord_less is `ca < cb` over two C names holding a tuple or an array: LEXICOGRAPHIC, the
+# first part that differs deciding and every part after it unread. A part is asked `<` both
+# ways, which is how a total order says "differs" without asking `==` of it as well.
+fn c_ord_less(mut &em: Emitter, t: ast.Ty, ca: str, cb: str) -> str {
+	n := c_tmp(em, "zgt_ord")
+	rv := n + "r"
+	dv := n + "d"
+	iv := n + "i"
+	xa := n + "x"
+	xb := n + "y"
+	bt := c_type(ast.Ty.TBool)
+
+	if c_is_tuple(t) {
+		tys := c_tuple_tys(t)
+		mut out := f"({{ {bt} {rv} = false; {bt} {dv} = false; "
+		mut i := 0
+		for i < tys.len() {
+			fi := f"f{strconv.to_string(i, 10)}"
+			et := c_type(tys[i])
+			out = out + f"if (!{dv}) {{ {et} {xa} = {ca}.{fi}; {et} {xb} = {cb}.{fi}; {c_ord_step(em, tys[i], xa, xb, rv, dv)} }} "
+			i = i + 1
+		}
+		return out + f"{rv}; }})"
+	}
+
+	e := c_arr_elem(t)
+	et := c_type(e)
+	return f"({{ {bt} {rv} = false; {bt} {dv} = false; for (int64_t {iv} = 0; !{dv} && {iv} < {c_arr_key(t)}; {iv}++) {{ {et} {xa} = {ca}.v[{iv}]; {et} {xb} = {cb}.v[{iv}]; {c_ord_step(em, e, xa, xb, rv, dv)} }} {rv}; }})"
+}
+
+# c_ord_step is one part of that walk: less, and the answer is in; greater, and it is too.
+fn c_ord_step(mut &em: Emitter, t: ast.Ty, xa: str, xb: str, rv: str, dv: str) -> str {
+	return f"if ({c_ord_pair(em, t, xa, xb)}) {{ {rv} = true; {dv} = true; }} else if ({c_ord_pair(em, t, xb, xa)}) {{ {dv} = true; }}"
+}
+
+# c_ord_pair is `xa < xb` AS A PROGRAM WOULD WRITE IT between two parts, rendered by c_expr the
+# way c_eq_pair renders `==`: a str through strcmp, a declared type through its `less`, a nested
+# tuple back here.
+fn c_ord_pair(mut &em: Emitter, t: ast.Ty, xa: str, xb: str) -> str {
+	outer := c_scope_open(em)
+	c_env_row(em, xa, t, xa, false, false)
+	c_env_row(em, xb, t, xb, false, false)
+	out := c_expr(em, ast.Expr.EBinary("<", ast.Expr.EIdent(xa, 0, 0), ast.Expr.EIdent(xb, 0, 0)), c_nosub())
+	c_scope_close(em, outer)
+	return out
 }
 
 # c_eq_places is the comparison itself, over two C names that hold the two values. It reads

@@ -11188,7 +11188,21 @@ fn c_display_check(mut &em: Emitter, t: ast.Ty, where: str) {
 	# `c_is_identity` IS THE CLASS, not a hand-written pair. It is what `E4034` refuses `==` on,
 	# and a second list of the same two types is how the defect it was extracted to end
 	# propagated in the first place.
-	raise c_diag(em, rule.Rule.IdentityHasNoRendering, f"a {ast.ty_name(t)} is an identity rather than a value, and the language gives it no rendering — it is a place to send to or to jump to, and its address is not a rendering of anything the program wrote") if c_is_identity(t)
+	#
+	# AND ONE INSIDE A COMPOSITE IS THE SAME REFUSAL, named for the part. The structural
+	# renderer walks the parts and asks each of them c_render_of, which has no refusal of its
+	# own — so `print [ch]` printed `[4313537872]` and `print [f]` reached cc, the two failures
+	# above one level down (#368). The walk is the renderer's own (c_render_parts), so what is
+	# refused is exactly what would have been rendered.
+	mut seen: list[str] = []
+	bad := c_identity_part(em, t, seen)
+	if not c_is_unknown(bad) {
+		mut why := "it is a place to send to or to jump to, and its address is not a rendering of anything the program wrote"
+		if not ast.ty_eq(bad, t) {
+			why = f"a {ast.ty_name(t)} renders by its parts and this one is a place to send to or to jump to, whose address is not a rendering of anything the program wrote"
+		}
+		raise c_diag(em, rule.Rule.IdentityHasNoRendering, f"a {ast.ty_name(bad)} is an identity rather than a value, and the language gives it no rendering — {why}")
+	}
 
 	# NIL IS NOT A THING TO RENDER, and it is asked here because this is the one gate the
 	# three rendering positions share — `print x`, an f-string's `{x}` and `str(x)`. A `fn`
@@ -20393,6 +20407,27 @@ fn c_render_runs(mut &em: Emitter, t: ast.Ty, mut &seen: list[str]) -> bool {
 		return true if c_render_runs(em, p, seen)
 	}
 	return false
+}
+
+# c_identity_part is the first part, depth first, that the structural renderer would reach and
+# that is an identity — the type itself when it is one, TUnknown when there is none. It stops
+# where c_render_runs does: a type that declares its own rendering and a box answer for what
+# they hold, and a shape already on the walk is not walked again.
+fn c_identity_part(mut &em: Emitter, t: ast.Ty, mut &seen: list[str]) -> ast.Ty {
+	return t if c_is_identity(t)
+	return ast.Ty.TUnknown if c_is_spec_name(em, c_named_of(t)) or c_declares_rendering(em, t) or not c_has_parts(em, t)
+
+	key := c_render_key(em, t)
+	for n in seen {
+		return ast.Ty.TUnknown if n == key
+	}
+	seen.append(key)
+
+	for p in c_render_parts(em, t) {
+		bad := c_identity_part(em, p, seen)
+		return bad if not c_is_unknown(bad)
+	}
+	return ast.Ty.TUnknown
 }
 
 # c_render_holds is the question a renderer body asks of the parts it is about to join.

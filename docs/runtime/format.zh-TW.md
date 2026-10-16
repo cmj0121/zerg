@@ -56,6 +56,10 @@ method 會在宣告處被拒絕。`print`、格式洞與 `str(…)` 都會採用
 > than a value, and the language gives it no rendering_。**nil** 是第三種答案,因為 nil 根本不是一個值:沒有
 > `-> type` 的 `fn` 回答的就是它（[`GRAMMAR#fn-decl`](../../GRAMMAR)）,而 `str(f())` 會被指名告知——
 > _E3086 this rendering needs a value, and this one is nil_——讀者需要的是一個會回答東西的 `fn`,不是一個渲染。
+>
+> **裝著身分的複合值,會因為那個部分被拒絕**,不論多深、四種拼法都一樣:`print [ch]` 是 _E4076_,
+> 指名 `chan[int]` 以及以部分渲染它的 `list[chan[int]]`。自己宣告了 `display` 的型別要為它裝的東西負責,
+> 所以藏在這種型別後面的 channel,渲染出來就是那個 `display` 寫的東西。
 > **內插——`f"…"`。** 裸 `"…"` 是字面量（大括號是普通字元）。**`f`-string** 內嵌 `{ expr }`，透過 `display` 渲染
 > 再串接——`f"sum={x + y}"`——在**編譯期 desugar** 成 `str` 串接（Collections），不需 variadic、無 runtime 格式
 > 引擎。洞是 **Python 形狀**——`{ expr =? !conv? :spec? }`：

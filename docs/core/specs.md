@@ -506,18 +506,18 @@ too narrow to earn an operator. Equality, where a type opts into it, is the **st
 **`is`** keyword is a different question — the **type-identity** test `x is T` on an existential (Type
 tests) — "what concrete type is boxed here?", never "are these two the same value?".
 
-> **[not yet]** Of the built-in specs this section describes, exactly two are declared: **`Eq`** above, and
-> **`Into[T]`** ([Types](types.md#into--an-ordinary-conversion-spec)). `Ord`, `Hash`, `Error`,
+> **[not yet]** Of the built-in specs this section describes, exactly three are declared: **`Eq`** above,
+> **`Ord`** below, and **`Into[T]`** ([Types](types.md#into--an-ordinary-conversion-spec)). `Hash`, `Error`,
 > `Iterator` / `Iterable`, the sealed `Ref`, and every operator spec — `Add`, `Sub`, `Mul`, `Div`, `BitAnd`,
 > `BitOr`, `BitXor`, `Not`, `Shl`, `Shr` — do not exist as declarations at all, so they cannot be named:
-> `impl Ord for P` reports _error: E3013 no spec named `Ord`_, the ordinary message for a spec nobody wrote,
-> and `impl BitAnd for P` reports it too. The USE side is refused by the operator rather than by the spec:
-> `P(1) < P(2)` reports _E3044 operator `<` orders two numbers or two strs, and these are P and P_, which
-> names the operand types and says nothing about the missing `Ord`. Several of the **behaviours** are built
-> in and reachable without their spec — `<` on an `int`, `+` concatenating a `str`, the error taxonomy `Err`
-> names and the `message()` / `unwrap()` it answers, a `chan`'s refcounted
-> close — but they are compiler-owned and a user type cannot join them, with a `#[derive(Eq)]` on the type
-> or without one. Everything from here to the end of this chapter is specified against that gap.
+> `impl Hash for P` reports _error: E3013 no spec named `Hash`_, the ordinary message for a spec nobody
+> wrote, and `impl BitAnd for P` reports it too. A type without `Ord` is refused by the operator rather than
+> by the spec: `P(1) < P(2)` reports _E3044 operator `<` orders two numbers or two strs, and these are P and
+> P_, which names the operand types and says nothing about the missing `Ord`. Several of the **behaviours**
+> are built in and reachable without their spec — `+` concatenating a `str`, the error taxonomy `Err` names
+> and the `message()` / `unwrap()` it answers, a `chan`'s refcounted close — but they are compiler-owned and
+> a user type cannot join them, with a `#[derive(Eq)]` on the type or without one. Everything from here to
+> the end of this chapter is specified against that gap.
 
 The remaining specs are likewise **opt-in** — implement (or derive) the spec to gain the capability; a
 generic bound gates on it:

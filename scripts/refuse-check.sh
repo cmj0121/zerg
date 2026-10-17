@@ -1820,12 +1820,20 @@ fn main() {
 EOF
 
 # `format` IS THE SAME DOOR. Its substitute is `f"{x}"`, which lowers through the `str(…)`
-# arm — one case, because what is being asserted is that the split reaches all three
-# renderings and not only two.
-expect "$ZERG" list-format E9107 'no spec-less rendering to fall back on' <<'EOF'
+# arm, and a LIST is offered it: a composite renders by its parts (#359), and this case said
+# there was no rendering to fall back on after there was one (#371).
+expect "$ZERG" list-format E9107 'and `f"{x}"` renders without one' <<'EOF'
 fn main() {
 	xs := [1, 2]
 	print xs.format("04d")
+}
+EOF
+
+# and one HOLDING an identity is told about the part, as every rendering spelling tells it
+expect "$ZERG" list-of-chan-format E9107 'fall back on — a list[chan[int]] renders by its parts, and a chan[int] among them is an identity' <<'EOF'
+fn main() {
+	ch := chan[int](1)
+	print [ch].format("04d")
 }
 EOF
 

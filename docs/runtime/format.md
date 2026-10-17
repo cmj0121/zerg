@@ -68,6 +68,10 @@ declaration. `print`, a format hole and `str(…)` all consult the override, and
 > with no `-> type` answers it ([`GRAMMAR#fn-decl`](../../GRAMMAR)), and `str(f())` is told so by name —
 > _E3086 this rendering needs a value, and this one is nil_ — where what the reader needs is a `fn` that
 > answers with something, not a rendering.
+>
+> **A composite holding an identity is refused for it**, at any depth and by all four spellings: `print [ch]`
+> is _E4076_ naming the `chan[int]` and the `list[chan[int]]` it renders by. A type that declares its own
+> `display` answers for what it holds, so a channel behind one renders as whatever that `display` writes.
 
 **Interpolation — `f"…"`.** A plain `"…"` is a literal (braces are ordinary characters). An **`f`-string**
 embeds `{ expr }`, rendered through `display` and joined — `f"sum={x + y}"` — **desugaring at compile

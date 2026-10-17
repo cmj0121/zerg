@@ -10219,6 +10219,65 @@ fn main() {
 }
 EOF
 
+# AND ONE INSIDE A COMPOSITE, named for the part (#368). The structural renderer walks the parts,
+# so `print [ch]` printed `[4313537872]` and `print [f]` reached cc — the two failures above, one
+# level down. One case per kind of container the walk descends through, a member of each kind
+# of identity, and a spelling of each kind of rendering; the sentence names the part and the
+# whole, so a case that refused the whole for some other reason would not pass.
+reject a-channel-in-a-list E4076 'a chan[int] is an identity rather than a value, and the language gives it no rendering — a list[chan[int]] renders by its parts' <<'EOF'
+fn main() {
+	ch := chan[int](1)
+
+	print [ch]
+}
+EOF
+
+reject a-function-value-deep-in-a-tuple E4076 'a fn(int) -> int is an identity rather than a value, and the language gives it no rendering — a (int, list[fn(int) -> int]) renders' <<'EOF'
+fn twice(n: int) -> int {
+	return n * 2
+}
+
+fn main() {
+	g := twice
+
+	print str((1, [g]))
+}
+EOF
+
+reject a-channel-as-a-map-value E4076 'a map[str, chan[int]] renders by its parts' <<'EOF'
+fn main() {
+	m := {"a": chan[int](1)}
+
+	print f"{m}"
+}
+EOF
+
+reject a-channel-in-a-struct-field E4076 'a P renders by its parts' <<'EOF'
+struct P {
+	pub n: int
+	pub c: chan[int]
+}
+
+fn main() {
+	ch := chan[int](1)
+
+	print P(1, ch).display()
+}
+EOF
+
+reject a-channel-in-a-variant E4076 'a E renders by its parts' <<'EOF'
+enum E {
+	A(chan[int])
+	B
+}
+
+fn main() {
+	ch := chan[int](1)
+
+	print E.A(ch)
+}
+EOF
+
 if [ $fail -ne 0 ]; then
 	echo "reject-check: $fail case(s) the compiler did not reject by itself"
 	exit 1

@@ -12719,7 +12719,23 @@ fn c_named_arg_misplaced(mut &em: Emitter, nm: str) -> str {
 fn c_call_val(mut &em: Emitter, callee: ast.Expr, args: list[ast.Expr], sb: Subst) -> str {
 	c_no_type_args(em, callee)
 	fty := c_infer(em, callee)
-	raise c_diag(em, rule.Rule.CalleeNotAFunction, f"`{ast.expr_kind(callee)}` is a {ast.ty_name(fty)} and this calls it — a callee that is not a name has to be a function VALUE (GRAMMAR#postfix)") if not c_is_fn(fty)
+	if not c_is_fn(fty) {
+		# A CALLEE OF NO TYPE IS SOME OTHER RULE'S FINDING, and lowering it is what reports
+		# that one: `nope[0](1)` is an undefined name, as `nope[0]` is, and not a callee whose
+		# type prints as `?` (#355). Those rules record and carry on, so the finding count is
+		# what says one answered — the method path asks it the same way (c_free_method). The
+		# sentence below names the callee by what it is rather than by its node kind, which no
+		# reader wrote.
+		mut what := f"is a {ast.ty_name(fty)}"
+		if c_is_unknown(fty) {
+			before := em.diags.len()
+			lowered := c_expr(em, callee, sb)
+			return lowered if em.diags.len() > before
+
+			what = "has no type this compiler could infer"
+		}
+		raise c_diag(em, rule.Rule.CalleeNotAFunction, f"this callee {what}, and a callee that is not a name has to be a function VALUE (GRAMMAR#postfix)")
+	}
 
 	v := c_tmp(em, "zgt_cv")
 	bind := f"zg_fnptr {v} = {c_expr(em, callee, sb)}; "

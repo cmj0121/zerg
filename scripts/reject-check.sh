@@ -1550,6 +1550,38 @@ EOF
 # The seed has said `undefined name` to all four of them since it was written. That is the
 # reason reject-check makes it the oracle, said once more.
 
+# AN UNDEFINED NAME INDEXED AND THEN CALLED is the same finding, at any index (#355). The call
+# inferred its callee, found no type, and reported _E4101 `index` is a ? and this calls it_ —
+# the node's kind and an unresolved type, where every other spelling of the mistake names it.
+# The bound twin is E4101 still, and its sentence names no node kind and no `?`.
+reject an-undefined-name-indexed-and-called E3069 'undefined name `nope`' <<'EOF'
+fn main() {
+	print nope[0](1)
+}
+EOF
+
+reject an-undefined-name-indexed-by-a-name-and-called E3069 'undefined name `nope`' <<'EOF'
+fn main() {
+	i := 0
+	print nope[i](1)
+}
+EOF
+
+reject an-undefined-name-indexed-by-an-expression-and-called E3069 'undefined name `nope`' <<'EOF'
+fn main() {
+	i := 0
+	print nope[i + 0](1)
+}
+EOF
+
+reject a-bound-element-that-is-not-a-function-called E4101 'this callee is a int, and a callee that is not a name' <<'EOF'
+fn main() {
+	fs := [1]
+	i := 0
+	print fs[i](1)
+}
+EOF
+
 reject an-invented-namespace-prefix E3069 'undefined name `bogus`' <<'EOF'
 import "./util/text"
 

@@ -15801,7 +15801,7 @@ fn c_pat_tuple_elems(pt: ast.Pat) -> list[ast.Pat] {
 # or the slice silently ran zero times — the shape the arm path now handles deliberately, and
 # these two do not handle at all.
 fn c_range_needs_hi(mut &em: Emitter, e: ast.Expr, what: str) {
-	raise c_diag(em, rule.Rule.NotYetOpenRangeHere, "NotImplemented: an open-ended range has no upper bound here —  (GRAMMAR#range-expr)" + what) if c_is_range(e) and c_is_nil_lit(c_range_hi(e))
+	raise c_diag(em, rule.Rule.NotYetOpenRangeHere, f"NotImplemented: an open-ended range has no upper bound here — {what} (GRAMMAR#range-expr)") if c_is_range(e) and c_is_nil_lit(c_range_hi(e))
 }
 
 # c_arm_eq is the scrutinee against a literal pattern. A `str` is not a native C operand, so the

@@ -533,12 +533,18 @@ void zrt_sched_wake(zrt_coro *co) {
 		 * why a stray one is harmless — every parking caller here (both channel ops and
 		 * select) re-scans in a loop and parks again if nothing was actually ready.
 		 *
-		 * Only select reaches this. A plain send or recv hands its one channel lock to
-		 * the scheduler, so a counterparty cannot even find the waiter until the switch
-		 * is done; a select pushes a waiter onto every channel it watches and can hold
-		 * only one of those locks at a time, so from the first push onward it is visible
-		 * to a counterparty while still RUNNING. Missing that wake is not a wrong answer,
-		 * it is a hang — the select parks on a hand-off that has already happened. */
+		 * Only select SETS one for a channel. A plain send or recv hands its one channel
+		 * lock to the scheduler, so a counterparty cannot even find the waiter until the
+		 * switch is done; a select pushes a waiter onto every channel it watches and can
+		 * hold only one of those locks at a time, so from the first push onward it is
+		 * visible to a counterparty while still RUNNING. Missing that wake is not a wrong
+		 * answer, it is a hang — the select parks on a hand-off that has already happened.
+		 *
+		 * BUT A PLAIN OP CAN STILL BE WOKEN EARLY. The token is the coroutine's, not the
+		 * channel's, and one a select left standing ends the coroutine's next park at once
+		 * — a plain `<-ch` included, while a sender on another worker may be mid-hand-off
+		 * to it. So both channel ops read their waiter's `done` under the channel lock the
+		 * counterparty writes it under (chan.c, #261). */
 		co->woken = true;
 	}
 	zrt_mutex_unlock(&g_lock);

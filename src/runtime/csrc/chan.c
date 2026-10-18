@@ -352,13 +352,18 @@ void zrt_chan_send(zrt_chan *ch, const void *val) {
 		if (zrt_sched_park_unlock(&ch->lock)) {
 			chan_deadlock(ch, &ch->sendq_head, &ch->sendq_tail, &w);
 		}
+		/* `done` IS READ UNDER THE LOCK THE RECEIVER WRITES IT UNDER (#261). A park can end
+		 * on a stray token before any receiver has looked (sched.c, zrt_sched_wake), and one
+		 * on another worker may then be between taking this waiter and setting `done`: read
+		 * without the lock, false sent this round the loop with its value already taken. */
+		zrt_mutex_lock(&ch->lock);
 		if (w.done) {
+			zrt_mutex_unlock(&ch->lock);
 			return; /* a receiver took the value straight out of *val. */
 		}
 		/* Woken without a taker: an explicit close (which unlinked us on its way past), or
-		 * a stray token. Re-take the lock, unlink if we are still on the queue, and let the
-		 * top of the loop decide which it was. */
-		zrt_mutex_lock(&ch->lock);
+		 * a stray token. Unlink if we are still on the queue, and let the top of the loop
+		 * decide which it was. */
 		wq_remove(&ch->sendq_head, &ch->sendq_tail, &w);
 	}
 }
@@ -400,10 +405,15 @@ int zrt_chan_recv(zrt_chan *ch, void *out) {
 		if (zrt_sched_park_unlock(&ch->lock)) {
 			chan_deadlock(ch, &ch->recvq_head, &ch->recvq_tail, &w);
 		}
+		/* `done` under the lock, as the send above reads it and for its reason (#261): a
+		 * sender between taking this waiter and setting `done` has already copied into *out,
+		 * and a lockless false went round the loop and overwrote that value with the next. */
+		zrt_mutex_lock(&ch->lock);
 		if (w.done) {
+			zrt_mutex_unlock(&ch->lock);
 			return 0; /* a sender rendezvoused straight into *out. */
 		}
-		/* Woken by close, or spuriously. Re-take the lock, UNLINK, and re-check everything:
+		/* Woken by close, or spuriously. UNLINK, and re-check everything:
 		 * with several workers the state that woke us may already have been taken by
 		 * another receiver, which is exactly why this is a loop and not an if.
 		 *
@@ -421,7 +431,6 @@ int zrt_chan_recv(zrt_chan *ch, void *out) {
 		 * cleanly a long time earlier. wq_remove is a no-op when the waiter is not on the
 		 * queue, which is the ordinary case, so this costs a walk of a queue that is almost
 		 * always empty. */
-		zrt_mutex_lock(&ch->lock);
 		wq_remove(&ch->recvq_head, &ch->recvq_tail, &w);
 	}
 }

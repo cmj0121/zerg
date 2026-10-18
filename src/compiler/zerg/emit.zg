@@ -10837,10 +10837,26 @@ fn c_conv(mut &em: Emitter, ty: ast.Ty, x: ast.Expr, nm: str, sb: Subst) -> str 
 		em.used_rt = true
 
 		inner := c_expr(em, x, sb)
+		mut parse := ""
+		if c_is_uint(ty) {
+			parse = "zrt_parse_uint"
+		} else if c_is_int(ty) {
+			parse = "zrt_parse_int"
+		} else if c_is_float(ty) {
+			parse = "zrt_parse_float"
+		}
 
-		return f"zrt_parse_uint({inner})" if c_is_uint(ty)
-		return f"zrt_parse_int({inner})" if c_is_int(ty)
-		return f"zrt_parse_float({inner})" if c_is_float(ty)
+		# AN OWNED SOURCE IS GIVEN BACK (#324). The parse reads the text and keeps nothing, so
+		# `int(digits(7))` released nothing of the `str` digits(7) answered. It is held across
+		# the parse, which raises on a malformed or out-of-range number.
+		if parse != "" and c_owns_value(x) {
+			sn := c_tmp(em, "zgt_ps")
+			rn := c_tmp(em, "zgt_ps")
+			keep := em.rel_cnames.len()
+			hold := c_hold(em, xt, sn)
+			return f"({{ const char* {sn} = {inner}; {hold}{c_type(ty)} {rn} = {parse}({sn}); {c_unhold(em, keep)}zrt_str_release({sn}); {rn}; }})"
+		}
+		return f"{parse}({inner})" if parse != ""
 
 		# A CHECKED rule rather than a refusal: which targets read a number out of a str is
 		# the language's answer and no future feature adds to it, so it belongs on the diag

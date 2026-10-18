@@ -95,7 +95,10 @@ mutability 屬於**實例（instance）**——也就是 binding——不是型�
 **`Ref[T]`** 盒——以 **reference** 共享、而非複製。runtime 計數持有者，在**最後**一個持有者的 scope 退出時釋放；
 其餘一切純 scope-owned、無 GC/refcount。複製一個值時，會對它（遞迴）包含的每個 `Ref` 值做 refcount++、深拷貝其餘
 部分；`Ref` 值永遠共享、絕不被複製。(作為**實作細節**,程式產生的 runtime `str` 值在內部同樣被 refcount、並於最後
-使用處釋放——表面沒有改變,但產生的字串不再洩漏。)
+使用處釋放——表面沒有改變。)
+
+> **[deviation]** `Err` 帶著的、程式產生的 `str` 不一定會被還回去:用 runtime `str` 建出的 `Err`,當 `??` 丟掉
+> 這個 `Err` 時,它的訊息永遠不會被釋放(#320)。答案不變;那塊儲存空間要到程式結束才會回收。
 
 對**明確的** refcounted 值而言,**refcount 在構造上就是 cycle-complete**,所以不需要循環收集器、也不需要 weak
 reference:`Ref[T]` 的 referent 在**盒子建構時就固定**(要指別處就建一個新的 `Ref`),而值 immutable-by-default、又是

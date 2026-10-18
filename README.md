@@ -138,10 +138,10 @@ linker against generated code nobody wrote. A feature the specification marks **
 chapter the feature belongs to. The ones worth knowing before writing anything are the **silent**
 ones, where a program gets an answer and no diagnostic:
 
-| Silent deviation                                         | Chapter                            |
-| -------------------------------------------------------- | ---------------------------------- |
-| an `init()` in a module the run never touches still runs | [modules](docs/runtime/package.md) |
-| an argument already built leaks when a later one aborts  | [memory](docs/core/memory.md)      |
+| Silent deviation                                               | Chapter                       |
+| -------------------------------------------------------------- | ----------------------------- |
+| an argument already built leaks when a later one aborts        | [memory](docs/core/memory.md) |
+| an `Err`'s run-time message leaks when `??` discards the `Err` | [memory](docs/core/memory.md) |
 
 One more is structural, and a running program feels it: the scheduler is **cooperative, not
 preemptive**, so a CPU-bound coroutine occupies a worker until it parks

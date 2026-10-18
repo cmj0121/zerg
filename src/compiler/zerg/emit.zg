@@ -11308,7 +11308,10 @@ fn c_index(mut &em: Emitter, target: ast.Expr, idx: ast.Expr, sb: Subst) -> str 
 	ln := c_tmp(em, "zgt_t")
 	vn := c_tmp(em, "zgt_t")
 	et := c_list_elem(tty)
-	borrowed := c_is_map_index(em, target)
+
+	# a value read out of a map this expression owned is TAKEN out of it (c_map_index), so it is
+	# this expression's like any other rvalue and not the borrow described below
+	borrowed := c_is_map_index(em, target) and not c_map_owned(em, target)
 
 	# THE LIST IS HELD ACROSS THE READ (c_hold) when it is this expression's to give back: the
 	# index is evaluated after it is bound, and the read itself aborts on an index out of range.
@@ -19775,15 +19778,64 @@ fn c_map_index(mut &em: Emitter, target: ast.Expr, idx: ast.Expr, tty: ast.Ty, s
 	check.chk_slot_fits(em, f"a key of this {ast.ty_name(tty)}", kt, idx)
 
 	kc := c_type(kt)
-	vc := c_type(c_map_val_ty(tty))
+	vt := c_map_val_ty(tty)
+	vc := c_type(vt)
 	tgt := c_expr(em, target, sb)
 
 	# the map is BOUND when it is not a place, for the reason c_index binds a list: a map
 	# index takes the map's ADDRESS, and `n["a"]["b"]` or `({"a": 9})["a"]` has none —
 	# which reached cc as "cannot take the address of an rvalue of type 'zrt_map'".
-	return f"({{ {kc} zgt_mk = {c_expr(em, idx, sb)}; (*({vc}*)zrt_map_index(&({tgt}), &zgt_mk)); }})" if c_is_place(em, target)
+	#
+	# AND ONE THIS EXPRESSION MADE IS GIVEN BACK (#322), as c_index gives back a list: nothing
+	# else will ever name `mkm(1)`, so `mkm(1)["a"]` read one value and walked away from the
+	# rest. It is held across the key and the lookup, which aborts on a missing key, and the
+	# value is taken out of it (c_taken) before the drop frees the entry it sits in.
+	owned := c_map_owned(em, target)
+	keep := em.rel_cnames.len()
+	mut bind := ""
+	mut m := tgt
+	if not c_is_place(em, target) {
+		bind = f"zrt_map zgt_mx = {tgt}; "
+		m = "zgt_mx"
+		if owned {
+			bind = bind + c_hold(em, tty, "zgt_mx")
+		}
+	}
 
-	return f"({{ zrt_map zgt_mx = {tgt}; {kc} zgt_mk = {c_expr(em, idx, sb)}; (*({vc}*)zrt_map_index(&zgt_mx, &zgt_mk)); }})"
+	# AN OWNED KEY IS GIVEN BACK TOO (#323). The lookup reads it through its address and keeps
+	# nothing, so `m[key(1)]` released nothing of the `str` key(1) answered. It is held across
+	# the lookup for the same abort.
+	k := c_expr(em, idx, sb)
+	kown := c_owns_value(idx) and c_drop_thunk(em, kt) != ""
+	mut kgive := ""
+	if kown {
+		bind = bind + f"{kc} zgt_mk = {k}; " + c_hold(em, kt, "zgt_mk")
+		kgive = c_drop_stmt(em, kt, "zgt_mk") + " "
+	} else {
+		bind = bind + f"{kc} zgt_mk = {k}; "
+	}
+
+	slot := f"(*({vc}*)zrt_map_index(&({m}), &zgt_mk))"
+	return f"({{ {bind}{slot}; }})" if not owned and not kown
+
+	mut val := slot
+	mut mgive := ""
+	if owned {
+		val = c_taken(em, vt, slot)
+		mgive = c_drop_stmt(em, tty, "zgt_mx") + " "
+	}
+	return f"({{ {bind}{vc} zgt_mv = {val}; {c_unhold(em, keep)}{kgive}{mgive}zgt_mv; }})"
+}
+
+# c_map_owned is whether what an expression hands over is its own to give back: not a place,
+# and owned (c_owns_value) — a call's result or a literal. A value read out of a map is a
+# borrow (c_is_map_index) exactly when that map is: one this expression owned is taken out of
+# it before it is dropped, so `mkn(7)["a"]["b"]` owns the inner map as well as the outer.
+fn c_map_owned(mut &em: Emitter, e: ast.Expr) -> bool {
+	return false if c_is_place(em, e) or not c_owns_value(e)
+	return c_map_owned(em, c_index_target(e)) if c_is_map_index(em, e)
+
+	return true
 }
 
 # c_map_set lowers `m[k] = v`. Both sides go through temps for the same reason.

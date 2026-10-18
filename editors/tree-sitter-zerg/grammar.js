@@ -82,6 +82,10 @@ module.exports = grammar({
 		[$.list_literal, $.list_pattern],
 		[$._bind_target, $._primary],
 
+		// a newline after `{` is a block's separator or a map literal's, and only the line after
+		// it says which (#356)
+		[$._statement_separator, $.map_literal],
+
 		// `(a, b) = …` and `(a, b)` the tuple EXPRESSION are the same tokens until the `=`, and
 		// so are a leaf that is an lvalue and the same name read as a value — GRAMMAR#assign-target
 		// against GRAMMAR#tuple-lit, which is a decision no amount of lookahead makes locally.
@@ -746,10 +750,24 @@ module.exports = grammar({
 				"]",
 			),
 		fill_literal: ($) => seq("[", $._expression, ";", $._expression, "]"),
+		// A NEWLINE RIGHT AFTER THE `{` IS A SEPARATOR TOKEN, not whitespace, because a block may
+		// open there and the scanner offers one wherever a statement could start (src/scanner.c).
+		// The map has to accept the same token or the parse is committed to the block, and
+		// `{⏎ "x": 1 ⏎}` — which `zerg fmt` writes — came out as an ERROR at the `:` (#356). The
+		// ones after a `,` and before the `}` are the same token, offered because the `}` may
+		// follow there.
 		map_literal: ($) =>
 			choice(
 				seq("{", ":", "}"),
-				seq("{", sepBy1(",", $.map_entry), optional(","), "}"),
+				seq(
+					"{",
+					repeat($._newline),
+					$.map_entry,
+					repeat(seq(",", repeat($._newline), $.map_entry)),
+					optional(","),
+					repeat($._newline),
+					"}",
+				),
 			),
 		map_entry: ($) =>
 			seq(

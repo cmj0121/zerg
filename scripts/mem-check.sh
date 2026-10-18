@@ -1394,6 +1394,105 @@ fn main() {
 }
 ZG
 
+# --- a map an index reads, and the key it reads with -----------------------------------
+# `mkm(1)["a"]` read one value out of a map nothing else names and walked away from the rest
+# (#322), and `m[key(1)]` read with a `str` nothing else names and kept it (#323). Each is held
+# across the lookup, which aborts on a missing key, and given back after it; the value is
+# taken out of an owned map before the map is dropped, and a map read out of one is owned too.
+case_run map_index_owned no no <<'ZG'
+fn word(n: int) -> str {
+	return str(n) + "!"
+}
+
+fn mkm(n: int) -> map[str, str] {
+	return {word(n): word(n + 1)}
+}
+
+fn mkn(n: int) -> map[str, map[str, str]] {
+	return {"a": mkm(n)}
+}
+
+fn round(n: int) {
+	raise "an owned map read wrong" if mkm(n)[word(n)] != word(n + 1)
+	raise "a map read out of an owned one read wrong" if mkn(n)["a"][word(n)] != word(n + 1)
+
+	m := mkm(n)
+	raise "a held map read wrong with an owned key" if m[word(n)] != word(n + 1)
+	raise "a missing key did not abort" if (guard { mkm(n)[word(n + 7)] } ?? "gone") != "gone"
+	raise "a held map lost its entry" if m.len() != 1
+}
+
+fn main() {
+	mut i := 0
+	r := rounds()
+	for i < r {
+		round(i)
+		i = i + 1
+	}
+}
+ZG
+
+# --- a map a `for … in` walks -------------------------------------------------------------
+# The loop copied the map it walks and gave back the copy, so a map a call answered had no
+# owner at all (#321). One the loop was handed is taken; one somebody holds is still copied.
+case_run map_walk_owned no no <<'ZG'
+fn mkm(n: int) -> map[str, int] {
+	return {str(n) + "!": n, str(n) + "?": n}
+}
+
+fn round(n: int) {
+	mut t := 0
+	for k in mkm(n) {
+		t = t + 1
+	}
+	for k in mkm(n) {
+		break
+	}
+	m := mkm(n)
+	for k in m {
+		t = t + m[k] - n
+	}
+	raise "a walked map counted wrong" if t != 2
+	raise "a held map was taken by its walk" if m.len() != 2
+}
+
+fn main() {
+	mut i := 0
+	r := rounds()
+	for i < r {
+		round(i)
+		i = i + 1
+	}
+}
+ZG
+
+# --- a str parsed into a number -----------------------------------------------------------
+# `int(digits(n))` read the text and released nothing of it (#324). An owned source is held
+# across the parse, which raises on a malformed number, and given back after it.
+case_run parse_owned no no <<'ZG'
+fn digits(n: int) -> str {
+	return str(n) + ""
+}
+
+fn round(n: int) {
+	raise "an owned str parsed wrong" if int(digits(n)) != n
+	raise "an owned str parsed wrong as a uint" if uint(digits(n)) != uint(n)
+	raise "a malformed str did not raise" if (guard { int(digits(n) + "x") } ?? -1) != -1
+
+	s := digits(n)
+	raise "a held str parsed wrong" if int(s) != n
+}
+
+fn main() {
+	mut i := 0
+	r := rounds()
+	for i < r {
+		round(i)
+		i = i + 1
+	}
+}
+ZG
+
 # --- a closure environment -------------------------------------------------------------
 # One environment per construction, and the closure may outlive the scope that made it —
 # which is what closing over a value is for, and why the scope cannot be what frees it.

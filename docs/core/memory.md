@@ -120,7 +120,11 @@ runtime counts holders and frees it at the **last** holder's scope exit; everyth
 scope-owned, no GC/refcount. Copying a value refcount-bumps any `Ref` value it (transitively) contains
 and deep-copies the rest; a `Ref` value is shared, never duplicated. (As an **implementation detail**,
 runtime `str` values the program produces are likewise refcounted internally and freed at last use — no
-surface change, but produced strings no longer leak.)
+surface change.)
+
+> **[deviation]** A produced `str` an `Err` carries is not always given back: the message of an `Err` built
+> from a run-time `str` is never released when `??` discards the `Err` (#320). The answer is unchanged; the
+> storage is lost until the program ends.
 
 For the **explicit** ref-counted values, **refcounting is cycle-complete by construction**, so they need no
 cycle collector and no weak reference: a `Ref[T]`'s referent is **fixed when the box is built** (to point

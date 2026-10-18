@@ -21869,8 +21869,16 @@ fn c_formap(mut &em: Emitter, var: str, iter: ast.Expr, ct: ast.Ty, body: list[a
 	# and dropped none of them: `for k in m { … }` inside a 1,000,000-round loop peaked at
 	# 108.8 MB against a 1.4 MB floor. Two loops, one rule; the map's is spelled the same way
 	# the list's is rather than a second way.
+	#
+	# A MAP THIS LOOP WAS HANDED IS TAKEN, NOT COPIED (#321). `for k in mkm(1)` copied the map
+	# the call answered and gave back the copy, so the original had no owner at all; it is the
+	# loop's own already (c_map_owned), and the copy is only for one somebody else holds.
+	mut walked := c_copy_of(em, c_infer(em, iter), it)
+	if c_map_owned(em, iter) {
+		walked = it
+	}
 	mut out := ind + "{\n" + in2 + f"size_t {mark} = zrt_scope_mark();\n"
-	out = out + in2 + "zrt_map zgt_mit = " + c_copy_of(em, c_infer(em, iter), it) + ";\n"
+	out = out + in2 + "zrt_map zgt_mit = " + walked + ";\n"
 	out = out + c_pend_drop(em, c_infer(em, iter), "zgt_mit", in2)
 	out = out + in2 + "for (size_t zgt_i = 0; zgt_i < zrt_map_len(&zgt_mit); zgt_i++) {\n"
 	out = out + in2 + "    " + kc + " " + cv + " = (*(" + kc + "*)zrt_map_key_at(&zgt_mit, zgt_i));\n"

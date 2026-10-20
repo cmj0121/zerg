@@ -274,7 +274,7 @@ pub fn chk_visible(mut &em: emit.Emitter, name: str, decl_path: str, is_pub: boo
 	return if is_pub
 	return if not chk_across_modules(em, em.at_path, decl_path)
 
-	chk_at(em, rule.Rule.NotPublicMember, f"`{name}` is not a public member of `{decl_path}` — the file is the unit of privacy (docs/runtime/package.md)")
+	chk_at(em, rule.Rule.NotPublicMember, f"`{chk_call_name(name)}` is not a public member of `{decl_path}` — the file is the unit of privacy (docs/runtime/package.md)")
 }
 
 # chk_name_is_this_file is #57's decision 2: THE NAMESPACE UNIT IS THE FILE. A bare name
@@ -309,7 +309,8 @@ pub fn chk_name_is_this_file(mut &em: emit.Emitter, name: str, decl_path: str) {
 	return if lint.is_test_file(ast.mod_name(em.at_path))
 
 	ns := ast.mod_name(chk_drop_zg(decl_path))
-	chk_at(em, rule.Rule.NameFromSibling, f"`{name}` is declared in `{decl_path}`, and a file names what it uses — write `import \"./{ns}\"` and spell it `{ns}.{name}` (docs/runtime/package.md)")
+	nm := chk_call_name(name)
+	chk_at(em, rule.Rule.NameFromSibling, f"`{nm}` is declared in `{decl_path}`, and a file names what it uses — write `import \"./{ns}\"` and spell it `{ns}.{nm}` (docs/runtime/package.md)")
 }
 
 # chk_drop_zg is a source path without its extension, which is the name an import of that
@@ -554,7 +555,7 @@ pub fn chk_unsafe_reachable(mut &em: emit.Emitter, name: str, callee_unsafe: boo
 	# a module-level `unsafe { … }` group" for as long as there were two; `unsafe fn` is gone —
 	# the marker propagated an obligation outward, and the group's whole value is that a caller
 	# never has to know — so the group is what the message names.
-	chk_at(em, rule.Rule.UnsafeNameInSafeCode, f"`{name}` is declared inside a module-level `unsafe {{ … }}` group, and GRAMMAR group 12 makes what a group holds reachable only from unsafe — {what} it from safe code is what the group is there to prevent; call it inside an `unsafe {{ … }}` block, or move the caller into the group")
+	chk_at(em, rule.Rule.UnsafeNameInSafeCode, f"`{chk_call_name(name)}` is declared inside a module-level `unsafe {{ … }}` group, and GRAMMAR group 12 makes what a group holds reachable only from unsafe — {what} it from safe code is what the group is there to prevent; call it inside an `unsafe {{ … }}` block, or move the caller into the group")
 }
 
 # chk_asm_context holds inline assembly to `unsafe`. It is the same rule an unsafe fn's caller

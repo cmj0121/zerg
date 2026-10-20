@@ -8400,6 +8400,19 @@ fn main() {
 }
 EOF
 
+# and `T: Ord` asks what `<` asks: a tuple meets it when every part orders, and a `float` part
+# does not (docs/core/specs.md), so the one beside it in the corpus is a tuple whose parts do.
+reject a-tuple-with-a-float-does-not-meet-the-ord-bound E4010 '`(int, float)` does not implement `Ord`' <<'EOF'
+fn least[T: Ord](a: T, b: T) -> T {
+	return a if a < b
+	return b
+}
+
+fn main() {
+	print least((1, 2.5), (1, 0.5))
+}
+EOF
+
 # A DERIVED `Eq` OVER A FIELD THAT IS A FORM asks the form, which asks its parts.
 reject a-derived-eq-over-a-list-of-no-eq E4020 'on a list[N], which compares its N' <<'EOF'
 struct N {

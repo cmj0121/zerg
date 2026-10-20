@@ -4641,11 +4641,13 @@ pub fn c_split_bounds(bound: str) -> list[str] {
 	return out
 }
 
-# c_satisfies is whether a type meets a bound. A BUILT-IN type meets `Eq` inherently — `==`
-# on two ints is the operator and not an impl — and a declared one meets it by having the
-# impl, which is the same list `==` on an aggregate reads.
+# c_satisfies is whether a type meets a bound. A BUILT-IN type meets `Eq` and `Ord` inherently
+# — `<` on two ints is the operator and not an impl — and a declared one meets them by having
+# the impl. Each asks the predicate its operator lowers by, so a generic body's `==` or `<` on
+# `T` is legal for exactly the types the bound admits.
 fn c_satisfies(mut &em: Emitter, t: ast.Ty, bound: str) -> bool {
 	return c_eq_legal(em, t) if bound == "Eq"
+	return c_ord_legal(em, t) if bound == "Ord"
 
 	return c_impls(em, c_named_of(t), bound)
 }
@@ -9527,7 +9529,7 @@ fn c_binexpr(mut &em: Emitter, oper: str, a: ast.Expr, b: ast.Expr, sb: Subst) -
 
 		# and a TUPLE or an ARRAY has it from its parts as it has `==`, compared in order with the
 		# first part that differs deciding (docs/core/types.md)
-		return c_eq_parts(em, oper, a, b, ta, sb) if c_is_order_op(oper) and c_is_ordered_form(ta) and c_is_unknown(c_ord_bad_part(em, ta)) and ast.ty_eq(ta, c_infer(em, b))
+		return c_eq_parts(em, oper, a, b, ta, sb) if c_is_order_op(oper) and c_is_ordered_form(ta) and c_ord_legal(em, ta) and ast.ty_eq(ta, c_infer(em, b))
 
 		# EQUALITY and ORDERING are two questions. `c_eq_legal` answers the first — and is
 		# the same answer the `T: Eq` bound gives, which is the point of it being one
@@ -9736,10 +9738,18 @@ pub fn c_ord_bad_part(mut &em: Emitter, t: ast.Ty) -> ast.Ty {
 	return ast.Ty.TUnknown
 }
 
+# c_ord_legal is whether `<` means something on two values of a type: the rule above, asked of
+# the whole type rather than of one of its parts.
+fn c_ord_legal(mut &em: Emitter, t: ast.Ty) -> bool {
+	return c_is_unknown(c_ord_bad_part(em, t)) if c_is_ordered_form(t)
+
+	return c_ord_scalar(em, t)
+}
+
 fn c_ord_scalar(mut &em: Emitter, t: ast.Ty) -> bool {
 	return true if c_is_str(t) or c_has_ord(em, t)
 
-	cls := c_scalar_class(t)
+	cls := c_scalar_class(c_scalar_repr(em, t))
 	return cls == SC_SIGNED or cls == SC_UNSIGNED
 }
 

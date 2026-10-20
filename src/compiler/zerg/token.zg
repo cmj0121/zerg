@@ -407,6 +407,25 @@ pub fn no_bound_follows(k: Kind) -> bool {
 	}
 }
 
+# GRAMMAR's operator groups — add-op, mul-op, cmp-op and unary-op. They live beside the token
+# kinds rather than in the parser because the formatter asks the same question: which tokens
+# take a value on their right (#374). Two copies of a group are two lists that drift.
+pub fn is_add_op(k: Kind) -> bool {
+	return k == Kind.Plus or k == Kind.Minus or k == Kind.Pipe or k == Kind.Caret or k == Kind.PlusMod or k == Kind.MinusMod
+}
+
+pub fn is_mul_op(k: Kind) -> bool {
+	return k == Kind.Star or k == Kind.Slash or k == Kind.SlashDiv or k == Kind.Percent or k == Kind.StarMod or k == Kind.Shl or k == Kind.Shr or k == Kind.Amp
+}
+
+pub fn is_cmp_op(k: Kind) -> bool {
+	return k == Kind.EqEq or k == Kind.Ne or k == Kind.Lt or k == Kind.Gt or k == Kind.Le or k == Kind.Ge
+}
+
+pub fn is_unary_op(k: Kind) -> bool {
+	return k == Kind.Minus or k == Kind.Not or k == Kind.Tilde or k == Kind.MinusMod
+}
+
 # ends_item reports whether a token of this kind can end a grammatical item, which
 # is what lets the lexer insert a ';' at a following line break (GRAMMAR group 2,
 # ASI).

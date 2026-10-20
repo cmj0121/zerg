@@ -1259,18 +1259,31 @@ fn fmt_brace_is_pattern(mut &toks: list[token.Token], at: int) -> bool {
 # purpose: the positions a body opens in are open-ended — after a `)`, a name, `else`, a type
 # — while the places an expression is expected are countable, and a new one joins by being
 # named here.
+#
+# A `true` here only ALLOWS a value: fmt_brace_is_map still reads the brace's contents, so a
+# block standing in one of these positions keeps a block's layout.
 fn fmt_wants_value(k: token.Kind) -> bool {
 	return true if k == token.Kind.Walrus or k == token.Kind.Assign or k == token.Kind.Colon or k == token.Kind.Comma or k == token.Kind.LParen or k == token.Kind.LBrack
 
-	# `return {…}`, `x in {…}`, `ch <- {…}` — the keyword and the two operators that take a
-	# value on their right and can find a literal there. `in` and `<-` were missed when this
-	# list was first written, and the miss reproduced the very defect the list exists to fix,
-	# one token class over: `found := "a" in {"a": 1}` came back as a block.
-	#
-	# `=>` joined them when a block became an expression: GRAMMAR#match-arm's body is an
-	# `expr`, so `Line(n) => { … }` is a block in a value's position and `Line(n) => {"a": 1}`
+	# `=>` is here rather than below because it is not an operator: GRAMMAR#match-arm's body is
+	# an `expr`, so `Line(n) => { … }` is a block in a value's position and `Line(n) => {"a": 1}`
 	# is a map in the same one.
-	return k == token.Kind.Return or k == token.Kind.In or k == token.Kind.LArrow or k == token.Kind.FatArrow
+	return true if k == token.Kind.FatArrow
+
+	return fmt_takes_operand(k)
+}
+
+# fmt_takes_operand is every OPERATOR and KEYWORD that takes an expression on its right. It is
+# the rule itself rather than instances of it: naming instances was the defect twice — `in`
+# and `<-` once, then `print {"x": 1}` and `m == {"x": 1}` came back opened across three
+# lines (#374). So the operators are GRAMMAR's groups, asked of the predicates the parser
+# reads them by, and a keyword is here when its production goes on to an `expr`. A token
+# followed by a type, a body or nothing is not.
+fn fmt_takes_operand(k: token.Kind) -> bool {
+	return true if token.is_cmp_op(k) or token.is_add_op(k) or token.is_mul_op(k) or token.is_unary_op(k) or is_range_op(k)
+	return true if k == token.Kind.And or k == token.Kind.Or or k == token.Kind.Coalesce or k == token.Kind.In or k == token.Kind.LArrow
+
+	return k == token.Kind.Return or k == token.Kind.Print or k == token.Kind.Assert or k == token.Kind.Raise or k == token.Kind.From or k == token.Kind.If or k == token.Kind.With or k == token.Kind.Match or k == token.Kind.Spawn or k == token.Kind.Defer
 }
 
 # fmt_brace_is_map is the parser's p_brace_is_map over a token list: a `:` among the brace's

@@ -1531,8 +1531,10 @@ void zrt_sched_wake(zrt_coro *co);
 typedef struct zrt_chan zrt_chan;
 
 /* zrt_chan_new allocates a channel carrying elemsz-byte elements with capacity cap
- * (0 = an unbuffered rendezvous). The new handle is bidirectional: rc = senders = 1. */
-zrt_chan *zrt_chan_new(size_t elemsz, size_t cap);
+ * (0 = an unbuffered rendezvous). The new handle is bidirectional: rc = senders = 1.
+ * `drop` gives back one element the buffer still holds when the channel is freed, through
+ * its address; NULL for an element that owns nothing. */
+zrt_chan *zrt_chan_new(size_t elemsz, size_t cap, zrt_drop_fn drop);
 
 /* zrt_chan_copy / zrt_chan_sender_copy copy a channel handle. A receive-only handle
  * bumps rc only (copy); a bidirectional or send-only handle also bumps senders

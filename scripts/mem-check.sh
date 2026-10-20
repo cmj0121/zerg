@@ -1016,6 +1016,48 @@ fn main() {
 }
 ZG
 
+# --- a value left in a channel's buffer --------------------------------------------------
+# Every owning element still buffered when the last holder leaves is given back, whatever
+# made it — a call, a named value's copy, a container — and a channel of plain data still
+# frees with nothing to drop (#334). A wrong received value aborts.
+case_run chan_left no yes <<'ZG'
+fn word(n: int) -> str {
+	return str(n) + "!"
+}
+
+fn pair(n: int) -> list[int] {
+	return [n, n + 1]
+}
+
+fn round(n: int) {
+	c := chan[str](2)
+	c <- word(n)
+	c <- word(n + 1)
+	raise "a buffered channel gave the wrong str" if (<-c ?? "") != word(n)
+
+	w := word(n)
+	d := chan[str](2)
+	d <- w
+	raise "a named send gave its own value away" if w != word(n)
+
+	e := chan[list[int]](1)
+	e <- pair(n)
+
+	f := chan[int](2)
+	f <- n
+	f <- n + 1
+}
+
+fn main() {
+	mut i := 0
+	r := rounds()
+	for i < r {
+		round(i)
+		i = i + 1
+	}
+}
+ZG
+
 # --- a Ref of a type whose name is not a C identifier ----------------------------------
 # The helpers a `Ref` copies and drops its payload with are named after the payload's type,
 # and a type's name is spelled with more than a C identifier allows: a function type has

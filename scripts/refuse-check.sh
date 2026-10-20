@@ -3524,6 +3524,18 @@ fn main() {
 }
 EOF
 
+# An OPERATOR on a refused typedef reaches the refusal, and not the end of the stack: the
+# operand rules look through a typedef to what it computes in and ask again, and one whose
+# underlying type was refused answered itself, so `p < p` asked the same question forever.
+expect "$ZERG" operator-on-a-typedef-over-a-tuple E9042 '`type Pair = (int, str)` over a non-scalar' <<'EOF'
+type Pair = (int, str)
+
+fn main() {
+	p: Pair = (1, "b")
+	print p < p
+}
+EOF
+
 # --- three productions GRAMMAR derives and this compiler does not build ------------
 #
 # Each of these had NO parse path at all, so the answer was whatever token the reader

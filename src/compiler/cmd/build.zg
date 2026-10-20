@@ -113,6 +113,8 @@ fn declares_main(files: list[str]) -> bool {
 # `zerg build main.zg -o app` wrote `app.o`, said nothing, and exited 0 — a program that
 # silently is not one.
 fn build_stage(files: list[str], emit: str, out: str, jobs: int) {
+	one_entry_only(files, emit)
+
 	# NO `guard` ON THE TWO STAGES BELOW. One used to wrap each of them whole, so a file that
 	# could not be read, lexed or PARSED printed nothing and exited 0: `--emit ast` on a
 	# program carrying an unbuilt form reported success and produced no tree. It is the
@@ -196,6 +198,20 @@ fn build_stage(files: list[str], emit: str, out: str, jobs: int) {
 		return
 	}
 	io.ewrite(f"zerg: unknown stage {emit} (want tokens, ast, check, c, lib, or bin)\n")
+	__zrt_exit(2)
+}
+
+# one_entry_only refuses a second file on a stage that reads ONE. `tokens` lexes a single
+# source, and `lib` and `bin` load a build the way docs/runtime/package.md defines one: an
+# entry file and the modules its imports reach. Every other file named on the line used to be
+# dropped without a word, so `zerg build a.zg b.zg` built `a.zg`, exited 0, and never read a
+# line of `b.zg` — its errors included. A stage that merges every file it is given is not
+# asked.
+fn one_entry_only(files: list[str], emit: str) {
+	return if files.len() < 2
+	return if emit != "tokens" and emit != "lib" and emit != "bin"
+
+	io.ewrite(f"zerg: --emit {emit} reads one entry file, so `{files[1]}` would never be read — a build is the entry and the modules its imports reach (docs/runtime/package.md); import the others from it\n")
 	__zrt_exit(2)
 }
 

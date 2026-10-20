@@ -92,12 +92,16 @@ has_place() {
 # turned away left _E3069 undefined name `zga_l3c9`_ behind it, one per conjunct of an `and`.
 # Both were found by hand. This is what finds the third.
 #
+# A GENERIC'S INSTANCE is the other name it mints: `least$int`, `least$_28_int_2c__20_str_29_`
+# — the template's name, a `$`, and the type arguments spelled as a C symbol (#379). No source
+# name holds a `$`, so a quoted name with one in it is the compiler's.
+#
 # `temp_named` answers WHICH one, so the gate that catches it can put the name in its own
 # message rather than leaving a reader to search the output for it, and the two are one
 # function and a test of it: a second copy of the pattern is the failure this file's header
 # recounts, and a negative assertion is where that failure is invisible.
 temp_named() {
-	printf '%s\n' "$1" | grep -oE '`zg[a-z]*_[A-Za-z0-9_]*' | head -1 | tr -d '`'
+	printf '%s\n' "$1" | grep -oE '`(zg[a-z]*_[A-Za-z0-9_]*|[A-Za-z_][A-Za-z0-9_.#]*\$[^`]*)' | head -1 | tr -d '`'
 }
 
 names_a_temp() {

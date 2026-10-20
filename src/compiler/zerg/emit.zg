@@ -6122,8 +6122,8 @@ fn c_open_app_checked(mut &em: Emitter, nm: str, s: Site) -> bool {
 }
 
 # c_typedef_of answers what a `type X = Y` name is underneath, or TUnknown for a name that
-# is not one. It is the ONE place the representation is looked through: everywhere else the
-# two are different types, which is what a strong typedef means.
+# is not one. It and c_repr_of are where the representation is looked through: everywhere
+# else the two are different types, which is what a strong typedef means.
 fn c_typedef_of(mut &em: Emitter, nm: str) -> ast.Ty {
 	r := c_ty_row(em, nm)
 	return ast.Ty.TUnknown if not c_row_is_typedef(em, r)
@@ -6334,12 +6334,17 @@ pub fn c_repr_of(mut &em: Emitter, t: ast.Ty) -> ast.Ty {
 # It recurses, because a typedef's underlying type may be one: `type A = B` over `type B =
 # int` computes in `int`. A type that is not a typedef answers ITSELF, so every other caller's
 # type passes through untouched.
+#
+# A TYPEDEF THE CHECKER REFUSED answers UNKNOWN, because c_repr_of does, and not itself: its
+# row holds the TUnknown chk_typedef returned, and answering `Pair` for `type Pair = (int, str)`
+# sent chk_binary, which re-enters itself with what this answers, round until the stack ran
+# out. Unknown keeps the uses quiet while the declaration carries the refusal.
 pub fn c_scalar_repr(mut &em: Emitter, t: ast.Ty) -> ast.Ty {
 	nm := c_named_of(t)
 	return t if nm == ""
 
-	u := c_typedef_of(em, nm)
-	return t if c_is_unknown(u)
+	u := c_repr_of(em, t)
+	return t if ast.ty_eq(u, t)
 
 	return c_scalar_repr(em, u)
 }
@@ -13002,10 +13007,32 @@ fn c_sig_row_of(mut &em: Emitter, name: str) -> int {
 # A row of -1 is quiet. A generated declaration — a `derive`d impl, a monomorphized
 # specialization — has no module a reader could have written, and a rule that guessed there
 # would refuse programs for a reason nobody can act on.
+#
+# A GENERIC'S INSTANCE DOES HAVE A ROW, keyed `least$int` and carrying its template's file and
+# `pub`. The rules print it through check.chk_call_name, where a key becomes a sentence.
+#
+# AND AN INSTANCE OF A COLLIDED TEMPLATE IS QUIET. When the reader's own file declares a
+# template of that name too, the call meant its own one, and the instance answers for the
+# other file only because templates share one flat namespace (#380). That collision is
+# E3060's, reported at the declaration; refusing the call as well would name the other file
+# for a call that never meant it. It goes when #380 keys templates by their file.
 fn c_chk_visible_fn(mut &em: Emitter, name: str, r: int) {
 	return if r < 0
+	return if c_own_collided_tpl(em, name)
 
 	check.chk_visible(em, name, em.sig_path[r], em.sig_pub[r])
+}
+
+# c_own_collided_tpl is whether `name` is an instance of a free template that the reader's
+# own file declares as well — a call c_check_gen_dup has already refused under E3060.
+fn c_own_collided_tpl(mut &em: Emitter, name: str) -> bool {
+	return false if not c_is_mangled(name)
+
+	base := c_spec_base(name)
+	for t in em.gen_tpls {
+		return true if t.recv == "" and t.name == base and t.path == em.at_path
+	}
+	return false
 }
 
 # c_chk_bare_fn is #57's rule for the one spelling that has no qualifier to check: a BARE
@@ -13014,6 +13041,7 @@ fn c_chk_visible_fn(mut &em: Emitter, name: str, r: int) {
 # namespaced call has already said which file it means.
 fn c_chk_bare_fn(mut &em: Emitter, name: str, r: int) {
 	return if r < 0
+	return if c_own_collided_tpl(em, name)
 
 	check.chk_name_is_this_file(em, name, em.sig_path[r])
 }

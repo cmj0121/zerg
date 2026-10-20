@@ -308,6 +308,11 @@ A private type is not in that space. Two files that each declare a struct, enum 
 is refused is a file that declares its own `P` and also writes another module's `sink.P` in a type position:
 a type position drops its qualifier, so the two would be spelled alike, and that is _E3158_.
 
+> **[deviation]** A private GENERIC function should not be in that space either: two files that each declare a
+> private `fn least[T]` declare two functions, as two private plain functions do. The compiler keeps its
+> templates in one table by bare name, so the second declaration is refused as _E3060 `least` is declared
+> twice, once as a generic_, across files and modules alike (#380).
+
 What the rule compares is the **import path a module was reached by** — the loader's answer, recorded
 where the module was resolved and read back by name. It is not computed from where a file sits: `./a`
 and `./b` beside each other are two modules, and the standard library is fifteen of them in one flat

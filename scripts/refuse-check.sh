@@ -16,6 +16,8 @@ set -u
 
 # shellcheck source=scripts/lib/diag.sh
 . "$(dirname "$0")/lib/diag.sh"
+# shellcheck source=scripts/lib/case.sh
+. "$(dirname "$0")/lib/case.sh"
 
 ZERG=${ZERG:-./bin/zerg}
 ZERG0=${ZERG0:-./bin/zerg0}
@@ -51,6 +53,16 @@ expect_lib() {
 	EXPECT_EMIT=bin
 }
 
+# EXPECT_FINDINGS pins the COUNT, for a case whose claim is that its refusal is the only
+# thing said — that a rule which follows from the refused form does not refuse it twice.
+EXPECT_FINDINGS=
+
+expect_alone() {
+	EXPECT_FINDINGS=1
+	expect "$@"
+	EXPECT_FINDINGS=
+}
+
 expect() {
 	local cc=$1 name=$2 want=$3
 	shift 3
@@ -80,8 +92,10 @@ expect() {
 		return
 	fi
 
-	local src="$tmp/$name.zg"
-	cat >"$src"
+	# A CASE MAY BE MORE THAN ONE FILE (scripts/lib/case.sh).
+	local dir="$tmp/$name.d"
+	local src="$dir/$name.zg"
+	write_case "$dir" "$src"
 
 	# `--emit bin`, not `--emit c`. The C stage stops BEFORE cc, so under it the two
 	# assertions below about cc can NEVER FIRE — a program the compiler emits anyway and
@@ -174,6 +188,14 @@ expect() {
 
 	if [ "$cc" = "$ZERG" ] && ! has_place "$out"; then
 		echo "NO PLACE  $name — the refusal does not say where: $(echo "$out" | head -1)"
+		fail=$((fail + 1))
+		return
+	fi
+
+	local found
+	found=$(printf '%s\n' "$out" | grep -c '^error:')
+	if [ -n "$EXPECT_FINDINGS" ] && [ "$found" -ne "$EXPECT_FINDINGS" ]; then
+		echo "COUNT     $name — wanted exactly $EXPECT_FINDINGS finding(s), got $found"
 		fail=$((fail + 1))
 		return
 	fi
@@ -2515,6 +2537,34 @@ type Label = str
 
 fn main() {
 	print(f"{str(Label("hi"))}")
+}
+EOF
+
+# TWO PRIVATE TEMPLATES IN TWO MODULES are two functions by docs/runtime/package.md — a
+# private name is its file's, and the seed builds this — but templates sit in one table by
+# bare name, so the second is refused: the deviation #380, and the case leaves when it closes.
+# Until then the refusal is E3060 ALONE (#379): each call answered with the other module's
+# instance, so E3001 used to follow it and name that instance, `least$int`, against the call.
+expect_alone "$ZERG" generic-declared-twice-across-modules E3060 <<'EOF'
+import "./lib"
+
+fn least[T: Ord](a: T, b: T) -> T {
+	return a if a < b
+	return b
+}
+
+fn main() {
+	print least(1, 2)
+	print lib.other()
+}
+--- lib/mod.zg
+fn least[T: Ord](a: T, b: T) -> T {
+	return a if a < b
+	return b
+}
+
+pub fn other() -> int {
+	return least(2, 1)
 }
 EOF
 

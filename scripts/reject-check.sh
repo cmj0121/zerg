@@ -54,6 +54,8 @@ set -u
 
 # shellcheck source=scripts/lib/diag.sh
 . "$(dirname "$0")/lib/diag.sh"
+# shellcheck source=scripts/lib/case.sh
+. "$(dirname "$0")/lib/case.sh"
 
 ZERG=${ZERG:-./bin/zerg}
 ZERG0=${ZERG0:-./bin/zerg0}
@@ -132,28 +134,8 @@ reject() {
 	# until now was a single file in one. The entry lives in the case's own directory so that
 	# a module beside it resolves the way it would in a real tree.
 	local dir="$tmp/$name.d"
-	rm -rf "$dir"
-	mkdir -p "$dir"
 	local src="$dir/$name.zg"
-
-	# LC_ALL=C, because this is a byte pipe and not a text one. A case is a PROGRAM, and one
-	# class of ill-formed program is ill-formed exactly because its bytes are not text: under
-	# the ambient UTF-8 locale macOS awk stops on `towc: multibyte conversion failure` and
-	# writes a TRUNCATED file, so the case that reaches the compiler is not the case that was
-	# written and the gate reports a mismatch on a rule it never exercised. In the C locale a
-	# record is bytes, `/^--- /` matches bytes, and every case — UTF-8, ASCII or neither —
-	# arrives as it was typed.
-	LC_ALL=C awk -v dir="$dir" -v entry="$src" '
-		/^--- / {
-			out = dir "/" $2
-			d = out
-			sub(/\/[^\/]*$/, "", d)
-			system("mkdir -p \"" d "\"")
-			next
-		}
-		{ print > (out ? out : entry) }
-	' >/dev/null
-	touch "$src"
+	write_case "$dir" "$src"
 
 	# at=LINE:COL narrows the place assertion below to a SPECIFIC line — for a case whose
 	# whole claim is that the finding sits at the declaration, not at a use site.
@@ -4570,6 +4552,58 @@ fn idg[U](x: U, y: U) -> U {
 
 fn main() {
 	print(f"{idg(1)}")
+}
+EOF
+
+# A RULE THAT DOES REACH AN INSTANCE NAMES ITS TEMPLATE. Another module's private generic is
+# refused at a call as any private function is, and the row the rule reads is the instance's:
+# the message said `least$int`, and `least$_28_int_2c__20_str_29_` for a tuple argument.
+reject a-module-private-generic E3001 '`least` is not a public member of' <<'EOF'
+import "./lib"
+
+fn main() {
+	print lib.least((1, "a"), (2, "b"))
+}
+--- lib/mod.zg
+fn least[T: Ord](a: T, b: T) -> T {
+	return a if a < b
+	return b
+}
+
+pub fn other() -> int {
+	return least(2, 1)
+}
+EOF
+
+reject a-sibling-generic-named-bare E3114 '`least` is declared in' seed-gap <<'EOF'
+import "./pair"
+
+fn main() {
+	print pair.both()
+}
+--- pair/one.zg
+pub fn least[T: Ord](a: T, b: T) -> T {
+	return a if a < b
+	return b
+}
+--- pair/two.zg
+pub fn both() -> int {
+	return least(2, 1)
+}
+--- pair/mod.zg
+import pub "./one"
+import pub "./two"
+EOF
+
+reject an-unsafe-group-generic-called-from-safe E3083 '`poke` is declared inside a module-level' <<'EOF'
+unsafe {
+	fn poke[T](x: T) -> T {
+		return x
+	}
+}
+
+fn main() {
+	print poke(1)
 }
 EOF
 
@@ -10322,6 +10356,33 @@ fn main() {
 	print E.A(ch)
 }
 EOF
+
+# --- a build is one entry file ----------------------------------------------------
+#
+# docs/runtime/package.md: a build is an entry file and the modules its imports reach, so a
+# stage that reads one entry refuses a second file and names it (cmd/build.zg one_entry_only).
+# The second file is ill-formed on purpose: a stage that read it would refuse too, but not by
+# naming it this way.
+drv="$tmp/one-entry.d"
+mkdir -p "$drv"
+printf 'fn main() {\n\tprint 1\n}\n' >"$drv/main.zg"
+printf 'pub fn other() {\n\tx: int = "no"\n}\n' >"$drv/second.zg"
+for stage in tokens lib bin; do
+	out=$(cd "$drv" && "$ZERG_ABS" build --emit "$stage" -o "$tmp/one-entry.$stage" main.zg second.zg 2>&1 >/dev/null)
+	status=$?
+	if [ $status -eq 0 ]; then
+		echo "ACCEPTED  one-entry-$stage — \`--emit $stage\` exited 0 with a second file it never read"
+		fail=$((fail + 1))
+		continue
+	fi
+	case $out in
+	*'`second.zg` would never be read'*) pass=$((pass + 1)) ;;
+	*)
+		echo "MESSAGE   one-entry-$stage — wanted the dropped file named, got: ${out%%$'\n'*}"
+		fail=$((fail + 1))
+		;;
+	esac
+done
 
 if [ $fail -ne 0 ]; then
 	echo "reject-check: $fail case(s) the compiler did not reject by itself"

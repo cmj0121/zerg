@@ -502,6 +502,46 @@ int main(void) {
 }
 `
 
+// TestChannelDropsWhatItsBufferHolds is #334: a channel freed with values still buffered
+// gives each one back through the drop it was made with, once, oldest first. The ring has
+// wrapped before the free, so an element is found from `head` and not from slot 0.
+func TestChannelDropsWhatItsBufferHolds(t *testing.T) {
+	bin := buildConcurrent(t, "chan_drop", chanDropC)
+
+	want := "recv=1\ndropped=2,3,4,\n"
+	for _, w := range workerModes {
+		out, code := runBounded(t, bin, w, 20*time.Second)
+		if out != want || code != 0 {
+			t.Fatalf("ZRT_WORKERS=%q: buffered drop = %q exit=%d, want %q exit=0", w, out, code, want)
+		}
+	}
+}
+
+const chanDropC = `
+#include "zergrt.h"
+#include <stdio.h>
+
+static void note_drop(void *elem) { printf("%ld,", *(long *)elem); }
+
+static void prog_main(void) {
+    zrt_chan *ch = zrt_chan_new(sizeof(long), 3, note_drop);
+    long v, out;
+    v = 1; zrt_chan_send(ch, &v);
+    v = 2; zrt_chan_send(ch, &v);
+    v = 3; zrt_chan_send(ch, &v);
+    zrt_chan_recv(ch, &out);
+    printf("recv=%ld\n", out);
+    v = 4; zrt_chan_send(ch, &v);
+    printf("dropped=");
+    zrt_chan_sender_release(ch);
+    printf("\n");
+}
+
+int main(void) {
+    return zrt_sched_main_nil(prog_main);
+}
+`
+
 // schedSmokeC spawns two coroutines from a nil main and waits for both through a
 // channel. Waiting is not ceremony: main returning ends the program, so a coroutine
 // that must finish has to be driven to a channel-observed completion — this is the

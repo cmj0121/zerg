@@ -471,7 +471,7 @@ static void prog_main(void) {
     long out;
 
     /* A: buffered (cap 2). main is a receive-only holder; producer is the sole sender. */
-    zrt_chan *a = zrt_chan_new(sizeof(long), 2);
+    zrt_chan *a = zrt_chan_new(sizeof(long), 2, NULL);
     zrt_chan_copy(a);
     zrt_spawn(producer_buffered, a, NULL);
     while (zrt_chan_recv(a, &out) == 0) { printf("A=%ld\n", out); }
@@ -479,7 +479,7 @@ static void prog_main(void) {
     zrt_chan_release(a);
 
     /* B: unbuffered rendezvous (cap 0). */
-    zrt_chan *b = zrt_chan_new(sizeof(long), 0);
+    zrt_chan *b = zrt_chan_new(sizeof(long), 0, NULL);
     zrt_chan_copy(b);
     zrt_spawn(producer_rendezvous, b, NULL);
     while (zrt_chan_recv(b, &out) == 0) { printf("B=%ld\n", out); }
@@ -487,7 +487,7 @@ static void prog_main(void) {
     zrt_chan_release(b);
 
     /* C: crashing last sender closes with a crash Err. */
-    zrt_chan *c = zrt_chan_new(sizeof(long), 0);
+    zrt_chan *c = zrt_chan_new(sizeof(long), 0, NULL);
     zrt_chan_copy(c);
     zrt_spawn(producer_crash, c, NULL);
     int r1 = zrt_chan_recv(c, &out);
@@ -528,7 +528,7 @@ static void spawn_sender(zrt_chan *ch, long id) {
 
 static void prog_main(void) {
     printf("main\n");
-    zrt_chan *ch = zrt_chan_new(sizeof(long), 2);
+    zrt_chan *ch = zrt_chan_new(sizeof(long), 2, NULL);
     spawn_sender(ch, 1);
     spawn_sender(ch, 2);
     zrt_chan_copy(ch);
@@ -648,7 +648,7 @@ static void producer(void *env) {
 
 static void prog(void) {
     for (int i = 0; i < NCHAN; i++) {
-        chans[i] = zrt_chan_new(sizeof(long), 8);
+        chans[i] = zrt_chan_new(sizeof(long), 8, NULL);
     }
     for (int p = 0; p < NPROD; p++) {
         prod_env *e = (prod_env *)zrt_alloc(sizeof(prod_env));
@@ -726,7 +726,7 @@ static void producer(void *env) {
 }
 
 static void prog(void) {
-    zrt_chan *ch = zrt_chan_new(sizeof(long), 2);
+    zrt_chan *ch = zrt_chan_new(sizeof(long), 2, NULL);
     zrt_spawn(producer, zrt_chan_sender_copy(ch), NULL);
     zrt_chan_copy(ch);
     zrt_chan_sender_release(ch); /* main keeps a holder and gives up its sender */
@@ -798,8 +798,8 @@ static void worker(void *env) {
 }
 
 static int64_t prog_main(void) {
-    zrt_chan *ready = zrt_chan_new(sizeof(long), 0);
-    zrt_chan *never = zrt_chan_new(sizeof(long), 0);
+    zrt_chan *ready = zrt_chan_new(sizeof(long), 0, NULL);
+    zrt_chan *never = zrt_chan_new(sizeof(long), 0, NULL);
     wenv *e = (wenv *)zrt_alloc(sizeof(wenv));
     e->ready = zrt_chan_sender_copy(ready);
     e->never = zrt_chan_copy(never);   /* receive-only: adds no sender */
@@ -867,7 +867,7 @@ static void sender(void *env) {
 }
 
 static void prog(void) {
-    zrt_chan *ch = zrt_chan_new(sizeof(long), 0);
+    zrt_chan *ch = zrt_chan_new(sizeof(long), 0, NULL);
     zrt_defer(say_defer, NULL);
 
     long first = 0;
@@ -910,10 +910,10 @@ static void sleeper(void *env) {
 }
 
 static void prog(void) {
-    zrt_chan *other = zrt_chan_new(sizeof(long), 0);
+    zrt_chan *other = zrt_chan_new(sizeof(long), 0, NULL);
     zrt_spawn(sleeper, zrt_chan_sender_copy(other), NULL);
 
-    zrt_chan *ch = zrt_chan_new(sizeof(long), 0);
+    zrt_chan *ch = zrt_chan_new(sizeof(long), 0, NULL);
     zrt_defer(say_defer, NULL);
     printf("before\n");
     fflush(stdout);
@@ -1023,7 +1023,7 @@ const sendOnClosedC = `
 #include <stdio.h>
 
 static void prog(void) {
-    zrt_chan *ch = zrt_chan_new(sizeof(long), 1);
+    zrt_chan *ch = zrt_chan_new(sizeof(long), 1, NULL);
     zrt_chan *rx = zrt_chan_copy(ch);   /* a receive handle: refcount only, not a sender */
     zrt_chan_sender_release(ch);        /* the last sender leaves: the channel closes clean */
     printf("before\n");
@@ -1085,7 +1085,7 @@ static void crasher(void *env) {
 /* hand the channel to a coroutine and give up main's own sender, so the coroutine
  * leaving is what closes it. */
 static zrt_chan *closed_by(void (*body)(void *)) {
-    zrt_chan *ch = zrt_chan_new(sizeof(long), 0);
+    zrt_chan *ch = zrt_chan_new(sizeof(long), 0, NULL);
     zrt_spawn(body, zrt_chan_sender_copy(ch), NULL);
     zrt_chan_copy(ch);
     zrt_chan_sender_release(ch);
@@ -1215,8 +1215,8 @@ static long cpu_ms(void) {
 }
 
 static void prog(void) {
-    zrt_chan *timer = zrt_chan_new(sizeof(long), 1);
-    zrt_chan *work = zrt_chan_new(sizeof(long), 1);  /* main holds its sender: never fires */
+    zrt_chan *timer = zrt_chan_new(sizeof(long), 1, NULL);
+    zrt_chan *work = zrt_chan_new(sizeof(long), 1, NULL);  /* main holds its sender: never fires */
     tenv *e = (tenv *)zrt_alloc(sizeof(tenv));
     e->ch = zrt_chan_sender_copy(timer);
     e->ns = SLEEP_NS;
@@ -1613,7 +1613,7 @@ static void prog(void) {
     /* main parks on a channel it is itself the only sender of, so the program can
      * only end the way the spawned coroutine ends it: no deadlock is declared
      * while the recursion is RUNNING, and the overflow's _exit(1) is the exit. */
-    zrt_chan *never = zrt_chan_new(sizeof(long), 0);
+    zrt_chan *never = zrt_chan_new(sizeof(long), 0, NULL);
     zrt_spawn(spawned, NULL, NULL);
     long v;
     zrt_chan_recv(never, &v);

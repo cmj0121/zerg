@@ -17671,10 +17671,13 @@ fn c_init_calls(mut &em: Emitter, f: ast.File) -> str {
 # CONSTRUCTED, and by the two readers of a constructor's element type — `parse_chan_elem` and
 # `subst_chan_elem` — which is the one form that carries an element without ever building the
 # type. So this path inherits the rule rather than holding a copy of its own.
+#
+# THE ELEMENT'S DROP GOES WITH ITS SIZE: chan_free gives back what the buffer still holds, and
+# the size alone cannot say how (#334). `NULL` for plain data.
 fn c_chan_new(mut &em: Emitter, t: ast.Ty, cap: ast.Expr, sb: Subst) -> str {
 	em.used_rt = true
 	em.used_conc = true
-	return f"zrt_chan_new(sizeof({c_type(t)}), (size_t)({c_expr(em, cap, sb)}))"
+	return f"zrt_chan_new(sizeof({c_type(t)}), (size_t)({c_expr(em, cap, sb)}), {c_elem_drop_fn(em, t)})"
 }
 
 # --- channel direction ------------------------------------------------------------

@@ -78,6 +78,7 @@ struct zrt_chan {
 	 * that kind, so no crash Err wears it by accident. */
 	zrt_err        crash_err;
 	size_t         elemsz;  /* element size in bytes (memcpy unit) */
+	zrt_drop_fn    drop;    /* gives one buffered element back; NULL for plain data */
 	size_t         cap;     /* ring capacity; 0 = unbuffered rendezvous */
 	size_t         head;    /* ring read cursor */
 	size_t         tail;    /* ring write cursor */
@@ -195,7 +196,7 @@ static zrt_err chan_stop_iteration(void) {
 	return zrt_err_new_kind(ZRT_ERR_STOP_ITERATION, "channel closed");
 }
 
-zrt_chan *zrt_chan_new(size_t elemsz, size_t cap) {
+zrt_chan *zrt_chan_new(size_t elemsz, size_t cap, zrt_drop_fn drop) {
 	zrt_chan *ch = (zrt_chan *)zrt_alloc(sizeof(*ch));
 	zrt_mutex_init(&ch->lock);
 	ch->rc = 1;
@@ -204,6 +205,7 @@ zrt_chan *zrt_chan_new(size_t elemsz, size_t cap) {
 	ch->err = chan_stop_iteration(); /* zrt_alloc is malloc: never leave the reason garbage */
 	ch->crash_err = ch->err; /* a clean end until a sender says otherwise */
 	ch->elemsz = elemsz;
+	ch->drop = drop;
 	ch->cap = cap;
 	ch->head = ch->tail = ch->len = 0;
 	ch->buf = (cap > 0) ? (unsigned char *)zrt_alloc(cap * elemsz) : NULL;
@@ -212,9 +214,18 @@ zrt_chan *zrt_chan_new(size_t elemsz, size_t cap) {
 	return ch;
 }
 
+/* chan_free gives back what the ring still holds before it frees the ring. A send moves an
+ * owned copy in and a receive moves it out, so an element still buffered when the last holder
+ * leaves belongs to nobody else: freeing only the bytes kept every str or list a value pointed
+ * at (#334). */
 static void chan_free(zrt_chan *ch) {
 	zrt_mutex_destroy(&ch->lock);
 	if (ch->buf != NULL) {
+		if (ch->drop != NULL) {
+			for (size_t i = 0; i < ch->len; i++) {
+				ch->drop(ch->buf + ((ch->head + i) % ch->cap) * ch->elemsz);
+			}
+		}
 		zrt_free(ch->buf);
 	}
 	zrt_free(ch);

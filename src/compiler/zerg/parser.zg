@@ -357,7 +357,7 @@ fn p_continues_expr(k: token.Kind) -> bool {
 	return true if k == token.Kind.Question or k == token.Kind.Coalesce or k == token.Kind.DotDot or k == token.Kind.DotDotEq
 	return true if k == token.Kind.And or k == token.Kind.Or or k == token.Kind.In or k == token.Kind.As
 
-	return is_add_op(k) or is_mul_op(k) or is_cmp_op(k)
+	return token.is_add_op(k) or token.is_mul_op(k) or token.is_cmp_op(k)
 }
 
 # ZG_MAX_NESTING bounds how deep a program may nest, and the number is a MEASURED one, not
@@ -3858,7 +3858,7 @@ fn p_assert_cmp(mut &sp: Parser) -> int {
 	start := sp.pos
 	parse_range(sp)
 	op := sp.pos
-	found := is_cmp_op(cur_kind(sp))
+	found := token.is_cmp_op(cur_kind(sp))
 	sp.pos = start
 	parse_cmp(sp)
 
@@ -4181,22 +4181,6 @@ fn parse_for(mut &p: Parser) -> ast.Stmt {
 
 # --- expressions ---------------------------------------------------------------
 
-fn is_add_op(k: token.Kind) -> bool {
-	return k == token.Kind.Plus or k == token.Kind.Minus or k == token.Kind.Pipe or k == token.Kind.Caret or k == token.Kind.PlusMod or k == token.Kind.MinusMod
-}
-
-fn is_mul_op(k: token.Kind) -> bool {
-	return k == token.Kind.Star or k == token.Kind.Slash or k == token.Kind.SlashDiv or k == token.Kind.Percent or k == token.Kind.StarMod or k == token.Kind.Shl or k == token.Kind.Shr or k == token.Kind.Amp
-}
-
-fn is_cmp_op(k: token.Kind) -> bool {
-	return k == token.Kind.EqEq or k == token.Kind.Ne or k == token.Kind.Lt or k == token.Kind.Gt or k == token.Kind.Le or k == token.Kind.Ge
-}
-
-fn is_unary_op(k: token.Kind) -> bool {
-	return k == token.Kind.Minus or k == token.Kind.Not or k == token.Kind.Tilde or k == token.Kind.MinusMod
-}
-
 # parse_expr is where every nested expression re-enters the parser — a parenthesized
 # group, a call's argument, a list's element, an index — so it is where a nesting level is
 # counted. The ladder below it is not: one pass through coalesce → or → … → primary is one
@@ -4312,7 +4296,7 @@ fn parse_and(mut &p: Parser) -> ast.Expr {
 # (GRAMMAR#cmp-expr puts the two at the same level and allows only one of them).
 fn parse_cmp(mut &p: Parser) -> ast.Expr {
 	left := parse_range(p)
-	if is_cmp_op(cur_kind(p)) {
+	if token.is_cmp_op(cur_kind(p)) {
 		op := token.kind_name(cur_kind(p))
 		p_advance(p)
 		return ast.Expr.EBinary(op, left, parse_range(p))
@@ -4360,7 +4344,7 @@ fn parse_range(mut &p: Parser) -> ast.Expr {
 
 fn parse_add(mut &p: Parser) -> ast.Expr {
 	mut left := parse_mul(p)
-	for is_add_op(cur_kind(p)) {
+	for token.is_add_op(cur_kind(p)) {
 		op := token.kind_name(cur_kind(p))
 		p_advance(p)
 		left = ast.Expr.EBinary(op, left, parse_mul(p))
@@ -4370,7 +4354,7 @@ fn parse_add(mut &p: Parser) -> ast.Expr {
 
 fn parse_mul(mut &p: Parser) -> ast.Expr {
 	mut left := parse_try(p)
-	for is_mul_op(cur_kind(p)) {
+	for token.is_mul_op(cur_kind(p)) {
 		op := token.kind_name(cur_kind(p))
 		p_advance(p)
 		left = ast.Expr.EBinary(op, left, parse_try(p))
@@ -4466,7 +4450,7 @@ fn parse_unary(mut &p: Parser) -> ast.Expr {
 	#
 	# Only THIS operand moves up to parse_try. The receive above keeps parse_unary, which is
 	# what leaves the `!` outside for parse_try to put around the ERecv.
-	if is_unary_op(cur_kind(p)) {
+	if token.is_unary_op(cur_kind(p)) {
 		op := token.kind_name(cur_kind(p))
 		p_advance(p)
 		p_deeper(p)

@@ -5550,9 +5550,15 @@ fn c_type_decls(mut &em: Emitter, f: ast.File, carriers: list[ast.Ty], tuples: l
 	# places that render a type do not have to learn about it.
 	#
 	# They precede the structs because a struct field may be declared with one, and they need
-	# no dependency sweep of their own: a typedef over a typedef is refused at declaration.
+	# no dependency sweep of their own: each is declared over its chain's ROOT, so `type Old =
+	# Age` written above `type Age = int` is `typedef int64_t zg_Old;` and names no typedef C
+	# has not seen yet (#382). A refused one keeps what it was written over.
 	for td in f.types {
-		out = out + f"typedef {c_type(td.under)} {c_ty_cname(td.name)};\n"
+		mut rep := c_scalar_repr(em, ast.Ty.TNamed(td.name))
+		if c_is_unknown(rep) {
+			rep = td.under
+		}
+		out = out + f"typedef {c_type(rep)} {c_ty_cname(td.name)};\n"
 		done.append(td.name)
 	}
 	if f.types.len() > 0 {
@@ -6321,17 +6327,7 @@ fn c_open_app_checked(mut &em: Emitter, nm: str, s: Site) -> bool {
 	return false
 }
 
-# c_typedef_of answers what a `type X = Y` name is underneath, or TUnknown for a name that
-# is not one. It and c_repr_of are where the representation is looked through: everywhere
-# else the two are different types, which is what a strong typedef means.
-fn c_typedef_of(mut &em: Emitter, nm: str) -> ast.Ty {
-	r := c_ty_row(em, nm)
-	return ast.Ty.TUnknown if not c_row_is_typedef(em, r)
-
-	return em.tk_unders[r]
-}
-
-# c_row_is_typedef is asked by the two readers of `tk_unders`, and it is asked BECAUSE the
+# c_row_is_typedef is asked by c_repr_of, the reader of `tk_unders`, and it is asked BECAUSE the
 # table is now one: a struct, an enum and a spec have rows too, and their underlying type is
 # the TUnknown a row needs to exist, not a representation anybody may read. Without this
 # `c_repr_of(TNamed("SomeStruct"))` would answer TUnknown instead of the struct — which no
@@ -10864,7 +10860,9 @@ pub fn c_is_enum_ty(mut &em: Emitter, t: ast.Ty) -> bool {
 # Y at runtime, and nothing should. What makes `Celsius` a type is that every rule in
 # check.zg sees TNamed("Celsius") and not TInt.
 fn c_typedef_conv(mut &em: Emitter, name: str, x: ast.Expr, sb: Subst) -> str {
-	under := c_typedef_of(em, name)
+	# Y is the chain's ROOT: `B2(300)` over `type B2 = B` over `type B = byte` owes byte's
+	# range check, which converting into `B` — a name, not a scalar — skipped (#382)
+	under := c_scalar_repr(em, ast.Ty.TNamed(name))
 
 	# a typedef this compiler could not make sense of — an underlying type nothing declares,
 	# or one it does not build over — renders as a plain cast. The DECLARATION has already
@@ -11241,8 +11239,9 @@ fn c_conv_scalar(mut &em: Emitter, dc: int, db: int, xt: ast.Ty, ty: ast.Ty, inn
 	# because a conversion is exactly where the two types are meant to meet. The REPR is what
 	# the guard below asks about too: a typedef whose underlying type nothing declares has
 	# already been reported at its declaration, and raising here as well would bury that
-	# sentence under one about the use.
-	xr := c_repr_of(em, xt)
+	# sentence under one about the use. The whole chain is looked through, so `int(o)` on a
+	# `type Old = Age` over `type Age = int` reads the `int` at its root (#382).
+	xr := c_scalar_repr(em, xt)
 	sc := c_scalar_class(xr)
 
 	# A RAW POINTER IS AN ADDRESS, and `uint(p)` is the cast GRAMMAR names for reading one as a

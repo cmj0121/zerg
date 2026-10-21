@@ -322,6 +322,9 @@ pub enum Rule {
 	QualifiedTypeBesideOwn = 3158
 	SpecDefaultReadsField = 3138
 
+	# a `type` chain that comes back on itself (#382) has no root to be a typedef over
+	TypedefCycle = 3159
+
 	# emitting — a form this compiler will not lower
 	LoopKeywordOutsideLoop = 4001
 	FromCauseNotErr = 4002

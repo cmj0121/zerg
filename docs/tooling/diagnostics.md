@@ -355,6 +355,7 @@ shipping compiler rather than a part of it (the line
 | `E3156` | a generic enum's variant written where nothing says which specialization                              |
 | `E3157` | a generic method called on a boxed value                                                              |
 | `E3158` | a type position qualifies a type this file also declares as its own private one                       |
+| `E3159` | a `type` declaration whose chain of `type` declarations goes round a cycle                            |
 | `E4001` | `…` outside of a loop: it belongs to a `for`, and a `select` arm is not one                           |
 | `E4002` | a `from` cause is an `Err`, and … is not one                                                          |
 | `E4004` | `…(…)` names one side of an `Either`, which holds exactly one value                                   |

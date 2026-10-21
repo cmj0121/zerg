@@ -331,6 +331,7 @@ seed 全程維持句子比對:代碼是語言的契約,而 seed 是建置正式�
 | `E3156` | 泛型 enum 的變體寫在沒有東西說是哪個特化的地方                                                        |
 | `E3157` | 在裝箱的值上呼叫泛型方法                                                                              |
 | `E3158` | 型別位置加了限定詞的型別，本檔案也以私有型別宣告了同名的一個                                          |
+| `E3159` | `type` 宣告沿著 `type` 宣告鏈繞回自己，沒有底層型別                                                   |
 | `E4001` | `break` / `continue` 在它所屬的迴圈之外                                                               |
 | `E4002` | `raise … from` 的 cause 不是 `Err`                                                                    |
 | `E4004` | `…(…)` names one side of an `Either`, which holds exactly one value                                   |

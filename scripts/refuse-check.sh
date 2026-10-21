@@ -2540,6 +2540,18 @@ fn main() {
 }
 EOF
 
+# A CHAIN THAT COMES BACK ON ITSELF has no root, and is refused by name at each declaration on it
+# rather than told its type "is not declared". Here and not in reject-check.sh: the seed does
+# not return on this program, so it cannot be the oracle for it.
+expect "$ZERG" typedef-cycle E3159 '`type A = B`' <<'EOF'
+type A = B
+type B = A
+
+fn main() {
+	print int(A(1))
+}
+EOF
+
 # TWO PRIVATE TEMPLATES IN TWO MODULES are two functions by docs/runtime/package.md — a
 # private name is its file's, and the seed builds this — but templates sit in one table by
 # bare name, so the second is refused: the deviation #380, and the case leaves when it closes.

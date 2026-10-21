@@ -3190,17 +3190,61 @@ pub fn chk_typedef(mut &em: emit.Emitter, td: ast.TypeDecl, f: ast.File) -> ast.
 		return ast.Ty.TUnknown
 	}
 
-	# A SCALAR UNDERNEATH, this phase. docs/core/types.md records the deviation, and the seed
-	# refuses the same thing — but it is worth naming rather than emitting, because a
+	# A SCALAR UNDERNEATH, this phase. docs/core/types.md marks it `[not yet]`, and the seed
+	# refuses constructing one — but it is worth naming rather than emitting, because a
 	# `type Label = str` looked like it worked: a str is a refcounted cell, and the typedef
 	# name is not a str to c_is_str, so nothing retained it, nothing released it, and
 	# `str(l)` printed the pointer as a number. A form that answers wrongly is worse than one
 	# that says it is not built.
-	if emit.c_scalar_class(td.under) == emit.SC_NONE {
+	#
+	# THE SCALAR IS ASKED OF THE CHAIN'S ROOT (#382): `type Old = Age` over `type Age = int` is
+	# a strong typedef over an `int` too, one name further from it. The chain is followed in
+	# the File, not the registry, so a declaration may name a typedef written below it.
+	root := chk_typedef_root(f, td.under)
+	if chk_file_typedef(f, emit.c_named_of(root)) >= 0 {
+		chk_at_place(em, td.path, td.line, td.col, rule.Rule.TypedefCycle, f"`type {td.name} = {ast.ty_name(td.under)}` never reaches a type — its chain of `type` declarations goes round a cycle, so nothing says what `{td.name}` is underneath")
+		return ast.Ty.TUnknown
+	}
+
+	# a root nothing declares is the E3035 of the declaration that names it; saying more here
+	# would refuse every link of the chain for one missing name
+	rnm := emit.c_named_of(root)
+	return ast.Ty.TUnknown if rnm != "" and not emit.c_is_type_name(em, rnm) and not chk_file_declares_ty(f, rnm)
+
+	if emit.c_scalar_class(root) == emit.SC_NONE {
 		chk_at_place(em, td.path, td.line, td.col, rule.Rule.NotYetTypedefNonScalar, f"NotImplemented: `type {td.name} = {ast.ty_name(td.under)}` over a non-scalar — this compiler builds a strong typedef over a scalar, where the new name costs nothing at runtime; a `str`, a container or a struct underneath needs the copy and drop rules to follow the name (GRAMMAR#type-decl)")
 		return ast.Ty.TUnknown
 	}
 	return td.under
+}
+
+# chk_typedef_root is what a chain of `type` declarations ends in: the first type that is not
+# one. A walk longer than the program has typedefs has gone round a cycle, and answers the
+# typedef name it stopped on, which is how the caller tells.
+fn chk_typedef_root(f: ast.File, t: ast.Ty) -> ast.Ty {
+	mut at := t
+	mut hops := 0
+	for hops <= f.types.len() {
+		i := chk_file_typedef(f, emit.c_named_of(at))
+		return at if i < 0
+
+		at = f.types[i].under
+		hops = hops + 1
+	}
+	return at
+}
+
+# chk_file_typedef is the index of the `type` declaration of this name in the File, or -1.
+fn chk_file_typedef(f: ast.File, nm: str) -> int {
+	return -1 if nm == ""
+
+	mut i := 0
+	for i < f.types.len() {
+		return i if f.types[i].name == nm
+
+		i = i + 1
+	}
+	return -1
 }
 
 # chk_file_declares_ty is whether the program declares a type by this name, asked of the
@@ -3213,7 +3257,7 @@ fn chk_file_declares_ty(f: ast.File, nm: str) -> bool {
 	for ed in f.enums {
 		return true if ed.name == nm
 	}
-	return false
+	return chk_file_typedef(f, nm) >= 0
 }
 
 # chk_slot_fits is a value entering a POSITIONAL slot named by `where` — a struct literal's

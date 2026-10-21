@@ -13223,8 +13223,12 @@ fn c_chk_visible_fn(mut &em: Emitter, name: str, r: int) {
 # call. It reads the same row the two rules above read, and is a third function for their
 # reason — the question is different and the place it is asked is different, since a
 # namespaced call has already said which file it means.
+#
+# A PRIVATE NAME IS c_chk_visible_fn's, which every caller asks first (#384): wherever this
+# would speak about one, that rule has already said E3001, and this sentence's fix — spell it
+# `one.least` — would only meet E3001 again.
 fn c_chk_bare_fn(mut &em: Emitter, name: str, r: int) {
-	return if r < 0
+	return if r < 0 or not em.sig_pub[r]
 
 	check.chk_name_is_this_file(em, name, em.sig_path[r])
 }

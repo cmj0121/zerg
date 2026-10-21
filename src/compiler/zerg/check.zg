@@ -339,7 +339,12 @@ pub fn chk_drop_zg(path: str) -> str {
 # this silent about a type PARAMETER, a spec named in a bound, and a name whose declaration
 # was itself refused — none of which is a declared type and all of which reach a type
 # position spelled exactly like one.
+#
+# A PRIVATE TYPE IS chk_ty_visible's, which every type leaf asks (#384): wherever this would
+# speak about one, that rule says E5008, and this sentence's fix would only meet it again.
 pub fn chk_ty_is_this_file(mut &em: emit.Emitter, nm: str) {
+	return if not emit.c_ty_pub(em, nm)
+
 	decl_path := emit.c_ty_path(em, nm)
 
 	return if decl_path == "" or em.at_path == ""

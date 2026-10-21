@@ -17419,10 +17419,17 @@ pub fn c_const_here(mut &em: Emitter, c: ast.ConstDecl) -> bool {
 
 # c_const_from_sibling is the sentence for a read of one that was not bound. It answers false
 # for every other unknown name, so the ordinary typo keeps the ordinary message.
+#
+# A PRIVATE ONE IS chk_visible's E3001 alone (#387), as a private sibling fn is (#384): this
+# sentence's fix — spell it `two.LIMIT` — would only meet E3001 again.
 fn c_const_from_sibling(mut &em: Emitter, n: str) -> bool {
 	mut i := 0
 	for i < em.k_decls.len() {
 		if em.k_decls[i].name == n and not c_const_here(em, em.k_decls[i]) {
+			if not em.k_decls[i].is_pub {
+				check.chk_visible(em, n, em.k_decls[i].path, false)
+				return true
+			}
 			ns := ast.mod_name(check.chk_drop_zg(em.k_decls[i].path))
 			check.chk_at(em, rule.Rule.ConstFromSibling, f"the constant `{n}` is declared in `{em.k_decls[i].path}`, and a file names what it uses — write `import \"./{ns}\"` and spell it `{ns}.{n}` (docs/runtime/package.md)")
 			return true

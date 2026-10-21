@@ -12333,7 +12333,7 @@ fn c_assoc_call(mut &em: Emitter, tn: str, meth: str, args: list[ast.Expr], l: i
 		c_refuse_method_through_type(em, tn, meth)
 	}
 
-	c_chk_unsafe_fn(em, f"{tn}.{meth}", "this call is in safe code", r)
+	c_chk_unsafe_fn(em, f"{tn}.{meth}", "calling it", r)
 
 	# base 0, and `lead` false: an associated fn has no receiver, so its first written argument
 	# is parameter 0 and there is no operand standing in front of the run.
@@ -13188,7 +13188,7 @@ fn c_call(mut &em: Emitter, name: str, args: list[ast.Expr], l: int, c: int, sb:
 	}
 	c_chk_visible_fn(em, name, sr)
 	c_chk_bare_fn(em, name, sr)
-	c_chk_unsafe_fn(em, name, "this call is in safe code", sr)
+	c_chk_unsafe_fn(em, name, "calling it", sr)
 
 	rels := c_owned_args(em, name, 0, args)
 	return c_call_releasing(em, c_fn_cname_in(em, check.c_mod_of(em, em.at_path), "", name), name, args, rels, sb) if c_any_owned(rels)
@@ -14999,7 +14999,7 @@ fn c_recv_call(mut &em: Emitter, recv: str, meth: str, target: ast.Expr, args: l
 		c_refuse_assoc_through_instance(em, recv, meth)
 	}
 
-	c_chk_unsafe_fn(em, f"{recv}.{meth}", "this call is in safe code", r)
+	c_chk_unsafe_fn(em, f"{recv}.{meth}", "calling it", r)
 	return f"{c_fn_cname(recv, meth)}({c_recv_args(em, key, target, args, sb)})"
 }
 
@@ -19418,7 +19418,7 @@ fn c_callee_free(mut &em: Emitter, mod: str, name: str, args: list[ast.Expr], wh
 	key := c_key_in(mod, c_sig_key("", name))
 	sr := c_sig_row(em, key)
 	c_chk_visible_fn(em, name, sr)
-	c_chk_unsafe_fn(em, name, f"this `{what}` is in safe code", sr)
+	c_chk_unsafe_fn(em, name, f"calling it through a `{what}`", sr)
 
 	mut at := mod
 	if at == "" {

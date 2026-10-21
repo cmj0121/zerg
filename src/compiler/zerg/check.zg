@@ -542,8 +542,9 @@ pub fn chk_ty_quals(mut &em: emit.Emitter, f: ast.File) {
 # is the boundary erased, silently, which the standing rule does not allow: a form is lowered
 # correctly or refused by name.
 #
-# `what` is what the safe code was doing with the name, because there are two ways in and the
-# sentence has to say which one happened.
+# `what` is what the safe code was doing with the name, as the phrase the sentence opens its
+# clause with ("calling it", "calling it through a `spawn`"), because there is more than one
+# way in and the sentence has to say which one happened.
 pub fn chk_unsafe_reachable(mut &em: emit.Emitter, name: str, callee_unsafe: bool, what: str) {
 	return if not callee_unsafe
 
@@ -555,7 +556,7 @@ pub fn chk_unsafe_reachable(mut &em: emit.Emitter, name: str, callee_unsafe: boo
 	# a module-level `unsafe { … }` group" for as long as there were two; `unsafe fn` is gone —
 	# the marker propagated an obligation outward, and the group's whole value is that a caller
 	# never has to know — so the group is what the message names.
-	chk_at(em, rule.Rule.UnsafeNameInSafeCode, f"`{chk_call_name(name)}` is declared inside a module-level `unsafe {{ … }}` group, and GRAMMAR group 12 makes what a group holds reachable only from unsafe — {what} it from safe code is what the group is there to prevent; call it inside an `unsafe {{ … }}` block, or move the caller into the group")
+	chk_at(em, rule.Rule.UnsafeNameInSafeCode, f"`{chk_call_name(name)}` is declared inside a module-level `unsafe {{ … }}` group, and GRAMMAR group 12 makes what a group holds reachable only from unsafe — {what} from safe code is what the group is there to prevent; call it inside an `unsafe {{ … }}` block, or move the caller into the group")
 }
 
 # chk_asm_context holds inline assembly to `unsafe`. It is the same rule an unsafe fn's caller

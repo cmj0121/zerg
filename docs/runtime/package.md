@@ -300,18 +300,21 @@ because they are two mistakes in two files and one message cannot point at both.
 with a fix available: the module that wrote `pub` decided to hand the type out and is the only party who
 can mark the type `pub` or stop returning it, where a dependent reading a private field can do neither.
 
-Every module's names are still one flat space of C SYMBOLS, which is why two modules that declare the
-same public name collide — that refusal is about the name, not about the visibility.
+A public name is not the collision either: two modules that each declare `pub fn pick` are reached as `a.pick`
+and `b.pick`, which build and answer their own. What still collides is a plain function two FILES of one module
+both declare, private or `pub` — that is _E4077_, the one-directory rule above, and it is about the module, not
+the visibility.
 
-A private type is not in that space. Two files that each declare a struct, enum or `type` of one name without
+A private type is not under that rule. Two files that each declare a struct, enum or `type` of one name without
 `pub` declare two types, and each file's constructions, field reads, patterns and methods reach its own. What
 is refused is a file that declares its own `P` and also writes another module's `sink.P` in a type position:
 a type position drops its qualifier, so the two would be spelled alike, and that is _E3158_.
 
-> **[deviation]** A private GENERIC function should not be in that space either: two files that each declare a
-> private `fn least[T]` declare two functions, as two private plain functions do. The compiler keeps its
-> templates in one table by bare name, so the second declaration is refused as _E3060 `least` is declared
-> twice, once as a generic_, across files and modules alike (#380).
+Nor is a private GENERIC function. A template is its file's: two files that each declare a private
+`fn least[T]` declare two templates, whether they are two modules or two files of one, a bare `least(…)` is
+its own file's, and each instance is a C symbol of its own (`examples/1g/generics`). Two modules' public
+generics of one name are reached through their qualifier, as two plain functions are. Two `pub` ones in ONE
+module are one public name twice, and a qualified call to it is _E4077_.
 
 What the rule compares is the **import path a module was reached by** — the loader's answer, recorded
 where the module was resolved and read back by name. It is not computed from where a file sits: `./a`

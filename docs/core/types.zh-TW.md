@@ -318,7 +318,11 @@ tuple 會因為那個部分被拒絕（`E4020`）。`<` `<=` `>` `>=` 也一樣�
 形狀。prelude 的 **`Result[T]`** 與 **`T?`** 是它在 `Either` 上、由 compiler 提供的泛型形式(內建,而非你目前能用泛型
 `type` 自己寫出的東西),這也是為什麼它們彼此不同、要用 `ok_or` / `ok` 顯式跨越。
 
-> **[not yet]** 底型 `Y` 必須是**純量**。其餘一律帶著位置具名拒絕:_E9042 NotImplemented:
+`Y` 本身也可以是一個 `type X = Y`,深度不限、宣告順序不限。在 `type Celsius = int` 之上,`type Reading = Celsius`
+既不是 `Celsius` 也不是 `int`:它以鏈的根部那個 `int` 運算,`int(r)` 則一步走出到那個根。繞成循環的鏈沒有根,
+鏈上的每個宣告都是 _E3159_。
+
+> **[not yet]** 底型 `Y`,或它那條鏈的根,必須是**純量**。其餘一律帶著位置具名拒絕:_E9042 NotImplemented:
 > `type Name = str` over a non-scalar — this compiler builds a strong typedef over a scalar, where the new
 > name costs nothing at runtime; a `str`, a container or a struct underneath needs the copy and drop rules
 > to follow the name_。缺的正是那句話說的:一個讓所有權規則跟著走的名字,而那是關於 `drop` 與 copy helper 的問題,

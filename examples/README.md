@@ -67,6 +67,7 @@ specification. Each of these is a **directory**: an entry file and the modules i
 | [`1g/visible/`](1g/visible)         | what a `pub` surface **does** reach across a module boundary                 |
 | [`1g/pubconst/`](1g/pubconst)       | `pub COUNT := 3` is a real member; a module binding needs no `const`         |
 | [`1g/pubname/`](1g/pubname)         | two modules may declare the same public name; the qualified call chooses     |
+| [`1g/generics/`](1g/generics)       | a generic of one name in several files is each file's; a qualifier chooses   |
 | [`1g/modconst/`](1g/modconst)       | a module constant is ONE object, read the same wherever it is read           |
 | [`1g/shapedconst/`](1g/shapedconst) | a module constant of a spelled type — a tuple, an optional                   |
 | [`1g/modtype/`](1g/modtype)         | a type reached through an import is also its constructor                     |

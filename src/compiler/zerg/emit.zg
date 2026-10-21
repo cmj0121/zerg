@@ -789,6 +789,11 @@ pub struct Emitter {
 	# evaluated, and the operator has no other way to reach the call it is rewritten into.
 	# c_recv_args takes it and clears it, so it never outlives the one call it was set for.
 	pub hold_recv: bool
+
+	# gen_filed is whether some template is keyed by its file (c_tpl_key) — a generic whose
+	# name another file declares too. It is what lets c_generic_row skip the second scan, which reads
+	# a declaration's path, in every program that has no such pair.
+	pub gen_filed: bool
 }
 
 # Subst is an active set of identifier substitutions: an EIdent whose name appears in
@@ -3360,9 +3365,11 @@ fn c_sig_seen(mut &em: Emitter, key: str) -> bool {
 # skips them: a template has no signature to record, because its parameter types name things
 # that are not types yet.
 fn c_build_generics(mut &em: Emitter, f: ast.File) {
+	decls := c_tpl_decls(f)
 	for fn_i in f.fns {
 		if c_is_template(fn_i) {
-			c_check_gen_dup(em, f, fn_i)
+			key := c_tpl_key(decls, fn_i)
+			c_check_gen_dup(em, f, fn_i, key)
 
 			# A METHOD OF A TEMPLATE IMPL IS NOT A TEMPLATE THIS TABLE CAN HOLD, because its
 			# RECEIVER is not a type yet: `impl[T] Box[T] { fn tag[U](…) }` has to be seated on
@@ -3382,10 +3389,153 @@ fn c_build_generics(mut &em: Emitter, f: ast.File) {
 			# function, so a program with no generic method keys exactly as it did; a method
 			# joins under `P#pick`, which is what keeps `P.pick` and `Q.pick` — and a free
 			# `pick` — three templates rather than whichever one was recorded last.
-			em.gen_names.append(c_sig_key(fn_i.recv, fn_i.name))
-			em.gen_tpls.append(fn_i)
+			#
+			# AND A FREE TEMPLATE WHOSE NAME ANOTHER FILE DECLARES TOO IS KEYED BY ITS FILE (#380),
+			# under the name
+			# c_tpl_key spells. The declaration carries that key as its name, so every
+			# specialization it is instantiated into is named after it too — `least'1$int` —
+			# and two files' `least` at `int` are two C symbols rather than one.
+			if key == fn_i.name {
+				em.gen_names.append(c_sig_key(fn_i.recv, fn_i.name))
+				em.gen_tpls.append(fn_i)
+				continue
+			}
+			mut t := fn_i
+			t.name = key
+			em.gen_names.append(key)
+			em.gen_tpls.append(t)
+			em.gen_filed = true
 		}
 	}
+}
+
+# --- a template is its file's (#380) ---------------------------------------------------
+#
+# "The file is the unit of privacy and of naming" (docs/runtime/package.md), and that holds of
+# a generic as it does of a plain function: two files that each declare `fn least[T]` declare
+# two templates. The table above keys a template by its NAME, so two of them were one row, and
+# the second was refused as a duplicate (E3060) — while two plain `helper`s, in two modules,
+# have long been two symbols (c_fn_cname_in).
+#
+# A FREE TEMPLATE WHOSE NAME ANOTHER FILE DECLARES — as a template or as a plain function — IS
+# RECORDED UNDER A KEY OF ITS FILE'S — `least'1`, the
+# spelling a private type another file declares is given (c_ft_fresh) — and the program is
+# left as it was written. A bare `least(…)` is resolved to the key of the reader's own file
+# when it is looked up (c_generic_row), which is after a binding of that name has had its turn
+# to shadow it; a qualified `a.least(…)` to the key of the module it names (c_ns_generic).
+# `pub` changes nothing here: a public template is reached through its qualifier, and that is
+# what chooses. The key is spoken back as the written name in every finding (c_file_types).
+#
+# A METHOD TEMPLATE IS NOT KEYED THIS WAY, because it is already its receiver's: `P#pick` and
+# `Q#pick` are two keys, and a private `P` two files declare is two types (c_file_types).
+
+# TplDecls is every free function in a program, templates and plain ones alike, as two
+# columns: its name and its file. A PLAIN one is here because it is what another file's bare
+# call of that name means: `least(1)` in a file declaring `fn least(a: int)` is that function,
+# and a template some other file declares under the same name must not be found first.
+struct TplDecls {
+	pub names: list[str]
+	pub paths: list[str]
+}
+
+fn c_tpl_decls(f: ast.File) -> TplDecls {
+	mut out := TplDecls([], [])
+	for fn_i in f.fns {
+		if fn_i.recv == "" {
+			out.names.append(fn_i.name)
+			out.paths.append(fn_i.path)
+		}
+	}
+	return out
+}
+
+# c_tpl_key is the key a template is recorded under: its name, unless it is a free template a
+# SECOND FILE declares a function of that name too, generic or plain — then the name with its
+# file's place among those files, which are SORTED for c_ft_files's reason (`fixpoint` compares
+# emitted C byte for byte). One file declaring it twice keeps one key for both, and
+# c_check_gen_dup refuses the second.
+fn c_tpl_key(decls: TplDecls, fn_i: ast.FnDecl) -> str {
+	return fn_i.name if fn_i.recv != "" or not c_is_template(fn_i)
+
+	files := c_ft_files(decls.names, decls.paths, fn_i.name)
+	return fn_i.name if files.len() < 2
+
+	return c_ft_fresh(fn_i.name, c_name_index(files, fn_i.path))
+}
+
+# c_tpl_keyed is whether `key` is a file's key for the written name `name` — `least'1` for
+# `least`.
+fn c_tpl_keyed(key: str, name: str) -> bool {
+	k := bytearray(key)
+	n := bytearray(name)
+	return false if k.len() <= n.len() or k[n.len()] != b'\''
+
+	mut i := 0
+	for i < n.len() {
+		return false if k[i] != n[i]
+		i = i + 1
+	}
+	return true
+}
+
+# c_tpl_written is the name a reader wrote, back out of a key c_tpl_key gave a file: `least`
+# for `least'1`, and any other name unchanged.
+fn c_tpl_written(key: str) -> str {
+	mut out: list[byte] = []
+	for b in bytearray(key) {
+		return str(out) if b == b'\''
+
+		out.append(b)
+	}
+	return key
+}
+
+# c_ns_generic is the template a QUALIFIED name means — `a.least` — as the key it is recorded
+# under, or the name unchanged where no file keys it. The candidates are the templates of that
+# name whose module the namespace `ns` names (c_ns_names_mod, which follows a re-export).
+#
+# "" WHEN FILES KEY THE NAME AND NONE OF THEM IS THAT MODULE'S: the module's member is then a
+# plain function, or nothing. Handing the name back would let c_generic_row find the READER's
+# own template of that name, and `strconv.to_string` would call a local `to_string[T]`.
+#
+# A MODULE'S FILES MAY EACH DECLARE ONE, and only a `pub` one is the module's to offer: a
+# private one is the answer only when there is nothing else, and the visibility rule then
+# refuses the call as it refuses any private name. TWO PUBLIC ONES IN ONE MODULE are the
+# collision two plain functions of one module are (E4077), met here at the qualified call
+# rather than at the declaration, because each of them is answerable until something names
+# the module's.
+fn c_ns_generic(mut &em: Emitter, ns: str, name: str) -> str {
+	return name if not em.gen_filed
+
+	mut found := -1
+	mut found_pub := false
+	mut keyed := false
+	mut i := 0
+	for i < em.gen_names.len() {
+		if c_tpl_keyed(em.gen_names[i], name) {
+			keyed = true
+			t := em.gen_tpls[i]
+
+			# NOT THE "NO MODULE" ANSWER c_ns_names_mod gives a declaration without one: the entry
+			# file has none, and its own `to_string[T]` is not what `strconv.to_string` names.
+			m := check.c_mod_of(em, t.path)
+			if m != "" and c_ns_names_mod(em, ns, m) {
+				if found < 0 or (t.is_pub and not found_pub) {
+					found = i
+					found_pub = t.is_pub
+				} else if t.is_pub {
+					prev := em.gen_tpls[found]
+					raise c_mod_flat_collide(t.path, t.line, t.col, name, prev.path)
+				}
+			}
+		}
+		i = i + 1
+	}
+
+	return "" if found < 0 and keyed
+	return name if found < 0
+
+	return em.gen_names[found]
 }
 
 # c_check_gen_dup is the DUPLICATE-DECLARATION rule for a template. It has to be made here
@@ -3399,20 +3549,31 @@ fn c_build_generics(mut &em: Emitter, f: ast.File) {
 # because a module's names flatten into the one program-wide function space here, so the
 # stdlib's `to_string` and a local template of that name are the same name — and `c_call`
 # asks `c_is_generic` before it asks anything else. The seed refuses the same program.
-fn c_check_gen_dup(mut &em: Emitter, f: ast.File, tpl: ast.FnDecl) {
+#
+# THAT PROGRAM BUILDS NOW, and prints 42: a template whose name another file declares is keyed
+# by its file (c_tpl_key), so the local `to_string[T]` is the local file's and `strconv.` names
+# strconv's (c_ns_generic). What is left for this rule is ONE FILE declaring the name twice.
+fn c_check_gen_dup(mut &em: Emitter, f: ast.File, tpl: ast.FnDecl, key: str) {
 	name := tpl.name
 
 	# REPORTED at the declaration, not raised. This pass runs before any statement is
 	# emitted, so the SAt markers have said nothing and the declaration's own place is the
 	# only one there is — which the reject gate insists on, and rightly: a rule that cannot
 	# say where is a rule the reader has to go and find.
-	if c_name_in(em.gen_names, name) {
-		check.chk_at_place(em, tpl.path, tpl.line, tpl.col, rule.Rule.DeclaredTwiceOneGeneric, f"`{name}` is declared twice, once as a generic — a template shares the one flat function namespace with every module of the program, so a second declaration of that name cannot be told apart from it")
+	#
+	# THE KEY IS THE FILE'S (c_tpl_key), so what meets one here is a second template of that
+	# name IN THE SAME FILE: another file's is recorded under a key of its own (#380).
+	if c_name_in(em.gen_names, key) {
+		check.chk_at_place(em, tpl.path, tpl.line, tpl.col, rule.Rule.DeclaredTwiceOneGeneric, f"`{name}` is declared twice in this file, once as a generic — a file declares a name once, so a second declaration of that name cannot be told apart from the template")
 		return
 	}
+
+	#
+	# AND A PLAIN FUNCTION OF THE NAME IS A COLLISION IN THE SAME FILE ONLY: another file's is
+	# that file's, and a template keyed by its file (c_tpl_key) is told apart from it (#380).
 	for other in f.fns {
-		if other.name == name and other.recv == "" and not c_is_template(other) {
-			check.chk_at_place(em, tpl.path, tpl.line, tpl.col, rule.Rule.GenericAndPlainFn, f"`{name}` is declared both as a generic and as a plain function — a template shares the one flat function namespace, so the two cannot be told apart; rename one")
+		if other.name == name and other.recv == "" and other.path == tpl.path and not c_is_template(other) {
+			check.chk_at_place(em, tpl.path, tpl.line, tpl.col, rule.Rule.GenericAndPlainFn, f"`{name}` is declared in this file both as a generic and as a plain function — a file declares a name once, so a call cannot tell the two apart; rename one")
 			return
 		}
 	}
@@ -4464,13 +4625,48 @@ fn c_is_template(fn_d: ast.FnDecl) -> bool {
 # The names are kept in a list of their own beside the FnDecls rather than read off them:
 # indexing a `list[FnDecl]` COPIES the declaration, body and all, and this is asked once per
 # call expression in the program. It is the same reason c_sig_seen scans by hand.
+#
+# A NAME TWO FILES DECLARE AS A TEMPLATE IS KEYED BY ITS FILE (c_tpl_key), and the key no
+# source can write: a bare `least` is the reader's own file's `least'1`, found by the second
+# scan. A file that declares none reaches its own plain function of the name, or else another
+# file's template, which the rules then refuse as they refuse any other file's name (#380).
 fn c_generic_row(mut &em: Emitter, name: str) -> int {
 	mut i := 0
 	for i < em.gen_names.len() {
 		return i if em.gen_names[i] == name
 		i = i + 1
 	}
-	return 0 - 1
+	return 0 - 1 if not em.gen_filed
+
+	here := c_ft_origin(em.at_path)
+	mut other := 0 - 1
+	i = 0
+	for i < em.gen_names.len() {
+		if c_tpl_keyed(em.gen_names[i], name) {
+			return i if em.gen_tpls[i].path == here
+			if other < 0 {
+				other = i
+			}
+		}
+		i = i + 1
+	}
+
+	# NONE OF ITS OWN: the reader's own PLAIN function of that name is what a bare call means,
+	# and otherwise the first file's template answers, for the rules a bare call to another
+	# file's name meets (E3001, E3114) — the answer a template only one file declares gets.
+	return 0 - 1 if other < 0 or c_file_declares_fn(em, name, here)
+
+	return other
+}
+
+# c_file_declares_fn is whether file `at` declares a plain free function `name`.
+fn c_file_declares_fn(mut &em: Emitter, name: str, at: str) -> bool {
+	mut i := 0
+	for i < em.sig_names.len() {
+		return true if em.sig_names[i] == name and em.sig_path[i] == at
+		i = i + 1
+	}
+	return false
 }
 
 # c_is_generic is asked of EVERY call expression in the program, twice — once to lower it
@@ -4507,7 +4703,8 @@ fn c_instantiate(mut &em: Emitter, name: str, args: list[ast.Expr]) -> str {
 # and arrives here with the same list. Splitting the two apart is what keeps the checks, the
 # dedup and the budget in one place rather than one copy per way in.
 fn c_instantiate_at(mut &em: Emitter, name: str, sol: list[ast.Ty]) -> str {
-	tpl := em.gen_tpls[c_generic_row(em, name)]
+	row := c_generic_row(em, name)
+	tpl := em.gen_tpls[row]
 
 	# ONE TYPE ARGUMENT PER PARAMETER. `gen_solve` always answers one per parameter, so while
 	# inference was the only way in this was an invariant nothing had to state; a call that
@@ -4528,7 +4725,10 @@ fn c_instantiate_at(mut &em: Emitter, name: str, sol: list[ast.Ty]) -> str {
 	# THE DEDUP SCAN COMES FIRST. A key already here was checked when it was made, and both
 	# checks below walk `sol` — one of them into `c_impls`, a scan of every impl in the
 	# program. Every call site reaches this twice, so re-checking was pure repeat work.
-	key := generic.gen_mangle(name, sol)
+	#
+	# MANGLED FROM THE KEY THE ROW HOLDS, not from the name asked: a bare `least` in a file whose
+	# template is keyed `least'1` has to name that file's specialization (c_generic_row).
+	key := generic.gen_mangle(em.gen_names[row], sol)
 	return key if c_name_in(em.inst_names, key)
 
 	c_check_solved(em, tpl, sol)
@@ -12391,7 +12591,10 @@ fn c_free_method(mut &em: Emitter, target: ast.Expr, meth: str, args: list[ast.E
 		# and a template reached this way has to be instantiated exactly as one reached
 		# directly. Asking the sig table first would find nothing, a template having no
 		# signature.
-		return c_call(em, meth, args, l, c, sb) if c_is_generic(em, meth)
+		#
+		# THE MODULE THE PREFIX NAMES CHOOSES WHICH, where two files declare one (#380).
+		gk := c_ns_generic(em, tn, meth)
+		return c_call(em, gk, args, l, c, sb) if gk != "" and c_is_generic(em, gk)
 
 		# AND A NAMESPACED GENERIC TYPE, for the same reason one line up: `boxmod.Box(4)` is
 		# the construction of a template that module declares, and a template has no signature
@@ -12698,7 +12901,7 @@ fn c_call_written(mut &em: Emitter, name: str, args: list[ast.Expr], ts: list[as
 	c_no_type_arg_list(em, name, ts)
 
 	if em.want_index and c_is_generic(em, name) {
-		c_nx_use(em, l, c, name, c_nx_template(em, name))
+		c_nx_use(em, l, c, c_tpl_written(name), c_nx_template(em, name))
 	}
 
 	# A BUILT-IN TYPE CONSTRUCTOR IS NOT A GENERIC FUNCTION, and the rule below says the
@@ -12943,7 +13146,7 @@ fn c_call(mut &em: Emitter, name: str, args: list[ast.Expr], l: int, c: int, sb:
 	# then finds an ordinary free function and applies the argument rules to a signature with
 	# real types in it. Nothing below this line knows a generic was involved.
 	if em.want_index and c_is_generic(em, name) {
-		c_nx_use(em, l, c, name, c_nx_template(em, name))
+		c_nx_use(em, l, c, c_tpl_written(name), c_nx_template(em, name))
 	}
 	return c_call(em, c_instantiate(em, name, args), args, 0, 0, sb) if c_is_generic(em, name)
 
@@ -13010,29 +13213,10 @@ fn c_sig_row_of(mut &em: Emitter, name: str) -> int {
 #
 # A GENERIC'S INSTANCE DOES HAVE A ROW, keyed `least$int` and carrying its template's file and
 # `pub`. The rules print it through check.chk_call_name, where a key becomes a sentence.
-#
-# AND AN INSTANCE OF A COLLIDED TEMPLATE IS QUIET. When the reader's own file declares a
-# template of that name too, the call meant its own one, and the instance answers for the
-# other file only because templates share one flat namespace (#380). That collision is
-# E3060's, reported at the declaration; refusing the call as well would name the other file
-# for a call that never meant it. It goes when #380 keys templates by their file.
 fn c_chk_visible_fn(mut &em: Emitter, name: str, r: int) {
 	return if r < 0
-	return if c_own_collided_tpl(em, name)
 
 	check.chk_visible(em, name, em.sig_path[r], em.sig_pub[r])
-}
-
-# c_own_collided_tpl is whether `name` is an instance of a free template that the reader's
-# own file declares as well — a call c_check_gen_dup has already refused under E3060.
-fn c_own_collided_tpl(mut &em: Emitter, name: str) -> bool {
-	return false if not c_is_mangled(name)
-
-	base := c_spec_base(name)
-	for t in em.gen_tpls {
-		return true if t.recv == "" and t.name == base and t.path == em.at_path
-	}
-	return false
 }
 
 # c_chk_bare_fn is #57's rule for the one spelling that has no qualifier to check: a BARE
@@ -13041,7 +13225,6 @@ fn c_own_collided_tpl(mut &em: Emitter, name: str) -> bool {
 # namespaced call has already said which file it means.
 fn c_chk_bare_fn(mut &em: Emitter, name: str, r: int) {
 	return if r < 0
-	return if c_own_collided_tpl(em, name)
 
 	check.chk_name_is_this_file(em, name, em.sig_path[r])
 }
@@ -16125,10 +16308,13 @@ fn c_infer_methcall(mut &em: Emitter, target: ast.Expr, meth: str, args: list[as
 # `int` and printed a pointer (#214).
 fn c_infer_ns_call(mut &em: Emitter, target: ast.Expr, meth: str, args: list[ast.Expr]) -> ast.Ty {
 	mod := c_ns_mod_of(em, c_ident_name(target))
-	if mod != "" and not c_is_generic(em, meth) {
+	gk := c_ns_generic(em, c_ident_name(target), meth)
+	if mod != "" and (gk == "" or not c_is_generic(em, gk)) {
 		r := c_sig_row_in(em, mod, c_sig_key("", meth))
 		return c_sig_row_ret(em, r) if r >= 0 and em.sig_mod[r] == mod
 	}
+	return c_infer_call(em, gk, args) if gk != ""
+
 	return c_infer_call(em, meth, args)
 }
 
@@ -19316,7 +19502,8 @@ fn c_callee_raw(mut &em: Emitter, x: ast.Expr, what: str) -> Callee {
 
 			# a NAMESPACED generic, `spawn mod.work(x)` — the same flattening, so the same
 			# instantiation the direct form gets
-			return c_callee_gen(em, c_instantiate(em, m, margs), x) if c_is_generic(em, m)
+			gk := c_ns_generic(em, c_ns_root(tgt), m)
+			return c_callee_gen(em, c_instantiate(em, gk, margs), x) if gk != "" and c_is_generic(em, gk)
 
 			# `mod.work()` — a module namespace flattens into the one program-wide function
 			# space, so a namespaced callee IS the free function of that name, exactly as an
@@ -25018,10 +25205,16 @@ fn c_section(parts: list[str], budget: int, at: str, mut &sofar: int) -> str {
 
 # FileTypes is the rename table, one row per (file, name): the private type `name` declared
 # in `at` is `to` from here down.
+#
+# say_to / say_name are the same speaking-back for a TEMPLATE keyed by its file (c_tpl_key). It
+# is not renamed in the program — a bare name is resolved to its file's key when it is looked
+# up — so it has no row above, and only the sentences need it.
 pub struct FileTypes {
 	pub at: list[str]
 	pub name: list[str]
 	pub to: list[str]
+	pub say_to: list[str]
+	pub say_name: list[str]
 }
 
 # TyRen is one file's rows, the only ones a walk over that file's declarations may apply.
@@ -25053,7 +25246,16 @@ pub fn c_file_types(prog: ast.File) -> FileTypes {
 		pubs.append(td.is_pub)
 	}
 
-	mut out := FileTypes([], [], [])
+	mut out := FileTypes([], [], [], [], [])
+	tds := c_tpl_decls(prog)
+	for fn_i in prog.fns {
+		key := c_tpl_key(tds, fn_i)
+		if key != fn_i.name and not c_name_in(out.say_to, key) {
+			out.say_to.append(key)
+			out.say_name.append(fn_i.name)
+		}
+	}
+
 	mut i := 0
 	for i < names.len() {
 		n := names[i]
@@ -25169,7 +25371,14 @@ fn c_ft_origin(at: str) -> str {
 # c_ft_says speaks a sentence back in the written spelling: every new name in it becomes the
 # name its file wrote.
 fn c_ft_says(ft: FileTypes, msg: str) -> str {
-	return c_ren_text(TyRen(ft.to, ft.name), msg)
+	mut r := TyRen(ft.to, ft.name)
+	mut i := 0
+	for i < ft.say_to.len() {
+		r.olds.append(ft.say_to[i])
+		r.to.append(ft.say_name[i])
+		i = i + 1
+	}
+	return c_ren_text(r, msg)
 }
 
 # c_ft_written is a type's name as its file wrote it, for text the running program shows.
@@ -25633,7 +25842,7 @@ fn c_ft_unindex(ft: FileTypes, mut &nx: ast.NameIndex) {
 # on every new name — with every finding spoken back in the written spelling.
 fn c_emit_unit(prog0: ast.File, own0: ast.File, ms: Mods, whole: bool, want_lints: bool, checking: bool, want_index: bool, mut &diags: list[ast.Diag], mut &lints: list[ast.Diag], mut &nx: ast.NameIndex) -> str {
 	ft := c_file_types(prog0)
-	return c_emit_unit_as(prog0, own0, ft, ms, whole, want_lints, checking, want_index, diags, lints, nx) if ft.at.len() == 0
+	return c_emit_unit_as(prog0, own0, ft, ms, whole, want_lints, checking, want_index, diags, lints, nx) if ft.at.len() == 0 and ft.say_to.len() == 0
 
 	prog := c_with_file_types(ft, prog0)
 	own := c_with_file_types(ft, own0)
@@ -25682,7 +25891,7 @@ fn c_emit_unit_as(prog0: ast.File, own0: ast.File, ft: FileTypes, ms: Mods, whol
 	# is what makes that invariant hold for a multi-unit program, at the place it already lives,
 	# and it is what lets the declaration passes below go back to reading the WHOLE program.
 	seen := diags.len()
-	mut em := Emitter([], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], false, false, false, false, [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], 0, [], 0, [], [], false, "", "", [], [], ast.Ty.TVoid, 0, "", 0, 0, 0, 0, "", diags, 0, 0, [], [], [], [], [], false, 0, false, "", 0, false, false, [], [], [], [], [], [], [], [], [], [], [], "", want_lints, [], [], [], [], [], [], [], [], [], [], [], [], false, 0, [], [], "", c_nosub(), [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], false, ast.no_index(), [], [], [], [], [], [], [], [], [], [], [], [], false)
+	mut em := Emitter([], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], false, false, false, false, [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], 0, [], 0, [], [], false, "", "", [], [], ast.Ty.TVoid, 0, "", 0, 0, 0, 0, "", diags, 0, 0, [], [], [], [], [], false, 0, false, "", 0, false, false, [], [], [], [], [], [], [], [], [], [], [], "", want_lints, [], [], [], [], [], [], [], [], [], [], [], [], false, 0, [], [], "", c_nosub(), [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], false, ast.no_index(), [], [], [], [], [], [], [], [], [], [], [], [], false, false)
 
 	# ASSIGNED, NOT PASSED. Every argument above is a zero value, and `layering` asserts that
 	# — it lines the call up with the fields by KIND, which only works while nothing in it

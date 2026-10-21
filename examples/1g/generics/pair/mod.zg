@@ -1,0 +1,5 @@
+# Two files of one module, each with a private generic of the same name.
+import (
+	pub "./one"
+	pub "./two"
+)

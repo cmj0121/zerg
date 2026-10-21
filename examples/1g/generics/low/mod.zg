@@ -1,0 +1,12 @@
+pub fn pick[T: Ord](a: T, b: T) -> T {
+	return a if a < b
+	return b
+}
+
+fn helper() -> int {
+	return 100
+}
+
+pub fn mark[T](x: T) -> int {
+	return helper()
+}

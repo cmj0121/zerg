@@ -6,6 +6,7 @@
 #   true
 #   false
 #   2
+#   true
 #
 # THE TWO HALVES ARE NOT IN TENSION, and this file is the demonstration. The IDENTITY decides
 # what a value may MEET — a `Celsius` never meets an `int` without `int(c)` written down — and
@@ -15,6 +16,10 @@
 type Celsius = int
 type Flag = bool
 type Mask = int
+
+# A typedef over a typedef: a Reading is neither a Celsius nor an int, and it computes in the
+# `int` at the root of its chain.
+type Reading = Celsius
 
 # The identity is what makes this signature mean something: nothing but a Celsius reaches it,
 # and no Celsius reaches a function wanting a plain int.
@@ -30,6 +35,7 @@ fn main() {
 	print c < d          # true  — the ordering `int` has, between two Celsius
 	print not Flag(true) # false — and the same for a bool underneath
 	print int(Mask(6) & Mask(3))
+	print Reading(3) + Reading(4) == Reading(7)
 
 	# `c + 1` is refused: the literal is an `int` and an `int` is not a `Celsius`. Write
 	# `c + Celsius(1)`, which is the step a reader of the other line wanted written down.

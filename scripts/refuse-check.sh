@@ -2540,6 +2540,18 @@ fn main() {
 }
 EOF
 
+# A CHAIN IS ASKED OF ITS ROOT (#382): `Tag` names a typedef, not a `str`, and is refused for the
+# `str` at the end of its chain — at its own declaration, which is written above the one it
+# names, so the chain is followed in the source and not in the order types were registered.
+expect "$ZERG" typedef-chain-over-a-str E9042 '`type Tag = Label`' <<'EOF'
+type Tag = Label
+type Label = str
+
+fn main() {
+	print 1
+}
+EOF
+
 # A CHAIN THAT COMES BACK ON ITSELF has no root, and is refused by name at each declaration on it
 # rather than told its type "is not declared". Here and not in reject-check.sh: the seed does
 # not return on this program, so it cannot be the oracle for it.
@@ -2552,31 +2564,30 @@ fn main() {
 }
 EOF
 
-# TWO PRIVATE TEMPLATES IN TWO MODULES are two functions by docs/runtime/package.md — a
-# private name is its file's, and the seed builds this — but templates sit in one table by
-# bare name, so the second is refused: the deviation #380, and the case leaves when it closes.
-# Until then the refusal is E3060 ALONE (#379): each call answered with the other module's
-# instance, so E3001 used to follow it and name that instance, `least$int`, against the call.
-expect_alone "$ZERG" generic-declared-twice-across-modules E3060 <<'EOF'
-import "./lib"
-
-fn least[T: Ord](a: T, b: T) -> T {
-	return a if a < b
-	return b
-}
+# TWO PUBLIC TEMPLATES IN ONE MODULE. A template is its file's (#380), so two files of `pair`
+# may each declare a `least` — but a qualified `pair.least` names the MODULE, and a module offers
+# one public name, not two. It is the collision two plain functions of one module are (E4077),
+# met at the qualified call, and the sentence names `least` as written, not the key a file's
+# template is kept under.
+expect "$ZERG" two-public-generics-of-one-module E4077 '`least`' <<'EOF'
+import "./pair"
 
 fn main() {
-	print least(1, 2)
-	print lib.other()
+	print pair.least(1, 2)
 }
---- lib/mod.zg
-fn least[T: Ord](a: T, b: T) -> T {
+--- pair/mod.zg
+import (
+	pub "./one"
+	pub "./two"
+)
+--- pair/one.zg
+pub fn least[T: Ord](a: T, b: T) -> T {
 	return a if a < b
 	return b
 }
-
-pub fn other() -> int {
-	return least(2, 1)
+--- pair/two.zg
+pub fn least[T: Ord](a: T, b: T) -> T {
+	return b
 }
 EOF
 

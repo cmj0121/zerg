@@ -1,0 +1,69 @@
+# Generic functions of one name in several files.
+#   zerg build examples/1g/generics/main.zg
+# Expected output:
+#   1
+#   a
+#   5
+#   9
+#   b
+#   2
+#   4
+#   5
+#   100
+#   14
+#   mine
+#   42
+#
+# A TEMPLATE IS ITS FILE'S, AS A PLAIN FUNCTION IS (#380). This file, both files of `pair`, and
+# the modules `low` and `high` each declare a generic of one name, and they are five templates:
+# a bare `least(…)` is the template its own file declares, and `low.pick` and `high.pick` name
+# the module out loud, so the qualified call chooses — public or private changes nothing.
+#
+# Every one of them is instantiated at `int`, and each specialization is a C symbol of its own:
+# two files' `least` at `int` are not one function, and they answer differently below.
+#
+# A TEMPLATE'S BODY READS ITS OWN FILE. `low.mark` calls `helper`, and the `helper` it means is
+# `low`'s, whichever file the call to `mark` was written in.
+#
+# AND A PLAIN FUNCTION IS ITS FILE'S TOO. This file's `pick` is not generic while `low`'s and
+# `high`'s are, and a bare `pick(…)` here is this file's. Its `to_string[T]` is the same story
+# told the other way: `strconv.to_string` names the standard library's, not this one.
+import (
+	"strconv"
+
+	"./high"
+	"./low"
+	"./pair"
+)
+
+fn least[T: Ord](a: T, b: T) -> T {
+	return a if a < b
+	return b
+}
+
+fn helper() -> int {
+	return 5
+}
+
+fn pick(a: int, b: int) -> int {
+	return a + b
+}
+
+fn to_string[T](x: T, base: int) -> str {
+	return "mine"
+}
+
+fn main() {
+	print least(1, 2)
+	print least("b", "a")
+	print low.pick(5, 9)
+	print high.pick(5, 9)
+	print high.pick("a", "b")
+	print pair.first()
+	print pair.second()
+	print helper()
+	print low.mark(0)
+	print pick(5, 9)
+	print to_string(7, 10)
+	print strconv.to_string(42, 10)
+}

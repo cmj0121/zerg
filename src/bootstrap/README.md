@@ -579,6 +579,15 @@ byte(N)` and `byte(N * 3)` are compile errors. The seed folds the literal alone:
   `scripts/reject-check.sh`'s `an-impl-target-through-a-module-that-is-not-imported` carries the
   `seed-gap` marker.
 
+- **A `type` CHAIN THAT GOES ROUND A CYCLE IS NOT REFUSED, and a use of it never returns.**
+  `type A = B` beside `type B = A` names no type underneath, and `zerg` reports `E3159` at each
+  declaration on the cycle. The seed builds the pair while nothing names it; once something does
+  — `print A(1)` — it follows the chain without end and the build never finishes.
+
+  It costs the bootstrap nothing: the compiler's own sources declare no `type X = Y` at all, and
+  a program the seed does not return on cannot be the oracle for one. `scripts/refuse-check.sh`'s
+  `typedef-cycle` asks the question of `zerg` alone.
+
 ## Changing the seed
 
 The invariant that makes a change safe to make: **the C emitted for the self-host source

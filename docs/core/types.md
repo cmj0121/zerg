@@ -379,13 +379,18 @@ which _wraps_ a value behind a new field and fresh impls rather than reusing the
 not something you can yet spell yourself with a generic `type`), which is why they are distinct from each other
 and need an explicit `ok_or` / `ok` to cross.
 
-> **[not yet]** The underlying `Y` must be a **scalar**. Anything else is refused by name, with a place:
-> _E9042 NotImplemented: `type Name = str` over a non-scalar — this compiler builds a strong typedef over a
-> scalar, where the new name costs nothing at runtime; a `str`, a container or a struct underneath needs
-> the copy and drop rules to follow the name_. What is missing is exactly that: a name the ownership rules
-> follow, which is a question about `drop` and the copy helper rather than about the type layer. The
-> operator half above **is** built, over every scalar the language has, and so is a `spec` impl written on
-> `X` itself; what `X` does not do is inherit an impl written on `Y`.
+`Y` may itself be a `type X = Y`, to any depth and declared in any order. Over `type Celsius = int`, a
+`type Reading = Celsius` is neither a `Celsius` nor an `int`: it computes in the `int` at the root of its
+chain, and `int(r)` steps out to that root. A chain that goes round a cycle has no root, and each declaration
+on it is _E3159_.
+
+> **[not yet]** The underlying `Y`, or the root of its chain, must be a **scalar**. Anything else is refused by
+> name, with a place: _E9042 NotImplemented: `type Name = str` over a non-scalar — this compiler builds a strong
+> typedef over a scalar, where the new name costs nothing at runtime; a `str`, a container or a struct underneath
+> needs the copy and drop rules to follow the name_. What is missing is exactly that: a name the ownership rules
+> follow, which is a question about `drop` and the copy helper rather than about the type layer. The operator half
+> above **is** built, over every scalar the language has, and so is a `spec` impl written on `X` itself; what `X`
+> does not do is inherit an impl written on `Y`.
 
 ## Construction & encapsulation
 

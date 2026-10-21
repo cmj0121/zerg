@@ -1,0 +1,8 @@
+fn least[T: Ord](a: T, b: T) -> T {
+	return b if a < b
+	return a
+}
+
+pub fn first() -> int {
+	return least(1, 2)
+}

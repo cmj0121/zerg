@@ -1,0 +1,4 @@
+pub fn pick[T: Ord](a: T, b: T) -> T {
+	return b if a < b
+	return a
+}

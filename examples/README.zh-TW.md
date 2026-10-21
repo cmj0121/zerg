@@ -64,6 +64,7 @@ entry 檔，加上它所 import 的模組。
 | [`1g/visible/`](1g/visible)         | 一個 `pub` 表面**確實**能跨過模組邊界抵達什麼                    |
 | [`1g/pubconst/`](1g/pubconst)       | `pub COUNT := 3` 是真正的成員；模組繫結不需要 `const`            |
 | [`1g/pubname/`](1g/pubname)         | 兩個模組可以宣告同一個公開名字；由限定呼叫來選                   |
+| [`1g/generics/`](1g/generics)       | 多個檔案中同名的泛型各屬於自己的檔案；由限定呼叫來選             |
 | [`1g/modconst/`](1g/modconst)       | 模組常數是同一個物件，不管在哪裡讀都一樣                         |
 | [`1g/shapedconst/`](1g/shapedconst) | 有拼出型別的模組常數——tuple、optional                            |
 | [`1g/modtype/`](1g/modtype)         | 透過 import 抵達的型別，同時也是它的建構子                       |

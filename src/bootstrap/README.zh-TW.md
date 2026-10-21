@@ -444,6 +444,13 @@ chan[int]() }`——或任何不是字面值、模組常數，或它們之間算
   永遠不會被 `make oracle` 拿去比對。`scripts/reject-check.sh` 的
   `an-impl-target-through-a-module-that-is-not-imported` 帶著 `seed-gap` 標記。
 
+- **繞成循環的 `type` 鏈不會被拒絕，而用到它的地方永遠不會返回。** `type A = B` 與 `type B = A` 並排，底下沒有
+  任何型別，`zerg` 在循環上的每個宣告回報 `E3159`。沒有東西指名這一對時，種子會把它建起來；一旦有東西指名——
+  `print A(1)`——它就沿著鏈無止境地走下去，建置永遠不會結束。
+
+  這對 bootstrap 不花任何代價：編譯器自己的原始碼根本沒有宣告任何 `type X = Y`，而一個種子不會返回的程式也不能
+  當它的 oracle。`scripts/refuse-check.sh` 的 `typedef-cycle` 只拿這個問題問 `zerg`。
+
 ## 修改種子時
 
 讓一項改動可以放心進行的不變量：**自舉原始碼所產生的 C 不得變動**。若那是真正的死碼移除，前後產生的 C 會逐位元組

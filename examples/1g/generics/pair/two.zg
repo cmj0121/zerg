@@ -1,0 +1,7 @@
+fn least[T](a: T, b: T) -> T {
+	return b
+}
+
+pub fn second() -> int {
+	return least(3, 4)
+}

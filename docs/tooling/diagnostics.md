@@ -256,8 +256,8 @@ shipping compiler rather than a part of it (the line
 | `E3057` | `….…()` renders the value as text, so it takes no arguments beyond the value                          |
 | `E3058` | `….…()` renders the value as text, so it is a plain `fn` and not a `mut fn`                           |
 | `E3059` | `….…()` answers the `str` the value shows as                                                          |
-| `E3060` | `…` is declared twice, once as a generic                                                              |
-| `E3061` | `…` is declared both as a generic and as a plain function                                             |
+| `E3060` | `…` is declared twice in this file, once as a generic                                                 |
+| `E3061` | `…` is declared in this file both as a generic and as a plain function                                |
 | `E3062` | `This` is the self type, and … is outside an `impl`                                                   |
 | `E3063` | `…` declares a parameter named `…` twice                                                              |
 | `E3064` | `…(…)` converts ONE value                                                                             |
@@ -355,6 +355,7 @@ shipping compiler rather than a part of it (the line
 | `E3156` | a generic enum's variant written where nothing says which specialization                              |
 | `E3157` | a generic method called on a boxed value                                                              |
 | `E3158` | a type position qualifies a type this file also declares as its own private one                       |
+| `E3159` | a `type` declaration whose chain of `type` declarations goes round a cycle                            |
 | `E4001` | `…` outside of a loop: it belongs to a `for`, and a `select` arm is not one                           |
 | `E4002` | a `from` cause is an `Err`, and … is not one                                                          |
 | `E4004` | `…(…)` names one side of an `Either`, which holds exactly one value                                   |

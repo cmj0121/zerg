@@ -922,7 +922,7 @@ EOF
 #
 # The seed refuses both of these by not parsing a module-level group at all, which is its
 # own contract (src/bootstrap/README.md) and not a gap in this rule.
-reject unsafe-group-fn-called-from-safe E3083 'this call is in safe code' <<'EOF'
+reject unsafe-group-fn-called-from-safe E3083 'only from unsafe — calling it from safe code is what the group is there to prevent' <<'EOF'
 unsafe {
 	fn poke() -> int {
 		return 7
@@ -2554,6 +2554,21 @@ type Celsius = float
 
 fn main() {
 	print(f"{int(Celsius(1))}")
+}
+EOF
+
+# a typedef over a typedef is a type of its own (#382): it computes in the `int` at its root,
+# and still meets neither the typedef it names nor that `int`
+reject typedef-over-a-typedef-is-its-own-type E3038 'is Age, and this gives Old' <<'EOF'
+type Age = int
+type Old = Age
+
+fn take(a: Age) -> Age {
+	return a
+}
+
+fn main() {
+	print(f"{int(take(Old(3)))}")
 }
 EOF
 
@@ -4575,7 +4590,64 @@ pub fn other() -> int {
 }
 EOF
 
-reject a-sibling-generic-named-bare E3114 '`least` is declared in' seed-gap <<'EOF'
+# AND WHEN A SECOND FILE DECLARES ONE TOO. Each template is its file's (#380) and is kept under
+# a key of its file's, so the instance the rule reads is that key's — and the sentence still
+# names `least`, as written, never the key nor a mangled instance.
+reject a-module-private-generic-beside-own E3001 '`least` is not a public member of' <<'EOF'
+import "./lib"
+
+fn least[T: Ord](a: T, b: T) -> T {
+	return a if a < b
+	return b
+}
+
+fn main() {
+	print least(1, 2)
+	print lib.least((1, "a"), (2, "b"))
+}
+--- lib/mod.zg
+fn least[T: Ord](a: T, b: T) -> T {
+	return a if a < b
+	return b
+}
+
+pub fn other() -> int {
+	return least(2, 1)
+}
+EOF
+
+# AND A BARE CALL TO A NAME TWO OTHER MODULES DECLARE AS A GENERIC. Neither template is this
+# file's, so the call meets the rule a bare call to another file's private name meets — the
+# same E3001 one declaring module gets — and not an undefined name.
+reject a-generic-two-modules-declare-called-bare E3001 '`least` is not a public member of' <<'EOF'
+import "./a"
+import "./b"
+
+fn main() {
+	print least(1, 2)
+	print a.x()
+	print b.x()
+}
+--- a/mod.zg
+fn least[T: Ord](p: T, q: T) -> T {
+	return p if p < q
+	return q
+}
+
+pub fn x() -> int {
+	return least(1, 2)
+}
+--- b/mod.zg
+fn least[T: Ord](p: T, q: T) -> T {
+	return q
+}
+
+pub fn x() -> int {
+	return least(1, 2)
+}
+EOF
+
+reject a-sibling-generic-named-bare E3114 '`least` is declared in' seed-gap one-finding <<'EOF'
 import "./pair"
 
 fn main() {
@@ -4593,6 +4665,79 @@ pub fn both() -> int {
 --- pair/mod.zg
 import pub "./one"
 import pub "./two"
+EOF
+
+# A SIBLING'S PRIVATE NAME CALLED BARE IS E3001 ALONE (#384). E3114's fix — spell it
+# `one.least` — cannot work for a name its file never exported, so the privacy rule speaks and
+# the spelling rule stays quiet; the PUBLIC name above keeps E3114 alone. Plain and generic
+# are two cases because they reach the rule through different rows: a function's own, and an
+# instance's that carries its template's file and `pub`.
+reject a-sibling-private-fn-named-bare E3001 '`least` is not a public member of' seed-gap one-finding <<'EOF'
+import "./pair"
+
+fn main() {
+	print pair.both()
+}
+--- pair/one.zg
+fn least(a: int, b: int) -> int {
+	return a if a < b
+	return b
+}
+--- pair/two.zg
+pub fn both() -> int {
+	return least(2, 1)
+}
+--- pair/mod.zg
+import pub "./one"
+import pub "./two"
+EOF
+
+reject a-sibling-private-generic-named-bare E3001 '`least` is not a public member of' seed-gap one-finding <<'EOF'
+import "./pair"
+
+fn main() {
+	print pair.both()
+}
+--- pair/one.zg
+fn least[T: Ord](a: T, b: T) -> T {
+	return a if a < b
+	return b
+}
+--- pair/two.zg
+pub fn both() -> int {
+	return least(2, 1)
+}
+--- pair/mod.zg
+import pub "./one"
+import pub "./two"
+EOF
+
+# AND WHEN TWO SIBLINGS DECLARE IT. Neither template is the caller's, so the call falls back
+# to the first declaring file's (#380), and that route meets the same one rule.
+reject two-sibling-private-generics-named-bare E3001 '`least` is not a public member of' one-finding <<'EOF'
+import "./pair"
+
+fn main() {
+	print pair.both()
+}
+--- pair/one.zg
+fn least[T: Ord](a: T, b: T) -> T {
+	return a if a < b
+	return b
+}
+--- pair/three.zg
+fn least[T: Ord](a: T, b: T) -> T {
+	return b if a < b
+	return a
+}
+--- pair/two.zg
+pub fn both() -> int {
+	return least(2, 1)
+}
+--- pair/mod.zg
+import pub "./one"
+import pub "./two"
+import pub "./three"
 EOF
 
 reject an-unsafe-group-generic-called-from-safe E3083 '`poke` is declared inside a module-level' <<'EOF'
@@ -7088,7 +7233,7 @@ EOF
 # The two files here are one module (one directory, and `zerg build` compiles them together),
 # so this is not a visibility question and not an unknown name: the declaration is found, and
 # the SPELLING is what is refused. That is why the sentence can carry the fix.
-reject bare-name-from-a-sibling-file E3114 'and a file names what it uses' seed-gap <<'EOF'
+reject bare-name-from-a-sibling-file E3114 'and a file names what it uses' seed-gap one-finding <<'EOF'
 import "./pair"
 
 fn main() {
@@ -7112,7 +7257,7 @@ EOF
 # separate PARSE — the qualifier a type position wrote is dropped by `parse_base_type`, so the
 # fact that none was written is recorded on the side (File.ty_quals with an empty `ns`) or the
 # rule would have nothing to read.
-reject bare-type-from-a-sibling-file E3115 'and a file names what it uses' seed-gap <<'EOF'
+reject bare-type-from-a-sibling-file E3115 'and a file names what it uses' seed-gap one-finding <<'EOF'
 import "./pair"
 
 fn main() {
@@ -7125,6 +7270,31 @@ pub fn both() -> Box {
 --- pair/two.zg
 pub struct Box {
 	pub x: int
+}
+--- pair/mod.zg
+import pub "./one"
+import pub "./two"
+EOF
+
+# A SIBLING'S PRIVATE TYPE WRITTEN BARE IS E5008 ALONE (#384), the type twin of the call
+# case: E3115's fix would only meet E5008 again.
+reject a-sibling-private-type-named-bare E5008 '`Box` is not a public type of' seed-gap one-finding <<'EOF'
+import "./pair"
+
+fn main() {
+	print pair.both()
+}
+--- pair/one.zg
+struct Box {
+	pub x: int
+}
+--- pair/two.zg
+fn take(b: Box) -> int {
+	return b.x
+}
+
+pub fn both() -> int {
+	return 2
 }
 --- pair/mod.zg
 import pub "./one"
@@ -7424,7 +7594,11 @@ fn main() {
 }
 EOF
 
-reject unsafe-group-fn-spawned E3083 'this `spawn` is in safe code' <<'EOF'
+# THE SENTENCE SAYS WHICH WAY IN, AND SAYS "SAFE CODE" ONCE (#383). A caller hands the rule the
+# phrase its clause opens with; a whole clause handed in read "this call is in safe code it from
+# safe code". A `spawn` and a `defer` reach the callee down a resolver of their own, so each
+# pins its own phrase.
+reject unsafe-group-fn-spawned E3083 'only from unsafe — calling it through a `spawn` from safe code is what' <<'EOF'
 unsafe {
 	fn poke() {
 		print 7
@@ -7433,6 +7607,19 @@ unsafe {
 
 fn main() {
 	spawn poke()
+	print 1
+}
+EOF
+
+reject unsafe-group-fn-deferred E3083 'only from unsafe — calling it through a `defer` from safe code is what' <<'EOF'
+unsafe {
+	fn poke() {
+		print 7
+	}
+}
+
+fn main() {
+	defer poke()
 	print 1
 }
 EOF

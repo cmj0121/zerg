@@ -45,9 +45,10 @@ visibility and the symbol emitted are the NAMESPACE's. Every call site used to a
 which is right for a private name — a bare call always means the caller's own — and is the reason a
 public collision could not be told apart.
 
-Two declarations under ONE directory are a different rule and are still refused: they are ONE module
-however many files they are spread over, and no tag separates them — _E4077 `a.zg` and `b.zg` both define
-`work`_. That question is asked FIRST.
+Two declarations under ONE directory are a different rule: they are ONE module however many files they are
+spread over, and no module tag separates them. Two private ones are told apart by their FILES, below; two
+`pub` ones are one public name offered twice, which a qualified call could not choose between, and are
+refused — _E4077 `a.zg` and `b.zg` both define `work`_. That question is asked FIRST.
 
 > Nothing can name a `pub` symbol from C today, which is what made the tag free to apply: [FFI](ffi.md)
 > marks the whole export edge unbuilt, `--emit lib` writes objects and no header, and nothing reports which
@@ -188,9 +189,9 @@ too, which is the narrower thing the flattened namespace can see on its own.
 
 ### Modules
 
-A **module is a directory**; the files inside it are physical slices that share one namespace — the
-number of files is layout, not meaning. A module is the default privacy unit: a plain declaration is
-visible across the module's files but not outside it (see Visibility).
+A **module is a directory**; the files inside it are the slices it is compiled from. Each file is its own
+namespace and privacy unit (see Four layers): a file reaches a sibling's `pub` names by importing that
+file, and a sibling's private names not at all (see Visibility).
 
 An import path is a **prefix** and a **package path** (`GRAMMAR#import-path`,
 [`GRAMMAR#package-path`](../../GRAMMAR)). The package path is a directory path made of package
@@ -237,13 +238,13 @@ once.
 
 A file that imports **its own module** is not a cycle at all, and is its own refusal: _E5015 `./greet`
 is the module this file is already part of_. There is a perfectly good order for it; the import is
-simply meaningless, because a module's files share one namespace and the names are in scope already.
+simply meaningless, because a file is already part of its module and reaches a sibling by importing that file.
 The advice a cycle carries — put the mutually recursive declarations in one module — is what the author
 of that import already did.
 
 So mutually recursive types and functions live in **one module** — which costs nothing, since a
-module is a directory of many files sharing a namespace: an `ast` module can spread `Expr` and `Stmt`
-across separate files that reference each other with no import, and the compiler forward-declares while
+module is a directory of many files that may import each other mutually: an `ast` module can spread `Expr`
+and `Stmt` across separate files that each import the other, and the compiler forward-declares while
 auto-boxing gives the recursion a finite layout, exactly as for a self-referential type. When two types
 in genuinely separate concerns refer to each other, the ban is a nudge to break the cycle by
 reference-by-id — usually the better design — rather than to merge them (the package graph is a DAG for
@@ -269,8 +270,8 @@ Every declaration starts **module-private**. `pub` is the one visibility marker,
 one thing — **visible to the rest of this package** — never, on its own, to the world. So there are
 three scopes but a single keyword:
 
-- **module-private** (the default) — visible only inside the defining module (across its files, which
-  draw no boundary).
+- **module-private** (the default) — visible only inside the declaring FILE, the unit of privacy (see Four
+  layers), and to its module's tests: a sibling file reaches it no more than another module does.
 - **package-internal** — a `pub` declaration; the other modules of the same package may name it.
 - **package-public** — not a marker but a **position**: a package's external API is exactly the `pub`
   surface of its **root module** (the top directory of the package's module tree). A declaration reaches
@@ -301,20 +302,40 @@ with a fix available: the module that wrote `pub` decided to hand the type out a
 can mark the type `pub` or stop returning it, where a dependent reading a private field can do neither.
 
 A public name is not the collision either: two modules that each declare `pub fn pick` are reached as `a.pick`
-and `b.pick`, which build and answer their own. What still collides is a plain function two FILES of one module
-both declare, private or `pub` — that is _E4077_, the one-directory rule above, and it is about the module, not
-the visibility.
+and `b.pick`, which build and answer their own. Module constants are per module the same way: two modules that
+each declare a private `const LIMIT` read their own.
 
-A private type is not under that rule. Two files that each declare a struct, enum or `type` of one name without
+Nor is a private name two FILES of one module declare. A private plain function and a private module constant
+are their declaring file's, as a private generic, struct, enum and `type` are: two files that each declare a
+private `helper` or `const LIMIT` declare two, and each file's bare `helper(…)` or `LIMIT` reaches its own. A
+`pub` one beside a private one of the name builds too, and `m.helper` from outside is the `pub` one
+(`examples/1g/filefns`, `examples/1g/fileconsts`). What collides is two `pub` ones of one name in one module —
+_E4077_, the one-directory rule above.
+
+A third file of that module writing the name bare reaches neither, since a sibling's name arrives only through
+an import. Where a declaring file keeps it `pub`, the finding names that file and says how to import it —
+_E3114_ for a function, _E3116_ for a constant. Where every declaring file keeps it private, that advice could
+not work, and the finding is _E3001_ naming the first declaring file in sorted order, sorted so that it is the
+same file on every run.
+
+A bare name that two IMPORTED modules both declare is refused rather than picked: _E3114 `helper` is declared
+in `x.zg` and `y.zg`, and a bare name cannot choose between them_ names both spellings, `x.helper` and
+`y.helper`, and _E3116_ says the same of a constant.
+
+A private type is under the same rule. Two files that each declare a struct, enum or `type` of one name without
 `pub` declare two types, and each file's constructions, field reads, patterns and methods reach its own. What
 is refused is a file that declares its own `P` and also writes another module's `sink.P` in a type position:
 a type position drops its qualifier, so the two would be spelled alike, and that is _E3158_.
 
-Nor is a private GENERIC function. A template is its file's: two files that each declare a private
+So is a private GENERIC function. A template is its file's: two files that each declare a private
 `fn least[T]` declare two templates, whether they are two modules or two files of one, a bare `least(…)` is
 its own file's, and each instance is a C symbol of its own (`examples/1g/generics`). Two modules' public
 generics of one name are reached through their qualifier, as two plain functions are. Two `pub` ones in ONE
 module are one public name twice, and a qualified call to it is _E4077_.
+
+The exception is a private METHOD of a `pub` type: another module can call it today. That is the compiler's
+gap rather than the language's rule, and `zerg lint` judges such a method by the whole program for that reason
+([lint](../tooling/lint.md)).
 
 What the rule compares is the **import path a module was reached by** — the loader's answer, recorded
 where the module was resolved and read back by name. It is not computed from where a file sits: `./a`
@@ -344,7 +365,8 @@ package gives you its public surface only, never the packages it imports in turn
 imports. Every name is either declared, imported, or a toolchain **built-in** — the primitive keywords
 and the prelude (see The prelude & std). What you import depends on the distance:
 
-- **Same module** (same directory) — nothing to import; a module's files share one namespace.
+- **Same module** (same directory) — import the sibling FILE (`import "./a"`, then `a.helper()`); only its
+  `pub` names arrive, and two files of one module may import each other.
 - **Another module of the same package** — import that sibling module, then name its package-internal
   (`pub`) declarations. A named function among them is a **first-class value**, not only a call target:
   `f := other.helper` binds it, `f(x)` calls it (see [Functions & Closures](../code/functions.md)).
@@ -662,7 +684,6 @@ language itself stays **target-agnostic**, ascribing no meaning to the name. The
 matching scheme is a build-tool detail, **deferred**.
 
 > **[not yet]** No suffix is recognized. Every `.zg` file in a module directory is compiled into the
-> build, so a module holding `plat_linux.zg` and `plat_darwin.zg` is two declarations of one name and is
-> refused as a collision, _E4073 `plat` is declared twice in this file_ or _E4077 both define `plat`_
-> depending on how they are spread — which is a clearer failure than picking the wrong one, and is still
-> not the feature.
+> build. A module whose `plat_linux.zg` and `plat_darwin.zg` each declare a `pub fn plat` is refused as a
+> collision, _E4077 both define `plat`_ — a clearer failure than picking the wrong one. Two private ones
+> build, each file's own, and nothing chooses one for the target; that is still not the feature.

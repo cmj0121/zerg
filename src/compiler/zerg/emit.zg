@@ -794,6 +794,16 @@ pub struct Emitter {
 	# name another file declares too. It is what lets c_generic_row skip the second scan, which reads
 	# a declaration's path, in every program that has no such pair.
 	pub gen_filed: bool
+
+	# fk_names / fk_mods are every free function name two or more FILES of one module declare,
+	# with that module, row for row. Each of those declarations is its file's (c_fn_keyed_file):
+	# a bare call means the reader's own, and each is a C symbol of its own (c_fn_cname_in).
+	pub fk_names: list[str]
+	pub fk_mods: list[str]
+
+	# ns_path is the path each import WROTE, row for row with ns_names, which is what names the
+	# FILE a sibling's namespace means when the module alone cannot (c_ns_scope).
+	pub ns_path: list[str]
 }
 
 # Subst is an active set of identifier substitutions: an EIdent whose name appears in
@@ -3180,17 +3190,86 @@ pub fn c_sig_key(recv: str, name: str) -> str {
 # `zg_<name>` space with every module of the program; a method is `zg_<Type>_<name>`, off
 # that space and unable to collide with it, since a type name is PascalCase and so cannot
 # be confused with the snake_case free functions it sits beside.
-# c_fn_cname_in is a free function's C name AS SEEN FROM a module. It differs from
-# c_fn_cname for one case: a private name two modules both declare, which needs two symbols.
-# Everything else keeps `zg_<name>`, so the change costs nothing anywhere it is not needed.
+# c_fn_cname_in is a free function's C name AS SEEN FROM `scope` — the file that declares it or
+# the reader's file, or the module a qualified call named. It differs from c_fn_cname for two
+# cases: a name two FILES of one module declare (c_fn_keyed_file), and a private name two
+# modules both declare. Each needs a symbol per declaration. Everything else keeps
+# `zg_<name>`, so the change costs nothing anywhere it is not needed.
 #
-# The tag is the module's position in a SORTED list of the program's modules. Sorted rather
-# than first-seen because `fixpoint` compares emitted C byte for byte, and a tag that
+# The module tag is the module's position in a SORTED list of the program's modules, and a
+# file's is its place among the files keying the name, sorted too (c_fn_key_index). Sorted
+# rather than first-seen because `fixpoint` compares emitted C byte for byte, and a tag that
 # depended on the order files were read would move the output without the program changing.
-fn c_fn_cname_in(mut &em: Emitter, mod: str, recv: str, name: str) -> str {
-	return c_fn_cname(recv, name) if recv != "" or mod == "" or not c_name_in(em.mod_tagged, name)
+fn c_fn_cname_in(mut &em: Emitter, scope: str, recv: str, name: str) -> str {
+	return c_fn_cname(recv, name) if recv != "" or scope == ""
+
+	kf := c_fn_keyed_file(em, scope, name)
+
+	return c_file_cname(f"{name}'fn{strconv.to_string(c_fn_key_index(em, name, kf), 10)}") if kf != ""
+	return c_fn_cname(recv, name) if not c_name_in(em.mod_tagged, name)
+
+	mod := check.c_mod_of(em, scope)
+	return c_fn_cname(recv, name) if mod == ""
 
 	return f"zg_m{strconv.to_string(c_mod_tag(em, mod), 10)}_{name}"
+}
+
+# c_fn_keyed_file is the FILE whose declaration of the free function `name` a reader in `scope`
+# means, when two or more files of that scope's module declare it — and "" when they do not,
+# which is every name in nearly every program. `scope` is a file or a module.
+#
+# A FILE THAT DECLARES IT MEANS ITS OWN: a bare `helper()` in `one.zg` is `one.zg`'s, whatever
+# its siblings declare (#386). Otherwise the module's `pub` one answers — the one a qualified
+# call from outside can reach — and with none, the first of the declaring files SORTED, which is
+# the generics' rule (c_generic_row) and deterministic across runs. A bare call reaching either
+# from a file that declares none is refused by the rules that read its row (E3114, E3001).
+fn c_fn_keyed_file(mut &em: Emitter, scope: str, name: str) -> str {
+	return "" if not c_name_in(em.fk_names, name)
+
+	mod := check.c_mod_of(em, scope)
+	return "" if not c_fn_keyed_in(em, name, mod)
+
+	mut pubp := ""
+	mut paths: list[str] = []
+	mut j := 0
+	for j < em.sig_names.len() {
+		if em.sig_names[j] == name and em.sig_mod[j] == mod {
+			return scope if em.sig_path[j] == scope
+
+			if em.sig_pub[j] and pubp == "" {
+				pubp = em.sig_path[j]
+			}
+			paths.append(em.sig_path[j])
+		}
+		j = j + 1
+	}
+	return pubp if pubp != ""
+
+	return c_sorted_names(paths)[0]
+}
+
+# c_fn_keyed_in is whether files of module `mod` key the name — the pair fk_names / fk_mods holds.
+fn c_fn_keyed_in(mut &em: Emitter, name: str, mod: str) -> bool {
+	mut i := 0
+	for i < em.fk_names.len() {
+		return true if em.fk_names[i] == name and em.fk_mods[i] == mod
+		i = i + 1
+	}
+	return false
+}
+
+# c_fn_key_index is a keyed file's place among EVERY file keying `name`, sorted — one list for
+# the whole program, so two modules' keyed files never share a symbol.
+fn c_fn_key_index(mut &em: Emitter, name: str, file: str) -> int {
+	mut paths: list[str] = []
+	mut j := 0
+	for j < em.sig_names.len() {
+		if em.sig_names[j] == name and not c_name_in(paths, em.sig_path[j]) and c_fn_keyed_in(em, name, em.sig_mod[j]) {
+			paths.append(em.sig_path[j])
+		}
+		j = j + 1
+	}
+	return c_name_index(c_sorted_names(paths), file)
 }
 
 # c_mod_tag answers a module's position among the program's modules, in sorted order. The
@@ -4572,7 +4651,7 @@ fn c_ref_drop_thunk(mut &em: Emitter, el: ast.Ty, callee: str) -> str {
 
 	em.refnew_done.append(nm)
 	ct := c_type(el)
-	cn := c_fn_cname_in(em, check.c_mod_of(em, em.at_path), "", callee)
+	cn := c_fn_cname_in(em, em.at_path, "", callee)
 
 	# INTO THE DEFER STREAM and not the on-demand one: this thunk CALLS A PROGRAM FUNCTION, and
 	# `res_decls` is emitted ahead of the prototypes. cc reported `zg_closed` undeclared against
@@ -4976,9 +5055,9 @@ fn c_first_with_key(f: ast.File, key: str, fallback: ast.FnDecl) -> ast.FnDecl {
 # WRITTEN, because that is the only thing that separates them:
 #
 #   one FILE declaring it twice        permanently ill-formed, whatever this compiler grows
-#   two files of one directory         one flat namespace, so no tag can separate them
-#   two directories, one `pub`         no package for a public name to be unique within
-#   two directories, both private      answerable, and recorded here for a module tag
+#   two files of one directory         each file's own, keyed by its file (fk_names) — unless
+#                                      both are `pub`, which no qualified call can choose between
+#   two directories                    answerable, and recorded here for a module tag
 #
 # THE FIRST IS NOT THE SECOND, and reporting it as one sent a reader looking for a module that
 # is not there: two `#[test]` functions of one name in one `*_test.zg` were refused with "two
@@ -4993,14 +5072,33 @@ fn c_mod_collide(mut &em: Emitter, fn_i: ast.FnDecl, prev: ast.FnDecl) {
 	# sees, and it would be the wrong one.
 	return if prev.path == fn_i.path
 
-	# TWO FILES OF ONE DIRECTORY ARE ONE MODULE, however many they are and whatever their
-	# visibility, and no tag can separate them — a tag is the MODULE's position, and they share
-	# it. This question was asked after the `pub` one, which made that refusal a lie about half
-	# the programs it met: two public files of one directory were told "two modules both define
-	# `helper`", sending a reader to look for a second module that is not there (#87). What
-	# stood below it has since retired — a public name in two DIFFERENT modules is two symbols
-	# now, by the tag (#92) — so this is the only collision left that no lowering can answer.
-	raise c_mod_flat_collide(fn_i.path, fn_i.line, fn_i.col, fn_i.name, prev.path) if check.c_mod_of(em, fn_i.path) == check.c_mod_of(em, prev.path)
+	# TWO DECLARATIONS NO MODULE OWNS — compiler-written trees — have nothing to be told apart by.
+	mod := check.c_mod_of(em, fn_i.path)
+	raise c_mod_flat_collide(fn_i.path, fn_i.line, fn_i.col, fn_i.name, prev.path) if mod == "" and check.c_mod_of(em, prev.path) == ""
+
+	# EACH FILE'S OWN, then, as a private generic, struct, enum or `type` already is (#386): a
+	# bare call means the reader's file's (c_fn_keyed_file), and each is a symbol of its own.
+	# What stays refused is TWO PUBLIC ONES IN ONE MODULE, which a qualified call from outside
+	# has no way to choose between. Every earlier row is asked, not only `prev`: the first
+	# declaration may be another module's, or the private half of this module's pair.
+	mut other_mod := false
+	mut j := 0
+	for j < em.sig_names.len() {
+		if em.sig_names[j] == fn_i.name and em.sig_path[j] != fn_i.path {
+			if em.sig_mod[j] != mod {
+				other_mod = true
+			} else {
+				raise c_mod_flat_collide(fn_i.path, fn_i.line, fn_i.col, fn_i.name, em.sig_path[j]) if fn_i.is_pub and em.sig_pub[j]
+
+				if not c_fn_keyed_in(em, fn_i.name, mod) {
+					em.fk_names.append(fn_i.name)
+					em.fk_mods.append(mod)
+				}
+			}
+		}
+		j = j + 1
+	}
+	return if not other_mod
 
 	# A PUBLIC NAME GETS THE TAG A PRIVATE ONE ALREADY GETS (#92). The refusal that stood here
 	# said a public name has no package to be unique within — true of a package REGISTRY, which
@@ -5086,8 +5184,14 @@ fn c_required_params(fn_d: ast.FnDecl) -> int {
 # or c_sig_row's answer when that module declares none. A namespaced call is the one shape where
 # the reader has said which module they mean, so the row it reads — the visibility, the arity,
 # the parameter types — has to be that module's and not the caller's (#92).
+#
+# `mod` MAY BE A FILE where files of one module key the name (c_ns_scope), and the row is then
+# the one c_fn_keyed_file picks: that file's, else the module's `pub` one.
 pub fn c_sig_row_in(mut &em: Emitter, mod: str, key: str) -> int {
 	if mod != "" {
+		kf := c_fn_keyed_file(em, mod, key)
+		return c_sig_row_at(em, key, kf) if kf != ""
+
 		mut j := 0
 		for j < em.sig_names.len() {
 			return j if em.sig_names[j] == key and em.sig_mod[j] == mod
@@ -5095,6 +5199,16 @@ pub fn c_sig_row_in(mut &em: Emitter, mod: str, key: str) -> int {
 		}
 	}
 	return c_sig_row(em, key)
+}
+
+# c_sig_row_at is the row of `key` declared in FILE `path`, or -1.
+fn c_sig_row_at(mut &em: Emitter, key: str, path: str) -> int {
+	mut j := 0
+	for j < em.sig_names.len() {
+		return j if em.sig_names[j] == key and em.sig_path[j] == path
+		j = j + 1
+	}
+	return -1
 }
 
 # c_key_in is the key of a call that NAMES the module it means — `bb.g(1)` — and c_key_name and
@@ -5131,6 +5245,10 @@ pub fn c_sig_row(mut &em: Emitter, key: str) -> int {
 	mod := c_key_mod(key)
 	return c_sig_row_in(em, mod, c_key_name(key)) if mod != ""
 
+	# THE READER'S OWN FILE FIRST, where files of its module key the name (#386).
+	kf := c_fn_keyed_file(em, em.at_path, key)
+	return c_sig_row_at(em, key, kf) if kf != ""
+
 	# THE READER'S OWN MODULE FIRST, where two of them declare the name. A private name two
 	# modules both have is two rows, and the first is whichever file was read first — so
 	# every rule that reads a row by name alone would answer about the other module's
@@ -5160,25 +5278,36 @@ pub fn c_param_row(mut &em: Emitter, fname: str, idx: int) -> int {
 	# `helper(n: int)` was refused as _argument 1 of `helper` is str_, naming a declaration the
 	# reader cannot see. And the module the CALL named before either, for c_sig_row's reason.
 	mod := c_key_mod(fname)
-	return c_param_row_in(em, c_key_name(fname), idx, mod) if mod != ""
+	if em.fk_names.len() != 0 {
+		name := c_key_name(fname)
+		mut scope := mod
+		if scope == "" {
+			scope = em.at_path
+		}
+
+		# THE FILE c_sig_row reads, for its reason, where files of one module key the name
+		kf := c_fn_keyed_file(em, scope, name)
+		return c_param_row_in(em, name, idx, "", kf) if kf != ""
+	}
+	return c_param_row_in(em, c_key_name(fname), idx, mod, "") if mod != ""
 
 	here := check.c_mod_of(em, em.at_path)
 	if here != "" {
-		r := c_param_row_in(em, fname, idx, here)
+		r := c_param_row_in(em, fname, idx, here, "")
 		return r if r >= 0
 	}
 
-	return c_param_row_in(em, fname, idx, "")
+	return c_param_row_in(em, fname, idx, "", "")
 }
 
-# c_param_row_in is that scan with the module fixed, or over every row when it is "". The
-# BLOCK structure is what both need: c_build_sigs appends a function's parameters contiguously
-# in index order, so a row is found by walking to the block and then within it.
-fn c_param_row_in(mut &em: Emitter, fname: str, idx: int, mod: str) -> int {
+# c_param_row_in is that scan with the module — or the FILE — fixed, or over every row when both
+# are "". The BLOCK structure is what all need: c_build_sigs appends a function's parameters
+# contiguously in index order, so a row is found by walking to the block and then within it.
+fn c_param_row_in(mut &em: Emitter, fname: str, idx: int, mod: str, path: str) -> int {
 	mut i := 0
 	mut seen := false
 	for i < em.pr_fn.len() {
-		if em.pr_fn[i] == fname and (mod == "" or em.pr_mod[i] == mod) {
+		if em.pr_fn[i] == fname and (mod == "" or em.pr_mod[i] == mod) and (path == "" or em.pr_path[i] == path) {
 			return i if em.pr_idx[i] == idx
 			seen = true
 		} else if seen {
@@ -7981,6 +8110,7 @@ fn c_build_namespaces(mut &em: Emitter, f: ast.File) {
 			}
 			em.ns_at.append(here)
 			em.ns_mods.append(c_imp_canon(em, im.at, im.path))
+			em.ns_path.append(im.path)
 			em.ns_pub.append(im.is_pub)
 		}
 	}
@@ -8055,6 +8185,35 @@ pub fn c_ns_mod_of(mut &em: Emitter, n: str) -> str {
 		i = i + 1
 	}
 	return ""
+}
+
+# c_ns_scope is what a qualified `n.name` names for a FREE FUNCTION: the module, or — where files
+# of the reader's own module key the name and `n` is a SIBLING's import — that sibling's FILE.
+# The module alone would answer its `pub` one (c_fn_keyed_file), and `two.helper` would then
+# call `one.zg`'s public `helper` rather than meet `two.zg`'s private one.
+fn c_ns_scope(mut &em: Emitter, n: str, name: str) -> str {
+	mod := c_ns_mod_of(em, n)
+	return mod if mod == "" or not c_name_in(em.fk_names, name)
+
+	here := em.at_path
+	return mod if mod != check.c_mod_of(em, here)
+
+	mut want := ""
+	mut i := 0
+	for i < em.ns_names.len() {
+		if em.ns_names[i] == n and em.ns_at[i] == here {
+			want = ast.mod_name(em.ns_path[i])
+		}
+		i = i + 1
+	}
+	i = 0
+	for i < em.unit_paths.len() {
+		p := em.unit_paths[i]
+		return p if em.unit_mods[i] == mod and ast.mod_name(check.chk_drop_zg(p)) == want
+
+		i = i + 1
+	}
+	return mod
 }
 
 pub fn c_ns_names_mod(mut &em: Emitter, n: str, decl_mod: str) -> bool {
@@ -12648,7 +12807,7 @@ fn c_free_method(mut &em: Emitter, target: ast.Expr, meth: str, args: list[ast.E
 		# caller's own — and wrong for this one, the only shape where the reader named someone
 		# else's module out loud. A public name two modules declare is two symbols, and this is
 		# where the right one is chosen (#92).
-		callee_mod := c_ns_mod_of(em, tn)
+		callee_mod := c_ns_scope(em, tn, meth)
 		callee := c_sig_row_in(em, callee_mod, c_sig_key("", meth))
 		if em.want_index {
 			c_nx_use(em, l, c, meth, c_nx_sig(em, callee))
@@ -13211,9 +13370,9 @@ fn c_call(mut &em: Emitter, name: str, args: list[ast.Expr], l: int, c: int, sb:
 	c_chk_unsafe_fn(em, name, "calling it", sr)
 
 	rels := c_owned_args(em, name, 0, args)
-	return c_call_releasing(em, c_fn_cname_in(em, check.c_mod_of(em, em.at_path), "", name), name, args, rels, sb) if c_any_owned(rels)
+	return c_call_releasing(em, c_fn_cname_in(em, em.at_path, "", name), name, args, rels, sb) if c_any_owned(rels)
 
-	return f"{c_fn_cname_in(em, check.c_mod_of(em, em.at_path), "", name)}({c_call_args(em, name, args, sb)})"
+	return f"{c_fn_cname_in(em, em.at_path, "", name)}({c_call_args(em, name, args, sb)})"
 }
 
 # c_sig_row_of is a free function's signature row, or -1 when nothing registered one. It is
@@ -14063,9 +14222,10 @@ fn c_param_named(mut &em: Emitter, key: str, nm: str) -> int {
 }
 
 # c_param_same_fn is whether two parameter rows belong to one declaration: the same key in the
-# same module, since a key alone is shared by every module that declares the name.
+# same FILE, since a key alone is shared by every module — and every file of one module — that
+# declares the name.
 fn c_param_same_fn(mut &em: Emitter, a: int, b: int) -> bool {
-	return em.pr_fn[a] == em.pr_fn[b] and em.pr_mod[a] == em.pr_mod[b]
+	return em.pr_fn[a] == em.pr_fn[b] and em.pr_path[a] == em.pr_path[b]
 }
 
 fn c_named_arg_name(e: ast.Expr) -> str {
@@ -14700,7 +14860,7 @@ fn c_fnval_thunk(mut &em: Emitter, target: str, t: ast.Ty) -> str {
 	# THE CALLEE'S C NAME, not `zg_` plus the source name. A private name two modules both
 	# declare is tagged by its module (c_fn_cname_in), and this wrote the untagged spelling —
 	# so the thunk called a function no unit declares and cc reported it against generated C.
-	return c_fnval_thunk_to(em, c_fn_cname_in(em, check.c_mod_of(em, em.at_path), "", target), t)
+	return c_fnval_thunk_to(em, c_fn_cname_in(em, em.at_path, "", target), t)
 }
 
 # c_fnval_thunk_to is the thunk around a callee already spelled in C — an associated fn's,
@@ -14755,13 +14915,15 @@ fn c_fn_ty_of(mut &em: Emitter, n: str) -> ast.Ty {
 	# THE MODULE TOO, for c_param_row's reason and with a worse failure than its: this collects
 	# EVERY row that names the function, so two modules' blocks were collected as one and
 	# `f := helper` came out `fn(int, int, int) -> int` — an arity neither declaration has.
+	# AND THE FILE, where files of the reader's module key the name (c_fn_keyed_file).
+	kf := c_fn_keyed_file(em, em.at_path, n)
 	here := check.c_mod_of(em, em.at_path)
 	mine := c_fn_ty_mod(em, n, here)
 
 	mut ptys: list[ast.Ty] = []
 	mut i := 0
 	for i < em.pr_fn.len() {
-		if em.pr_fn[i] == n and em.pr_mod[i] == mine {
+		if em.pr_fn[i] == n and (em.pr_path[i] == kf or (kf == "" and em.pr_mod[i] == mine)) {
 			# THE MARKER RIDES IN THE TYPE. The table keeps `mut &` in a column of its own,
 			# because a declaration has a name to hang it on; a VALUE has not, so what the
 			# call site reads it from is the type — and that is what this builds.
@@ -16334,7 +16496,7 @@ fn c_infer_ns_call(mut &em: Emitter, target: ast.Expr, meth: str, args: list[ast
 	mod := c_ns_mod_of(em, c_ident_name(target))
 	gk := c_ns_generic(em, c_ident_name(target), meth)
 	if mod != "" and (gk == "" or not c_is_generic(em, gk)) {
-		r := c_sig_row_in(em, mod, c_sig_key("", meth))
+		r := c_sig_row_in(em, c_ns_scope(em, c_ident_name(target), meth), c_sig_key("", meth))
 		return c_sig_row_ret(em, r) if r >= 0 and em.sig_mod[r] == mod
 	}
 	return c_infer_call(em, gk, args) if gk != ""
@@ -17900,7 +18062,7 @@ fn c_init_calls(mut &em: Emitter, f: ast.File) -> str {
 	mut out := ""
 	for fd in f.fns {
 		if parser.is_init_name(fd.name) {
-			out = out + "    " + c_fn_cname_in(em, check.c_mod_of(em, fd.path), "", fd.name) + "();\n"
+			out = out + "    " + c_fn_cname_in(em, fd.path, "", fd.name) + "();\n"
 		}
 	}
 	return out
@@ -19416,7 +19578,7 @@ fn c_with_defaults(mut &em: Emitter, key: str, args: list[ast.Expr]) -> list[ast
 # (through c_fn_cname) and the signature key the argument rules read, which is what makes a
 # deferred generic call checked exactly as a direct one is.
 fn c_callee_gen(mut &em: Emitter, key: str, x: ast.Expr) -> Callee {
-	return Callee(c_fn_cname_in(em, check.c_mod_of(em, em.at_path), "", key), c_callee_args_of(x), key)
+	return Callee(c_fn_cname_in(em, em.at_path, "", key), c_callee_args_of(x), key)
 }
 
 # c_callee_args_of is the argument list of either call form, since c_callee_raw reaches this
@@ -19453,7 +19615,7 @@ fn c_callee_free(mut &em: Emitter, mod: str, name: str, args: list[ast.Expr], wh
 
 	mut at := mod
 	if at == "" {
-		at = check.c_mod_of(em, em.at_path)
+		at = em.at_path
 	}
 	return Callee(c_fn_cname_in(em, at, "", name), args, key)
 }
@@ -19543,7 +19705,7 @@ fn c_callee_raw(mut &em: Emitter, x: ast.Expr, what: str) -> Callee {
 				check.chk_no_member(em, c_ns_root(tgt), m)
 				return Callee("0", [], "")
 			}
-			return c_callee_free(em, c_ns_mod_of(em, c_ns_root(tgt)), m, margs, what)
+			return c_callee_free(em, c_ns_scope(em, c_ns_root(tgt), m), m, margs, what)
 		}
 
 		# ONE NUMBER, TWO QUESTIONS, and a sentence that was false for both halves (#87).
@@ -23249,7 +23411,7 @@ fn c_param_ctype(pm: ast.Param) -> str {
 }
 
 fn c_proto(mut &em: Emitter, fn_d: ast.FnDecl) -> str {
-	return f"{c_ret_type(fn_d)} {c_fn_cname_in(em, check.c_mod_of(em, fn_d.path), fn_d.recv, fn_d.name)}({c_param_types(fn_d)});\n"
+	return f"{c_ret_type(fn_d)} {c_fn_cname_in(em, fn_d.path, fn_d.recv, fn_d.name)}({c_param_types(fn_d)});\n"
 }
 
 # c_check_loop_jump refuses a `break` or a `continue` that belongs to no loop. Without it
@@ -23365,7 +23527,7 @@ fn c_fn(mut &em: Emitter, fn_d: ast.FnDecl) -> str {
 	em.fn_mark_used = false
 	mut pdefer := ""
 
-	mut sig := f"{c_ret_type(fn_d)} {c_fn_cname_in(em, check.c_mod_of(em, fn_d.path), fn_d.recv, fn_d.name)}("
+	mut sig := f"{c_ret_type(fn_d)} {c_fn_cname_in(em, fn_d.path, fn_d.recv, fn_d.name)}("
 	if fn_d.params.len() == 0 {
 		sig = sig + "void"
 	} else {
@@ -25922,7 +26084,7 @@ fn c_emit_unit_as(prog0: ast.File, own0: ast.File, ft: FileTypes, ms: Mods, whol
 	# is what makes that invariant hold for a multi-unit program, at the place it already lives,
 	# and it is what lets the declaration passes below go back to reading the WHOLE program.
 	seen := diags.len()
-	mut em := Emitter([], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], false, false, false, false, [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], 0, [], 0, [], [], false, "", "", [], [], ast.Ty.TVoid, 0, "", 0, 0, 0, 0, "", diags, 0, 0, [], [], [], [], [], false, 0, false, "", 0, false, false, [], [], [], [], [], [], [], [], [], [], [], "", want_lints, [], [], [], [], [], [], [], [], [], [], [], [], false, 0, [], [], "", c_nosub(), [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], false, ast.no_index(), [], [], [], [], [], [], [], [], [], [], [], [], false, false)
+	mut em := Emitter([], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], false, false, false, false, [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], 0, [], 0, [], [], false, "", "", [], [], ast.Ty.TVoid, 0, "", 0, 0, 0, 0, "", diags, 0, 0, [], [], [], [], [], false, 0, false, "", 0, false, false, [], [], [], [], [], [], [], [], [], [], [], "", want_lints, [], [], [], [], [], [], [], [], [], [], [], [], false, 0, [], [], "", c_nosub(), [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], false, ast.no_index(), [], [], [], [], [], [], [], [], [], [], [], [], false, false, [], [], [])
 
 	# ASSIGNED, NOT PASSED. Every argument above is a zero value, and `layering` asserts that
 	# — it lines the call up with the fields by KIND, which only works while nothing in it

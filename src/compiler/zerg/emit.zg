@@ -6633,20 +6633,20 @@ fn c_build_top_names(mut &em: Emitter, f: ast.File) {
 	mut wpath: list[str] = []
 	mut wline: list[int] = []
 	for sd in f.structs {
-		c_check_type_dup(em, seen, kind, wpath, wline, sd.name, "a struct", sd.path, sd.line, sd.col)
+		c_check_type_dup(em, seen, kind, wpath, wline, sd.name, "a struct", sd.path, sd.line, sd.col, false)
 	}
 	for ed in f.enums {
-		c_check_type_dup(em, seen, kind, wpath, wline, ed.name, "an enum", ed.path, ed.line, ed.col)
+		c_check_type_dup(em, seen, kind, wpath, wline, ed.name, "an enum", ed.path, ed.line, ed.col, false)
 	}
 	for td in f.types {
-		c_check_type_dup(em, seen, kind, wpath, wline, td.name, "a type declaration", td.path, td.line, td.col)
+		c_check_type_dup(em, seen, kind, wpath, wline, td.name, "a type declaration", td.path, td.line, td.col, false)
 	}
 	for sp in f.specs {
 		# ALL SIX KINDS KNOW WHERE THEY WERE WRITTEN, so all six report the same way: they say
 		# where, and they accumulate rather than ending the run at the first finding. A
 		# StructDecl and an EnumDecl carried no place once and those two raised instead, which
 		# is the split c_dup_report's comment records as gone.
-		c_check_type_dup(em, seen, kind, wpath, wline, sp.name, "a spec", sp.path, sp.line, sp.col)
+		c_check_type_dup(em, seen, kind, wpath, wline, sp.name, "a spec", sp.path, sp.line, sp.col, false)
 	}
 
 	# THE FUNCTIONS AFTER THE TYPES, so the finding lands on the `fn` in EITHER source order.
@@ -6658,9 +6658,20 @@ fn c_build_top_names(mut &em: Emitter, f: ast.File) {
 	# mangles to `zg_Bar_Foo` and lives in that type's namespace (GRAMMAR#impl-decl), which
 	# is a different rule with its own report in c_build_sigs — so a method may share a name
 	# with a type and nothing is ambiguous about it.
+	#
+	# THE TEMPLATES AFTER THE PLAIN ONES, because a pair that holds a template is c_check_gen_dup's
+	# (E3060 / E3061) and is not reported here a second time (#388). Walking them last makes the
+	# first function recorded under a name a plain one whenever the file has one, so two plain
+	# `least`s beside a `least[T]` still meet each other and are E4073 once, against the plain
+	# one's line rather than the template's.
 	for fn_i in f.fns {
-		if fn_i.recv == "" {
-			c_check_type_dup(em, seen, kind, wpath, wline, fn_i.name, "a function", fn_i.path, fn_i.line, fn_i.col)
+		if fn_i.recv == "" and not c_is_template(fn_i) {
+			c_check_type_dup(em, seen, kind, wpath, wline, fn_i.name, "a function", fn_i.path, fn_i.line, fn_i.col, false)
+		}
+	}
+	for fn_i in f.fns {
+		if fn_i.recv == "" and c_is_template(fn_i) {
+			c_check_type_dup(em, seen, kind, wpath, wline, fn_i.name, "a function", fn_i.path, fn_i.line, fn_i.col, true)
 		}
 	}
 
@@ -6668,7 +6679,7 @@ fn c_build_top_names(mut &em: Emitter, f: ast.File) {
 	# constant-versus-function half from, so the place a reader is pointed at does not move:
 	# the collision is reported at the constant's own declaration in both orders.
 	for c in f.consts {
-		c_check_type_dup(em, seen, kind, wpath, wline, c_const_scope_name(c), "a module constant", c.path, c.line, c.col)
+		c_check_type_dup(em, seen, kind, wpath, wline, c_const_scope_name(c), "a module constant", c.path, c.line, c.col, false)
 	}
 
 	# AND THE TABLE IS KEPT. What the six loops above have in hand is "what the top level
@@ -6818,12 +6829,16 @@ fn c_check_names_distinct(names: list[str], what: str, whose: str, path: str, li
 	}
 }
 
-fn c_check_type_dup(mut &em: Emitter, mut &seen: list[str], mut &kind: list[str], mut &wpath: list[str], mut &wline: list[int], name: str, what: str, path: str, line: int, col: int) {
+# EVERY DECLARATION IS RECORDED, the second of a name as well as the first: the import rule
+# (chk_decl_kind) asks what THIS FILE declares, and a table holding only the first declaring
+# file answered "nothing" for every other file of the name. A duplicate is still reported
+# against the FIRST, which is the one the loop meets.
+fn c_check_type_dup(mut &em: Emitter, mut &seen: list[str], mut &kind: list[str], mut &wpath: list[str], mut &wline: list[int], name: str, what: str, path: str, line: int, col: int, tpl: bool) {
 	mut i := 0
 	for i < seen.len() {
 		if seen[i] == name {
-			c_dup_report(em, name, kind[i], what, path, line, col, wpath[i], wline[i])
-			return
+			c_dup_report(em, name, kind[i], what, path, line, col, wpath[i], wline[i], tpl)
+			break
 		}
 		i = i + 1
 	}
@@ -6853,7 +6868,7 @@ fn c_check_type_dup(mut &em: Emitter, mut &seen: list[str], mut &kind: list[str]
 # later rule that resolves one — a mechanism, for one cascade, whose first missed consultation
 # is a rule going quiet about a real mistake. Reporting every finding in one run is what the
 # specification asks for (docs/conformance.md), and a cascade is what "every" costs.
-fn c_dup_report(mut &em: Emitter, name: str, prev: str, what: str, path: str, line: int, col: int, wpath: str, wline: int) {
+fn c_dup_report(mut &em: Emitter, name: str, prev: str, what: str, path: str, line: int, col: int, wpath: str, wline: int, tpl: bool) {
 	if prev != what {
 		check.chk_at_place(em, path, line, col, rule.Rule.DeclaredTwiceDifferentKind, f"`{name}` is declared twice — once as {prev}, once as {what}")
 		return
@@ -6871,7 +6886,13 @@ fn c_dup_report(mut &em: Emitter, name: str, prev: str, what: str, path: str, li
 	# but two of them in ONE FILE never is. Asking it here is what keeps this rule's extent to
 	# one walk — the property the head of c_build_top_names claims and the reason a code may
 	# be reported from exactly one place.
+	#
+	# A TEMPLATE IN THE PAIR makes it c_check_gen_dup's, which says which of the two it is
+	# (E3060 / E3061). `tpl` is the second half's, and it covers the first as well: the
+	# templates are walked last, so a template is only ever met second.
 	if wpath == path {
+		return if tpl
+
 		check.chk_at_place(em, path, line, col, rule.Rule.DeclaredTwiceInFile, c_twice_in_file_says(name, wline))
 		return
 	}

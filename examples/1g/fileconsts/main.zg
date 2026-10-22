@@ -1,0 +1,44 @@
+# A module constant of one name in several files of one module, and in two modules.
+#   zerg build examples/1g/fileconsts/main.zg
+# Expected output:
+#   100
+#   1
+#   11
+#   1
+#   2
+#   22
+#   2
+#   10
+#   10
+#   30
+#   aa
+#   7
+#
+# A PRIVATE CONSTANT IS ITS FILE'S (#386), as a private function is. Both files of `pair` declare
+# a private `LIMIT` and a `NEXT` built from it, and each file's bare `LIMIT` is its own — read,
+# folded into the other constant's initializer, and as an array length.
+#
+# A `pub` ONE BESIDE A PRIVATE ONE is two constants too: `mixed.LIMIT` reaches the public one,
+# `two.zg` reads its own bare and the public one as `one.LIMIT`. Two `pub` ones in one module
+# would be refused (E4077) — a qualified read could not choose between them.
+#
+# Two MODULES' private `LIMIT`s are two constants, of two types; this file's own is a third.
+import (
+	"./aa"
+	"./bb"
+	"./mixed"
+	"./pair"
+)
+
+const LIMIT := 100
+
+fn main() {
+	print LIMIT
+	pair.from_one()
+	pair.from_two()
+	print mixed.LIMIT
+	print mixed.from_one()
+	print mixed.from_two()
+	print aa.limit()
+	print bb.limit()
+}

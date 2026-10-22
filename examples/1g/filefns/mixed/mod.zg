@@ -1,0 +1,5 @@
+# A public `helper` in one file and a private one in the other.
+import (
+	pub "./one"
+	pub "./two"
+)

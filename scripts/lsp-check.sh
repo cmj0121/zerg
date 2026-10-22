@@ -1256,11 +1256,49 @@ fn main() {
 	print f(x) + x
 }
 ZG
-if ! "$ZERG" build --emit check "$tmp/names/main.zg" >/dev/null 2>"$tmp/names.cc"; then
-	echo "NAMES     the fixture program does not build, so there is nothing to hold the index to"
-	sed 's/^/  /' "$tmp/names.cc"
-	exit 1
-fi
+# A SECOND PROGRAM, beside the first and not inside it: two files of one module, each with a
+# private `helper` of its own (#386). The rename property copies the first fixture's two files
+# alone, so a module it imported would leave every rename comparing two failed builds.
+mkdir -p "$tmp/names-fns/pair"
+cat >"$tmp/names-fns/main.zg" <<'ZG'
+import "./pair"
+
+fn main() {
+	pair.from_one()
+	pair.from_two()
+}
+ZG
+cat >"$tmp/names-fns/pair/mod.zg" <<'ZG'
+import (
+	pub "./one"
+	pub "./two"
+)
+ZG
+cat >"$tmp/names-fns/pair/one.zg" <<'ZG'
+fn helper() -> int {
+	return 1
+}
+
+pub fn from_one() {
+	print helper()
+}
+ZG
+cat >"$tmp/names-fns/pair/two.zg" <<'ZG'
+fn helper(n: int) -> int {
+	return n
+}
+
+pub fn from_two() {
+	print helper(2)
+}
+ZG
+for fx in names names-fns; do
+	if ! "$ZERG" build --emit check "$tmp/$fx/main.zg" >/dev/null 2>"$tmp/$fx.cc"; then
+		echo "NAMES     the fixture program $fx does not build, so there is nothing to hold the index to"
+		sed 's/^/  /' "$tmp/$fx.cc"
+		exit 1
+	fi
+done
 if ! "$PY" - "$ZERG" "$tmp/names" src/stdlib/strings.zg src/stdlib/math.zg <<'PYEOF'
 import json, os, re, shutil, subprocess, sys
 
@@ -1405,6 +1443,21 @@ for (what, use, want), got in zip(CASES, defs):
         continue
     check(answer(got) == wanted(want), "%s resolves to %s" % (what, want), answer(got))
 positions = len(CASES)
+
+# EACH FILE'S BARE CALL IS ITS OWN, where two files of one module each declare a private `helper`
+# (#386): an index that resolved by module answers one declaration for both. Asked in the second
+# fixture, whose entry is opened only for these questions and then dropped from `src`, so the
+# rename property below never copies it.
+FNS = root + "-fns"
+F_MAIN, F_ONE, F_TWO = (os.path.join(FNS, f) for f in ("main.zg", "pair/one.zg", "pair/two.zg"))
+FN_CASES = [
+    ("a private function its own file declares", at(F_ONE, "print helper()", "helper"), at(F_ONE, "fn helper", "helper")),
+    ("the other file's private function of that name", at(F_TWO, "print helper(2)", "helper"), at(F_TWO, "fn helper", "helper")),
+]
+src[F_MAIN] = open(F_MAIN, encoding="utf-8").read()
+for (what, use, want), got in zip(FN_CASES, ask(F_MAIN, [("textDocument/definition", p, l, c) for _, (p, l, c), _ in FN_CASES])):
+    check(answer(got) == want, "%s resolves to %s" % (what, want), answer(got))
+del src[F_MAIN]
 
 # the SHARED places the fixture writes: a place one body resolves two ways, answering with both
 EXPECT_SHARED = set(use for what, use, want in CASES if isinstance(want, list))

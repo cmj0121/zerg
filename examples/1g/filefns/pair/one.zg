@@ -1,0 +1,21 @@
+fn helper(out: chan[int]<-) -> int {
+	out <- 1
+	return 1
+}
+
+fn later(out: chan[int]<-) {
+	defer helper(out)
+}
+
+pub fn from_one() {
+	ch := chan[int](1)
+	print helper(ch)
+	print (<-ch) ?? 0
+	spawn helper(ch)
+	print (<-ch) ?? 0
+	later(ch)
+	print (<-ch) ?? 0
+	f := helper
+	print f(ch)
+	print (<-ch) ?? 0
+}

@@ -804,6 +804,17 @@ pub struct Emitter {
 	# ns_path is the path each import WROTE, row for row with ns_names, which is what names the
 	# FILE a sibling's namespace means when the module alone cannot (c_ns_scope).
 	pub ns_path: list[str]
+
+	# kc_names / kc_paths / kc_pub are every module constant whose name two or more FILES declare,
+	# with its file and visibility. Each is its file's (c_k_path) and a C symbol of its own
+	# (c_const_cname); a name only one file declares has no row and keeps `zg_<name>`.
+	pub kc_names: list[str]
+	pub kc_paths: list[str]
+	pub kc_pub: list[bool]
+
+	# kv_paths is the FILE each kv_names row was declared in, which is what lets chk_const_of
+	# read the reader's own `LIMIT` where two files each declare one (c_k_path).
+	pub kv_paths: list[str]
 }
 
 # Subst is an active set of identifier substitutions: an EIdent whose name appears in
@@ -3002,10 +3013,27 @@ fn c_fresh_cname(mut &em: Emitter, name: str) -> str {
 # is a column on these rows now (env_const), so every asker has a row and the twin has
 # nothing left to be for.
 pub fn c_in_scope(mut &em: Emitter, idx: int) -> bool {
+	mut open := false
 	for sid in em.open_scopes {
-		return true if sid == em.env_scope[idx]
+		if sid == em.env_scope[idx] {
+			open = true
+			break
+		}
 	}
-	return false
+	return open and c_k_in_view(em, idx)
+}
+
+# c_k_in_view is whether a module row is the one the reader means, where two or more files declare
+# its name (#386): c_reset_env binds every row this file may name, and of two `LIMIT`s only the one
+# c_k_path picks answers. A row of any other name — and every row of an ordinary program — is.
+fn c_k_in_view(mut &em: Emitter, idx: int) -> bool {
+	return true if em.kc_names.len() == 0 or em.env_scope[idx] != 0
+
+	name := em.env_names[idx]
+	return true if not c_name_in(em.kc_names, name)
+
+	p := c_k_path(em, em.at_path, name)
+	return p == "" or em.env_cnames[idx] == c_k_cname(em, name, p)
 }
 
 fn c_cname_taken(mut &em: Emitter, cand: str) -> bool {
@@ -3313,6 +3341,32 @@ fn c_sorted_names(names: list[str]) -> list[str] {
 	for n in names {
 		mut at := 0
 		for at < out.len() and ast.last_segment(out[at]) <= ast.last_segment(n) {
+			at = at + 1
+		}
+		mut next: list[str] = []
+		mut i := 0
+		for i < out.len() {
+			if i == at {
+				next.append(n)
+			}
+			next.append(out[i])
+			i = i + 1
+		}
+		if at >= out.len() {
+			next.append(n)
+		}
+		out = next
+	}
+	return out
+}
+
+# c_sorted_paths is paths in byte order, whole — c_sorted_names compares the last segment, which
+# two modules' `mod.zg` share.
+fn c_sorted_paths(names: list[str]) -> list[str] {
+	mut out: list[str] = []
+	for n in names {
+		mut at := 0
+		for at < out.len() and out[at] <= n {
 			at = at + 1
 		}
 		mut next: list[str] = []
@@ -8192,8 +8246,14 @@ pub fn c_ns_mod_of(mut &em: Emitter, n: str) -> str {
 # The module alone would answer its `pub` one (c_fn_keyed_file), and `two.helper` would then
 # call `one.zg`'s public `helper` rather than meet `two.zg`'s private one.
 fn c_ns_scope(mut &em: Emitter, n: str, name: str) -> str {
+	return c_ns_scope_if(em, n, c_name_in(em.fk_names, name))
+}
+
+# c_ns_scope_if is c_ns_scope for a name `keyed` says files of one module declare — a free
+# function's (fk_names) or a module constant's (kc_names).
+fn c_ns_scope_if(mut &em: Emitter, n: str, keyed: bool) -> str {
 	mod := c_ns_mod_of(em, n)
-	return mod if mod == "" or not c_name_in(em.fk_names, name)
+	return mod if mod == "" or not keyed
 
 	here := em.at_path
 	return mod if mod != check.c_mod_of(em, here)
@@ -9000,7 +9060,12 @@ fn c_twice_in_file_says(name: str, first: int) -> str {
 # Asserting the first reading is what made it wrong about the same-file case above; naming the
 # files is right about all of them.
 fn c_mod_flat_collide(path: str, line: int, col: int, name: str, other: str) -> str {
-	return c_diag_at(path, line, col, rule.Rule.NamespaceCollision, f"`{other}` and `{path}` both define `{name}` — this compiler flattens every module into one namespace, so two declarations under one directory cannot be told apart, whether they are two modules or two files of one")
+	return c_collide_says(path, line, col, f"`{other}` and `{path}` both define `{name}` — one module offers one public name once, and a qualified name from outside could not choose between these two; make one of them private or rename it")
+}
+
+# c_collide_says is E4077 with its sentence: two declarations one name may not have twice.
+fn c_collide_says(path: str, line: int, col: int, msg: str) -> str {
+	return c_diag_at(path, line, col, rule.Rule.NamespaceCollision, msg)
 }
 
 # The two below are one rule over a two-valued domain, which is why they read a side rather
@@ -13368,6 +13433,7 @@ fn c_call(mut &em: Emitter, name: str, args: list[ast.Expr], l: int, c: int, sb:
 	c_chk_visible_fn(em, name, sr)
 	c_chk_bare_fn(em, name, sr)
 	c_chk_unsafe_fn(em, name, "calling it", sr)
+	return "0" if c_bare_ambiguous(em, name, c_fn_choices(em, name), false)
 
 	rels := c_owned_args(em, name, 0, args)
 	return c_call_releasing(em, c_fn_cname_in(em, em.at_path, "", name), name, args, rels, sb) if c_any_owned(rels)
@@ -13431,7 +13497,10 @@ fn c_chk_unsafe_fn(mut &em: Emitter, name: str, what: str, r: int) {
 # row is: the reference is answered elsewhere, and this rule only speaks about a
 # declaration whose module it knows.
 fn c_chk_visible_const(mut &em: Emitter, name: str) {
-	i := c_k_idx(em, name)
+	c_chk_visible_k(em, name, c_k_idx(em, name))
+}
+
+fn c_chk_visible_k(mut &em: Emitter, name: str, i: int) {
 	return if i < 0
 	check.chk_visible(em, name, em.k_decls[i].path, em.k_decls[i].is_pub)
 }
@@ -13446,10 +13515,29 @@ fn c_chk_visible_const(mut &em: Emitter, name: str) {
 # `P.LIMIT` and not `LIMIT`. Matching the declaration's own field made `impl P { LIMIT := 5 }`
 # and `impl Q { LIMIT := 9 }` one name — the duplicate rule refused a program with two types
 # that each have a limit, which is the ordinary case rather than a mistake.
+#
+# AS SEEN FROM THE READER'S FILE, where files declare the name more than once (c_k_path).
 fn c_k_idx(mut &em: Emitter, name: str) -> int {
+	return c_k_idx_in(em, em.at_path, name)
+}
+
+# c_k_idx_in is c_k_idx as seen from `scope` — a file, or the module a qualified read named.
+fn c_k_idx_in(mut &em: Emitter, scope: str, name: str) -> int {
+	p := c_k_path(em, scope, name)
 	mut i := 0
 	for i < em.k_decls.len() {
-		return i if c_const_scope_name(em.k_decls[i]) == name
+		return i if c_const_scope_name(em.k_decls[i]) == name and (p == "" or em.k_decls[i].path == p)
+		i = i + 1
+	}
+	return -1
+}
+
+# c_k_row is the row of the declaration `c` itself.
+fn c_k_row(mut &em: Emitter, c: ast.ConstDecl) -> int {
+	want := c_const_scope_name(c)
+	mut i := 0
+	for i < em.k_decls.len() {
+		return i if c_const_scope_name(em.k_decls[i]) == want and em.k_decls[i].path == c.path
 		i = i + 1
 	}
 	return -1
@@ -14816,6 +14904,8 @@ fn c_ident_val(mut &em: Emitter, n: str, l: int, c: int, sb: Subst) -> str {
 	# either half stops being true.
 	idx := c_live_idx(em, n)
 	if idx >= 0 and check.chk_is_module_binding(em, idx) {
+		return "0" if c_bare_ambiguous(em, n, c_k_choices(em, em.at_path, n), true)
+
 		c_chk_visible_const(em, n)
 	}
 	if em.want_index {
@@ -17419,9 +17509,16 @@ fn c_pushes(mut &em: Emitter, target: str, elem: ast.Ty, lit: ast.Expr, ind: str
 # written — the same order c_const_globals assigns in, from the same function, because a
 # constant that folds here and is assigned there in a different order is two answers to one
 # question.
+#
+# THE KEYED NAMES ARE SETTLED HERE TOO, first (c_build_const_keys): a fold reads the reader's own
+# file's constant, and so does every later lookup.
 fn c_build_const_vals(mut &em: Emitter, f: ast.File) {
+	c_build_const_keys(em, f)
+
+	keep_path := em.at_path
 	for i in c_const_order(em, f) {
 		c := f.consts[i]
+		em.at_path = c.path
 
 		# THE FOLD RUNS BEFORE THE ROW IS APPENDED, so `const A := A` names whatever `A` meant
 		# outside this declaration — nothing — rather than resolving to the row being built.
@@ -17434,7 +17531,169 @@ fn c_build_const_vals(mut &em: Emitter, f: ast.File) {
 		}
 		em.kv_names.append(c_const_scope_name(c))
 		em.kv_vals.append(v)
+		em.kv_paths.append(c.path)
 	}
+	em.at_path = keep_path
+}
+
+# c_build_const_keys records every module constant whose name two or more files declare
+# (kc_names). It reads the whole program, so every unit spells each one's C name alike.
+fn c_build_const_keys(mut &em: Emitter, f: ast.File) {
+	for c in f.consts {
+		continue if c.recv != ""
+
+		for d in f.consts {
+			if d.recv == "" and d.name == c.name and d.path != c.path {
+				em.kc_names.append(c.name)
+				em.kc_paths.append(c.path)
+				em.kc_pub.append(c.is_pub)
+				break
+			}
+		}
+	}
+}
+
+# c_k_path is the FILE whose module constant `name` a reader in `scope` means, where two or more
+# files declare it — and "" where they do not, which is every name in nearly every program.
+# `scope` is a file or a module.
+#
+# The rule is c_fn_keyed_file's (#386): a file that declares it means its own; otherwise its
+# module's `pub` one, and with none the first of the module's declaring files SORTED. A reader
+# whose module declares none gets "", and the first row answers as it always has.
+pub fn c_k_path(mut &em: Emitter, scope: str, name: str) -> str {
+	return "" if not c_name_in(em.kc_names, name)
+
+	mod := check.c_mod_of(em, scope)
+	mut pubp := ""
+	mut paths: list[str] = []
+	mut i := 0
+	for i < em.kc_names.len() {
+		if em.kc_names[i] == name {
+			return scope if em.kc_paths[i] == scope
+
+			if check.c_mod_of(em, em.kc_paths[i]) == mod {
+				if em.kc_pub[i] and pubp == "" {
+					pubp = em.kc_paths[i]
+				}
+				paths.append(em.kc_paths[i])
+			}
+		}
+		i = i + 1
+	}
+
+	return pubp if pubp != ""
+	return "" if paths.len() == 0
+
+	return c_sorted_names(paths)[0]
+}
+
+# c_k_cname is the C name of the constant `name` that file `path` declares, where files key it:
+# the file's place among every file declaring the name, sorted, as c_fn_key_index numbers a
+# function's.
+fn c_k_cname(mut &em: Emitter, name: str, path: str) -> str {
+	mut paths: list[str] = []
+	mut i := 0
+	for i < em.kc_names.len() {
+		if em.kc_names[i] == name {
+			paths.append(em.kc_paths[i])
+		}
+		i = i + 1
+	}
+	return c_file_cname(f"{name}'k{strconv.to_string(c_name_index(c_sorted_paths(paths), path), 10)}")
+}
+
+# c_k_choices is the files a bare `name` read in `scope` could mean when it cannot choose — sorted,
+# and empty when it can. Two cases: the reader's module declares none and two other modules each
+# do (an import binds both, and c_k_path has nothing to prefer), and a `_test.zg` file, which names
+# its whole module, reading a name two of its module's files declare.
+fn c_k_choices(mut &em: Emitter, scope: str, name: str) -> list[str] {
+	mut mine: list[str] = []
+	mut others: list[str] = []
+	return mine if not c_name_in(em.kc_names, name)
+
+	mod := check.c_mod_of(em, scope)
+	mut i := 0
+	for i < em.kc_names.len() {
+		if em.kc_names[i] == name {
+			p := em.kc_paths[i]
+			return [] if p == scope
+
+			if check.c_mod_of(em, p) == mod {
+				mine.append(p)
+			} else {
+				others.append(p)
+			}
+		}
+		i = i + 1
+	}
+
+	return c_sorted_paths(mine) if mine.len() > 1 and lint.is_test_file(ast.mod_name(scope))
+	return c_sorted_paths(others) if mine.len() == 0 and others.len() > 1
+
+	return []
+}
+
+# c_fn_choices is c_k_choices for a free function called bare: the reader's module declares none,
+# and two other modules each declare one — a public name two modules may both have (#92), which a
+# bare call has nothing to choose between.
+fn c_fn_choices(mut &em: Emitter, name: str) -> list[str] {
+	mut out: list[str] = []
+	mod := check.c_mod_of(em, em.at_path)
+	mut mods: list[str] = []
+	mut j := 0
+	for j < em.sig_names.len() {
+		if em.sig_names[j] == name {
+			return [] if em.sig_mod[j] == mod
+
+			if not c_name_in(mods, em.sig_mod[j]) {
+				mods.append(em.sig_mod[j])
+				out.append(em.sig_path[j])
+			}
+		}
+		j = j + 1
+	}
+	return c_sorted_paths(out) if out.len() > 1
+
+	return []
+}
+
+# c_bare_ambiguous reports a bare name that `paths` — two or more declaring files — could each
+# answer, and says whether it did. Each spelling is the namespace this file bound for that module,
+# or the file's own name for a sibling a `_test.zg` reads. A constant's is E3116 and a function's
+# E3114, the codes of a bare name reaching another file.
+fn c_bare_ambiguous(mut &em: Emitter, name: str, paths: list[str], is_const: bool) -> bool {
+	return false if paths.len() < 2
+
+	mut files := ""
+	mut spell := ""
+	for p in paths {
+		if files != "" {
+			files = files + " and "
+			spell = spell + " or "
+		}
+		files = files + f"`{p}`"
+		spell = spell + f"`{c_ns_spelling(em, p)}.{name}`"
+	}
+	msg := f"`{name}` is declared in {files}, and a bare name cannot choose between them — spell it {spell} (docs/runtime/package.md)"
+	if is_const {
+		c_const_elsewhere(em, msg)
+	} else {
+		check.chk_name_elsewhere(em, msg)
+	}
+	return true
+}
+
+# c_ns_spelling is the namespace the reader's file bound for the module declaring `path`, or the
+# file's own name when it bound none.
+fn c_ns_spelling(mut &em: Emitter, path: str) -> str {
+	mod := check.c_mod_of(em, path)
+	mut i := 0
+	for i < em.ns_names.len() {
+		return em.ns_names[i] if em.ns_at[i] == em.at_path and em.ns_mods[i] == mod
+
+		i = i + 1
+	}
+	return ast.mod_name(check.chk_drop_zg(path))
 }
 
 fn c_const_globals(mut &em: Emitter, f: ast.File, own: ast.File, whole: bool) -> str {
@@ -17485,13 +17744,12 @@ fn c_const_globals(mut &em: Emitter, f: ast.File, own: ast.File, whole: bool) ->
 		# WHICH of the two rules is the earlier declaration's FILE, exactly as it is for a
 		# signature: one file declaring a constant twice is ill-formed for good, and two files
 		# under one directory is the flat namespace this compiler still has.
-		ki := c_k_idx(em, c_const_scope_name(c))
-		if ki >= 0 {
-			# ONE FILE IS NOT THIS WALK'S TO ANSWER, for the reason c_mod_collide states: it
-			# is recorded as E4073 there and rendered at the end, while this raises and would
-			# be the only sentence the reader ever saw.
-			raise c_mod_flat_collide(c.path, c.line, c.col, c.name, em.k_decls[ki].path) if em.k_decls[ki].path != c.path
-		}
+		#
+		# TWO FILES ARE TWO CONSTANTS NOW (#386), as two files' private functions are: each is its
+		# file's (c_k_path) and a symbol of its own. What stays refused is two `pub` ones in one
+		# module — a qualified read from outside could not choose — and an associated value or a
+		# compiler-written one, which no file keys.
+		c_const_collide(em, c)
 
 		# A WRITTEN annotation is honoured, exactly as c_let honours a local's: the check
 		# is chk_binding's — the value must fit the declared type, literals adopting the
@@ -17532,16 +17790,36 @@ fn c_const_globals(mut &em: Emitter, f: ast.File, own: ast.File, whole: bool) ->
 		# globals follow; a scalar or a container answers "nothing to do" by itself.
 		c_spelled_register(em, ty)
 		if whole {
-			out = out + f"static {c_type(ty)} {c_const_cname(c)};\n"
+			out = out + f"static {c_type(ty)} {c_const_cname(em, c)};\n"
 		} else if c_const_in(own, c) {
-			out = out + f"{c_type(ty)} {c_const_cname(c)};\n"
+			out = out + f"{c_type(ty)} {c_const_cname(em, c)};\n"
 		} else {
-			out = out + f"extern {c_type(ty)} {c_const_cname(c)};\n"
+			out = out + f"extern {c_type(ty)} {c_const_cname(em, c)};\n"
 		}
 	}
 	em.at_path = keep_path
 	c_mark_to(em, keep_line, keep_col, keep_end_line, keep_end_col)
 	return out
+}
+
+# c_const_collide refuses `c` against an earlier row of its name in another file, where the two
+# cannot be told apart. ONE FILE IS NOT THIS WALK'S TO ANSWER, for the reason c_mod_collide
+# states: it is recorded as E4073 there and rendered at the end, while this raises and would be
+# the only sentence the reader ever saw.
+fn c_const_collide(mut &em: Emitter, c: ast.ConstDecl) {
+	want := c_const_scope_name(c)
+	mod := check.c_mod_of(em, c.path)
+	mut i := 0
+	for i < em.k_decls.len() {
+		k := em.k_decls[i]
+		if c_const_scope_name(k) == want and k.path != c.path {
+			same := check.c_mod_of(em, k.path) == mod
+
+			raise c_collide_says(c.path, c.line, c.col, f"`{k.path}` and `{c.path}` both define `{want}` — a type holds one associated value of a name, wherever its `impl` blocks are written; rename one of them") if c.recv != ""
+			raise c_mod_flat_collide(c.path, c.line, c.col, c.name, k.path) if same and (mod == "" or (c.is_pub and k.is_pub))
+		}
+		i = i + 1
+	}
 }
 
 # c_const_bind puts one constant's row into scope 0, which is what c_reset_env does for all of
@@ -17550,9 +17828,13 @@ fn c_const_globals(mut &em: Emitter, f: ast.File, own: ast.File, whole: bool) ->
 # c_const_cname — a constant's C name. An ASSOCIATED value carries the type it belongs to, which
 # is what keeps `impl P { LIMIT := 5 }` and a module `LIMIT` apart in the one flat C namespace —
 # the same reason a method is `zg_P_show` and not `zg_show`.
-fn c_const_cname(c: ast.ConstDecl) -> str {
+#
+# A MODULE CONSTANT TWO FILES DECLARE is one symbol per file (c_k_cname, #386); every other one
+# keeps `zg_<name>`.
+fn c_const_cname(mut &em: Emitter, c: ast.ConstDecl) -> str {
 	return c_spec_cname(f"{c.recv}${c.name}") if c_is_filed(c.recv)
 	return f"zg_{c.recv}_{c.name}" if c.recv != ""
+	return c_k_cname(em, c.name, c.path) if c_name_in(em.kc_names, c.name)
 
 	return "zg_" + c.name
 }
@@ -17569,7 +17851,7 @@ fn c_const_scope_name(c: ast.ConstDecl) -> str {
 fn c_const_bind(mut &em: Emitter, c: ast.ConstDecl, ty: ast.Ty) {
 	em.env_names.append(c_const_scope_name(c))
 	em.env_tys.append(ty)
-	em.env_cnames.append(c_const_cname(c))
+	em.env_cnames.append(c_const_cname(em, c))
 	em.env_dead.append(0)
 	em.env_mut.append(c.is_mut)
 	em.env_scope.append(0)
@@ -17605,21 +17887,30 @@ pub fn c_const_here(mut &em: Emitter, c: ast.ConstDecl) -> bool {
 #
 # A PRIVATE ONE IS chk_visible's E3001 alone (#387), as a private sibling fn is (#384): this
 # sentence's fix — spell it `two.LIMIT` — would only meet E3001 again.
+#
+# WHERE SIBLINGS EACH DECLARE IT, the one c_k_path picks answers — a `pub` one first, else the
+# sorted-first file — as a third file's bare call to a keyed function does (#386).
 fn c_const_from_sibling(mut &em: Emitter, n: str) -> bool {
+	p := c_k_path(em, em.at_path, n)
 	mut i := 0
 	for i < em.k_decls.len() {
-		if em.k_decls[i].name == n and not c_const_here(em, em.k_decls[i]) {
+		if em.k_decls[i].name == n and (p == "" or em.k_decls[i].path == p) and not c_const_here(em, em.k_decls[i]) {
 			if not em.k_decls[i].is_pub {
 				check.chk_visible(em, n, em.k_decls[i].path, false)
 				return true
 			}
 			ns := ast.mod_name(check.chk_drop_zg(em.k_decls[i].path))
-			check.chk_at(em, rule.Rule.ConstFromSibling, f"the constant `{n}` is declared in `{em.k_decls[i].path}`, and a file names what it uses — write `import \"./{ns}\"` and spell it `{ns}.{n}` (docs/runtime/package.md)")
+			c_const_elsewhere(em, f"the constant `{n}` is declared in `{em.k_decls[i].path}`, and a file names what it uses — write `import \"./{ns}\"` and spell it `{ns}.{n}` (docs/runtime/package.md)")
 			return true
 		}
 		i = i + 1
 	}
 	return false
+}
+
+# c_const_elsewhere reports a bare module constant this file cannot read as written (E3116).
+fn c_const_elsewhere(mut &em: Emitter, msg: str) {
+	check.chk_at(em, rule.Rule.ConstFromSibling, msg)
 }
 
 # c_const_in is whether this unit declares the constant `k`, which is where its global is DEFINED —
@@ -17630,7 +17921,7 @@ fn c_const_from_sibling(mut &em: Emitter, n: str) -> bool {
 fn c_const_in(f: ast.File, k: ast.ConstDecl) -> bool {
 	want := c_const_scope_name(k)
 	for c in f.consts {
-		return true if c_const_scope_name(c) == want
+		return true if c_const_scope_name(c) == want and c.path == k.path
 	}
 	return false
 }
@@ -17662,9 +17953,19 @@ fn c_const_assigns(mut &em: Emitter, f: ast.File) -> str {
 	# GRAMMAR puts no ordering requirement on a declaration, and the rest of this compiler
 	# does not either: a function may call one declared below it. A constant is the only
 	# top-level form whose meaning depended on where it was written.
+	#
+	# EACH INITIALIZER READS ITS OWN FILE'S SCOPE, rebound whenever the file changes. The
+	# environment this walk inherited is the last function body's, which binds THAT file's
+	# constants: `const NEXT := BASE + 10` in `one.zg` was refused as an undefined `BASE`
+	# whenever a function of `two.zg` happened to be emitted last.
+	mut bound := ""
 	for i in c_const_order(em, f) {
 		c := f.consts[i]
 		em.at_path = c.path
+		if c.path != bound {
+			c_reset_env(em)
+			bound = c.path
+		}
 		c_mark(em, c.line, c.col)
 
 		# the value is rendered AGAINST the recorded type — row i of k_tys, appended by
@@ -17678,12 +17979,12 @@ fn c_const_assigns(mut &em: Emitter, f: ast.File) -> str {
 		# constant happened to be registered third and rendered an int through
 		# `zrt_str_retain`. c_k_idx is the lookup that cannot drift, and it is the same one the
 		# duplicate-name check already uses.
-		ty := em.k_tys[c_k_idx(em, c_const_scope_name(c))]
+		ty := em.k_tys[c_k_row(em, c)]
 		mut val := c_into(em, ty, c.value, c_nosub())
 		if c.has_ty and c_is_carrier(ty) {
 			val = c_carrier_fit(em, check.chk_binding_says(c.name), ty, c.value, c_nosub())
 		}
-		out = out + f"    {c_const_cname(c)} = {val};\n"
+		out = out + f"    {c_const_cname(em, c)} = {val};\n"
 	}
 	em.at_path = keep_path
 	c_mark_to(em, keep_line, keep_col, keep_end_line, keep_end_col)
@@ -17711,7 +18012,7 @@ fn c_const_order(mut &em: Emitter, f: ast.File) -> list[int] {
 	for out.len() < n {
 		mut placed := 0
 		for j in seq {
-			if not done[j] and c_const_ready(f, f.consts[j].value, done) {
+			if not done[j] and c_const_ready(f, f.consts[j].value, done, f.consts[j].path) {
 				done[j] = true
 				out.append(j)
 				placed = placed + 1
@@ -17794,20 +18095,55 @@ fn c_const_seq(mut &em: Emitter, f: ast.File) -> list[int] {
 # of. Both can only make a constant wait longer, and the one observable cost is a ConstCycle
 # naming a path that is not truly circular. That is a loud, rare wrong answer in place of a
 # silent, ordinary one.
-fn c_const_ready(f: ast.File, e: ast.Expr, done: list[bool]) -> bool {
+#
+# `path` IS THE FILE THE EXPRESSION IS WRITTEN IN, since a name two files declare is each file's
+# (#386): a bare name waits for that file's row, or — where the file declares none — for every
+# row of the name, and `two.LIMIT` waits for every other file's. Waiting for more is the
+# over-approximation above again, never a wrong order.
+fn c_const_ready(f: ast.File, e: ast.Expr, done: list[bool], path: str) -> bool {
 	mut seen: list[str] = []
-	return c_const_ready_at(f, e, done, seen)
+	return c_const_ready_at(f, e, done, seen, path)
 }
 
-fn c_const_ready_at(f: ast.File, e: ast.Expr, done: list[bool], mut &seen: list[str]) -> bool {
-	idx := c_const_idx(f, e)
-
-	return done[idx] if idx >= 0
+fn c_const_ready_at(f: ast.File, e: ast.Expr, done: list[bool], mut &seen: list[str], path: str) -> bool {
+	match e {
+		Expr.EIdent(nm, _, _) => {
+			return c_const_done(f, done, nm, path, true)
+		}
+		Expr.EField(x, nm, _, _) => {
+			return false if c_ident_name(x) != "" and not c_const_done(f, done, nm, path, false)
+		}
+		_ => {
+			nop
+		}
+	}
 
 	return false if not c_const_ready_call(f, e, done, seen)
 
 	for p in ast.expr_parts(e) {
-		return false if not c_const_ready_at(f, p, done, seen)
+		return false if not c_const_ready_at(f, p, done, seen, path)
+	}
+	return true
+}
+
+# c_const_done is whether the module constants `nm` names from `path` are assigned: the file's own
+# row when `own` and it declares one, else every row of that name in another file.
+fn c_const_done(f: ast.File, done: list[bool], nm: str, path: str, own: bool) -> bool {
+	mut i := 0
+	if own {
+		for i < f.consts.len() {
+			k := f.consts[i]
+			return done[i] if k.name == nm and k.path == path
+
+			i = i + 1
+		}
+	}
+	i = 0
+	for i < f.consts.len() {
+		k := f.consts[i]
+		return false if k.name == nm and k.path != path and not done[i]
+
+		i = i + 1
 	}
 	return true
 }
@@ -17829,7 +18165,7 @@ fn c_const_ready_call(f: ast.File, e: ast.Expr, done: list[bool], mut &seen: lis
 	mut i := 0
 	for i < f.fns.len() {
 		if f.fns[i].name == nm {
-			return false if not c_const_ready_stmts(f, f.fns[i].body, done, seen)
+			return false if not c_const_ready_stmts(f, f.fns[i].body, done, seen, f.fns[i].path)
 		}
 		i = i + 1
 	}
@@ -17840,14 +18176,14 @@ fn c_const_ready_call(f: ast.File, e: ast.Expr, done: list[bool], mut &seen: lis
 # statement mentions, then what it holds. Both are exhaustive over Stmt with no catch-all, so
 # a form written inside a bare block or an `assert` is reached here rather than silently
 # contributing no dependency.
-fn c_const_ready_stmts(f: ast.File, body: list[ast.Stmt], done: list[bool], mut &seen: list[str]) -> bool {
+fn c_const_ready_stmts(f: ast.File, body: list[ast.Stmt], done: list[bool], mut &seen: list[str], path: str) -> bool {
 	mut i := 0
 	for i < body.len() {
 		s := body[i]
 		for e in ast.stmt_exprs(s) {
-			return false if not c_const_ready_at(f, e, done, seen)
+			return false if not c_const_ready_at(f, e, done, seen, path)
 		}
-		return false if not c_const_ready_stmts(f, ast.stmt_kids(s), done, seen)
+		return false if not c_const_ready_stmts(f, ast.stmt_kids(s), done, seen, path)
 		i = i + 1
 	}
 	return true
@@ -17870,25 +18206,6 @@ fn c_seen_fn(seen: list[str], nm: str) -> bool {
 		return true if s == nm
 	}
 	return false
-}
-
-# c_const_idx is the row this expression names, or -1 when it names no constant. Only a bare
-# identifier can: a qualified `m.K` is a field read to this parser, and a module's constants
-# flatten into one namespace before they reach here.
-fn c_const_idx(f: ast.File, e: ast.Expr) -> int {
-	return match e {
-		Expr.EIdent(nm, _, _) => c_const_row(f, nm)
-		_ => 0 - 1
-	}
-}
-
-fn c_const_row(f: ast.File, nm: str) -> int {
-	mut i := 0
-	for i < f.consts.len() {
-		return i if f.consts[i].name == nm
-		i = i + 1
-	}
-	return 0 - 1
 }
 
 # c_const_cycle_says names the constants still waiting, which is the cycle plus anything that
@@ -21431,9 +21748,30 @@ pub fn c_arr_len(mut &em: Emitter, t: ast.Ty) -> int {
 	key := c_arr_key(t)
 	n := ast.ty_arr_len(key)
 
+	# A SIBLING'S CONSTANT IS REFUSED AS A BARE READ OF IT IS (#386), since a length resolves by
+	# its own file (gen_resolve_lens): E3116 for a `pub` one, E3001 for a private one. Its value
+	# stands in, so the one finding is the only one — and it is said ONCE per file: every use of
+	# the array (`xs.len()`, an index) asks its length again.
+	if n < 0 and (c_arr_len_said(em, key) or c_bare_ambiguous(em, key, c_k_choices(em, em.at_path, key), true) or c_const_from_sibling(em, key)) {
+		v := check.chk_const_of(em, key)
+		return v.value if v.ok and v.value >= 0
+
+		return 0
+	}
+
 	raise c_diag(em, rule.Rule.ArrayLenUnresolved, f"an array length names `{key}`, and no compile-time constant this build can FOLD answers to it — GRAMMAR#array-type derives a const-expr there, so a length that names one is a literal, or arithmetic over names that are. A constant this program does not declare and one whose value is a call are both absent for that reason") if n < 0
 
 	return n
+}
+
+# c_arr_len_said is whether this file was already told about the sibling's constant `key`.
+fn c_arr_len_said(mut &em: Emitter, key: str) -> bool {
+	for d in em.diags {
+		if d.path == em.at_path {
+			return true if parser.strings_has_prefix(d.msg, f"`{key}` is not a public member of ") or parser.strings_has_prefix(d.msg, f"the constant `{key}` is declared in ") or parser.strings_has_prefix(d.msg, f"`{key}` is declared in ")
+		}
+	}
+	return false
 }
 
 fn c_tuple_cname(tys: list[ast.Ty]) -> str {
@@ -21567,7 +21905,7 @@ fn c_field_ty_of(mut &em: Emitter, target: ast.Expr, fld: str) -> ast.Ty {
 	# module row's (k_tys), not the environment's: a local shadowing the constant must not
 	# answer for it here any more than in c_fieldref
 	if c_ns_kind(em, target) == NsKind.NsModule {
-		ki := c_k_idx(em, fld)
+		ki := c_k_idx_in(em, c_ns_scope_if(em, c_ident_name(target), c_name_in(em.kc_names, fld)), fld)
 		return em.k_tys[ki] if ki >= 0
 	}
 
@@ -21739,12 +22077,13 @@ fn c_fieldref(mut &em: Emitter, target: ast.Expr, fld: str, l: int, c: int, sb: 
 		#
 		# Whether this module may read it is the same question a call asks
 		# (c_chk_visible_fn), against the rows c_const_globals recorded.
-		if c_k_idx(em, fld) >= 0 and c_ns_names_mod(em, ns, check.c_mod_of(em, em.k_decls[c_k_idx(em, fld)].path)) {
+		ki := c_k_idx_in(em, c_ns_scope_if(em, ns, c_name_in(em.kc_names, fld)), fld)
+		if ki >= 0 and c_ns_names_mod(em, ns, check.c_mod_of(em, em.k_decls[ki].path)) {
 			if em.want_index {
-				c_nx_use(em, l, c, fld, c_nx_const(em, em.k_decls[c_k_idx(em, fld)]))
+				c_nx_use(em, l, c, fld, c_nx_const(em, em.k_decls[ki]))
 			}
-			c_chk_visible_const(em, fld)
-			return "zg_" + fld
+			c_chk_visible_k(em, fld, ki)
+			return c_const_cname(em, em.k_decls[ki])
 		}
 
 		# a REAL module and a member no module declares. Falling through lowered `lib` as
@@ -26084,7 +26423,7 @@ fn c_emit_unit_as(prog0: ast.File, own0: ast.File, ft: FileTypes, ms: Mods, whol
 	# is what makes that invariant hold for a multi-unit program, at the place it already lives,
 	# and it is what lets the declaration passes below go back to reading the WHOLE program.
 	seen := diags.len()
-	mut em := Emitter([], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], false, false, false, false, [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], 0, [], 0, [], [], false, "", "", [], [], ast.Ty.TVoid, 0, "", 0, 0, 0, 0, "", diags, 0, 0, [], [], [], [], [], false, 0, false, "", 0, false, false, [], [], [], [], [], [], [], [], [], [], [], "", want_lints, [], [], [], [], [], [], [], [], [], [], [], [], false, 0, [], [], "", c_nosub(), [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], false, ast.no_index(), [], [], [], [], [], [], [], [], [], [], [], [], false, false, [], [], [])
+	mut em := Emitter([], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], false, false, false, false, [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], 0, [], 0, [], [], false, "", "", [], [], ast.Ty.TVoid, 0, "", 0, 0, 0, 0, "", diags, 0, 0, [], [], [], [], [], false, 0, false, "", 0, false, false, [], [], [], [], [], [], [], [], [], [], [], "", want_lints, [], [], [], [], [], [], [], [], [], [], [], [], false, 0, [], [], "", c_nosub(), [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], false, ast.no_index(), [], [], [], [], [], [], [], [], [], [], [], [], false, false, [], [], [], [], [], [], [])
 
 	# ASSIGNED, NOT PASSED. Every argument above is a zero value, and `layering` asserts that
 	# — it lines the call up with the fields by KIND, which only works while nothing in it

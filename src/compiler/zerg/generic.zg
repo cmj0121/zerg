@@ -33,6 +33,7 @@ import (
 	"./ast"
 	"./emit"
 	"./lexer"
+	"./lint"
 )
 fn gen_ty_key(t: ast.Ty) -> str {
 	mut out := ""
@@ -245,64 +246,153 @@ pub struct TySubst {
 # THE TABLE IS A FIXPOINT AND NOT A SCAN IN ORDER. `const B = A * 2` may be written above
 # `const A = 2`, and a single pass would answer for one order and not the other — which would
 # make where a constant sits decide whether a type resolves.
+#
+# AND A LENGTH IS RESOLVED BY ITS DECLARATION'S FILE (#386): a module constant is its file's, so
+# `[int; LIMIT]` means the `LIMIT` the same file declares, and two files of one module may each
+# declare their own. A name another file declares is left unresolved here, and the emitter
+# reports it with the sentence a bare read of it gets (c_arr_len). A `_test.zg` file names its
+# whole module, as it does everywhere else.
 pub fn gen_resolve_lens(f: ast.File) -> ast.File {
-	mut keys: list[str] = []
-	mut vals: list[str] = []
-	gen_len_table(f, keys, vals)
-
-	mut noapps: list[ast.TyApp] = []
-	su := TySubst([], [], keys, vals, noapps, "")
+	mut lt := gen_len_table(f)
+	mut vs := LenViews([], [])
 
 	mut structs: list[ast.StructDecl] = []
 	for sd in f.structs {
+		su := gen_len_view(lt, vs, sd.path)
 		structs.append(ast.StructDecl(sd.name, subst_fields(su, sd.fields), sd.is_pub, sd.path, sd.line, sd.col, sd.tparams, sd.name_line, sd.name_col, sd.end_line, sd.end_col))
 	}
 	mut enums: list[ast.EnumDecl] = []
 	for ed in f.enums {
+		su := gen_len_view(lt, vs, ed.path)
 		enums.append(ast.EnumDecl(ed.name, subst_variants(su, ed.variants), ed.tparams, ed.is_pub, ed.path, ed.line, ed.col, ed.name_line, ed.name_col, ed.end_line, ed.end_col))
 	}
 	mut types: list[ast.TypeDecl] = []
 	for td in f.types {
+		su := gen_len_view(lt, vs, td.path)
 		types.append(ast.TypeDecl(td.name, subst_ty(su, td.under), td.is_pub, td.path, td.line, td.col, td.name_line, td.name_col, td.end_line, td.end_col))
 	}
 	mut consts: list[ast.ConstDecl] = []
 	for cd in f.consts {
+		su := gen_len_view(lt, vs, cd.path)
 		consts.append(ast.ConstDecl(cd.name, cd.recv, subst_ty(su, cd.ty), cd.has_ty, cd.is_mut, cd.is_const, cd.is_pub, cd.in_unsafe, subst_expr(su, cd.value), cd.path, cd.line, cd.col, cd.name_line, cd.name_col, cd.end_line, cd.end_col))
 	}
 	mut fns: list[ast.FnDecl] = []
 	for fd in f.fns {
-		fns.append(gen_len_fn(su, fd))
+		fns.append(gen_len_fn(gen_len_view(lt, vs, fd.path), fd))
 	}
 	mut specs: list[ast.SpecDecl] = []
 	for sp in f.specs {
-		specs.append(ast.SpecDecl(sp.name, sp.params, sp.supers, sp.super_args, gen_len_fns(su, sp.reqs), sp.is_pub, sp.path, sp.line, sp.col, sp.name_line, sp.name_col, sp.end_line, sp.end_col))
+		specs.append(ast.SpecDecl(sp.name, sp.params, sp.supers, sp.super_args, gen_len_fns(gen_len_view(lt, vs, sp.path), sp.reqs), sp.is_pub, sp.path, sp.line, sp.col, sp.name_line, sp.name_col, sp.end_line, sp.end_col))
 	}
 	return ast.File(f.imports, structs, enums, specs, f.impls, fns, types, consts, f.derive_on, f.derive_spec, f.derive_at, f.stmts, f.ty_quals, f.ty_apps, f.ty_uses, f.tp_scopes)
 }
 
+# LenTable is every folded module constant with the FILE that declares it, row for row.
+struct LenTable {
+	pub names: list[str]
+	pub paths: list[str]
+	pub vals: list[str]
+}
+
+# LenViews is each file's substitution, built the first time a declaration of that file asks:
+# a program is thousands of declarations in a few hundred files.
+struct LenViews {
+	pub paths: list[str]
+	pub sus: list[TySubst]
+}
+
+# gen_len_view is the substitution a declaration in `path` resolves its lengths with: the names
+# its own file declares, and — for a `_test.zg` file — every other row after them.
+fn gen_len_view(mut &lt: LenTable, mut &vs: LenViews, path: str) -> TySubst {
+	mut i := 0
+	for i < vs.paths.len() {
+		return vs.sus[i] if vs.paths[i] == path
+
+		i = i + 1
+	}
+
+	mut keys: list[str] = []
+	mut vals: list[str] = []
+	gen_len_rows(lt, path, lint.is_test_file(ast.mod_name(path)), keys, vals)
+
+	mut noapps: list[ast.TyApp] = []
+	su := TySubst([], [], keys, vals, noapps, "")
+	vs.paths.append(path)
+	vs.sus.append(su)
+	return su
+}
+
+# gen_len_rows is the rows a file in `path` reads: its own, then — for a file naming its whole
+# module — the rest that one file alone declares.
+fn gen_len_rows(mut &lt: LenTable, path: str, all: bool, mut &keys: list[str], mut &vals: list[str]) {
+	mut i := 0
+	for i < lt.names.len() {
+		if lt.paths[i] == path {
+			keys.append(lt.names[i])
+			vals.append(lt.vals[i])
+		}
+		i = i + 1
+	}
+	return if not all
+
+	i = 0
+	for i < lt.names.len() {
+		if lt.paths[i] != path and not gen_len_twice(lt, lt.names[i], path) {
+			keys.append(lt.names[i])
+			vals.append(lt.vals[i])
+		}
+		i = i + 1
+	}
+}
+
+# gen_len_twice is whether two files other than `path` declare `name`. Such a length is left for
+# the emitter, which refuses the bare name a file naming its whole module cannot choose
+# (c_k_choices) rather than resolving it to whichever row came first.
+fn gen_len_twice(mut &lt: LenTable, name: str, path: str) -> bool {
+	mut n := 0
+	mut i := 0
+	for i < lt.names.len() {
+		if lt.names[i] == name and lt.paths[i] != path {
+			n = n + 1
+		}
+		i = i + 1
+	}
+	return n > 1
+}
+
 # gen_len_table folds every module-level constant an array length may name. A `mut` binding is
 # not one however it was initialised — GRAMMAR#array-type wants a const-expr, and a name that
-# can be assigned to is not a compile-time value.
-fn gen_len_table(f: ast.File, mut &keys: list[str], mut &vals: list[str]) {
+# can be assigned to is not a compile-time value. An initializer reads the rows its own file's
+# lengths would (gen_len_rows).
+fn gen_len_table(f: ast.File) -> LenTable {
+	mut lt := LenTable([], [], [])
 	mut again := true
 	for again {
 		again = false
 		for cd in f.consts {
-			continue if cd.is_mut or cd.recv != "" or gen_len_known(keys, cd.name)
+			continue if cd.is_mut or cd.recv != "" or gen_len_known(lt, cd.name, cd.path)
 
+			mut keys: list[str] = []
+			mut vals: list[str] = []
+			gen_len_rows(lt, cd.path, lint.is_test_file(ast.mod_name(cd.path)), keys, vals)
 			v := gen_len_fold(keys, vals, cd.value)
 			continue if v < 0
 
-			keys.append(cd.name)
-			vals.append(strconv.to_string(v, 10))
+			lt.names.append(cd.name)
+			lt.paths.append(cd.path)
+			lt.vals.append(strconv.to_string(v, 10))
 			again = true
 		}
 	}
+	return lt
 }
 
-fn gen_len_known(keys: list[str], name: str) -> bool {
-	for k in keys {
-		return true if k == name
+fn gen_len_known(mut &lt: LenTable, name: str, path: str) -> bool {
+	mut i := 0
+	for i < lt.names.len() {
+		return true if lt.names[i] == name and lt.paths[i] == path
+
+		i = i + 1
 	}
 	return false
 }

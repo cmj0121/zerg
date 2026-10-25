@@ -1,0 +1,6 @@
+# The other importer of `core`. Importing it here does not run `core`'s `init()` again.
+import "/core"
+
+pub fn n() -> int {
+	return core.n()
+}

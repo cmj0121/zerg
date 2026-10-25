@@ -1,0 +1,12 @@
+# Imported by both `left` and `right`. Its two `init()` blocks run once between them.
+init () {
+	print 1
+}
+
+init () {
+	print 2
+}
+
+pub fn n() -> int {
+	return 4
+}

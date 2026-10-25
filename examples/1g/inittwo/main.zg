@@ -1,0 +1,18 @@
+# Two `init()` functions of one imported module, each once, before `main`.
+#   zerg build examples/1g/inittwo/main.zg
+# Expected output:
+#   1
+#   2
+#   3
+#   0
+#
+# BOTH RUN, IN DECLARATION ORDER, BEFORE `main`'s FIRST STATEMENT (#296). `m` declares
+# two, and the `3` is the first thing `main` prints, so it lands under them. Calling into
+# the module afterwards does not run them again: the `0` is `m.touch()`, and nothing
+# reprints above it.
+import "./m"
+
+fn main() {
+	print 3
+	print m.touch()
+}

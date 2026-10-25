@@ -74,6 +74,9 @@ specification. Each of these is a **directory**: an entry file and the modules i
 | [`1g/shapedconst/`](1g/shapedconst) | a module constant of a spelled type — a tuple, an optional                   |
 | [`1g/modtype/`](1g/modtype)         | a type reached through an import is also its constructor                     |
 | [`1g/init/`](1g/init)               | an imported module's `init()` runs once, before `main`'s first line          |
+| [`1g/inittwo/`](1g/inittwo)         | two `init()` in one module run once, before `main`'s first statement         |
+| [`1g/initagain/`](1g/initagain)     | a second module importing the first does not run those `init()` again        |
+| [`1g/initidle/`](1g/initidle)       | a module the program never imports does not run its `init()`                 |
 | [`1g/initorder/`](1g/initorder)     | two independent constants — the module NAME breaks the tie, not import order |
 | [`1g/stdlibwins/`](1g/stdlibwins)   | a bare name is the standard library, beside a project module of that name    |
 | [`1g/reexport/`](1g/reexport)       | `import pub` — a module putting another module's name on its surface         |

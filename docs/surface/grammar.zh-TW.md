@@ -691,10 +691,11 @@ init-decl   ::= 'init' '(' ')' block
   不需分隔符（每個 spec 是 `pub`? 加一個字串再加可選的 `as name`）,`( … )` 內的換行不具意義。**沒有 selective
   （`from … import`）或 glob import**——要 unqualified 使用某成員,就本地綁定（`split := text.split`）,因為函式是值。
 
-- **`init()`**（[`GRAMMAR#init-decl`](../../GRAMMAR)）是 module 的**惰性**初始化,首次使用時執行。一個 module 可宣告**多個** `init()`;它們依**宣告
-  （FIFO）順序**執行,每個**恰好一次**。**safe 程式碼無可變全域**:頂層 binding 不可 `mut`——頂層 `:=` 是**不可變
-  的模組常數**,於 init 時求值。唯一例外是 module 層級 **`unsafe { … }`** 分組內的 `mut` 綁定(group 12);要安全共享可變全域狀態,用不可變 `:=`
-  持有 stdlib **`Atomic[T]`**。
+- **`init()`**（[`GRAMMAR#init-decl`](../../GRAMMAR)）在它所屬的 module **第一次被 import 時跑一次**，於 `main`
+  的第一個敘述之前。它不在首次使用某個名字時跑，程式沒有 import 的 module 也不跑它。第二次 import 不會再跑。一個
+  module 可宣告**多個** `init()`；它們依**宣告（FIFO）順序**執行。**safe 程式碼無可變全域**:頂層 binding 不可
+  `mut`——頂層 `:=` 是**不可變的模組常數**,於 init 時求值。唯一例外是 module 層級 **`unsafe { … }`** 分組內的
+  `mut` 綁定(group 12);要安全共享可變全域狀態,用不可變 `:=` 持有 stdlib **`Atomic[T]`**。
 - **program** 是以入口檔為根的 build,其入口檔定義頂層 `fn main(…) -> Result[nil]`;`main` 是普通函式(非保留)。
   **`package`** 是 distribution/versioning 單位——由 build tool 選定的目錄樹,**無 in-source `package` 宣告**。
 

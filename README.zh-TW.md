@@ -99,6 +99,9 @@ Zero-dependency 分兩層。**runtime**——透過平台 C 函式庫碰 OS、�
 `fs`、`os`、`strings`、`ascii`、`cli`、`strconv`、`json`、`log`、`sha256`、`time`、`math`、`rand`、`testing`——以
 `import "<name>"` 取得。
 
+`init()` 在它所屬的 module 第一次被 import 時跑一次,在 `main` 的第一個敘述之前。程式沒有 import 的 module 不會跑
+它,兩個地方 import 同一個 module 也只跑一次([packages](docs/runtime/package.zh-TW.md))。
+
 ## 文件
 
 **[Getting started](docs/getting-started.zh-TW.md)** 把 `hello, world` 帶到一支多檔案的程式——工具鏈、

@@ -99,15 +99,17 @@ _E4068 these constants depend on each other and none can be given a value first_
 `mk()` 讀 `B`，`A` 會拿到 `B` 被宣告成的那個值。這曾是這條排序規則唯一的 silent-wrong——`A` 持有零值而且
 沒有任何診斷——已由 #14 關閉。
 
-一個 module 也可定義 **`init()`** 函式(**可多個**)——它一次性的 setup。它們**恰好跑一次**,在 **`main` 的第一個敘述
-之前**,跨 module 依**相依序**(一個 module 的 imports 先備妥,然後才輪到它自己),module 內依**宣告(FIFO)順序**。
+一個 module 也可定義 **`init()`** 函式(**可多個**)——它一次性的 setup。每一個在它所屬的 module **第一次被 import
+時恰好跑一次**,在 **`main` 的第一個敘述之前**。跨 module 是**相依序**(一個 module 的 imports 先備妥,然後才輪到它
+自己);module 內是**宣告(FIFO)順序**。另一個 module 再 import 同一個,不會再跑。程式沒有 import 的 module 不會跑。
 `init()` 承載多步或有副作用的啟動——開資源、註冊、seed——而不是把它藏進 constant 的 initializer,並備妥該 module 的
 immutable 狀態。
 
-**是及早的,不是首次使用時。** 這次建置搆得到的每一個 `init()` 都會跑,包含一個執行從未碰到的 module 裡的那個。那是
-Go 的模型,也是這個語言採用的那一個:把它做成惰性的,代價是每一個 module 的每一次使用都要一道 guard,換回來的只有
-「某人 import 了卻沒有呼叫的 module」的啟動成本——而一次解析了那個 import 的建置,在其他每一個意義上都已經付過了。
-及早真正的代價,是啟動時的工作不能任意昂貴,而那件事的答案不是讓 `init()` 更惰性,是在裡面少做一點。
+**在被 import 時,不是首次使用時。** 第一次呼叫進 module 沒有一道 guard:建置解析到的 import 會在 `main` 之前備妥,
+包含一個程式從未呼叫其名字的 module。建置沒有走到的 module 不會被備妥。把它做成惰性的,代價是每一個 module 的每一次
+使用都要一道 guard,換回來的只有「某人 import 了卻沒有呼叫的 module」的啟動成本——而一次解析了那個 import 的建置,
+在其他每一個意義上都已經付過了。在 import 時跑真正的代價,是啟動時的工作不能任意昂貴,而那件事的答案不是把 `init()`
+延後,是在裡面少做一點。
 
 仍**沒有可變全域**:共享的可變狀態以值傳遞或走 channel,絕不透過 module 層級的變數——頂層 binding 在 module 層級
 `unsafe { … }` 分組外不得為 `mut`,而在分組**裡面**的那個是 **module-private** 的,永遠不是 `pub`(見可見性)。

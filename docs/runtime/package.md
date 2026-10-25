@@ -123,18 +123,19 @@ A read that goes **through a call** is an edge like any other: `const A: str = m
 `const B: str = "x"`, with `mk()` reading `B`, gives `A` the value `B` was declared with. It was the
 ordering rule's one silent-wrong — `A` held the zero value and nothing said so — and #14 closed it.
 
-A module may also define **`init()`** functions (**multiple allowed**) — its one-time setup. They run
-**exactly once**, **before `main`'s first statement**, in **dependency order** across modules (a module's
-imports are readied before it is) and in **declaration (FIFO) order** within a module. `init()` carries
-multi-step or effectful startup — opening a resource, registering, seeding — rather than hiding it inside a
-constant's initializer, and readies that module's immutable state.
+A module may also define **`init()`** functions (**multiple allowed**) — its one-time setup. Each runs
+**exactly once, when its module is first imported**, before `main`'s first statement. Across modules that is
+**dependency order** (a module's imports are readied before it is); within a module it is **declaration (FIFO)
+order**. A second module that imports the first does not run them again. A module the program never imports
+does not run them. `init()` is where effectful startup goes — opening a resource, registering, seeding —
+rather than inside a constant's initializer, and it readies that module's immutable state.
 
-**Eagerly, and not at first use.** Every `init()` the build reaches runs, including one in a module the run
-never otherwise touches. That is Go's model and it is the one this language takes: making it lazy costs a
-guard on every use of every module, and buys back only the startup of a module somebody imported and did not
-call — which a build that resolved the import has already paid for in every other way. What eagerness does
-cost is that startup work is not free to be arbitrarily expensive, and the answer to that is not a lazier
-`init()` but less work in it.
+**When it is imported, not at first use.** There is no guard on the first call into the module: an import the
+build resolved is readied before `main`, including one whose names the program never calls. A module the build
+never reached is not readied. Making it lazy would cost a guard on every use of every module, and would buy
+back only the startup of a module somebody imported and did not call — which a build that resolved the import
+has already paid for in every other way. What running at import does cost is that startup work is not free to
+be arbitrarily expensive, and the answer is less work in `init()`, not a later one.
 
 There is still **no mutable global**: shared mutable state travels by value or through channels, never a
 module-level variable — a top-level binding may not be `mut` outside a module-level `unsafe { … }` group,

@@ -106,6 +106,10 @@ platform C library and nothing else — is fixed by both the specification and i
 binding. The packages that import cleanly today — `io`, `fs`, `os`, `strings`, `ascii`, `cli`,
 `strconv`, `json`, `log`, `sha256`, `time`, `math`, `rand`, `testing` — are reached with `import "<name>"`.
 
+An `init()` runs once, when its module is first imported, before `main`'s first statement. A module the
+program never imports does not run it, and importing the same module from two places still runs it once
+([packages](docs/runtime/package.md)).
+
 ## Documentation
 
 **[Getting started](docs/getting-started.md)** takes `hello, world` to a program in more than one

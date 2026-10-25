@@ -1,0 +1,6 @@
+# One importer of `core`. `/core` is the package root, where the entry sits.
+import "/core"
+
+pub fn n() -> int {
+	return core.n()
+}

@@ -1,0 +1,9 @@
+const LIMIT := 1
+const NEXT := LIMIT + 10
+
+pub fn from_one() {
+	xs: [int; LIMIT] = [7]
+	print LIMIT
+	print NEXT
+	print xs.len()
+}

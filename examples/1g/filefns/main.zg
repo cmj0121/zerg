@@ -1,0 +1,50 @@
+# A private function of one name in several files of one module.
+#   zerg build examples/1g/filefns/main.zg
+# Expected output:
+#   100
+#   1
+#   1
+#   1
+#   1
+#   1
+#   1
+#   22
+#   22
+#   24
+#   23
+#   35
+#   35
+#   10
+#   10
+#   20
+#
+# A PRIVATE FUNCTION IS ITS FILE'S (#386), as a private generic, struct, enum or `type` is.
+# Both files of `pair` declare a private `helper`, and they differ in what they answer, in how
+# many parameters they take and in a default: each file's bare `helper(…)` is its own — called
+# directly, through `spawn`, through `defer`, and taken as a value. So is each file's `later`.
+#
+# A `pub` ONE BESIDE A PRIVATE ONE is two functions too: `mixed.helper()` reaches the public
+# one, and inside `mixed` each file's bare call is still its own. Two `pub` ones in one module
+# would be refused (E4077) — a qualified call could not choose between them.
+#
+# This file's own `helper` is a third: another module's private names never reach it.
+import (
+	"./mixed"
+	"./pair"
+)
+
+fn helper(out: chan[int]<-) -> int {
+	out <- 100
+	return 100
+}
+
+fn main() {
+	ch := chan[int](1)
+	spawn helper(ch)
+	print (<-ch) ?? 0
+	pair.from_one()
+	pair.from_two()
+	print mixed.helper()
+	print mixed.from_one()
+	print mixed.from_two()
+}

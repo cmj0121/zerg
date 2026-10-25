@@ -1,0 +1,8 @@
+# The module `main` imports.
+init () {
+	print 2
+}
+
+pub fn touch() -> int {
+	return 0
+}

@@ -65,10 +65,15 @@ entry 檔，加上它所 import 的模組。
 | [`1g/pubconst/`](1g/pubconst)       | `pub COUNT := 3` 是真正的成員；模組繫結不需要 `const`            |
 | [`1g/pubname/`](1g/pubname)         | 兩個模組可以宣告同一個公開名字；由限定呼叫來選                   |
 | [`1g/generics/`](1g/generics)       | 多個檔案中同名的泛型各屬於自己的檔案；由限定呼叫來選             |
+| [`1g/filefns/`](1g/filefns)         | 多個檔案中同名的私有函式各屬於自己的檔案                         |
+| [`1g/fileconsts/`](1g/fileconsts)   | 多個檔案中同名的私有模組常數各屬於自己的檔案                     |
 | [`1g/modconst/`](1g/modconst)       | 模組常數是同一個物件，不管在哪裡讀都一樣                         |
 | [`1g/shapedconst/`](1g/shapedconst) | 有拼出型別的模組常數——tuple、optional                            |
 | [`1g/modtype/`](1g/modtype)         | 透過 import 抵達的型別，同時也是它的建構子                       |
 | [`1g/init/`](1g/init)               | 被 import 的模組，它的 `init()` 在 `main` 第一行之前跑一次       |
+| [`1g/inittwo/`](1g/inittwo)         | 一個 module 的兩個 `init()` 各跑一次，在 `main` 的第一個敘述之前 |
+| [`1g/initagain/`](1g/initagain)     | 第二個 module 再 import 同一個，那些 `init()` 不會再跑           |
+| [`1g/initidle/`](1g/initidle)       | 程式沒有 import 的 module 不會跑它的 `init()`                    |
 | [`1g/initorder/`](1g/initorder)     | 兩個互不相干的常數 —— 打破平手的是模組**名稱**，不是 import 順序 |
 | [`1g/stdlibwins/`](1g/stdlibwins)   | 裸名字永遠是標準函式庫,即使旁邊就有一個同名的專案模組            |
 | [`1g/reexport/`](1g/reexport)       | `import pub`——一個模組把另一個模組的名字放到自己的表面上         |

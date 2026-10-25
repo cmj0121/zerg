@@ -802,9 +802,10 @@ init-decl   ::= 'init' '(' ')' block
   inside the `( … )` are insignificant. There is **no selective (`from … import`) or glob import** — to use a
   member unqualified, bind it locally (`split := text.split`), since a function is a value.
 
-- **`init()`** ([`GRAMMAR#init-decl`](../../GRAMMAR)) is a module's **lazy** setup, run on first use. A module may
-  declare **several** `init()`
-  blocks; they run in **declaration (FIFO) order**, each **exactly once**. There are **no mutable globals in
+- **`init()`** ([`GRAMMAR#init-decl`](../../GRAMMAR)) runs **once, when its module is first imported**, before
+  `main`'s first statement. It does not run on first use of a name, and a module the program never imports does
+  not run it. A second import does not run it again. A module may declare **several** `init()` blocks; they run
+  in **declaration (FIFO) order**. There are **no mutable globals in
   safe code**: a top-level binding may not be `mut` — a top-level `:=` is an **immutable module constant**
   evaluated at init. The one exception is a `mut` binding inside a module-level **`unsafe { … }`** group
   (group 12); the safe way to share mutable

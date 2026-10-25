@@ -1,0 +1,12 @@
+# The module `main` imports. Two `init()` blocks, in the order they are written.
+init () {
+	print 1
+}
+
+init () {
+	print 2
+}
+
+pub fn touch() -> int {
+	return 0
+}

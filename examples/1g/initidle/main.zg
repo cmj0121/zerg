@@ -1,0 +1,14 @@
+# A module the program never imports does not run its `init()`.
+#   zerg build examples/1g/initidle/main.zg
+# Expected output:
+#   2
+#   0
+#
+# `used` IS IMPORTED, so its `init()` prints `2` before `main` (#296). `idle` sits beside
+# it and its `init()` would print `9`, and `main` does not import it, so `9` is not here.
+# The `0` is `used.touch()`.
+import "./used"
+
+fn main() {
+	print used.touch()
+}

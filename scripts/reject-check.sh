@@ -139,10 +139,13 @@ reject() {
 
 	# at=LINE:COL narrows the place assertion below to a SPECIFIC line — for a case whose
 	# whole claim is that the finding sits at the declaration, not at a use site.
-	local at="" emit_max="" fl
+	local at="" emit_max="" findings="" fl
 	for fl in $flags; do
 		case $fl in
 		at=*) at=${fl#at=} ;;
+		# `findings=N` is `one-finding` for a case whose claim is N messages — two rules that
+		# each answer one half of a program, where a third would be one of them said twice.
+		findings=*) findings=${fl#findings=} ;;
 		# `emit-max=N` runs the case with `$ZERG_EMIT_MAX` set, and it is the only way to
 		# write a case for a rule about a program's SIZE: the ceiling is an environment
 		# variable, and lowering it is cheaper than writing a program that reaches the real
@@ -265,11 +268,17 @@ reject() {
 	# that keeps a refused name resolvable ON PURPOSE (so its uses do not each add a
 	# second finding) is asserted here, since a second message would match every other
 	# assertion and still be the regression.
-	if has_flag "$flags" one-finding; then
+	if has_flag "$flags" one-finding && [ -n "$findings" ]; then
+		echo "MARKERS   $name — \`one-finding\` and \`findings=$findings\` both pin the count; keep one"
+		fail=$((fail + 1))
+		return
+	fi
+	has_flag "$flags" one-finding && findings=1
+	if [ -n "$findings" ]; then
 		local found
 		found=$(printf '%s\n' "$out" | grep -c '^error:')
-		if [ "$found" -ne 1 ]; then
-			echo "COUNT     $name — wanted exactly one finding, got $found"
+		if [ "$found" -ne "$findings" ]; then
+			echo "COUNT     $name — wanted exactly $findings finding(s), got $found"
 			fail=$((fail + 1))
 			return
 		fi
@@ -1858,6 +1867,60 @@ fn main() {
 --- util/text/mod.zg
 pub fn shout(s: str) -> str {
 	return s + "!"
+}
+EOF
+
+# EVERY FILE THAT DECLARES THE NAME, not the first one the walk records: the table used to
+# keep one file per name, so an import in any OTHER declaring file was asked of the wrong one
+# and went through. Two shapes, both in a module's second file. A plain `strconv` in a sibling
+# file and a template in this one went quiet when the walk moved templates after plain
+# functions (#388); two templates, one per file, never reached the rule at all.
+reject an-import-beside-a-generic-a-sibling-declares-plain E3085 'is already a function in this file' <<'EOF'
+import "./m"
+
+fn main() {
+	print m.go()
+}
+--- m/mod.zg
+import pub "./one"
+--- m/one.zg
+import "strconv"
+
+pub fn go() -> str {
+	return strconv.to_string(1, 10)
+}
+
+fn strconv[T](x: T) -> T {
+	return x
+}
+--- m/two.zg
+fn strconv() -> int {
+	return 3
+}
+EOF
+
+reject an-import-beside-a-generic-a-sibling-also-declares E3085 'is already a function in this file' <<'EOF'
+import "./m"
+
+fn main() {
+	print m.go()
+}
+--- m/mod.zg
+import pub "./one"
+import pub "./two"
+--- m/one.zg
+fn strconv[T](x: T) -> T {
+	return x
+}
+--- m/two.zg
+import "strconv"
+
+pub fn go() -> str {
+	return strconv.to_string(1, 10)
+}
+
+fn strconv[T](x: T) -> T {
+	return x
 }
 EOF
 
@@ -4542,7 +4605,12 @@ EOF
 # therefore silent AND the template won, including against a module: `strconv.to_string` and a
 # local `to_string[T]` are one name here, and the local one answered.
 
-reject generic-shadows-a-plain-function E3061 <<'EOF'
+#
+# ONE PAIR, ONE REPORT (#388): a pair that holds a template is E3060's or E3061's, and E4073
+# stays quiet about it — in either source order. It is suppressed PER PAIR, not per name: two
+# plain `idg`s beside a template still meet each other, and E4073 says where the first PLAIN
+# one is, never the template's line.
+reject generic-shadows-a-plain-function E3061 one-finding <<'EOF'
 fn idg[T](x: T) -> T {
 	return x
 }
@@ -4556,13 +4624,45 @@ fn main() {
 }
 EOF
 
-reject generic-declared-twice E3060 <<'EOF'
+reject a-plain-function-then-a-generic-of-its-name E3061 at=5:1 one-finding <<'EOF'
+fn idg(x: int) -> int {
+	return x + 100
+}
+
+fn idg[T](x: T) -> T {
+	return x
+}
+
+fn main() {
+	print(f"{idg(1)}")
+}
+EOF
+
+reject generic-declared-twice E3060 one-finding <<'EOF'
 fn idg[T](x: T) -> T {
 	return x
 }
 
 fn idg[U](x: U, y: U) -> U {
 	return y
+}
+
+fn main() {
+	print(f"{idg(1)}")
+}
+EOF
+
+reject two-plain-functions-beside-a-generic-of-their-name E3061 'E4073 `idg` is declared twice in this file — the first is at line 5' findings=2 <<'EOF'
+fn idg[T](x: T) -> T {
+	return x
+}
+
+fn idg(x: int) -> int {
+	return x + 100
+}
+
+fn idg(x: int) -> int {
+	return x + 200
 }
 
 fn main() {
@@ -7304,7 +7404,7 @@ EOF
 # And the same rule for a MODULE CONSTANT, which is the one declaration that reached every
 # body by being BOUND rather than looked up — so the rule is enforced by not binding a
 # sibling's, and the read then lands where an unknown name would with a sentence of its own.
-reject bare-const-from-a-sibling-file E3116 'and a file names what it uses' seed-gap <<'EOF'
+reject bare-const-from-a-sibling-file E3116 'and a file names what it uses' seed-gap one-finding <<'EOF'
 import "./pair"
 
 fn main() {
@@ -7316,6 +7416,26 @@ pub fn both() -> int {
 }
 --- pair/two.zg
 pub const LIMIT := 7
+--- pair/mod.zg
+import pub "./one"
+import pub "./two"
+EOF
+
+# A SIBLING'S PRIVATE CONSTANT READ BARE IS E3001 ALONE (#387), as a private fn is (#384):
+# E3116's fix — spell it `two.LIMIT` — cannot work for a name its file never exported, so the
+# privacy rule speaks and the spelling rule stays quiet; the PUBLIC constant above keeps E3116.
+reject a-sibling-private-const-named-bare E3001 '`LIMIT` is not a public member of' seed-gap one-finding <<'EOF'
+import "./pair"
+
+fn main() {
+	print pair.both()
+}
+--- pair/one.zg
+pub fn both() -> int {
+	return LIMIT
+}
+--- pair/two.zg
+const LIMIT := 7
 --- pair/mod.zg
 import pub "./one"
 import pub "./two"
@@ -9468,11 +9588,6 @@ fn main() {
 }
 EOF
 
-# TWO FILES of one module declaring a name. Two DIFFERENT modules each declaring a private one
-# is legal — they take a module tag in C — so what this pins is the collision no tag can
-# separate. The sentence is pinned because the case below it shares the shape and not the rule:
-# what E4077 has to say here is that there are two FILES, which is the thing this compiler
-# cannot tell from two modules and used to assert it could.
 # TWO `pub` FILES OF ONE MODULE ARE ONE MODULE (#87). The `pub` test used to be asked before
 # the same-module test, so this program was told "two modules both define `work`" — which sends
 # a reader looking for a second module that is not there. The two rules also have different
@@ -9498,7 +9613,11 @@ pub fn first() -> int {
 }
 EOF
 
-reject two-files-of-one-module-declaring-a-function E4077 'both define `work`' <<'EOF'
+# TWO `pub` ONES AFTER A PRIVATE ONE. Files of one module may each declare a private function of
+# one name, and a `pub` one beside them (#386, `examples/1g/filefns`) — so the first declaration
+# a second `pub` one meets may be the private one, and the rule must look past it. The sentence
+# names the two PUBLIC files: naming `a.zg` would refuse the one pair that is legal.
+reject two-public-functions-of-one-module-after-a-private-one E4077 'one/b.zg` and `' <<'EOF'
 import "./one"
 
 fn main() {
@@ -9513,12 +9632,290 @@ pub fn first() -> int {
 	return work()
 }
 --- one/b.zg
-fn work() -> int {
+pub fn work() -> int {
 	return 2
+}
+--- one/c.zg
+pub fn work() -> int {
+	return 3
 }
 --- one/mod.zg
 import pub "./a"
-import pub "./b"
+EOF
+
+# A THIRD FILE CALLING BARE a name two files of its module keep private. Neither is its own, and
+# the finding names the first declaring file SORTED — `aa.zg` — and not the first imported, so it
+# does not move when `mod.zg` is reordered (#386; the generics' rule, c_generic_row). One finding:
+# E3114's advice to import `aa` would only meet E3001.
+reject a-third-file-calling-a-name-two-files-keep-private E3001 'lib/aa.zg` — the file' one-finding <<'EOF'
+import "./lib"
+
+fn main() {
+	print lib.go()
+}
+--- lib/zz.zg
+fn helper() -> int {
+	return 2
+}
+
+pub fn z() -> int {
+	return helper()
+}
+--- lib/aa.zg
+fn helper() -> int {
+	return 1
+}
+
+pub fn a() -> int {
+	return helper()
+}
+--- lib/mm.zg
+pub fn go() -> int {
+	return helper()
+}
+--- lib/mod.zg
+import (
+	pub "./zz"
+	pub "./aa"
+	pub "./mm"
+)
+EOF
+
+# AND WHEN ONE OF THEM IS `pub`, the public one answers first: it is the one an import would
+# reach, so E3114's advice — import `zz` — is advice that works.
+reject a-third-file-calling-a-name-one-file-keeps-public E3114 'spell it `zz.helper`' one-finding <<'EOF'
+import "./lib"
+
+fn main() {
+	print lib.go()
+}
+--- lib/zz.zg
+pub fn helper() -> int {
+	return 2
+}
+--- lib/aa.zg
+fn helper() -> int {
+	return 1
+}
+
+pub fn a() -> int {
+	return helper()
+}
+--- lib/mm.zg
+pub fn go() -> int {
+	return helper()
+}
+--- lib/mod.zg
+import (
+	pub "./zz"
+	pub "./aa"
+	pub "./mm"
+)
+EOF
+
+# A SIBLING'S IMPORT NAMES THAT FILE. `aa.helper` is `aa.zg`'s private `helper`, refused — not
+# the module's public one in `zz.zg`, which the module alone would answer (c_ns_scope).
+reject a-sibling-qualifier-naming-its-files-private-function E3001 'lib/aa.zg` — the file' one-finding <<'EOF'
+import "./lib"
+
+fn main() {
+	print lib.go()
+}
+--- lib/zz.zg
+pub fn helper() -> int {
+	return 2
+}
+--- lib/aa.zg
+fn helper() -> int {
+	return 1
+}
+
+pub fn a() -> int {
+	return helper()
+}
+--- lib/mm.zg
+import "./aa"
+
+pub fn go() -> int {
+	return aa.helper()
+}
+--- lib/mod.zg
+import (
+	pub "./zz"
+	pub "./aa"
+	pub "./mm"
+)
+EOF
+
+# THE SAME RULES FOR A MODULE CONSTANT (#386). Files of one module may each declare a private
+# constant of one name, and a `pub` one beside them (`examples/1g/fileconsts`); two `pub` ones
+# are the collision a qualified read from outside cannot choose between. The seed builds it and
+# answers the second file's.
+reject two-public-constants-of-one-module E4077 'both define `LIMIT` — one module offers one public name once' seed-gap <<'EOF'
+import "./lib"
+
+fn main() {
+	print lib.LIMIT
+}
+--- lib/one.zg
+pub const LIMIT := 1
+--- lib/two.zg
+pub const LIMIT := 2
+--- lib/mod.zg
+import pub "./one"
+import pub "./two"
+EOF
+
+# A THIRD FILE READING BARE a constant two files of its module keep private: the finding names
+# the first declaring file SORTED — `aa.zg` — not the first imported, as for a function. The
+# seed builds it and answers one of them.
+reject a-third-file-reading-a-constant-two-files-keep-private E3001 'lib/aa.zg` — the file' seed-gap one-finding <<'EOF'
+import "./lib"
+
+fn main() {
+	print lib.go()
+}
+--- lib/zz.zg
+const LIMIT := 2
+--- lib/aa.zg
+const LIMIT := 1
+--- lib/mm.zg
+pub fn go() -> int {
+	return LIMIT
+}
+--- lib/mod.zg
+import (
+	pub "./zz"
+	pub "./aa"
+	pub "./mm"
+)
+EOF
+
+# AN ARRAY LENGTH IS A READ OF THE CONSTANT it names, and obeys the file rule a bare read does.
+# A length resolves by its own file, so a sibling's constant there used to resolve anyway — the
+# one place a sibling's private `LIMIT` was reachable bare. Said once, though `xs.len()` asks the
+# length again.
+reject a-sibling-private-constant-as-an-array-length E3001 'lib/one.zg` — the file' one-finding <<'EOF'
+import "./lib"
+
+fn main() {
+	print lib.get()
+}
+--- lib/one.zg
+const LIMIT := 2
+--- lib/two.zg
+pub fn get() -> int {
+	xs: [int; LIMIT] = [1, 2]
+	return xs.len()
+}
+--- lib/mod.zg
+import pub "./one"
+import pub "./two"
+EOF
+
+reject a-sibling-public-constant-as-an-array-length E3116 'spell it `one.LIMIT`' one-finding <<'EOF'
+import "./lib"
+
+fn main() {
+	print lib.get()
+}
+--- lib/one.zg
+pub const LIMIT := 2
+--- lib/two.zg
+pub fn get() -> int {
+	xs: [int; LIMIT] = [1, 2]
+	return xs.len()
+}
+--- lib/mod.zg
+import pub "./one"
+import pub "./two"
+EOF
+
+# A PRIVATE FUNCTION AND A PRIVATE CONSTANT of one name, one per file of a module, stay refused:
+# each kind is its file's, but a module's top level still holds one name once across kinds.
+reject a-private-function-and-a-private-constant-in-two-files E3077 'once as a function, once as a module constant' one-finding <<'EOF'
+import "./lib"
+
+fn main() {
+	print lib.go()
+}
+--- lib/one.zg
+const helper := 1
+
+pub fn go() -> int {
+	return helper
+}
+--- lib/two.zg
+fn helper() -> int {
+	return 2
+}
+--- lib/mod.zg
+import pub "./one"
+import pub "./two"
+EOF
+
+# A BARE NAME TWO IMPORTED MODULES EACH DECLARE, and the reader's module none: nothing chooses
+# between them, so it is refused by name with both spellings (#386). It used to read whichever
+# row the environment met last — for a constant silently, for a function as a C call to a symbol
+# no unit declares. The seed refuses both.
+reject a-bare-constant-two-imported-modules-declare E3116 'and a bare name cannot choose between them — spell it `aa.LIMIT` or `bb.LIMIT`' one-finding <<'EOF'
+import (
+	"./bb"
+	"./aa"
+)
+
+fn main() {
+	print LIMIT
+}
+--- aa/mod.zg
+pub const LIMIT := 1
+--- bb/mod.zg
+pub const LIMIT := 2
+EOF
+
+reject a-bare-call-two-imported-modules-declare E3114 'and a bare name cannot choose between them — spell it `aa.f` or `bb.f`' one-finding <<'EOF'
+import (
+	"./bb"
+	"./aa"
+)
+
+fn main() {
+	print f()
+}
+--- aa/mod.zg
+pub fn f() -> int {
+	return 1
+}
+--- bb/mod.zg
+pub fn f() -> int {
+	return 2
+}
+EOF
+
+# AN ASSOCIATED VALUE IS ITS TYPE'S, and two files' `impl P` blocks of one module may not each
+# give `P` a `K` — whatever their visibility, so the sentence says so rather than "make one
+# private". The seed builds it.
+reject one-associated-value-in-two-files E4077 'both define `P.K` — a type holds one associated value of a name' seed-gap <<'EOF'
+import "./lib"
+
+fn main() {
+	print 1
+}
+--- lib/one.zg
+pub struct P {
+	pub x: int
+}
+
+impl P {
+	K := 1
+}
+--- lib/two.zg
+impl P {
+	K := 2
+}
+--- lib/mod.zg
+import pub "./one"
+import pub "./two"
 EOF
 
 # ONE FILE declaring a name twice, which is the other half of the same collision and is a
@@ -9529,7 +9926,7 @@ EOF
 #
 # The sentence is pinned on the half no place carries: the marker points at the SECOND
 # declaration, so the first one's line is the thing the reader cannot see from the caret.
-reject one-file-declaring-a-function-twice E4073 'the first is at line 1' <<'EOF'
+reject one-file-declaring-a-function-twice E4073 'the first is at line 1' one-finding <<'EOF'
 fn work() -> int {
 	return 1
 }

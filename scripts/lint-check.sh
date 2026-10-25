@@ -1247,15 +1247,15 @@ fn main() {
 EOF
 refused E3033 e3033 main.zg
 
-# two files of one module defining one name: the collision no module tag can separate
+# two files of one module defining one public name: the collision no module tag can separate
 mkdir -p "$tmp/e4077/one"
 cat >"$tmp/e4077/one/a.zg" <<'EOF'
-fn helper() -> int {
+pub fn helper() -> int {
 	return 1
 }
 EOF
 cat >"$tmp/e4077/one/b.zg" <<'EOF'
-fn helper() -> int {
+pub fn helper() -> int {
 	return 2
 }
 EOF

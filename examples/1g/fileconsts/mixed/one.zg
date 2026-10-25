@@ -1,0 +1,5 @@
+pub const LIMIT := 10
+
+pub fn from_one() -> int {
+	return LIMIT
+}

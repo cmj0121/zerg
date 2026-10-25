@@ -1,0 +1,6 @@
+# A private `LIMIT` of its own.
+const LIMIT := "aa"
+
+pub fn limit() -> str {
+	return LIMIT
+}

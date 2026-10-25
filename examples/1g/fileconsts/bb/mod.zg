@@ -1,0 +1,6 @@
+# A private `LIMIT` of its own, of another type.
+const LIMIT := 7
+
+pub fn limit() -> int {
+	return LIMIT
+}

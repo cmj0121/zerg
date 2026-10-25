@@ -36,8 +36,9 @@ Zerg 原始碼如何組織、建置與啟動。本文建立在 [語言參考](..
 **命名空間**的。過去每個呼叫點問的都是**呼叫端**的 module——那對私有名字是對的,裸呼叫一定指呼叫端自己那一個
 ——而那正是公開撞名分不開的原因。
 
-同一個目錄下的兩份宣告是另一條規則,而且仍然被拒絕:不論分成幾個檔案,它們是**同一個** module,沒有 tag 能把
-它們分開——_E4077 `a.zg` and `b.zg` both define `work`_。那個問題會**先**問。
+同一個目錄下的兩份宣告是另一條規則：不論分成幾個檔案，它們是**同一個** module，沒有 module tag 能把它們分開。
+兩個私有的由它們的**檔案**分開，見下文；兩個 `pub` 的是同一個公開名字提供了兩次，限定呼叫無從選擇，所以被拒絕——
+_E4077 `a.zg` and `b.zg` both define `work`_。那個問題會**先**問。
 
 > 今天沒有任何東西能從 C 指名一個 `pub` 符號,這正是這個 tag 現在可以自由套用的原因:[FFI](ffi.zh-TW.md) 把
 > 整條 export 邊標為未建,`--emit lib` 只寫 object、不產生 header,也沒有任何東西回報 header 會帶哪些宣告。
@@ -98,15 +99,17 @@ _E4068 these constants depend on each other and none can be given a value first_
 `mk()` 讀 `B`，`A` 會拿到 `B` 被宣告成的那個值。這曾是這條排序規則唯一的 silent-wrong——`A` 持有零值而且
 沒有任何診斷——已由 #14 關閉。
 
-一個 module 也可定義 **`init()`** 函式(**可多個**)——它一次性的 setup。它們**恰好跑一次**,在 **`main` 的第一個敘述
-之前**,跨 module 依**相依序**(一個 module 的 imports 先備妥,然後才輪到它自己),module 內依**宣告(FIFO)順序**。
+一個 module 也可定義 **`init()`** 函式(**可多個**)——它一次性的 setup。每一個在它所屬的 module **第一次被 import
+時恰好跑一次**,在 **`main` 的第一個敘述之前**。跨 module 是**相依序**(一個 module 的 imports 先備妥,然後才輪到它
+自己);module 內是**宣告(FIFO)順序**。另一個 module 再 import 同一個,不會再跑。程式沒有 import 的 module 不會跑。
 `init()` 承載多步或有副作用的啟動——開資源、註冊、seed——而不是把它藏進 constant 的 initializer,並備妥該 module 的
 immutable 狀態。
 
-**是及早的,不是首次使用時。** 這次建置搆得到的每一個 `init()` 都會跑,包含一個執行從未碰到的 module 裡的那個。那是
-Go 的模型,也是這個語言採用的那一個:把它做成惰性的,代價是每一個 module 的每一次使用都要一道 guard,換回來的只有
-「某人 import 了卻沒有呼叫的 module」的啟動成本——而一次解析了那個 import 的建置,在其他每一個意義上都已經付過了。
-及早真正的代價,是啟動時的工作不能任意昂貴,而那件事的答案不是讓 `init()` 更惰性,是在裡面少做一點。
+**在被 import 時,不是首次使用時。** 第一次呼叫進 module 沒有一道 guard:建置解析到的 import 會在 `main` 之前備妥,
+包含一個程式從未呼叫其名字的 module。建置沒有走到的 module 不會被備妥。把它做成惰性的,代價是每一個 module 的每一次
+使用都要一道 guard,換回來的只有「某人 import 了卻沒有呼叫的 module」的啟動成本——而一次解析了那個 import 的建置,
+在其他每一個意義上都已經付過了。在 import 時跑真正的代價,是啟動時的工作不能任意昂貴,而那件事的答案不是把 `init()`
+延後,是在裡面少做一點。
 
 仍**沒有可變全域**:共享的可變狀態以值傳遞或走 channel,絕不透過 module 層級的變數——頂層 binding 在 module 層級
 `unsafe { … }` 分組外不得為 `mut`,而在分組**裡面**的那個是 **module-private** 的,永遠不是 `pub`(見可見性)。
@@ -149,8 +152,8 @@ belong to whoever declared them, and an impl belongs with one of the two_ 拒絕
 
 ### Module
 
-**一個 module 就是一個目錄**；裡面的檔案是共享同一命名空間的實體切片——檔案數量是排版、不是語意。module 是預設的
-私有單位：一個未加標記的宣告在該 module 的各檔案間可見，但不越出 module（見可見性）。
+**一個 module 就是一個目錄**；裡面的檔案是編譯它的切片。每個檔案各自是命名空間與私有單位（見四層）：一個檔案
+import 兄弟檔案才拿得到它的 `pub` 名字，兄弟檔案的私有名字則完全拿不到（見可見性）。
 
 import path 是一個**前綴**加一個**套件路徑**（`GRAMMAR#import-path`、
 [`GRAMMAR#package-path`](../../GRAMMAR)）。套件路徑是由套件名組成的目錄路徑；
@@ -187,12 +190,12 @@ module 的樹，搬走時它自己的 import 需要改。
 import 的同一個 module 也不是環——它只會被載入一次。
 
 一個檔案 import **它自己所屬的 module** 根本不是環，而是它自己的一條拒絕：_E5015 `./greet` is the module this
-file is already part of_。它有完全正常的順序；那個 import 只是沒有意義，因為一個 module 的檔案共享同一個命名
-空間，那些名字本來就在 scope 裡。環所帶的那句建議——把相互遞迴的宣告放進同一個 module——正是寫下這個 import
+file is already part of_。它有完全正常的順序；那個 import 只是沒有意義，因為一個檔案本來就屬於它的
+module，要抵達兄弟檔案就 import 那個檔案。環所帶的那句建議——把相互遞迴的宣告放進同一個 module——正是寫下這個 import
 的人已經做到的事。
 
-所以相互遞迴的型別與函式住在**同一個 module**——而這不痛，因為 module 是共享命名空間的多檔案目錄：一個 `ast`
-module 可以把 `Expr`、`Stmt` 分放在不同檔案、彼此**免 import** 互相引用，編譯器 forward-declare、auto-boxing 讓遞迴有
+所以相互遞迴的型別與函式住在**同一個 module**——而這不痛，因為 module 是檔案之間可以互相 import 的多檔案目錄：
+一個 `ast` module 可以把 `Expr`、`Stmt` 分放在不同檔案、彼此 import 對方，編譯器 forward-declare、auto-boxing 讓遞迴有
 有限 layout，與自我參照型別完全相同。當兩個分屬**不同關注點**的型別互相回指，這條禁令是個推力——用 **id 引用**打破
 循環（通常是更好的設計），而不是把它們併一起（package 圖是 DAG 也是同一道理：互相依賴的 package 必須合為一個）。
 
@@ -212,7 +215,8 @@ compile error。一個型別指名另一個型別**從來不是**這種循環—
 每個宣告都從 **module-private** 起步。`pub` 是唯一的可見性標記，而且只有一個意思——**露給這個 package 的其餘部分**
 ——它本身**永遠**到不了世界。所以有三個範圍、卻只有一個關鍵字：
 
-- **module-private**（預設）——只在定義它的 module 內可見（跨其各檔案，file 不劃邊界）。
+- **module-private**（預設）——只在宣告它的**檔案**內可見（檔案是私有單位，見四層），以及它所屬 module 的測試：
+  兄弟檔案和另一個 module 一樣碰不到它。
 - **package-internal**——一個 `pub` 宣告；同 package 的其他 module 可指名它。
 - **package-public**——不是標記、而是一個**位置**：一個 package 的對外 API，就等於它 **root module**（package
   module 樹的頂層目錄）的 `pub` 表面。宣告唯有出現在那裡，才能被依賴者看到。
@@ -237,17 +241,33 @@ module 永不擾動對外契約。宣告不能比它所指名的型別更外露�
 不再回傳它；讀取私有欄位的相依端兩件事都做不到。
 
 公開名字也不會撞：兩個 module 各自宣告 `pub fn pick`，以 `a.pick` 與 `b.pick` 抵達，都能建置，也各自回答自己的
-值。仍然會撞的是同一個 module 的兩個**檔案**都宣告的一般函式，不論私有或 `pub`——那是 _E4077_，也就是上文的
-同目錄規則，它關乎 module，不關乎可見性。
+值。模組常數同樣以 module 為單位：兩個 module 各自宣告私有的 `const LIMIT`，各自讀到自己的。
 
-私有型別不受那條規則管。兩個檔案各自不加 `pub` 宣告同名的 struct、enum 或 `type`，宣告的是兩個型別，每個檔案的
+同一個 module 的兩個**檔案**都宣告的私有名字也不會撞。私有的一般函式與私有的模組常數屬於宣告它的檔案，和私有的
+泛型、struct、enum 與 `type` 一樣：兩個檔案各自宣告私有的 `helper` 或 `const LIMIT`，宣告的就是兩個，每個檔案的
+裸 `helper(…)` 或 `LIMIT` 都指向自己那一個。一個 `pub` 的和一個私有的同名並排也能建置，從外面寫 `m.helper` 指的是
+`pub` 那一個（`examples/1g/filefns`、`examples/1g/fileconsts`）。會撞的是同一個 module 裡兩個同名的 `pub`——
+_E4077_，也就是上文的同目錄規則。
+
+那個 module 的第三個檔案裸寫這個名字，兩個都碰不到，因為兄弟檔案的名字只經由 import 抵達。若有一個宣告它的檔案把它
+標成 `pub`，錯誤會指出那個檔案並說明如何 import 它——函式是 _E3114_，常數是 _E3116_。若每個宣告它的檔案都讓它保持
+私有，那個建議行不通，錯誤便是 _E3001_，指出排序後的第一個宣告檔案；用排序，是為了每次執行都指向同一個檔案。
+
+兩個**被 import 的** module 都宣告的裸名字會被拒絕，而不是挑一個：_E3114 `helper` is declared in `x.zg` and
+`y.zg`, and a bare name cannot choose between them_ 說出兩種拼法，`x.helper` 與 `y.helper`；常數則由 _E3116_
+說同樣的話。
+
+私有型別也受同一條規則管。兩個檔案各自不加 `pub` 宣告同名的 struct、enum 或 `type`，宣告的是兩個型別，每個檔案的
 建構、欄位讀取、pattern 與 method 都指向自己那一個。會被拒絕的是：一個檔案宣告了自己的 `P`，又在型別位置寫了
 另一個 module 的 `sink.P`——型別位置會丟掉限定詞，兩者會拼成同一個名字，那就是 _E3158_。
 
-私有的**泛型**函式也不受那條規則管。template 屬於它的檔案：兩個檔案各自宣告私有的 `fn least[T]`，宣告的是兩個
+私有的**泛型**函式也一樣。template 屬於它的檔案：兩個檔案各自宣告私有的 `fn least[T]`，宣告的是兩個
 template，不論它們是兩個 module 還是同一個 module 的兩個檔案；裸呼叫 `least(…)` 指的是自己檔案那一個，每個
 instance 也各自是一個 C 符號（`examples/1g/generics`）。兩個 module 同名的公開泛型經由各自的限定詞抵達，與兩個
 一般函式一樣。同一個 module 裡的兩個 `pub` 泛型是一個公開名字出現兩次，對它的限定呼叫是 _E4077_。
+
+例外是 `pub` 型別的私有**方法**：另一個 module 目前叫得到它。那是編譯器的缺口而不是語言的規則，`zerg lint` 也因此
+以整支程式來判斷這種方法（[lint](../tooling/lint.zh-TW.md)）。
 
 規則比較的是**這個 module 被哪一條 import path 抵達**——由 loader 回答、在解析出這個 module 的地方記下來，之後
 按名字讀回。它不是從「檔案放在哪」算出來的：並排的 `./a` 與 `./b` 是兩個 module，標準函式庫就是一個扁平目錄裡
@@ -271,7 +291,8 @@ module-level `unsafe { … }` group_，以及 _E4046 the mutable global `x` may 
 import 的那些 package），也沒有 ambient import。每個名字要嘛是宣告的、import 的，要嘛是 toolchain **built-in**——
 primitive 關鍵字與 prelude（見 Prelude 與 std）。要 import 什麼，取決於距離：
 
-- **同一 module**（同目錄）——無須 import；一個 module 的各檔案共享一個命名空間。
+- **同一 module**（同目錄）——import 兄弟**檔案**（`import "./a"`，然後 `a.helper()`）；只有它的 `pub` 名字會
+  抵達，同一個 module 的兩個檔案可以互相 import。
 - **同 package 的其他 module**——import 那個 sibling module，即可指名它的 package-internal（`pub`）宣告。其中一個
   具名函式是**一等值**、不只是呼叫目標:`f := other.helper` 綁定它、`f(x)` 呼叫它(見 [函式與閉包](../code/functions.zh-TW.md))。
 - **別的 package**——import 該 package，只看得到它 root 的公開表面；相依套件的內層 module **不可達**，依賴者只拿得到
@@ -528,5 +549,6 @@ normal build compiles none_，兩者都帶位置。E3084 不會進一步說「�
 綴，與 `_test` 慣例並列），build 只納入符合所選 target 的那些；語言本身維持 **target-agnostic**、不賦予檔名任何意義。
 確切的 target 命名與匹配方案屬 build 工具細節，**延後**。
 
-> **[not yet]** 沒有任何後綴被辨識。module 目錄裡每個 `.zg` 都會被編進建置，所以同時放著 `plat_linux.zg` 與
-> `plat_darwin.zg` 的 module 就是同一個名字宣告了兩次，會以碰撞被拒——這比挑錯一個要清楚，但仍然不是這個功能。
+> **[not yet]** 沒有任何後綴被辨識。module 目錄裡每個 `.zg` 都會被編進建置，`plat_linux.zg` 與 `plat_darwin.zg`
+> 各自宣告 `pub fn plat` 的 module 會以碰撞被拒，_E4077 both define `plat`_——這比挑錯一個要清楚。兩個私有的
+> 能建置，各屬自己的檔案，卻沒有任何東西替目標挑出一個；那仍然不是這個功能。

@@ -301,11 +301,11 @@ chan[int]() }`——或任何不是字面值、模組常數，或它們之間算
   步寫成了一步（`E3091`）。`reject-check.sh` 裡有十七個案例帶著這個標記，而這一章是 `zerg` 比較嚴、而不是
   反過來的地方。（種子自己的原始碼不需要遷移：`src/stdlib` 裡已經沒有任何地方寫出表外的配對，那也正是
   兩個編譯器能建出同一套標準函式庫的原因。）
-- **兩個模組各自宣告一個同名的 `pub` 函式會被接受，而其中一個勝出。** 一個公開名字沒有可以在其中保持唯一
-  的 package（[package](../../docs/runtime/package.md)），所以 `zerg` 按名字拒絕這一對（`E9081`），並說出
-  要同時留下兩個需要什麼——也就是 [ffi](../../docs/runtime/ffi.md) 規定的 link-name 覆寫。種子和 `zerg`
-  一樣把每個模組攤平成同一個命名空間，卻只對**私有**的那一對問這個問題，並用模組替它加標記；公開的那一對
-  以單一個 mangled 符號抵達 C，第二份定義就這樣取代了第一份。`reject-check.sh` 裡有一個案例帶著這個標記。
+- **同一個模組的兩個檔案各自宣告一個同名的私有函式會被拒絕。** 私有函式屬於宣告它的檔案
+  （[package](../../docs/runtime/package.md)），所以 `zerg` 建得起這一對，每個檔案的裸呼叫都到達自己的那個
+  （`examples/1g/filefns`）。種子只用模組替函式定鍵，在第二個那裡停下，說
+  `function "m__helper" is already declared`；一個 `pub` 的和一個私有的並排，它也一樣拒絕，而 `zerg`
+  同樣建得起來。這對 bootstrap 不花任何代價：編譯器自己的原始碼裡，沒有同一個模組的兩個檔案宣告同一個私有名字。
 - **沒有上界的 inclusive range 會被接受，而寫著它的那個 arm 永遠不會成立。** `GRAMMAR#range-arm` 規定
   `..=` 的上界是必要的，而剖析器把缺席的那個讀成 `nil`——那也是一支程式寫得出來的東西，`1..=nil`。`zerg`
   不論它從哪裡來都拒絕這個形式（`E3136`）。種子把缺席的上界讀成 0，於是那個 arm 對每一個值都是假的，`match`
@@ -450,6 +450,25 @@ chan[int]() }`——或任何不是字面值、模組常數，或它們之間算
 
   這對 bootstrap 不花任何代價：編譯器自己的原始碼根本沒有宣告任何 `type X = Y`，而一個種子不會返回的程式也不能
   當它的 oracle。`scripts/refuse-check.sh` 的 `typedef-cycle` 只拿這個問題問 `zerg`。
+
+- **模組常數不屬於它的檔案，而兩個檔案的同名私有常數會一聲不響地答錯。** `zerg` 像對私有函式一樣，用宣告它的
+  檔案替私有常數定鍵：每個檔案的裸讀取都是自己的（`examples/1g/fileconsts`），裸讀兄弟檔案的私有常數是
+  `E3001`，裸讀兄弟檔案的 `pub` 常數是 `E3116`，同一個模組裡兩個 `pub` 的是 `E4077`。種子把一個模組的每個常數
+  綁在同一個名字下，所以兩個各自宣告 `const LIMIT` 的檔案建得起來，而且兩邊都讀到最後一個——`zerg` 印
+  `1 2` 的地方它印 `2 2`——上面每一個被拒絕的讀取也都建得起來，並答出一個值。
+
+  這對 bootstrap 不花任何代價：編譯器自己的原始碼裡，沒有同一個模組的兩個檔案宣告同一個常數，也沒有裸讀兄弟
+  檔案的常數。`scripts/reject-check.sh` 的 `bare-const-from-a-sibling-file`、
+  `a-sibling-private-const-named-bare`、`two-public-constants-of-one-module` 與
+  `a-third-file-reading-a-constant-two-files-keep-private` 帶著 `seed-gap` 標記。
+
+- **兩個檔案的 `impl` 區塊替同一個型別給出同名的 associated value 會被接受。** associated value 屬於它的型別，
+  不論 `impl` 寫在哪裡，所以一個檔案的 `impl P` 裡的 `K := 1` 與另一個檔案裡的 `K := 2` 並排時，`zerg` 拒絕
+  （`E4077`）。種子把這一對建起來。
+
+  這對 bootstrap 不花任何代價：`zerg` 建得起編譯器自己的原始碼，所以它們沒有這樣的一對，而「種子接受、`zerg`
+  拒絕」的程式永遠不會被 `make oracle` 拿去比對。`scripts/reject-check.sh` 的
+  `one-associated-value-in-two-files` 帶著 `seed-gap` 標記。
 
 ## 修改種子時
 

@@ -1,0 +1,4 @@
+# Not imported by `main`, and not imported by `used`. Its `init()` does not run.
+init () {
+	print 9
+}

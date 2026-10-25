@@ -1,0 +1,5 @@
+# A public `LIMIT` in one file and a private one in the other, which reads both.
+import (
+	pub "./two"
+	pub "./one"
+)

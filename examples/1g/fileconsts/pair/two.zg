@@ -1,0 +1,9 @@
+const NEXT := LIMIT + 20
+const LIMIT := 2
+
+pub fn from_two() {
+	xs: [int; LIMIT] = [7, 8]
+	print LIMIT
+	print NEXT
+	print xs.len()
+}

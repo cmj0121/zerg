@@ -1420,11 +1420,34 @@ for spelled in stdlib . "$tmp/proj/stdlib"; do
 	say "a project's own stdlib/, spelled \`$spelled\`, was taken for the standard library: $own" $?
 done
 
+# --- a bare constant two files of the module keep ---------------------------------------------
+#
+# A `_test.zg` FILE NAMES ITS WHOLE MODULE, so where two files each keep a private `LIMIT` its
+# bare `LIMIT` has two answers (#386). It is refused by name with both spellings — it used to
+# read whichever row the environment met last, and the test passed or failed on that.
+mkdir -p "$tmp/twolimit"
+printf 'const LIMIT := 1\n\npub fn fa() -> int {\n\treturn LIMIT\n}\n' >"$tmp/twolimit/a.zg"
+printf 'const LIMIT := 2\n\npub fn fb() -> int {\n\treturn LIMIT\n}\n' >"$tmp/twolimit/b.zg"
+cat >"$tmp/twolimit/mod_test.zg" <<'EOF'
+#[test]
+fn test_limit() {
+	assert LIMIT == 1
+}
+EOF
+twolimit=$("$ZERG" test "$tmp/twolimit" 2>&1)
+tlstatus=$?
+
+[ "$tlstatus" -ne 0 ]
+say "a test file's bare constant that two files of its module keep private did not fail the run" $?
+
+printf '%s\n' "$twolimit" | grep -q 'E3116 `LIMIT` is declared in `.*a\.zg` and `.*b\.zg`, and a bare name cannot choose between them — spell it `a.LIMIT` or `b.LIMIT`'
+say "a test file's bare constant two files keep was not refused naming both: $twolimit" $?
+
 # --- the floor -----------------------------------------------------------------------------
 #
-# 106 assertions today. The floor is what keeps this from reporting success after a rewrite
+# 108 assertions today. The floor is what keeps this from reporting success after a rewrite
 # that stops asserting — the failure every gate here is written against, one level up.
-MIN_ASSERTS=${MIN_ASSERTS:-106}
+MIN_ASSERTS=${MIN_ASSERTS:-108}
 total=$((pass + fail))
 if [ "$total" -lt "$MIN_ASSERTS" ]; then
 	printf 'test-runner-check: %s assertions were made, below the floor of %s — the gate did not run itself\n' \

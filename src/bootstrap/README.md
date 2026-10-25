@@ -381,14 +381,13 @@ byte(N)` and `byte(N * 3)` are compile errors. The seed folds the literal alone:
   compiler rather than the reverse. (The seed's own sources need no migration: nothing in
   `src/stdlib` writes a pair off the table any more, which is what lets both compilers build
   the same standard library.)
-- **TWO MODULES EACH DECLARING ONE `pub` FUNCTION OF THE SAME NAME are accepted, and one of
-  them wins.** A public name has no package to be unique within
-  ([package](../../docs/runtime/package.md)), so `zerg` refuses the pair by name (`E9081`) and
-  says what would be needed to keep both — the link-name override
-  [ffi](../../docs/runtime/ffi.md) specifies. The seed flattens every module into one
-  namespace as `zerg` does, but asks the question only of the PRIVATE pair, which it tags by
-  module; a public one reaches C as a single mangled symbol and the second definition simply
-  replaces the first. One case in `reject-check.sh` carries the marker.
+- **TWO FILES OF ONE MODULE EACH DECLARING A PRIVATE FUNCTION OF ONE NAME are refused.** A
+  private function is its declaring file's ([package](../../docs/runtime/package.md)), so `zerg`
+  builds the pair and each file's bare call reaches its own (`examples/1g/filefns`). The seed
+  keys a function by its module alone and stops at the second one, saying
+  `function "m__helper" is already declared`; it refuses a `pub` one beside a private one the
+  same way, which `zerg` builds too. It costs the bootstrap nothing: no two files of one module
+  in the compiler's own sources declare one private name.
 - **AN INCLUSIVE RANGE WITH NO UPPER BOUND is accepted, and the arm it is written on never
   matches.** `GRAMMAR#range-arm` gives `..=` a mandatory bound, and the parser reads a missing
   one as `nil` — which a program may also write out, `1..=nil`. `zerg` refuses the shape
@@ -587,6 +586,28 @@ byte(N)` and `byte(N * 3)` are compile errors. The seed folds the literal alone:
   It costs the bootstrap nothing: the compiler's own sources declare no `type X = Y` at all, and
   a program the seed does not return on cannot be the oracle for one. `scripts/refuse-check.sh`'s
   `typedef-cycle` asks the question of `zerg` alone.
+
+- **A MODULE CONSTANT IS NOT ITS FILE'S, and two files' private constants of one name answer
+  wrong with nothing said.** `zerg` keys a private constant by its declaring file, as a private
+  function: each file's bare read is its own (`examples/1g/fileconsts`), a sibling's private one
+  read bare is `E3001`, a sibling's `pub` one read bare is `E3116`, and two `pub` ones in one
+  module are `E4077`. The seed binds every constant of a module under one name, so two files that
+  each declare `const LIMIT` build and both read the last one — `2 2` where `zerg` prints `1 2` —
+  and each refused read above builds and answers a value.
+
+  It costs the bootstrap nothing: no two files of one module in the compiler's own sources
+  declare one constant, and none reads a sibling's bare. `scripts/reject-check.sh`'s
+  `bare-const-from-a-sibling-file`, `a-sibling-private-const-named-bare`,
+  `two-public-constants-of-one-module` and `a-third-file-reading-a-constant-two-files-keep-private`
+  carry the `seed-gap` marker.
+
+- **TWO FILES' `impl` BLOCKS GIVING ONE TYPE AN ASSOCIATED VALUE OF ONE NAME are accepted.** An
+  associated value is its type's, wherever the `impl` is written, so `zerg` refuses `K := 1` in
+  one file's `impl P` beside `K := 2` in another's (`E4077`). The seed builds the pair.
+
+  It costs the bootstrap nothing: `zerg` builds the compiler's own sources, so they hold no such
+  pair, and a program the seed accepts and `zerg` rejects is never compared by `make oracle`.
+  `scripts/reject-check.sh`'s `one-associated-value-in-two-files` carries the `seed-gap` marker.
 
 ## Changing the seed
 

@@ -1,0 +1,18 @@
+# Two modules import one module, and its `init()` still runs once.
+#   zerg build examples/1g/initagain/main.zg
+# Expected output:
+#   1
+#   2
+#   8
+#
+# `left` AND `right` BOTH IMPORT `core` (#296). A second importer does not run `core`'s
+# `init()` again, so `1` and `2` appear once, before `main`. The `8` is `left.n() +
+# right.n()`, each of which reads `core` — a use, not a second run.
+import (
+	"./left"
+	"./right"
+)
+
+fn main() {
+	print left.n() + right.n()
+}

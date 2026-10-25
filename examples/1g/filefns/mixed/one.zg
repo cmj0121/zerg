@@ -1,0 +1,7 @@
+pub fn helper() -> int {
+	return 10
+}
+
+pub fn from_one() -> int {
+	return helper()
+}

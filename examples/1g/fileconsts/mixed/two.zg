@@ -1,0 +1,8 @@
+import "./one"
+
+const LIMIT := 20
+const SUM := one.LIMIT + LIMIT
+
+pub fn from_two() -> int {
+	return SUM
+}

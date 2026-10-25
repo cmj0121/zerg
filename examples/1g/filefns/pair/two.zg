@@ -1,0 +1,21 @@
+fn helper(out: chan[int]<-, n: int, k: int = 20) -> int {
+	out <- n + k
+	return n + k
+}
+
+fn later(out: chan[int]<-) {
+	defer helper(out, 3)
+}
+
+pub fn from_two() {
+	ch := chan[int](1)
+	print helper(ch, 2)
+	print (<-ch) ?? 0
+	spawn helper(ch, 4)
+	print (<-ch) ?? 0
+	later(ch)
+	print (<-ch) ?? 0
+	f := helper
+	print f(ch, 5, 30)
+	print (<-ch) ?? 0
+}

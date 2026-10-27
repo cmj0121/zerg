@@ -407,16 +407,17 @@ Zerg **不設兩值之間的 instance-identity 測試**：copy-by-value 下值�
 **`is`** 關鍵字問的是另一件事——existential 上的**型別身分**測試 `x is T`（見型別測試）——「這裡 box 的是哪個具體
 型別？」，而非「這兩個是不是同一個值？」。
 
-> **[not yet]** 本節所描述的內建 spec 裡,恰好只有三個被宣告出來:上面的 **`Eq`**、下面的 **`Ord`**,以及
-> **`Into[T]`**（見 [型別轉換](types.zh-TW.md#into--一個普通的轉換-spec)）。`Hash`、`Error`、`Iterator` /
-> `Iterable`、sealed 的 `Ref`,以及每一個運算子 spec——`Add`、`Sub`、`Mul`、`Div`、`BitAnd`、`BitOr`、`BitXor`、
-> `Not`、`Shl`、`Shr`——根本不以宣告的形式存在,所以它們指名不了:`impl Hash for P` 報 _error: E3013 no spec
-> named `Hash`_,也就是「沒有人寫過這個 spec」的普通訊息,而 `impl BitAnd for P` 報的也是同一句。沒有 `Ord` 的
-> 型別是被運算子、而不是被 spec 擋下:`P(1) < P(2)` 報的是 _E3044 operator `<` orders two numbers or two strs,
-> and these are P and P_,它指名的是運算元型別,對缺席的 `Ord` 隻字未提。其中好幾個所描述的**行為**是內建的、
-> 不經那個 spec 也到得了——`str` 的 `+` 串接、`Err` 所指的錯誤分類以及它回答的 `message()` / `unwrap()`、
-> `chan` 的 refcounted 關閉——但它們由編譯器擁有,使用者型別加入不了——不論那個型別上有沒有
-> `#[derive(Eq)]`。從這裡到本章結束的每一句,都是對著這個缺口所寫的規範。
+> **[not yet]** 本節所描述的內建 spec 裡,編譯器恰好只宣告了三個:上面的 **`Eq`**、下面的 **`Ord`**,以及
+> **`Into[T]`**（見 [型別轉換](types.zh-TW.md#into--一個普通的轉換-spec)）。下面的 **`Hash`** 指名它的方法
+> `fn hash() -> uint`,以及 `eq` 成立時兩次呼叫答出同一個 `uint` 的定律。編譯器還沒有宣告這個 spec,所以那裡的
+> 程式報 _error: E3013 no spec named `Hash`_,也就是「沒有人寫過這個 spec」的普通訊息。`Error`、`Iterator` /
+> `Iterable`、sealed 的 `Ref`,以及每一個運算子 spec——`Add`、`Sub`、`Mul`、`Div`、`BitAnd`、`BitOr`、
+> `BitXor`、`Not`、`Shl`、`Shr`——根本不以宣告的形式存在,所以它們指名不了:`impl BitAnd for P` 報的也是同一個
+> _E3013_。沒有 `Ord` 的型別是被運算子、而不是被 spec 擋下:`P(1) < P(2)` 報的是 _E3044 operator `<` orders
+> two numbers or two strs, and these are P and P_,它指名的是運算元型別,對缺席的 `Ord` 隻字未提。其中好幾個
+> 所描述的**行為**是內建的、不經那個 spec 也到得了——`str` 的 `+` 串接、`Err` 所指的錯誤分類以及它回答的
+> `message()` / `unwrap()`、`chan` 的 refcounted 關閉——但它們由編譯器擁有,使用者型別加入不了——不論那個型別上
+> 有沒有 `#[derive(Eq)]`。從這裡到本章結束的每一句,都是對著這個缺口所寫的規範。
 
 其餘的 spec 同樣是 **opt-in**——實作（或 derive）該 spec 才取得能力；泛型 bound 以它把關：
 
@@ -424,7 +425,26 @@ Zerg **不設兩值之間的 instance-identity 測試**：copy-by-value 下值�
   (`spec Ord: Eq`);`<=` `>` `>=` 與 sort 都由它配 `Eq` 導出,而 `min` / `max` / `clamp` 是建在 `Ord` bound 上的普通
   stdlib helper——**沒有三路 `Ordering`** 值,只有 `less` 與 `Eq`。`str` 依 **code point 字典序**排序(＝ byte 序,因其
   UTF-8 有效——非 locale collation,那是另一個 stdlib 功能);`float` 同時退出 `Ord` 與 `Hash`(理由見下)。
-- **`Hash`**——`map` / `set` 的 key，`equal ⇒ same hash`。`str` 不可變、是天然的 key。**[not yet]**
+- **`Hash`**——`map` / `set` 的 key。方法是 `fn hash() -> uint`：`eq` 成立時，兩次 `hash()` 答出同一個
+  `uint`，反方向不要求。`str` 不可變、是天然的 key。`float` 仍退出，見下。**[not yet]**——底下的程式是
+  _E3013_，而 `derive` 處由 _E9054_ 指名它。
+
+```refused E3013
+struct Point {
+ pub x: int
+}
+
+impl Hash for Point {
+ fn hash() -> uint {
+  return uint(this.x)
+ }
+}
+
+fn main() {
+ print 1
+}
+```
+
 - **`Iterator`** / **`Iterable`**——迭代協定（見下方 **迭代**）。
 - **`Error`（`Err`）**——錯誤層：`message() -> str`、`unwrap() -> Err?`（底層 cause、無則 `nil`）、
   `code() -> byte?`（可選小碼）。
@@ -452,11 +472,12 @@ Zerg **不設兩值之間的 instance-identity 測試**：copy-by-value 下值�
 無法短路，是普通運算、不是關鍵字）。這些、以及 null-safety 運算子（`?`、`??`、`?.`、`!`），都是**固定構造——永不
 可多載**；bitwise 符號（`& | ^ ~`，見 [整數運算](types.zh-TW.md)）永不與它們撞臉。
 
-`float` 退出 `Ord` 與 `Hash`——`NaN` 破壞全序與 `equal ⇒ hash`——所以 `float` 永遠不是排序集合的元素、也不是 key，
-而一個**含** `float` 的複合型別會透明地繼承這點：一個 **derive 出的 `Eq`** 用 `==` 比那個欄位，所以對 `NaN`
-**非自反**，該型別也**得不到** `Ord`/`Hash`。要讓這種型別當 key 或可排序，作者得**顯式實作**、並處理 `float` 的兩個
-陷阱：`Hash` 需要一個**自反**的 `eq` 並 canonicalize **`±0.0`**（相等、故必須同 hash）；`Ord` 需要一個
-**total order**（IEEE `totalOrder`，`NaN` 排到端點）。一個 stdlib 的 total-order／hashable `float` wrapper 延後。
+`float` 退出 `Ord` 與 `Hash`——`NaN` 破壞全序與 `equal ⇒ same hash`——所以 `float` 永遠不是排序集合的元素、也不是
+key，而一個**含** `float` 的複合型別會透明地繼承這點：一個 **derive 出的 `Eq`** 用 `==` 比那個欄位，所以對
+`NaN` **非自反**，該型別也**得不到** `Ord`/`Hash`。要讓這種型別當 key 或可排序，作者得**顯式實作**、並處理
+`float` 的兩個陷阱：`Hash` 需要一個**自反**的 `eq` 並 canonicalize **`±0.0`**（相等、故兩次 `hash()` 必須答出
+同一個 `uint`）；`Ord` 需要一個 **total order**（IEEE `totalOrder`，`NaN` 排到端點）。一個 stdlib 的
+total-order／hashable `float` wrapper 延後。
 
 **迭代。** 一個 **`Iterator[T]`** 有 `next() -> Result[T]`——`Left(v)` 是下一個元素，`Right(StopIteration)` 表示
 結束（**`StopIteration`** 是內建的 `Err`）。一個 **`Iterable[T]`** 有 `iter()`、產生一個全新的 `Iterator[T]`。

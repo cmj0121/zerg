@@ -1515,16 +1515,26 @@ fn c_try(mut &em: Emitter, x: ast.Expr, sb: Subst) -> str {
 	tv := "zgt_tr" + tag
 	mut out := f"({{ {src} {tv} = {c_expr(em, x, sb)};"
 	out = out + " if (" + c_res_is_right(tv) + ") {"
+
+	# the right side travels UNCHANGED — an optional's carries nothing, and an Either's
+	# carries the value that is the whole reason the early return happened.
+	#
+	# IT IS TAKEN BEFORE THE UNWIND. One that names storage — `r?` on a binding — is copied,
+	# since the unwind below gives `r` back, and a carrier this expression made hands its own
+	# over. Read after the unwind, a named Result's Err was freed on the way out (#377).
+	mut right := f"({rcn}){{ .tag = 1 }}"
+	if not ast.ty_is_opt(em.fn_ret) {
+		mut rv := c_res_err(tv)
+		if c_is_borrow(x) {
+			rv = c_taken(em, c_either_right(t), rv)
+		}
+		rn := "zgt_trr" + tag
+		out = out + f" {rcn} {rn} = ({rcn}){{ .tag = 1, .err = {rv} }};"
+		right = rn
+	}
 	if c_needs_fn_unwind(em) {
 		em.fn_mark_used = true
 		out = out + " zrt_unwind_to(" + em.fn_mark + ");"
-	}
-
-	# the right side travels UNCHANGED — an optional's carries nothing, and an Either's
-	# carries the value that is the whole reason the early return happened
-	mut right := f"({rcn}){{ .tag = 1 }}"
-	if not ast.ty_is_opt(em.fn_ret) {
-		right = f"({rcn}){{ .tag = 1, .err = {c_res_err(tv)} }}"
 	}
 
 	# THE LEFT IS HANDED OVER AS THIS EXPRESSION'S OWN. A carrier this expression made gives up
@@ -1693,8 +1703,8 @@ fn c_carrier_temp_drop(mut &em: Emitter, t: ast.Ty, e: ast.Expr) -> str {
 # reference; nothing took it back. A leak and never a double free, which is why nothing
 # crashed and why macOS ASan, having no LeakSanitizer, never said a word.
 #
-# A `Result[T]` is unaffected either way: its Right is an `Err`, whose storage belongs to the
-# runtime, so `c_needs_copy` answers no for it exactly as it did.
+# A `Result[T]` owns its Right too: an `Err` holds counts on its message and its cause (#377),
+# so the arm that drops the Right is what gives back an Err a `??` or an unread carrier lets go.
 fn c_carrier_owns(mut &em: Emitter, t: ast.Ty) -> bool {
 	# A BOXED CARRIER OWNS THE CELL, and asking its payload is the question that does not
 	# terminate: the payload is the struct that holds this carrier, so `c_needs_copy` would
@@ -1894,7 +1904,10 @@ fn c_carrier_decl(mut &em: Emitter, c: ast.Ty) -> str {
 	if ast.ty_is_opt(c) {
 		fail = "zrt_raise_err(zrt_err_new(\"force-unwrap of nil\"));"
 	} else if c_is_err_ty(c_either_right(c)) {
-		fail = "zrt_raise_err(" + c_res_err("r") + ");"
+		# a COPY: `r` is the caller's carrier, which its holder gives back as the unwind
+		# passes it, so the Err in flight holds counts of its own (#377). A carrier the
+		# caller made raises its own Err before it gets here (c_force).
+		fail = "zrt_raise_err(zrt_err_copy(" + c_res_err("r") + "));"
 	}
 	d = d + "    if (" + c_res_is_right("r") + ") { " + fail + " }\n"
 
@@ -7252,6 +7265,13 @@ fn c_needs_copy(mut &em: Emitter, t: ast.Ty) -> bool {
 	# renders one without a copy, and c_fn does not release the parameter.
 	return true if ast.ty_is_chan(t)
 
+	# AN ERR OWNS ITS MESSAGE AND ITS CAUSE (#377). It was the one value type treated as
+	# storage the runtime kept, so a run-time message lived until exit wherever an Err was
+	# discarded — under `??`, in a Result nobody read, in an `ok_or` whose optional was
+	# present. A second name is a count, and the last holder's drop gives it back; the
+	# runtime's own literal messages are told apart by the Err's `owned` flag, not here.
+	return true if c_is_err_ty(t)
+
 	# A CARRIER owns WHICHEVER SIDE IT HOLDS — that is what `if v := c { … }` retaining what
 	# it binds already says — so it owes a copy exactly when either side does. Answering
 	# `false` here is what made `got := <-c` a second name for one reference: the value was
@@ -7390,6 +7410,10 @@ fn c_copy_of(mut &em: Emitter, t: ast.Ty, x: str) -> str {
 	if c_is_str(t) {
 		em.used_rt = true
 		return f"zrt_str_retain({x})"
+	}
+	if c_is_err_ty(t) {
+		em.used_rt = true
+		return f"zrt_err_copy({x})"
 	}
 
 	# a carrier's helper is named after the carrier's own C name, which is not `zg_` plus a
@@ -7581,6 +7605,13 @@ fn c_elem_kind(mut &em: Emitter, t: ast.Ty) -> str {
 	# gave two buffers one reference between them.
 	return "str" if c_is_str(t)
 
+	# AN ERR is its own kind, for the reason a str is: a `list[Err]` holds counts on what its
+	# elements own. Its trio is written on demand, as a channel end's is.
+	if c_is_err_ty(t) {
+		c_err_vt(em)
+		return "err"
+	}
+
 	# A channel end is the same shape of answer, and it has to come BEFORE the empty return:
 	# c_named_of of a `TChan` is "", so a `list[chan[int]]` took `zg_listvt` and memcpy'd the
 	# pointer. A receive-only end is its own kind because its release is not the sender's.
@@ -7633,6 +7664,16 @@ fn c_chan_vt(mut &em: Emitter, k: str) {
 	out = out + "static void " + c_ty_helper("elemdrop", k) + "(void *elem) { " + dr + "(*(zrt_chan**)elem); }\n"
 	out = out + "static const zrt_elem_vt " + c_ty_helper("listvt", k) + " = {" + c_ty_helper("elemcopy", k) + ", " + c_ty_helper("elemdrop", k) + "};\n\n"
 	em.res_decls.append(out)
+}
+
+# c_err_vt emits the Err element trio, once, through the registry every kind's goes through.
+# The kind is entered BEFORE the trio is written, because writing it asks c_elem_kind again.
+fn c_err_vt(mut &em: Emitter) {
+	return if c_name_in(em.refvt_done, "err")
+
+	em.refvt_done.append("err")
+	em.used_rt = true
+	em.res_decls.append(c_elem_vt_helper(em, ast.Ty.TErr))
 }
 
 # The vtable carries BOTH halves. It used to carry only the copy, with the note that a drop
@@ -7724,6 +7765,7 @@ fn c_drop_fn(mut &em: Emitter, t: ast.Ty) -> str {
 	return "zrt_list_drop" if c_is_list(t)
 	return "zrt_map_drop" if c_is_map(t) or c_is_set(t)
 	return "zrt_str_release" if c_is_str(t)
+	return "zrt_err_drop" if c_is_err_ty(t)
 
 	# by value, like the str: the runtime takes the handle, and the direction is the end's own
 	return c_chan_release_fn(c_chan_dir(t)) if ast.ty_is_chan(t)
@@ -7756,7 +7798,7 @@ fn c_drop_arg(mut &em: Emitter, t: ast.Ty, place: str) -> str {
 	# str spelling) taking the CELL. Handing it `&place` released the address of the variable
 	# holding the cell, which is the defect this function was written to stop being written by
 	# hand — and a spec value is the third type to need it.
-	return place if c_is_str(t) or c_is_ref_box(t) or c_is_spec_name(em, c_named_of(t)) or ast.ty_is_chan(t)
+	return place if c_is_str(t) or c_is_err_ty(t) or c_is_ref_box(t) or c_is_spec_name(em, c_named_of(t)) or ast.ty_is_chan(t)
 
 	return "&" + place
 }
@@ -9208,7 +9250,14 @@ fn c_force(mut &em: Emitter, x: ast.Expr, sb: Subst) -> str {
 	cn := c_tmp(em, "zgt_t")
 	vn := c_tmp(em, "zgt_t")
 	et := c_type(c_carrier_elem(t))
-	return f"({{ {name} {cn} = {rendered}; {et} {vn} = zg_force_{name}({cn}); {df}(&{cn}); {vn}; }})"
+
+	# an Err this expression owns is MOVED into the raise, which the helper's copy would
+	# leave counted twice with only one holder to give it back (#377)
+	mut mv := ""
+	if c_is_result(t) {
+		mv = f"if ({c_res_is_right(cn)}) {{ zrt_raise_err({c_res_err(cn)}); }} "
+	}
+	return f"({{ {name} {cn} = {rendered}; {mv}{et} {vn} = zg_force_{name}({cn}); {df}(&{cn}); {vn}; }})"
 }
 
 # c_coalesce lowers `a ?? b`: the Left of `a`, or the fallback. The operand is bound to a
@@ -9233,9 +9282,9 @@ fn c_coalesce(mut &em: Emitter, a: ast.Expr, b: ast.Expr, jump: list[ast.Stmt], 
 
 	# the carrier is bound here whether or not it is somebody else's, because it is READ
 	# TWICE. Giving it back is the other question, and it is asked the way c_force asks it:
-	# only a carrier that names no storage is this expression's own. The drop is a no-op on
-	# the fallback side by construction — there is no payload to give back on a Right — so it
-	# can sit after the choice rather than inside one arm of it.
+	# only a carrier that names no storage is this expression's own. It sits after the choice
+	# rather than inside one arm of it: on the Left it gives back what was copied out, and on
+	# the Right it gives back the Err the fallback discards (#320).
 	df := c_carrier_temp_drop(em, t, a)
 	if jump.len() == 0 {
 		alt := c_fit_copied(em, "the `??` fallback", elem, b, sb)
@@ -9252,7 +9301,7 @@ fn c_coalesce(mut &em: Emitter, a: ast.Expr, b: ast.Expr, jump: list[ast.Stmt], 
 	if df != "" {
 		give = f" {df}(&{tmp});"
 	}
-	out = out + " if (" + c_res_is_left(tmp) + ") { " + val + " = " + c_res_taken(em, t, tmp, elem) + ";" + give + " } else { "
+	out = out + " if (" + c_res_is_left(tmp) + ") { " + val + " = " + c_res_taken(em, t, tmp, elem) + ";" + give + " } else {" + give + " "
 	for s in jump {
 		out = out + c_stmt(em, s, "")
 	}
@@ -10680,7 +10729,7 @@ fn c_is_test(mut &em: Emitter, x: ast.Expr, name: str, sb: Subst) -> str {
 		# that question — `e in ValueError` is, and it is a different operator at the same
 		# precedence. Asking one of them both ways is how `is` stopped being able to tell an
 		# IOError from something an IOError was raised from.
-		return f"(({c_expr(em, x, sb)}).kind == {kind})"
+		return c_err_read(em, x, sb, "int", "((", f").kind == {kind})")
 	}
 
 	# A BOX IS THE ONE OPERAND WHOSE TYPE IS NOT A COMPILE-TIME ANSWER, and folding it as one
@@ -11065,7 +11114,7 @@ fn c_in_test(mut &em: Emitter, x: ast.Expr, set: ast.Expr, sb: Subst) -> str {
 
 	em.used_rt = true
 
-	return f"zrt_err_in({c_expr(em, x, sb)}, {kind})"
+	return c_err_read(em, x, sb, "int", "zrt_err_in(", f", {kind})")
 }
 
 # c_is_aggregate reports the types C cannot compare with `==`: a declared struct, and the
@@ -12286,17 +12335,33 @@ fn c_err_method(mut &em: Emitter, target: ast.Expr, meth: str, args: list[ast.Ex
 	# evaluated nowhere and mentioned by nothing.
 	raise c_diag(em, rule.Rule.ErrMethodArgs, f"the method `{meth}` on an Err takes no argument") if args.len() != 0
 
-	return f"zrt_str_dup(({c_expr(em, target, sb)}).msg)" if meth == "message"
+	return c_err_read(em, target, sb, "const char *", "zrt_str_dup((", ").msg)") if meth == "message"
 
+	# the cause comes out COUNTED: the optional is the reader's own and its drop gives the
+	# count back, while the chain stays the Err's
 	if meth == "unwrap" {
 		cn := c_opt_name(em, ast.Ty.TErr)
 		t := c_tmp(em, "zgt_ec")
-		head := "({ zrt_err *" + t + " = (" + c_expr(em, target, sb) + ").cause; "
-		return head + t + " != NULL ? (" + cn + "){ .tag = 0, .ok = *" + t + " } : (" + cn + "){ .tag = 1 }; })"
+		head := "({ zrt_err *" + t + " = ("
+		tail := ").cause; " + t + " != NULL ? (" + cn + "){ .tag = 0, .ok = zrt_err_copy(*" + t + ") } : (" + cn + "){ .tag = 1 }; })"
+		return c_err_read(em, target, sb, cn, head, tail)
 	}
 	return "(" + c_opt_name(em, ast.Ty.TByte) + "){ .tag = 1 }" if meth == "code"
 
 	raise c_err_method_unknown(em, meth)
+}
+
+# c_err_read renders `pre + <the Err> + post`, a read of an Err that keeps nothing of it. An
+# Err this expression made — `mk().message()`, `mk() is ValueError` — has no other holder, so
+# it is bound, read, and given back (#377); a named one is read where it stands.
+fn c_err_read(mut &em: Emitter, x: ast.Expr, sb: Subst, rty: str, pre: str, post: str) -> str {
+	rendered := c_expr(em, x, sb)
+	return pre + rendered + post if not c_owns_value(x)
+
+	em.used_rt = true
+	tv := c_tmp(em, "zgt_er")
+	rv := c_tmp(em, "zgt_ev")
+	return f"({{ zrt_err {tv} = {rendered}; {rty} {rv} = {pre}{tv}{post}; zrt_err_drop({tv}); {rv}; }})"
 }
 
 # c_carrier_method is the bridge between the two carriers — the one conversion the error
@@ -12317,9 +12382,8 @@ fn c_err_method(mut &em: Emitter, target: ast.Expr, meth: str, args: list[ast.Ex
 # `int` payloads in the corpus could not show, and the two conversions here are the path the
 # errors chapter tells a reader to take.
 #
-# The Right is dropped by value on the `ok()` path, exactly as `??` drops it — the carrier
-# held a copy and nothing releases it there either. That is one behaviour, not two, and if it
-# is a leak it is the same leak in both places.
+# The Right is dropped on the `ok()` path, exactly as `??` drops it: the carrier this
+# expression made is given back whole once its Left is copied out (c_carrier_temp_give).
 fn c_carrier_method(mut &em: Emitter, target: ast.Expr, meth: str, args: list[ast.Expr], tty: ast.Ty, sb: Subst) -> str {
 	if meth == "ok_or" and ast.ty_is_opt(tty) {
 		raise c_diag(em, rule.Rule.OkOrNoArg, "`ok_or` takes the error to answer an absence with, and none was given") if args.len() == 0
@@ -12342,12 +12406,17 @@ fn c_carrier_method(mut &em: Emitter, target: ast.Expr, meth: str, args: list[as
 		# forms are a closed set `ok_or` is not in, so an argument that printed or raised did
 		# it only when the optional happened to be absent — a conditional side effect the
 		# language does not have anywhere else, and one nothing marked.
+		#
+		# AND IT IS THIS EXPRESSION'S OWN (#377): a named Err is counted again, and a present
+		# optional — the branch that does not need it — gives it back. Moving it into the Right
+		# is the other branch's give-back. The optional itself is dropped when this expression
+		# made it, since the payload it holds was copied out.
 		e := c_tmp(em, "zgt_ke")
-		mut out := "({ " + c_type(ast.Ty.TErr) + " " + e + " = " + c_expr(em, args[0], sb) + "; "
+		mut out := "({ " + c_type(ast.Ty.TErr) + " " + e + " = " + c_copied(em, ast.Ty.TErr, args[0], sb) + "; "
 		out = out + on + " " + t + " = " + c_expr(em, target, sb) + "; " + rn + " " + r + ";"
-		out = out + " if (" + c_res_is_left(t) + ") { " + c_res_mark_left(r) + " " + c_res_put(em, ast.Ty.TEither(elem, ast.Ty.TErr), r, c_res_taken(em, tty, t, elem)) + " }"
+		out = out + " if (" + c_res_is_left(t) + ") { " + c_res_mark_left(r) + " " + c_res_put(em, ast.Ty.TEither(elem, ast.Ty.TErr), r, c_res_taken(em, tty, t, elem)) + " " + c_drop_stmt(em, ast.Ty.TErr, e) + " }"
 		out = out + " else { " + c_res_mark_right(r) + " " + c_res_err(r) + " = " + e + "; }"
-		return out + " " + r + "; })"
+		return out + c_carrier_temp_give(em, tty, target, t) + " " + r + "; })"
 	}
 	if meth == "ok" and c_is_either(tty) {
 		raise c_diag(em, rule.Rule.OkTakesNoArg, "`ok` forgets the Right and takes no argument") if args.len() != 0
@@ -12360,10 +12429,19 @@ fn c_carrier_method(mut &em: Emitter, target: ast.Expr, meth: str, args: list[as
 		mut out := "({ " + cn + " " + t + " = " + c_expr(em, target, sb) + "; " + on + " " + o + ";"
 		out = out + " if (" + c_res_is_left(t) + ") { " + c_res_mark_left(o) + " " + c_res_put(em, ast.Ty.TOpt(left), o, c_res_taken(em, tty, t, left)) + " }"
 		out = out + " else { " + c_res_mark_right(o) + " }"
-		return out + " " + o + "; })"
+		return out + c_carrier_temp_give(em, tty, target, t) + " " + o + "; })"
 	}
 
 	raise c_carrier_method_unknown(em, tty, meth)
+}
+
+# c_carrier_temp_give is the statement that gives back a carrier this expression made and
+# read its payload out of: the Left was copied, and a Right — an Err `ok()` forgets — is
+# dropped with it (#377). A borrowed carrier answers nothing; its holder gives it back.
+fn c_carrier_temp_give(mut &em: Emitter, tty: ast.Ty, target: ast.Expr, t: str) -> str {
+	d := c_carrier_temp_drop(em, tty, target)
+	return "" if d == ""
+	return f" {d}(&{t});"
 }
 
 # c_carrier_method_ret is the typing half. `ok_or` names the Err side itself, so the answer
@@ -13291,8 +13369,8 @@ fn c_call(mut &em: Emitter, name: str, args: list[ast.Expr], l: int, c: int, sb:
 	if c_err_kind(name) > 0 {
 		raise c_diag(em, rule.Rule.TestableNotConstructible, f"`{name}` is testable but not constructible: a sender able to raise the end-of-stream sentinel would close its channel wearing it, and its consumer would read the crash as a clean finish") if not c_err_constructible(name)
 		em.used_rt = true
-		return f"zrt_err_new_kind({c_err_kind(name)}, {c_err_msg(em, args[0], sb)})" if args.len() == 1
-		return f"zrt_err_new_kind({c_err_kind(name)}, {c_args(em, args, sb)})"
+		return f"zrt_err_own({c_err_kind(name)}, {c_err_msg(em, args[0], sb)})" if args.len() == 1
+		return f"zrt_err_own({c_err_kind(name)}, {c_args(em, args, sb)})"
 	}
 
 	# calling a BINDING that holds a function: cast the stored generic pointer back to the
@@ -15442,18 +15520,23 @@ fn c_match(mut &em: Emitter, scrut: ast.Expr, arms: list[ast.Arm], sb: Subst) ->
 	# answers with a value of its own — a payload it binds is copied out on the way — so once
 	# the answer is in hand the scrutinee has nobody left. `match c_unmark(t) { … }` in
 	# c_is_fn leaked the Ty it matched on every call, which the language server paid on every
-	# check (#23). A match whose answer is void has nothing to hold across the drop, and one
-	# whose answer is untyped has no declaration to hold it in; both are left as they were.
+	# check (#23). A match whose answer is untyped has no declaration to hold it in, and is
+	# left as it was.
+	#
+	# A MATCH WHOSE ANSWER IS VOID gives it back too, after the arms, with nothing to hold
+	# across the drop. It was left alone, and `match res(9) { Right(e) => … }` kept the Err
+	# it matched on — and the str a Left held — until exit (#377).
 	mut rt := ast.Ty.TUnknown
 	if c_needs_copy(em, st) and arms.len() > 0 {
 		rt = c_infer_arm_body(em, arms[0], st)
 	}
-	if not c_is_nil_ty(rt) and not c_is_unknown(rt) {
+	if not c_is_unknown(rt) {
 		# held across the arms (c_hold): an arm runs the program's own code, and one that
 		# raises — or returns — never reaches the drop written after them
 		keep := em.rel_cnames.len()
 		hold := c_hold(em, st, tmp)
 		body := c_arms(em, arms, 0, tmp, st, sb)
+		return f"({{ {c_type(st)} {tmp} = {s}; {hold}{body}; {c_unhold(em, keep)}{c_drop_stmt(em, st, tmp)} }})" if c_is_nil_ty(rt)
 		rv := c_tmp(em, "zgt_mr")
 		return f"({{ {c_type(st)} {tmp} = {s}; {hold}__auto_type {rv} = {body}; {c_unhold(em, keep)}{c_drop_stmt(em, st, tmp)} {rv}; }})"
 	}
@@ -18689,6 +18772,7 @@ fn c_recv_helper(mut &em: Emitter, elem: ast.Ty) -> str {
 	d = d + "    if (" + c_res_is_right("r") + ") {\n"
 	d = d + "        zrt_err e = zrt_chan_close_err(ch);\n"
 	d = d + "        if (e.kind != ZRT_ERR_STOP_ITERATION) { zrt_raise_err(e); }\n"
+	d = d + "        zrt_err_drop(e);\n"
 	d = d + "    }\n"
 	d = d + "    return r;\n}\n"
 	em.rcv_decls.append(d)
@@ -22145,9 +22229,12 @@ fn c_fieldref(mut &em: Emitter, target: ast.Expr, fld: str, l: int, c: int, sb: 
 	#
 	# AND ITS MESSAGE IS STILL THE ERR'S. A field of an owned rvalue is the reader's own
 	# (c_is_borrow), which the other fields earn by being copied out of a temporary this read
-	# drops; an Err is never dropped, and the copy another holder of it shares its message with,
-	# so the message read out of one is counted once more here rather than handed over.
-	return f"zrt_str_retain({tgt}.{fld})" if c_is_err_ty(tt) and fld == "msg" and c_owns_value(target)
+	# drops — and the Err read here is dropped too (#377), so the message comes out as a copy
+	# of its own: zrt_str_dup, because a runtime-raised message is a C literal with no count.
+	if c_is_err_ty(tt) and fld == "msg" and c_owns_value(target) {
+		tv := c_tmp(em, "zgt_er")
+		return f"({{ zrt_err {tv} = {tgt}; const char *{tv}_m = zrt_str_dup({tv}.msg); zrt_err_drop({tv}); {tv}_m; }})"
+	}
 	return f"{tgt}.{fld}" if c_is_err_ty(tt)
 
 	# A FIELD THE TYPE DOES NOT HAVE was spelled `zg_<fld>` and handed to cc, which reported
@@ -22503,7 +22590,8 @@ fn c_forchan(mut &em: Emitter, var: str, iter: ast.Expr, t: ast.Ty, body: list[a
 	if owns {
 		out = out + in2 + f"  zrt_unwind_to({mark});\n"
 	}
-	out = out + in2 + "  if (zgt_ce.kind != ZRT_ERR_STOP_ITERATION) { zrt_raise_err(zgt_ce); } }\n"
+	out = out + in2 + "  if (zgt_ce.kind != ZRT_ERR_STOP_ITERATION) { zrt_raise_err(zgt_ce); }\n"
+	out = out + in2 + "  zrt_err_drop(zgt_ce); }\n"
 	c_scope_close(em, outer_scope)
 	return out + ind + "}\n"
 }
@@ -23121,6 +23209,12 @@ fn c_print(mut &em: Emitter, e: ast.Expr, ind: str) -> str {
 		em.used_rt = true
 		return f"{ind}{{ const char* zgt_ps = {ex}; printf(\"%s\\n\", zgt_ps); zrt_str_release(zgt_ps); }}\n"
 	}
+
+	# and an Err this statement made is given back the same way, once its message is shown
+	if c_is_err_ty(ty) and c_owns_value(e) {
+		em.used_rt = true
+		return f"{ind}{{ zrt_err zgt_pe = {ex}; printf(\"%s\\n\", zgt_pe.msg); zrt_err_drop(zgt_pe); }}\n"
+	}
 	return match ty {
 		Ty.TStr => f"{ind}printf(\"%s\\n\", {ex});\n"
 
@@ -23268,6 +23362,15 @@ fn c_iflet(mut &em: Emitter, name: str, value: ast.Expr, then_body: list[ast.Stm
 	in2 := ind + "    "
 	in3 := in2 + "    "
 	mut out := f"{ind}{{\n{in2}{cn} {tmp} = {val};\n"
+
+	# the carrier this statement materialised is given back on both sides, once its payload
+	# has been copied out. Only one that names no storage is this statement's to give back.
+	# The Right — an Err (#377) — goes here, before the `if`, since neither branch reads it;
+	# the Left inside the branch, once copied.
+	df := c_carrier_temp_drop(em, t, value)
+	if df != "" {
+		out = out + in2 + "if (" + c_res_is_right(tmp) + ") { " + df + "(&" + tmp + "); }\n"
+	}
 	out = out + in2 + "if (" + c_res_is_left(tmp) + ") {\n"
 
 	# THE BINDING OWNS WHAT c_res_taken COPIED OUT, and nothing gave it back. That is a
@@ -23291,10 +23394,6 @@ fn c_iflet(mut &em: Emitter, name: str, value: ast.Expr, then_body: list[ast.Stm
 	}
 	out = out + in3 + c_type(elem) + " " + cv + " = " + c_res_taken(em, t, tmp, elem) + ";\n" + give
 
-	# the payload has been copied out, so the carrier this statement materialised has nothing
-	# left to say. Only one that names no storage is this statement's to give back, and only
-	# the Left side has a payload — which is why the drop sits inside this branch.
-	df := c_carrier_temp_drop(em, t, value)
 	if df != "" {
 		out = out + in3 + df + "(&" + tmp + ");\n"
 	}
@@ -23523,8 +23622,12 @@ fn c_raise(mut &em: Emitter, x: ast.Expr, has_cause: bool, cause: ast.Expr, ind:
 
 # c_err_value renders an expression AS an Err: one that already is an Err passes through,
 # and anything else — a bare message — has one built around it.
+#
+# THE ERR RAISED IS THE RAISE'S OWN. The runtime keeps it in flight while the unwind drops
+# every binding on the way to the guard, so a named Err — `raise e` of a caught one — is
+# counted again here rather than handed over: the binding's drop gives back its own count.
 fn c_err_value(mut &em: Emitter, x: ast.Expr) -> str {
-	return c_expr(em, x, c_nosub()) if c_is_err_ctor(em, x) or c_is_err_ty(c_infer(em, x))
+	return c_copied(em, ast.Ty.TErr, x, c_nosub()) if c_is_err_ctor(em, x) or c_is_err_ty(c_infer(em, x))
 
 	# AND OTHERWISE A MESSAGE, which the fallback below assumed rather than checked: it wraps
 	# the operand in `zrt_err_new`, whose parameter is a `const char *`, so `raise 5` reached cc
@@ -23539,7 +23642,7 @@ fn c_err_value(mut &em: Emitter, x: ast.Expr) -> str {
 		check.chk_at(em, rule.Rule.RaiseCarriesErr, f"raise carries an `Err`, or a message to build one from — {ast.ty_name(t)} is neither; write `ValueError(…)`, or a `str`")
 	}
 
-	return f"zrt_err_new({c_err_msg(em, x, c_nosub())})"
+	return f"zrt_err_own(0, {c_err_msg(em, x, c_nosub())})"
 }
 
 # c_err_msg renders the message an Err is built around AS THE ERR'S OWN. The runtime stores
@@ -23560,7 +23663,9 @@ fn c_err_msg(mut &em: Emitter, x: ast.Expr, sb: Subst) -> str {
 # whatever C type it happened to be.
 fn c_err_cause(mut &em: Emitter, cause: ast.Expr) -> str {
 	raise c_diag(em, rule.Rule.FromCauseNotErr, f"a `from` cause is an `Err`, and {ast.ty_name(c_infer(em, cause))} is not one — bind the Err a `guard` gave back (`Right(e) => raise … from e`)") if not c_is_err_ctor(em, cause) and not c_is_err_ty(c_infer(em, cause))
-	return c_expr(em, cause, c_nosub())
+
+	# the chain TAKES its cause, so a named one is counted again, as the raised Err is
+	return c_copied(em, ast.Ty.TErr, cause, c_nosub())
 }
 
 fn c_is_err_ctor(mut &em: Emitter, x: ast.Expr) -> bool {

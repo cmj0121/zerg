@@ -311,7 +311,7 @@ shipping compiler rather than a part of it (the line
 | `E3112` | a channel direction only narrows: a `…` cannot fill a `…`                                             |
 | `E3113` | `fn main` takes something other than the command-line arguments                                       |
 | `E3114` | a bare name another file of this module declares, or two imported modules both do                     |
-| `E3115` | a bare type name is declared in another file of this module                                           |
+| `E3115` | a bare type name another file of this module declares, or another module does                         |
 | `E3116` | a bare module constant another file of this module declares, or two imported modules both do          |
 | `E3117` | `if … := …` over a … — it binds the Left of a Result[T] or a T?                                       |
 | `E3118` | `in` over … compares its elements for equality, and … has none                                        |

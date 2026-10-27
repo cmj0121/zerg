@@ -263,6 +263,14 @@ _E4077_，也就是上文的同目錄規則。
 建構、欄位讀取、pattern 與 method 都指向自己那一個。會被拒絕的是：一個檔案宣告了自己的 `P`，又在型別位置寫了
 另一個 module 的 `sink.P`——型別位置會丟掉限定詞，兩者會拼成同一個名字，那就是 _E3158_。
 
+另一個 module 宣告的公開型別，要用這個檔案為那個 module 繫上的 namespace 來拼。`aa` 公開了 `struct P`
+時，`P(x: 1)` 與 `p: P` 是 _E3115_，錯誤會指出 `aa.P`；import 寫了 `as` 時，用的是那個名字。目錄 module 以
+`import "./shape"` 匯入時是 `shape.Point`，取的是 import 的名字而不是檔名。加上限定詞的拼法可以建置。
+兄弟檔案的公開型別仍是同一個 _E3115_ 的另一句：它指出那個檔案，並說明要寫 `import "./two"`。
+
+impl 的 spec 維持裸名字。文法要求 spec 是裸的 type-name，所以 `impl Tag for A` 指名的是另一個 module 公開的
+spec，而那正是這條 import 存在的拼法。
+
 私有的**泛型**函式也一樣。template 屬於它的檔案：兩個檔案各自宣告私有的 `fn least[T]`，宣告的是兩個
 template，不論它們是兩個 module 還是同一個 module 的兩個檔案；裸呼叫 `least(…)` 指的是自己檔案那一個，每個
 instance 也各自是一個 C 符號（`examples/1g/generics`）。兩個 module 同名的公開泛型經由各自的限定詞抵達，與兩個

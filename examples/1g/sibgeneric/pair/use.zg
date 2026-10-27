@@ -1,0 +1,12 @@
+import (
+	"./one"
+	"./two"
+)
+
+pub fn from_one() -> int {
+	return one.least(1, 2)
+}
+
+pub fn from_two() -> int {
+	return two.least(1, 2)
+}

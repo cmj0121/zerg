@@ -60,6 +60,10 @@ void zrt_tls_load(const zrt_tls *in) {
 }
 
 void zrt_tls_free(zrt_tls *t) {
+	/* an Err a crash left in flight, which no guard took: the coroutine reported it and
+	 * ended, and the bundle is the last thing holding it */
+	zrt_err_drop(t->taken);
+	t->taken = (zrt_err){0};
 	free(t->stack);
 	t->stack = NULL;
 	t->len = 0;
@@ -201,7 +205,44 @@ zrt_err zrt_err_new_kind(int kind, const char *msg) {
 	e.msg = msg;
 	e.cause = NULL;
 	e.kind = kind;
+	e.owned = 0;
 	return e;
+}
+
+zrt_err zrt_err_own(int kind, const char *msg) {
+	zrt_err e = zrt_err_new_kind(kind, msg);
+	e.owned = 1;
+	return e;
+}
+
+/* the cause is the PAYLOAD of a counted cell, so its header is the word pair before it —
+ * the layout a str cell has, and recovered the same way */
+static void *zrt_err_cause_cell(zrt_err *cause) {
+	return (zrt_ref_hdr *)cause - 1;
+}
+
+zrt_err zrt_err_copy(zrt_err e) {
+	if (e.owned && e.msg != NULL) {
+		zrt_str_retain(e.msg);
+	}
+	if (e.cause != NULL) {
+		zrt_retain(zrt_err_cause_cell(e.cause));
+	}
+	return e;
+}
+
+void zrt_err_drop(zrt_err e) {
+	if (e.owned && e.msg != NULL) {
+		zrt_str_release(e.msg);
+	}
+	if (e.cause != NULL) {
+		zrt_release(zrt_err_cause_cell(e.cause));
+	}
+}
+
+/* zrt_err_cause_drop is the cause cell's teardown: the Err in it is the cell's to give back */
+static void zrt_err_cause_drop(void *payload) {
+	zrt_err_drop(*(zrt_err *)payload);
 }
 
 zrt_err zrt_err_with_cause(const char *msg, zrt_err cause) {
@@ -247,8 +288,12 @@ int zrt_err_in(zrt_err e, int kind) {
 }
 
 zrt_err zrt_err_chain(zrt_err e, zrt_err cause) {
-	e.cause = (zrt_err *)zrt_alloc(sizeof(zrt_err));
-	*e.cause = cause;
+	zrt_err *cell = (zrt_err *)zrt_ref_payload(zrt_ref_alloc(sizeof(zrt_err), zrt_err_cause_drop));
+	*cell = cause;
+	if (e.cause != NULL) {
+		zrt_release(zrt_err_cause_cell(e.cause));
+	}
+	e.cause = cell;
 	return e;
 }
 
@@ -258,5 +303,11 @@ _Noreturn void zrt_raise_err(zrt_err e) {
 }
 
 zrt_err zrt_taken_err(void) {
-	return g_tls.taken;
+	zrt_err e = g_tls.taken;
+	g_tls.taken = (zrt_err){0};
+	return e;
+}
+
+zrt_err zrt_taken_err_copy(void) {
+	return zrt_err_copy(g_tls.taken);
 }

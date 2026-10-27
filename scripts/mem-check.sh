@@ -13,9 +13,8 @@
 # untouched. This gate is "no per-round leak", never "no leak" — do not read it as the
 # stronger sentence.
 #
-# WHY NOT `live == 0`: the runtime keeps deliberate live allocations at exit (a heap
-# cause on zrt_err_chain, a channel's crash message) and reaches the platform around the
-# counter in several places (unwind.c's bare realloc, sched.c's mmap, sys.c's argv). Every
+# WHY NOT `live == 0`: the runtime reaches the platform around the counter in several places
+# (unwind.c's bare realloc, sched.c's mmap, sys.c's argv). Every
 # one of those is a CONSTANT, so a difference is immune to it and an absolute zero is not
 # reachable. The floor below is what stops the difference form from passing by measuring
 # nothing: total(200) - total(5) must be positive, so a case that allocates nothing at all
@@ -4036,6 +4035,108 @@ fn main() {
 	print n
 }
 ZG
+
+# --- an Err owns its message (#377) -------------------------------------------------------
+# An Err built from a run-time str holds a count on it, and every way of letting go of one
+# gives that count back: a `??` that takes the fallback (#320), a Result nobody reads, an
+# `ok()` that forgets the Right, an `ok_or` whose optional was present, a match or an
+# `if v := …` over a Right, and a raise a `guard` demotes and `??` then discards. Each was
+# one str a round, kept until exit. The `res` and `mk` below are what every case shares.
+#
+# THE SHARED SHAPES ARE HERE TOO, because owning the message is what can free it twice: an
+# Err handed to `Either.Right` and then read through its name (`wrap(e) ?? 0`, then
+# `e.message()`), and one raised by name and caught (`guard { boom(e) } ?? 0`, then the same
+# read). A copy that forgot to count would free the message under `e` — a crash here, and a
+# use-after-free under the sanitizers.
+#
+# NOT THE SEED: zerg0 never drops an Err, so it leaks every one of these by design.
+err_prelude='fn res(n: int) -> Result[str] {
+	return Either.Right(ValueError(str(n) + "x")) if n >= 0
+	return Either.Left("ok")
+}
+
+fn mk(n: int) -> Err {
+	return ValueError(str(n) + "m")
+}
+
+fn wrap(e: Err) -> Result[int] {
+	return Either.Right(e)
+}
+
+fn boom(e: Err) -> int {
+	raise e
+}
+
+fn chain(e: Err) -> int {
+	raise ValueError("outer") from e
+}
+
+fn size(s: str) -> int {
+	return bytearray(s).len()
+}
+'
+
+# err_case <name> <the loop body> — one round of the shape, inside the counting loop.
+err_case() {
+	local name=$1 body=$2
+	case_run "$name" no no <<ZG
+$err_prelude
+fn main() {
+	mut n := 0
+	mut i := 0
+	r := rounds()
+	for i < r {
+$body
+		i = i + 1
+	}
+	print n
+}
+ZG
+}
+
+err_case err_coalesce '		n = n + size(res(i) ?? "dflt")'
+
+err_case err_unread_carrier '		c := res(i)
+		n = n + 1'
+
+err_case err_ok_forgets '		n = n + size(res(i).ok() ?? "d")'
+
+err_case err_ok_or_present '		o: str? = "v"
+		c := o.ok_or(ValueError(str(i) + "x"))
+		n = n + size(c ?? "d")'
+
+err_case err_guard_reraise '		n = n + size(guard { res(i)! } ?? "d")'
+
+err_case err_match_right '		match res(i) {
+			Right(e) => {
+				n = n + size(e.message())
+			}
+			Left(v) => {
+				n = n + size(v)
+			}
+		}'
+
+err_case err_if_bind_right '		if v := res(i) {
+			n = n + size(v)
+		}
+		n = n + 1'
+
+err_case err_wrap_then_read '		e := mk(i)
+		n = n + (wrap(e) ?? 0) + size(e.message())'
+
+err_case err_raise_then_read '		e := mk(i)
+		n = n + (guard { boom(e) } ?? 0) + size(e.message())'
+
+err_case err_cause_chain '		match guard { chain(mk(i)) } {
+			Right(x) => {
+				if u := x.unwrap() {
+					n = n + size(u.message())
+				}
+			}
+			Left(v) => {
+				n = n + v
+			}
+		}'
 
 # --- a literal with no type of its own, at a position that has one (#332) -----------------
 #

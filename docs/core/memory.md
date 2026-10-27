@@ -122,10 +122,6 @@ and deep-copies the rest; a `Ref` value is shared, never duplicated. (As an **im
 runtime `str` values the program produces are likewise refcounted internally and freed at last use — no
 surface change.)
 
-> **[deviation]** A produced `str` an `Err` carries is not always given back: the message of an `Err` built
-> from a run-time `str` is never released when `??` discards the `Err` (#320). The answer is unchanged; the
-> storage is lost until the program ends.
-
 For the **explicit** ref-counted values, **refcounting is cycle-complete by construction**, so they need no
 cycle collector and no weak reference: a `Ref[T]`'s referent is **fixed when the box is built** (to point
 elsewhere, build a new `Ref`), and with values immutable by default and constructed bottom-up there is no way

@@ -783,13 +783,6 @@ pub struct Emitter {
 	pub ft_to: list[str]
 	pub ft_name: list[str]
 
-	# hold_recv asks the NEXT method call rendered to hold its receiver across its arguments
-	# (c_hold). c_eq_call and c_ord_call set it: an operator's left operand becomes the
-	# receiver of `eq` / `less`, bound to a sequencing temporary before the right operand is
-	# evaluated, and the operator has no other way to reach the call it is rewritten into.
-	# c_recv_args takes it and clears it, so it never outlives the one call it was set for.
-	pub hold_recv: bool
-
 	# gen_filed is whether some template is keyed by its file (c_tpl_key) — a generic whose
 	# name another file declares too. It is what lets c_generic_row skip the second scan, which reads
 	# a declaration's path, in every program that has no such pair.
@@ -10317,18 +10310,7 @@ fn c_eq_call(mut &em: Emitter, oper: str, a: ast.Expr, b: ast.Expr, sb: Subst) -
 	if oper == "==" {
 		call = ast.Expr.EMethod(a, "eq", [b], 0, 0)
 	}
-	return c_holding_recv(em, call, sb)
-}
-
-# c_holding_recv renders an operator rewritten as a method call, with the call's receiver held
-# across its argument (hold_recv). The flag is cleared on the way out as well as where it is
-# taken, so a rewriting that never reaches c_recv_args cannot leave it standing for a call
-# somebody wrote.
-fn c_holding_recv(mut &em: Emitter, call: ast.Expr, sb: Subst) -> str {
-	em.hold_recv = true
-	out := c_expr(em, call, sb)
-	em.hold_recv = false
-	return out
+	return c_expr(em, call, sb)
 }
 
 # c_is_order_op is the half of the comparison operators `Ord` answers. `==` and `!=` are
@@ -10347,11 +10329,11 @@ fn c_is_order_op(oper: str) -> bool {
 # (docs/core/specs.md), and under totality `a <= b` is exactly `not (b < a)`, which spends
 # each operand once.
 fn c_ord_call(mut &em: Emitter, oper: str, a: ast.Expr, b: ast.Expr, sb: Subst) -> str {
-	return c_holding_recv(em, ast.Expr.EMethod(a, "less", [b], 0, 0), sb) if oper == "<"
-	return c_holding_recv(em, ast.Expr.EMethod(b, "less", [a], 0, 0), sb) if oper == ">"
-	return c_holding_recv(em, ast.Expr.EUnary("not", ast.Expr.EMethod(b, "less", [a], 0, 0)), sb) if oper == "<="
+	return c_expr(em, ast.Expr.EMethod(a, "less", [b], 0, 0), sb) if oper == "<"
+	return c_expr(em, ast.Expr.EMethod(b, "less", [a], 0, 0), sb) if oper == ">"
+	return c_expr(em, ast.Expr.EUnary("not", ast.Expr.EMethod(b, "less", [a], 0, 0)), sb) if oper == "<="
 
-	return c_holding_recv(em, ast.Expr.EUnary("not", ast.Expr.EMethod(a, "less", [b], 0, 0)), sb)
+	return c_expr(em, ast.Expr.EUnary("not", ast.Expr.EMethod(a, "less", [b], 0, 0)), sb)
 }
 
 # c_eq_refuse names what is missing, one sentence to a class of type.
@@ -12957,25 +12939,21 @@ fn c_recv_args(mut &em: Emitter, key: str, target: ast.Expr, args: list[ast.Expr
 	#
 	# A default that reads an earlier parameter puts every argument in a temporary
 	# (c_args_from), and those run before the receiver unless it is held in one as well.
-	seq := c_needs_order_args(args, c_ref_args(em, key, 1, args), 0) or c_defaults_read_earlier(em, key, 1, args.len(), c_args_filled(em, key, 1, args))
-	held := em.hold_recv
-	em.hold_recv = false
+	seq := c_needs_order_args(args, c_ref_args(em, key, 1, args), 0) or c_last_code(c_defaults_from(em, key, 1 + args.len())) >= 0 or c_defaults_read_earlier(em, key, 1, args.len(), c_args_filled(em, key, 1, args))
 	bound := seq and not c_is_ref_param(em, key, 0)
 	recv := c_ordered(em, bound, c_arg(em, key, 0, 0, target, sb))
-	return recv + c_args_from(em, key, 1, args, true, sb) if not held or not bound
 
-	# AN OPERATOR'S LEFT OPERAND, HELD ACROSS ITS RIGHT ONE. The receiver is a by-value
-	# parameter, so what the temporary holds is the callee's the moment the call is entered and
-	# this expression's until then; the hold ends on the last line before the call, after every
-	# argument has been bound.
-	row := c_param_row(em, key, 0)
+	# A RECEIVER THE CALL OWNS IS HELD ACROSS THE ARGUMENTS (c_hold, #326), as every earlier
+	# argument is (c_args_held): a by-value receiver is the callee's once the call is entered
+	# and this expression's until then, and a later argument that raises or leaves by a `?`
+	# never reaches the call. An operator's left operand, rewritten into `eq` or `less`, is the
+	# same receiver. It is bound only when something after it runs code (c_needs_order), so a
+	# bound receiver always has a later operand to be held across.
 	keep := em.rel_cnames.len()
-	if row >= 0 {
-		em.seq_pre = em.seq_pre + c_hold(em, em.pr_ty[row], recv)
+	if bound {
+		em.seq_pre = em.seq_pre + c_arg_hold(em, key, 0, target, recv)
 	}
-	rest := c_args_from(em, key, 1, args, true, sb)
-	em.seq_pre = em.seq_pre + c_unhold(em, keep)
-	return recv + rest
+	return recv + c_args_held(em, key, 1, args, true, sb, keep)
 }
 
 # c_call emits an enum-variant construction as a tagged-union literal, a struct
@@ -14028,6 +14006,22 @@ fn c_call_args(mut &em: Emitter, fname: str, args: list[ast.Expr], sb: Subst) ->
 # once here rather than in each caller, because getting it wrong passes a `mut &` argument
 # by value into the slot after the one that wanted its address.
 fn c_args_from(mut &em: Emitter, key: str, base: int, written: list[ast.Expr], lead: bool, sb: Subst) -> str {
+	return c_args_held(em, key, base, written, lead, sb, em.rel_cnames.len())
+}
+
+# c_args_held is c_args_from with the holds taken since `keep` ended where its own end: a
+# method's receiver, held by c_recv_args before its arguments are rendered, comes off in the
+# same pop as theirs.
+#
+# AN ARGUMENT THE CALLEE OWNS IS HELD ACROSS THE ONES AFTER IT (c_hold, #326). A by-value
+# parameter is given back by the callee's frame, and that frame is not entered until every
+# argument has answered: `f(ys, bad(1))` copied `ys` into its temporary, `bad` raised, and
+# the copy was nobody's. Each bound argument that owns something (c_arg_hold) is registered
+# where it is bound while a later one can still run code, and every hold comes off on the
+# last line before the call, so the callee's frame and the cleanup stack never both have it.
+# An argument left where it stands — a `mut &` one, or every one of a call nothing sequences —
+# is evaluated inside the call's own parentheses, and no hold spans it.
+fn c_args_held(mut &em: Emitter, key: str, base: int, written: list[ast.Expr], lead: bool, sb: Subst, keep: int) -> str {
 	# NAMED ARGUMENTS ARE REORDERED FIRST, so everything below this line sees a positional
 	# list and nothing downstream of it knows the form exists. The arity check included: a
 	# call that skipped a defaulted parameter in the middle is fully applied by the time it
@@ -14053,7 +14047,12 @@ fn c_args_from(mut &em: Emitter, key: str, base: int, written: list[ast.Expr], l
 	}
 
 	refs := c_ref_args(em, key, base, args)
-	seq := c_needs_order_args(args, refs, at)
+
+	# A DEFAULT THAT RUNS CODE sequences the call as a written argument that does: it is
+	# evaluated after every written one, and an argument the callee owns is held across it
+	# (#326) — which a temporary is needed for, and which C's own order would not give.
+	defs := c_defaults_from(em, key, base + args.len())
+	seq := c_needs_order_args(args, refs, at) or c_last_code(defs) >= 0
 
 	# a parameter a NAME skipped was filled from its default by c_args_named, and that default
 	# is lowered in its own file (c_default_enter), not in this one
@@ -14064,6 +14063,24 @@ fn c_args_from(mut &em: Emitter, key: str, base: int, written: list[ast.Expr], l
 	# arguments run in anyway. `prior` stays empty for every other call, and so does its C.
 	need := c_defaults_read_earlier(em, key, base, args.len(), filled)
 	mut prior: list[str] = []
+
+	# the last operand that runs code, counting the defaults appended after the written ones:
+	# an argument in front of it is held, and the one at it — bound last — never is
+	mut last := 0 - 1
+	mut k := 0
+	for k < args.len() {
+		if c_runs_code(args[k]) and not refs[k] {
+			last = k
+		}
+		k = k + 1
+	}
+	k = 0
+	for k < defs.len() {
+		if c_runs_code(defs[k]) {
+			last = args.len() + k
+		}
+		k = k + 1
+	}
 
 	mut out := ""
 	mut i := 0
@@ -14081,8 +14098,12 @@ fn c_args_from(mut &em: Emitter, key: str, base: int, written: list[ast.Expr], l
 			s = c_nosub()
 			saved = c_default_enter(em, key, base + i, base, prior)
 		}
-		v := c_ordered(em, (seq or need) and not refs[i], c_arg(em, key, base + i, i + 1, args[i], s))
+		bound := (seq or need) and not refs[i]
+		v := c_ordered(em, bound, c_arg(em, key, base + i, i + 1, args[i], s))
 		c_default_leave(em, saved)
+		if bound and i < last {
+			em.seq_pre = em.seq_pre + c_arg_hold(em, key, base + i, args[i], v)
+		}
 		if need {
 			prior.append(v)
 		}
@@ -14090,19 +14111,40 @@ fn c_args_from(mut &em: Emitter, key: str, base: int, written: list[ast.Expr], l
 		i = i + 1
 	}
 
+	# an appended default is bound as well while anything is held: left in the parentheses it
+	# would run after the holds came off, and one that raises would lose what they held
 	mut j := base + args.len()
-	for d in c_defaults_from(em, key, j) {
+	for d in defs {
 		if lead or j > base {
 			out = out + ", "
 		}
-		v := c_ordered(em, need, c_default_arg(em, key, j, base, prior, d))
+		bound := need or (em.rel_cnames.len() > keep and c_runs_code(d))
+		v := c_ordered(em, bound, c_default_arg(em, key, j, base, prior, d))
+		if bound and j - base < last {
+			em.seq_pre = em.seq_pre + c_arg_hold(em, key, j, d, v)
+		}
 		if need {
 			prior.append(v)
 		}
 		out = out + v
 		j = j + 1
 	}
+	em.seq_pre = em.seq_pre + c_unhold(em, keep)
 	return out
+}
+
+# c_arg_hold is c_hold for an argument bound to `tmp`, asked of the parameter it is passed to:
+# a by-value parameter of an owning type is the one the callee's frame gives back, so the
+# temporary holds what nobody else will until the call is entered. A `mut &` argument is the
+# caller's storage and a channel argument a borrow (c_arg), and neither is the call's to give
+# back; a literal names no storage (c_part_owns).
+fn c_arg_hold(mut &em: Emitter, key: str, idx: int, a: ast.Expr, tmp: str) -> str {
+	row := c_param_row(em, key, idx)
+
+	return "" if row < 0 or em.pr_ref[row] or ast.ty_is_chan(em.pr_ty[row])
+	return "" if not c_part_owns(em, em.pr_ty[row], a)
+
+	return c_hold(em, em.pr_ty[row], tmp)
 }
 
 # c_defaults_read_earlier is whether a default this call lowers — a slot a name skipped
@@ -14409,7 +14451,8 @@ fn c_call_releasing(mut &em: Emitter, cfn: str, key: str, args: list[ast.Expr], 
 	# later arguments first. The argument that owns something is already bound here, and one
 	# that does not joins it whenever anything after the first can tell.
 	refs := c_ref_args(em, key, 0, args)
-	seq := c_needs_order_args(args, refs, 1)
+	defs := c_defaults_from(em, key, args.len())
+	seq := c_needs_order_args(args, refs, 1) or c_last_code(defs) >= 0
 
 	# the temporaries a default reading an earlier parameter names, as c_args_from keeps them —
 	# declared among this call's own, since they are read inside its statement expression
@@ -14419,7 +14462,27 @@ fn c_call_releasing(mut &em: Emitter, cfn: str, key: str, args: list[ast.Expr], 
 	# AN END THE CALLER KEEPS IS HELD ACROSS THE CALL (c_hold_with), not only across the
 	# arguments after it: the callee borrows it, so a callee that raises leaves it the caller's
 	# to give back exactly as a later argument that raises does.
+	#
+	# AN ARGUMENT THE CALLEE OWNS IS HELD ONLY UNTIL THE CALL (c_arg_hold, #326), as c_args_held
+	# holds one: the callee's frame gives it back from there. The two kinds of hold end at
+	# different lines and one pop takes the newest first, so where any argument was held the
+	# pop before the call takes them all and the ends are held again (`ends`).
+	mut last := 0 - 1
+	mut k := 0
+	for k < args.len() {
+		if c_runs_code(args[k]) and not refs[k] {
+			last = k
+		}
+		k = k + 1
+	}
+	if c_last_code(defs) >= 0 {
+		last = args.len() + c_last_code(defs)
+	}
+
 	keep := em.rel_cnames.len()
+	mut owned := false
+	mut ends: list[str] = []
+	mut thunks: list[str] = []
 	mut decls := ""
 	mut call := cfn + "("
 	mut frees := ""
@@ -14434,6 +14497,11 @@ fn c_call_releasing(mut &em: Emitter, cfn: str, key: str, args: list[ast.Expr], 
 				on := c_tmp(em, "zgt_ord")
 				decls = decls + c_ord_decl(on, v)
 				v = on
+				if i < last {
+					hold := c_arg_hold(em, key, i, args[i], on)
+					decls = decls + hold
+					owned = owned or hold != ""
+				}
 			}
 		} else {
 			# the release below is by the PARAMETER's direction, so the owned end is narrowed to
@@ -14447,7 +14515,10 @@ fn c_call_releasing(mut &em: Emitter, cfn: str, key: str, args: list[ast.Expr], 
 			}
 			decls = decls + f"zrt_chan *{tn} = {v}; "
 			if row >= 0 {
-				decls = decls + c_hold_with(em, c_chan_defer_thunk(c_chan_dir(em.pr_ty[row])), tn)
+				th := c_chan_defer_thunk(c_chan_dir(em.pr_ty[row]))
+				decls = decls + c_hold_with(em, th, tn)
+				ends.append(tn)
+				thunks.append(th)
 			}
 			frees = frees + f"{rels[i]}({tn}); "
 			v = tn
@@ -14459,21 +14530,36 @@ fn c_call_releasing(mut &em: Emitter, cfn: str, key: str, args: list[ast.Expr], 
 		i = i + 1
 	}
 	mut j := args.len()
-	for d in c_defaults_from(em, key, j) {
+	for d in defs {
 		if j > 0 {
 			call = call + ", "
 		}
 		mut v := c_default_arg(em, key, j, 0, prior, d)
-		if need {
+		if need or (owned and c_runs_code(d)) {
 			on := c_tmp(em, "zgt_ord")
 			decls = decls + c_ord_decl(on, v)
 			v = on
+			if j < last {
+				hold := c_arg_hold(em, key, j, d, on)
+				decls = decls + hold
+				owned = owned or hold != ""
+			}
+		}
+		if need {
 			prior.append(v)
 		}
 		call = call + v
 		j = j + 1
 	}
 	call = call + ")"
+	if owned {
+		decls = decls + c_unhold(em, keep)
+		k = 0
+		for k < ends.len() {
+			decls = decls + c_hold_with(em, thunks[k], ends[k])
+			k = k + 1
+		}
+	}
 
 	frees = c_unhold(em, keep) + frees
 	ret := c_lookup_sig_ret(em, key)
@@ -15056,7 +15142,16 @@ fn c_fn_ty_of(mut &em: Emitter, n: str) -> ast.Ty {
 # in the same place, and it has to: the two compilers must agree about which operands are
 # sequenced or `make oracle` becomes a tripwire waiting for a program that can tell, so
 # moving the line is a change to both.
+#
+# A SEQUENCED ARGUMENT THE CALLEE OWNS IS HELD ACROSS THE ONES AFTER IT (c_hold, #326), as
+# c_args_held holds a named call's: the callee's frame gives a by-value parameter back, and
+# it is not entered when a later argument raises or leaves by a `?`.
 fn c_args_typed(mut &em: Emitter, ftys: list[ast.Ty], args: list[ast.Expr], sb: Subst, seq: bool) -> str {
+	keep := em.rel_cnames.len()
+	mut last := 0 - 1
+	if seq {
+		last = c_last_code(args)
+	}
 	mut out := ""
 	mut i := 0
 	for i < args.len() {
@@ -15086,9 +15181,14 @@ fn c_args_typed(mut &em: Emitter, ftys: list[ast.Ty], args: list[ast.Expr], sb: 
 
 		# the COPY is inside the temporary: hoisting the uncopied value would move the
 		# retain out of the run and leave the copy where the argument list is.
-		out = out + c_ordered(em, seq, val)
+		val = c_ordered(em, seq, val)
+		if i < last and i < ftys.len() and not c_ty_is_ref(ftys[i]) and not ast.ty_is_chan(ftys[i]) and c_part_owns(em, ftys[i], args[i]) {
+			em.seq_pre = em.seq_pre + c_hold(em, ftys[i], val)
+		}
+		out = out + val
 		i = i + 1
 	}
+	em.seq_pre = em.seq_pre + c_unhold(em, keep)
 	return out
 }
 
@@ -18811,10 +18911,19 @@ fn c_spawn(mut &em: Emitter, x: ast.Expr, ind: str) -> str {
 	th = th + " zrt_defer(" + dropfn + ", p);"
 	th = th + " " + cal.cname + "(" + call + "); }\n"
 	em.dfn_decls.append(th)
-	mut out := f"{ind}zg_spawnenv_{tag} *zgt_se{tag} = (zg_spawnenv_{tag}*)zrt_alloc(sizeof(zg_spawnenv_{tag}));\n"
+
+	# THE ARGUMENTS ARE EVALUATED BEFORE THE ENVIRONMENT IS ALLOCATED, each into a temporary of
+	# its own, and the environment is filled from them after (#326). Allocated first, it was
+	# nobody's while they ran: an argument that raised or left by a `?` — the first one included
+	# — lost the allocation and every capture already stored in it. A capture is held across the
+	# arguments after it (c_hold) until the last of them has answered, and from there to
+	# `zrt_spawn` nothing runs that could leave.
+	keep := em.rel_cnames.len()
+	last := c_last_code(args)
+	mut out := ""
 	mut j := 0
 	for j < args.len() {
-		entered := c_callee_enter(em, cal, j, f"zgt_se{tag}->f")
+		entered := c_callee_enter(em, cal, j, f"zgt_se{tag}_a")
 		mut v := c_captured(em, cal.key, j, args[j])
 		c_default_leave(em, entered)
 
@@ -18824,7 +18933,27 @@ fn c_spawn(mut &em: Emitter, x: ast.Expr, ind: str) -> str {
 		if dirs[j] >= 0 {
 			v = c_chan_into(em, args[j], v, c_infer(em, args[j]), dirs[j])
 		}
-		out = out + ind + "zgt_se" + tag + "->f" + strconv.to_string(j, 10) + " = " + v + ";\n"
+		an := f"zgt_se{tag}_a{strconv.to_string(j, 10)}"
+		at := c_captured_ty(em, cal.key, j, args[j])
+		out = out + ind + c_type(at) + " " + an + " = " + v + ";\n"
+		if j < last and dirs[j] >= 0 {
+			out = out + ind + c_hold_with(em, c_chan_defer_thunk(dirs[j]), an) + "\n"
+		} else if j < last {
+			hold := c_arg_hold(em, cal.key, j, args[j], an)
+			if hold != "" {
+				out = out + ind + hold + "\n"
+			}
+		}
+		j = j + 1
+	}
+	unhold := c_unhold(em, keep)
+	if unhold != "" {
+		out = out + ind + unhold + "\n"
+	}
+	out = out + f"{ind}zg_spawnenv_{tag} *zgt_se{tag} = (zg_spawnenv_{tag}*)zrt_alloc(sizeof(zg_spawnenv_{tag}));\n"
+	j = 0
+	for j < args.len() {
+		out = out + ind + "zgt_se" + tag + "->f" + strconv.to_string(j, 10) + " = zgt_se" + tag + "_a" + strconv.to_string(j, 10) + ";\n"
 		j = j + 1
 	}
 
@@ -19797,6 +19926,13 @@ fn c_defer_of(mut &em: Emitter, cal: Callee, ind: str) -> str {
 	# ONE STATEMENT PER FIELD, in order, rather than one initializer list: C leaves the order of
 	# an initializer's expressions unspecified, and a default that reads an earlier parameter
 	# reads the field that argument was stored in, which must already hold it.
+	#
+	# A FIELD STORED IS HELD ACROSS THE ONES AFTER IT (c_hold, #326) until the deferred call is
+	# registered: what a field holds is the callee's by-value parameter, given back by the
+	# callee's frame when the defer runs, and a later argument that raises or leaves by a `?`
+	# never registers it.
+	keep := em.rel_cnames.len()
+	last := c_last_code(args)
 	mut fields := ""
 	mut vals := ""
 	mut call := ""
@@ -19804,14 +19940,25 @@ fn c_defer_of(mut &em: Emitter, cal: Callee, ind: str) -> str {
 	for i < args.len() {
 		entered := c_callee_enter(em, cal, i, f"zgt_de{tag}.f")
 		ft := c_type(c_captured_ty(em, cal.key, i, args[i]))
+		fi := f"zgt_de{tag}.f{strconv.to_string(i, 10)}"
 		fields = fields + " " + ft + " f" + strconv.to_string(i, 10) + ";"
 		if i > 0 {
 			call = call + ", "
 		}
-		vals = f"{vals}{ind}zgt_de{tag}.f{strconv.to_string(i, 10)} = {c_captured(em, cal.key, i, args[i])};\n"
+		vals = f"{vals}{ind}{fi} = {c_captured(em, cal.key, i, args[i])};\n"
 		c_default_leave(em, entered)
+		if i < last {
+			hold := c_arg_hold(em, cal.key, i, args[i], fi)
+			if hold != "" {
+				vals = vals + ind + hold + "\n"
+			}
+		}
 		call = call + "e->f" + strconv.to_string(i, 10)
 		i = i + 1
+	}
+	unhold := c_unhold(em, keep)
+	if unhold != "" {
+		vals = vals + ind + unhold + "\n"
 	}
 	em.dfn_decls.append("typedef struct {" + fields + " } zg_denv_" + tag + ";\n")
 	em.dfn_decls.append("static void zg_dfn_" + tag + "(void *p) { zg_denv_" + tag + " *e = (zg_denv_" + tag + "*)p; " + cal.cname + "(" + call + "); }\n")
@@ -26423,7 +26570,7 @@ fn c_emit_unit_as(prog0: ast.File, own0: ast.File, ft: FileTypes, ms: Mods, whol
 	# is what makes that invariant hold for a multi-unit program, at the place it already lives,
 	# and it is what lets the declaration passes below go back to reading the WHOLE program.
 	seen := diags.len()
-	mut em := Emitter([], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], false, false, false, false, [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], 0, [], 0, [], [], false, "", "", [], [], ast.Ty.TVoid, 0, "", 0, 0, 0, 0, "", diags, 0, 0, [], [], [], [], [], false, 0, false, "", 0, false, false, [], [], [], [], [], [], [], [], [], [], [], "", want_lints, [], [], [], [], [], [], [], [], [], [], [], [], false, 0, [], [], "", c_nosub(), [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], false, ast.no_index(), [], [], [], [], [], [], [], [], [], [], [], [], false, false, [], [], [], [], [], [], [])
+	mut em := Emitter([], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], false, false, false, false, [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], 0, [], 0, [], [], false, "", "", [], [], ast.Ty.TVoid, 0, "", 0, 0, 0, 0, "", diags, 0, 0, [], [], [], [], [], false, 0, false, "", 0, false, false, [], [], [], [], [], [], [], [], [], [], [], "", want_lints, [], [], [], [], [], [], [], [], [], [], [], [], false, 0, [], [], "", c_nosub(), [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], false, ast.no_index(), [], [], [], [], [], [], [], [], [], [], [], [], false, [], [], [], [], [], [], [])
 
 	# ASSIGNED, NOT PASSED. Every argument above is a zero value, and `layering` asserts that
 	# — it lines the call up with the fields by KIND, which only works while nothing in it

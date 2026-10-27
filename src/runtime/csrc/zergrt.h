@@ -391,10 +391,19 @@ enum {
 	ZRT_ERR_ASSERTION      = 11, /* AssertionError: a claim `assert` made that did not hold */
 };
 
+/* AN ERR OWNS WHAT IT HOLDS, when it says so. `owned` is set on an Err a program built
+ * (zrt_err_own): its msg is a counted str cell, and the Err holds one count on it. The
+ * runtime's own aborts carry a plain C string literal, which has no cell header to count,
+ * so they build with zrt_err_new and leave the flag clear. zrt_err_copy and zrt_err_drop
+ * read the flag; nothing else may retain or release an Err's msg.
+ *
+ * `cause` is the payload of a counted cell (zrt_err_chain) and is counted whatever the
+ * flag says: a copy shares the chain and the last holder frees it. */
 typedef struct zrt_err {
 	const char     *msg;
 	struct zrt_err *cause;
 	int             kind; /* a zrt_err_kind (ZRT_ERR_*); ZRT_ERR_NONE for a generic Err */
+	int             owned; /* nonzero: msg is a counted cell this Err holds a count on */
 } zrt_err;
 
 typedef struct {
@@ -488,8 +497,19 @@ _Noreturn void zrt_abort_kind(int kind, const char *msg);
 /* --- Err value + carrying abort (unwind.c, Decision D) -------------------- */
 
 /* zrt_err_new builds an Err with the given message, no cause, and the generic kind
- * (ZRT_ERR_NONE). */
+ * (ZRT_ERR_NONE). The message is BORROWED for the life of the program: this is the
+ * constructor for a C string literal, which nothing counts. */
 zrt_err zrt_err_new(const char *msg);
+
+/* zrt_err_own builds the Err a program constructs: msg is a counted str cell and the
+ * caller's count on it is HANDED OVER, so the Err gives it back when it is dropped. A
+ * literal's cell is immortal and the release no-ops on it. */
+zrt_err zrt_err_own(int kind, const char *msg);
+
+/* zrt_err_copy is a second holder of an Err: it counts the message (when owned) and the
+ * cause cell, and answers the same value. zrt_err_drop gives both counts back. */
+zrt_err zrt_err_copy(zrt_err e);
+void    zrt_err_drop(zrt_err e);
 
 /* zrt_err_new_kind builds an Err with a built-in KIND (a ZRT_ERR_* value) and message,
  * no cause — the value a `raise ValueError("…")` carries. */
@@ -498,9 +518,9 @@ zrt_err zrt_err_new_kind(int kind, const char *msg);
 /* zrt_err_chain attaches a cause to an Err ALREADY BUILT: `raise e from c` records c
  * so a handler can walk the chain, and e keeps everything else it is — its KIND above
  * all. Chaining used to go through a message-only constructor, so `raise IOError("x")
- * from c` came out kind-less and an `e is IOError` on the far side answered false. The
- * cause is copied to the heap (the caller's is a stack temporary), leaked for the MVP
- * like every other box. */
+ * from c` came out kind-less and an `e is IOError` on the far side answered false. Both
+ * operands are TAKEN: the cause moves into a counted cell (the caller's is a stack
+ * temporary) that the Err's drop gives back, and a cause e already had is dropped. */
 zrt_err zrt_err_chain(zrt_err e, zrt_err cause);
 
 /* zrt_err_in answers `e in Kind` — membership in that kind's subtree of the built-in taxonomy:
@@ -517,9 +537,13 @@ zrt_err zrt_err_with_cause(const char *msg, zrt_err cause);
  * zrt_abort. `raise e`, `x!`, and the propagate paths funnel through here. */
 _Noreturn void zrt_raise_err(zrt_err e);
 
-/* zrt_taken_err returns the Err the current abort/raise carried, read on a `guard`
- * setjmp!=0 landing. It is an empty Err (msg NULL) when nothing was stashed. */
+/* zrt_taken_err MOVES OUT the Err the current abort/raise carried, read on a `guard`
+ * setjmp!=0 landing: the caller owns what it is handed and the stash is left empty. It is
+ * an empty Err (msg NULL) when nothing was stashed. zrt_taken_err_copy is a second holder
+ * of the in-flight Err that leaves it in flight — what a channel a crashing sender closes
+ * keeps. */
 zrt_err zrt_taken_err(void);
+zrt_err zrt_taken_err_copy(void);
 
 /* --- checked integer ARITHMETIC (docs/core/types.md) -----------------------------
  *

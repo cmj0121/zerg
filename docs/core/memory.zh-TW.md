@@ -97,9 +97,6 @@ mutability 屬於**實例（instance）**——也就是 binding——不是型�
 部分；`Ref` 值永遠共享、絕不被複製。(作為**實作細節**,程式產生的 runtime `str` 值在內部同樣被 refcount、並於最後
 使用處釋放——表面沒有改變。)
 
-> **[deviation]** `Err` 帶著的、程式產生的 `str` 不一定會被還回去:用 runtime `str` 建出的 `Err`,當 `??` 丟掉
-> 這個 `Err` 時,它的訊息永遠不會被釋放(#320)。答案不變;那塊儲存空間要到程式結束才會回收。
-
 對**明確的** refcounted 值而言,**refcount 在構造上就是 cycle-complete**,所以不需要循環收集器、也不需要 weak
 reference:`Ref[T]` 的 referent 在**盒子建構時就固定**(要指別處就建一個新的 `Ref`),而值 immutable-by-default、又是
 bottom-up 建構,沒有辦法讓一個既存的 `Ref` 回頭指向後建的值——參照循環永遠形不成,所以「最後持有者釋放」永遠是完整
@@ -151,10 +148,10 @@ n.next!.value = 99                # 觸及共享的 tail——m.next!.value 也�
 `defer` 在 block 退出時、於**每一條**路徑上執行，**包含 abort-unwind 路徑**；一個 block 內多個 `defer` 以
 **後登記先跑（LIFO）**執行，與同一逆序的 scope-owned 釋放及 `Ref` drop 交錯。
 
-> **[deviation]** 一個運算式已經建好、還沒綁到名字上的值，在那條路徑上也會被還回去——跨過後一個運算元而被
-> 持有的運算元、literal 或建構式裡已經建好的部分。呼叫的**引數**則不會：後面的引數 abort、而由 `guard`
-> 接住時，已經求值的引數不會被釋放，method 呼叫的 receiver、以及 `spawn` 或 `defer` 已經存下的引數也一樣
-> （#326）。答案不變；那塊儲存要到程式結束才回來。
+一個運算式已經建好、還沒綁到名字上的值，在那條路徑上也會被還回去——跨過後一個運算元而被持有的運算元、
+literal 或建構式裡已經建好的部分。呼叫的**引數**也一樣：後面的引數 abort，或經由 `?`、或經由會
+return、break、continue 的 `??` 離開時，已經求值的引數會被釋放，method 呼叫的 receiver、以及 `spawn` 或
+`defer` 已經存下的引數也是。呼叫一旦進入，它們就屬於被呼叫端，由它的 frame 還回去。
 
 **指派**也是一次釋放：寫過一個擁有東西的 binding 會釋放它原本持有的值，而新值一定在舊值被釋放**之前**就先建好
 ——`s = s + x` 要讀 `s` 才做得出自己的右手邊。

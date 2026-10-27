@@ -783,13 +783,6 @@ pub struct Emitter {
 	pub ft_to: list[str]
 	pub ft_name: list[str]
 
-	# hold_recv asks the NEXT method call rendered to hold its receiver across its arguments
-	# (c_hold). c_eq_call and c_ord_call set it: an operator's left operand becomes the
-	# receiver of `eq` / `less`, bound to a sequencing temporary before the right operand is
-	# evaluated, and the operator has no other way to reach the call it is rewritten into.
-	# c_recv_args takes it and clears it, so it never outlives the one call it was set for.
-	pub hold_recv: bool
-
 	# gen_filed is whether some template is keyed by its file (c_tpl_key) — a generic whose
 	# name another file declares too. It is what lets c_generic_row skip the second scan, which reads
 	# a declaration's path, in every program that has no such pair.
@@ -1515,16 +1508,26 @@ fn c_try(mut &em: Emitter, x: ast.Expr, sb: Subst) -> str {
 	tv := "zgt_tr" + tag
 	mut out := f"({{ {src} {tv} = {c_expr(em, x, sb)};"
 	out = out + " if (" + c_res_is_right(tv) + ") {"
+
+	# the right side travels UNCHANGED — an optional's carries nothing, and an Either's
+	# carries the value that is the whole reason the early return happened.
+	#
+	# IT IS TAKEN BEFORE THE UNWIND. One that names storage — `r?` on a binding — is copied,
+	# since the unwind below gives `r` back, and a carrier this expression made hands its own
+	# over. Read after the unwind, a named Result's Err was freed on the way out (#377).
+	mut right := f"({rcn}){{ .tag = 1 }}"
+	if not ast.ty_is_opt(em.fn_ret) {
+		mut rv := c_res_err(tv)
+		if c_is_borrow(x) {
+			rv = c_taken(em, c_either_right(t), rv)
+		}
+		rn := "zgt_trr" + tag
+		out = out + f" {rcn} {rn} = ({rcn}){{ .tag = 1, .err = {rv} }};"
+		right = rn
+	}
 	if c_needs_fn_unwind(em) {
 		em.fn_mark_used = true
 		out = out + " zrt_unwind_to(" + em.fn_mark + ");"
-	}
-
-	# the right side travels UNCHANGED — an optional's carries nothing, and an Either's
-	# carries the value that is the whole reason the early return happened
-	mut right := f"({rcn}){{ .tag = 1 }}"
-	if not ast.ty_is_opt(em.fn_ret) {
-		right = f"({rcn}){{ .tag = 1, .err = {c_res_err(tv)} }}"
 	}
 
 	# THE LEFT IS HANDED OVER AS THIS EXPRESSION'S OWN. A carrier this expression made gives up
@@ -1693,8 +1696,8 @@ fn c_carrier_temp_drop(mut &em: Emitter, t: ast.Ty, e: ast.Expr) -> str {
 # reference; nothing took it back. A leak and never a double free, which is why nothing
 # crashed and why macOS ASan, having no LeakSanitizer, never said a word.
 #
-# A `Result[T]` is unaffected either way: its Right is an `Err`, whose storage belongs to the
-# runtime, so `c_needs_copy` answers no for it exactly as it did.
+# A `Result[T]` owns its Right too: an `Err` holds counts on its message and its cause (#377),
+# so the arm that drops the Right is what gives back an Err a `??` or an unread carrier lets go.
 fn c_carrier_owns(mut &em: Emitter, t: ast.Ty) -> bool {
 	# A BOXED CARRIER OWNS THE CELL, and asking its payload is the question that does not
 	# terminate: the payload is the struct that holds this carrier, so `c_needs_copy` would
@@ -1894,7 +1897,10 @@ fn c_carrier_decl(mut &em: Emitter, c: ast.Ty) -> str {
 	if ast.ty_is_opt(c) {
 		fail = "zrt_raise_err(zrt_err_new(\"force-unwrap of nil\"));"
 	} else if c_is_err_ty(c_either_right(c)) {
-		fail = "zrt_raise_err(" + c_res_err("r") + ");"
+		# a COPY: `r` is the caller's carrier, which its holder gives back as the unwind
+		# passes it, so the Err in flight holds counts of its own (#377). A carrier the
+		# caller made raises its own Err before it gets here (c_force).
+		fail = "zrt_raise_err(zrt_err_copy(" + c_res_err("r") + "));"
 	}
 	d = d + "    if (" + c_res_is_right("r") + ") { " + fail + " }\n"
 
@@ -3555,9 +3561,10 @@ fn c_build_generics(mut &em: Emitter, f: ast.File) {
 # spelling a private type another file declares is given (c_ft_fresh) — and the program is
 # left as it was written. A bare `least(…)` is resolved to the key of the reader's own file
 # when it is looked up (c_generic_row), which is after a binding of that name has had its turn
-# to shadow it; a qualified `a.least(…)` to the key of the module it names (c_ns_generic).
-# `pub` changes nothing here: a public template is reached through its qualifier, and that is
-# what chooses. The key is spoken back as the written name in every finding (c_file_types).
+# to shadow it; a qualified `a.least(…)` to the key c_ns_generic resolves — the module's
+# template, or that sibling file's when the qualifier names one (#391). `pub` changes which
+# of a module's templates an outside qualifier may reach, not which file a sibling qualifier
+# named. The key is spoken back as the written name in every finding (c_file_types).
 #
 # A METHOD TEMPLATE IS NOT KEYED THIS WAY, because it is already its receiver's: `P#pick` and
 # `Q#pick` are two keys, and a private `P` two files declare is two types (c_file_types).
@@ -3631,14 +3638,19 @@ fn c_tpl_written(key: str) -> str {
 # plain function, or nothing. Handing the name back would let c_generic_row find the READER's
 # own template of that name, and `strconv.to_string` would call a local `to_string[T]`.
 #
-# A MODULE'S FILES MAY EACH DECLARE ONE, and only a `pub` one is the module's to offer: a
-# private one is the answer only when there is nothing else, and the visibility rule then
-# refuses the call as it refuses any private name. TWO PUBLIC ONES IN ONE MODULE are the
-# collision two plain functions of one module are (E4077), met here at the qualified call
-# rather than at the declaration, because each of them is answerable until something names
-# the module's.
+# A MODULE'S FILES MAY EACH DECLARE ONE. A qualifier that names the MODULE — `lib.least`
+# from outside — offers a `pub` one, and a private one only when nothing public is there;
+# the visibility rule then refuses that call as it refuses any private name. TWO PUBLIC ONES
+# are the collision two plain functions of one module are (E4077), met here at that qualified
+# call rather than at the declaration, because a template is gone before the declaration walk.
+#
+# A SIBLING FILE'S QUALIFIER NAMES THAT FILE (#391), as `two.helper` does (c_ns_sibling_file).
+# It does not prefer another file's `pub` template, and it does not raise the collision: the
+# file was named. A private template there is the visibility rule's (E3001), naming that file.
 fn c_ns_generic(mut &em: Emitter, ns: str, name: str) -> str {
 	return name if not em.gen_filed
+
+	sib := c_ns_sibling_file(em, ns)
 
 	mut found := -1
 	mut found_pub := false
@@ -3648,17 +3660,23 @@ fn c_ns_generic(mut &em: Emitter, ns: str, name: str) -> str {
 		if c_tpl_keyed(em.gen_names[i], name) {
 			keyed = true
 			t := em.gen_tpls[i]
-
-			# NOT THE "NO MODULE" ANSWER c_ns_names_mod gives a declaration without one: the entry
-			# file has none, and its own `to_string[T]` is not what `strconv.to_string` names.
-			m := check.c_mod_of(em, t.path)
-			if m != "" and c_ns_names_mod(em, ns, m) {
-				if found < 0 or (t.is_pub and not found_pub) {
+			if sib != "" {
+				if t.path == sib and found < 0 {
 					found = i
-					found_pub = t.is_pub
-				} else if t.is_pub {
-					prev := em.gen_tpls[found]
-					raise c_mod_flat_collide(t.path, t.line, t.col, name, prev.path)
+				}
+			} else {
+				# NOT THE "NO MODULE" ANSWER c_ns_names_mod gives a declaration without one: the
+				# entry file has none, and its own `to_string[T]` is not what `strconv.to_string`
+				# names.
+				m := check.c_mod_of(em, t.path)
+				if m != "" and c_ns_names_mod(em, ns, m) {
+					if found < 0 or (t.is_pub and not found_pub) {
+						found = i
+						found_pub = t.is_pub
+					} else if t.is_pub {
+						prev := em.gen_tpls[found]
+						raise c_mod_flat_collide(t.path, t.line, t.col, name, prev.path)
+					}
 				}
 			}
 		}
@@ -7252,6 +7270,13 @@ fn c_needs_copy(mut &em: Emitter, t: ast.Ty) -> bool {
 	# renders one without a copy, and c_fn does not release the parameter.
 	return true if ast.ty_is_chan(t)
 
+	# AN ERR OWNS ITS MESSAGE AND ITS CAUSE (#377). It was the one value type treated as
+	# storage the runtime kept, so a run-time message lived until exit wherever an Err was
+	# discarded — under `??`, in a Result nobody read, in an `ok_or` whose optional was
+	# present. A second name is a count, and the last holder's drop gives it back; the
+	# runtime's own literal messages are told apart by the Err's `owned` flag, not here.
+	return true if c_is_err_ty(t)
+
 	# A CARRIER owns WHICHEVER SIDE IT HOLDS — that is what `if v := c { … }` retaining what
 	# it binds already says — so it owes a copy exactly when either side does. Answering
 	# `false` here is what made `got := <-c` a second name for one reference: the value was
@@ -7390,6 +7415,10 @@ fn c_copy_of(mut &em: Emitter, t: ast.Ty, x: str) -> str {
 	if c_is_str(t) {
 		em.used_rt = true
 		return f"zrt_str_retain({x})"
+	}
+	if c_is_err_ty(t) {
+		em.used_rt = true
+		return f"zrt_err_copy({x})"
 	}
 
 	# a carrier's helper is named after the carrier's own C name, which is not `zg_` plus a
@@ -7581,6 +7610,13 @@ fn c_elem_kind(mut &em: Emitter, t: ast.Ty) -> str {
 	# gave two buffers one reference between them.
 	return "str" if c_is_str(t)
 
+	# AN ERR is its own kind, for the reason a str is: a `list[Err]` holds counts on what its
+	# elements own. Its trio is written on demand, as a channel end's is.
+	if c_is_err_ty(t) {
+		c_err_vt(em)
+		return "err"
+	}
+
 	# A channel end is the same shape of answer, and it has to come BEFORE the empty return:
 	# c_named_of of a `TChan` is "", so a `list[chan[int]]` took `zg_listvt` and memcpy'd the
 	# pointer. A receive-only end is its own kind because its release is not the sender's.
@@ -7633,6 +7669,16 @@ fn c_chan_vt(mut &em: Emitter, k: str) {
 	out = out + "static void " + c_ty_helper("elemdrop", k) + "(void *elem) { " + dr + "(*(zrt_chan**)elem); }\n"
 	out = out + "static const zrt_elem_vt " + c_ty_helper("listvt", k) + " = {" + c_ty_helper("elemcopy", k) + ", " + c_ty_helper("elemdrop", k) + "};\n\n"
 	em.res_decls.append(out)
+}
+
+# c_err_vt emits the Err element trio, once, through the registry every kind's goes through.
+# The kind is entered BEFORE the trio is written, because writing it asks c_elem_kind again.
+fn c_err_vt(mut &em: Emitter) {
+	return if c_name_in(em.refvt_done, "err")
+
+	em.refvt_done.append("err")
+	em.used_rt = true
+	em.res_decls.append(c_elem_vt_helper(em, ast.Ty.TErr))
 }
 
 # The vtable carries BOTH halves. It used to carry only the copy, with the note that a drop
@@ -7724,6 +7770,7 @@ fn c_drop_fn(mut &em: Emitter, t: ast.Ty) -> str {
 	return "zrt_list_drop" if c_is_list(t)
 	return "zrt_map_drop" if c_is_map(t) or c_is_set(t)
 	return "zrt_str_release" if c_is_str(t)
+	return "zrt_err_drop" if c_is_err_ty(t)
 
 	# by value, like the str: the runtime takes the handle, and the direction is the end's own
 	return c_chan_release_fn(c_chan_dir(t)) if ast.ty_is_chan(t)
@@ -7756,7 +7803,7 @@ fn c_drop_arg(mut &em: Emitter, t: ast.Ty, place: str) -> str {
 	# str spelling) taking the CELL. Handing it `&place` released the address of the variable
 	# holding the cell, which is the defect this function was written to stop being written by
 	# hand — and a spec value is the third type to need it.
-	return place if c_is_str(t) or c_is_ref_box(t) or c_is_spec_name(em, c_named_of(t)) or ast.ty_is_chan(t)
+	return place if c_is_str(t) or c_is_err_ty(t) or c_is_ref_box(t) or c_is_spec_name(em, c_named_of(t)) or ast.ty_is_chan(t)
 
 	return "&" + place
 }
@@ -8249,14 +8296,17 @@ fn c_ns_scope(mut &em: Emitter, n: str, name: str) -> str {
 	return c_ns_scope_if(em, n, c_name_in(em.fk_names, name))
 }
 
-# c_ns_scope_if is c_ns_scope for a name `keyed` says files of one module declare — a free
-# function's (fk_names) or a module constant's (kc_names).
-fn c_ns_scope_if(mut &em: Emitter, n: str, keyed: bool) -> str {
+# c_ns_sibling_file is the FILE a namespace names when the file being emitted imported a
+# sibling of its own module — `import "./two"` written in a file of that module — or "" when
+# the namespace names another module, names nothing, or names a file this unit does not hold.
+# A plain function's qualifier and a template's qualifier ask it the same question (#391):
+# the module alone would answer the module's `pub` declaration.
+fn c_ns_sibling_file(mut &em: Emitter, n: str) -> str {
 	mod := c_ns_mod_of(em, n)
-	return mod if mod == "" or not keyed
+	return "" if mod == ""
 
 	here := em.at_path
-	return mod if mod != check.c_mod_of(em, here)
+	return "" if mod != check.c_mod_of(em, here)
 
 	mut want := ""
 	mut i := 0
@@ -8266,6 +8316,8 @@ fn c_ns_scope_if(mut &em: Emitter, n: str, keyed: bool) -> str {
 		}
 		i = i + 1
 	}
+	return "" if want == ""
+
 	i = 0
 	for i < em.unit_paths.len() {
 		p := em.unit_paths[i]
@@ -8273,6 +8325,18 @@ fn c_ns_scope_if(mut &em: Emitter, n: str, keyed: bool) -> str {
 
 		i = i + 1
 	}
+	return ""
+}
+
+# c_ns_scope_if is c_ns_scope for a name `keyed` says files of one module declare — a free
+# function's (fk_names) or a module constant's (kc_names).
+fn c_ns_scope_if(mut &em: Emitter, n: str, keyed: bool) -> str {
+	mod := c_ns_mod_of(em, n)
+	return mod if mod == "" or not keyed
+
+	sib := c_ns_sibling_file(em, n)
+	return sib if sib != ""
+
 	return mod
 }
 
@@ -9208,7 +9272,14 @@ fn c_force(mut &em: Emitter, x: ast.Expr, sb: Subst) -> str {
 	cn := c_tmp(em, "zgt_t")
 	vn := c_tmp(em, "zgt_t")
 	et := c_type(c_carrier_elem(t))
-	return f"({{ {name} {cn} = {rendered}; {et} {vn} = zg_force_{name}({cn}); {df}(&{cn}); {vn}; }})"
+
+	# an Err this expression owns is MOVED into the raise, which the helper's copy would
+	# leave counted twice with only one holder to give it back (#377)
+	mut mv := ""
+	if c_is_result(t) {
+		mv = f"if ({c_res_is_right(cn)}) {{ zrt_raise_err({c_res_err(cn)}); }} "
+	}
+	return f"({{ {name} {cn} = {rendered}; {mv}{et} {vn} = zg_force_{name}({cn}); {df}(&{cn}); {vn}; }})"
 }
 
 # c_coalesce lowers `a ?? b`: the Left of `a`, or the fallback. The operand is bound to a
@@ -9233,9 +9304,9 @@ fn c_coalesce(mut &em: Emitter, a: ast.Expr, b: ast.Expr, jump: list[ast.Stmt], 
 
 	# the carrier is bound here whether or not it is somebody else's, because it is READ
 	# TWICE. Giving it back is the other question, and it is asked the way c_force asks it:
-	# only a carrier that names no storage is this expression's own. The drop is a no-op on
-	# the fallback side by construction — there is no payload to give back on a Right — so it
-	# can sit after the choice rather than inside one arm of it.
+	# only a carrier that names no storage is this expression's own. It sits after the choice
+	# rather than inside one arm of it: on the Left it gives back what was copied out, and on
+	# the Right it gives back the Err the fallback discards (#320).
 	df := c_carrier_temp_drop(em, t, a)
 	if jump.len() == 0 {
 		alt := c_fit_copied(em, "the `??` fallback", elem, b, sb)
@@ -9252,7 +9323,7 @@ fn c_coalesce(mut &em: Emitter, a: ast.Expr, b: ast.Expr, jump: list[ast.Stmt], 
 	if df != "" {
 		give = f" {df}(&{tmp});"
 	}
-	out = out + " if (" + c_res_is_left(tmp) + ") { " + val + " = " + c_res_taken(em, t, tmp, elem) + ";" + give + " } else { "
+	out = out + " if (" + c_res_is_left(tmp) + ") { " + val + " = " + c_res_taken(em, t, tmp, elem) + ";" + give + " } else {" + give + " "
 	for s in jump {
 		out = out + c_stmt(em, s, "")
 	}
@@ -10317,18 +10388,7 @@ fn c_eq_call(mut &em: Emitter, oper: str, a: ast.Expr, b: ast.Expr, sb: Subst) -
 	if oper == "==" {
 		call = ast.Expr.EMethod(a, "eq", [b], 0, 0)
 	}
-	return c_holding_recv(em, call, sb)
-}
-
-# c_holding_recv renders an operator rewritten as a method call, with the call's receiver held
-# across its argument (hold_recv). The flag is cleared on the way out as well as where it is
-# taken, so a rewriting that never reaches c_recv_args cannot leave it standing for a call
-# somebody wrote.
-fn c_holding_recv(mut &em: Emitter, call: ast.Expr, sb: Subst) -> str {
-	em.hold_recv = true
-	out := c_expr(em, call, sb)
-	em.hold_recv = false
-	return out
+	return c_expr(em, call, sb)
 }
 
 # c_is_order_op is the half of the comparison operators `Ord` answers. `==` and `!=` are
@@ -10347,11 +10407,11 @@ fn c_is_order_op(oper: str) -> bool {
 # (docs/core/specs.md), and under totality `a <= b` is exactly `not (b < a)`, which spends
 # each operand once.
 fn c_ord_call(mut &em: Emitter, oper: str, a: ast.Expr, b: ast.Expr, sb: Subst) -> str {
-	return c_holding_recv(em, ast.Expr.EMethod(a, "less", [b], 0, 0), sb) if oper == "<"
-	return c_holding_recv(em, ast.Expr.EMethod(b, "less", [a], 0, 0), sb) if oper == ">"
-	return c_holding_recv(em, ast.Expr.EUnary("not", ast.Expr.EMethod(b, "less", [a], 0, 0)), sb) if oper == "<="
+	return c_expr(em, ast.Expr.EMethod(a, "less", [b], 0, 0), sb) if oper == "<"
+	return c_expr(em, ast.Expr.EMethod(b, "less", [a], 0, 0), sb) if oper == ">"
+	return c_expr(em, ast.Expr.EUnary("not", ast.Expr.EMethod(b, "less", [a], 0, 0)), sb) if oper == "<="
 
-	return c_holding_recv(em, ast.Expr.EUnary("not", ast.Expr.EMethod(a, "less", [b], 0, 0)), sb)
+	return c_expr(em, ast.Expr.EUnary("not", ast.Expr.EMethod(a, "less", [b], 0, 0)), sb)
 }
 
 # c_eq_refuse names what is missing, one sentence to a class of type.
@@ -10680,7 +10740,7 @@ fn c_is_test(mut &em: Emitter, x: ast.Expr, name: str, sb: Subst) -> str {
 		# that question — `e in ValueError` is, and it is a different operator at the same
 		# precedence. Asking one of them both ways is how `is` stopped being able to tell an
 		# IOError from something an IOError was raised from.
-		return f"(({c_expr(em, x, sb)}).kind == {kind})"
+		return c_err_read(em, x, sb, "int", "((", f").kind == {kind})")
 	}
 
 	# A BOX IS THE ONE OPERAND WHOSE TYPE IS NOT A COMPILE-TIME ANSWER, and folding it as one
@@ -11065,7 +11125,7 @@ fn c_in_test(mut &em: Emitter, x: ast.Expr, set: ast.Expr, sb: Subst) -> str {
 
 	em.used_rt = true
 
-	return f"zrt_err_in({c_expr(em, x, sb)}, {kind})"
+	return c_err_read(em, x, sb, "int", "zrt_err_in(", f", {kind})")
 }
 
 # c_is_aggregate reports the types C cannot compare with `==`: a declared struct, and the
@@ -12286,17 +12346,33 @@ fn c_err_method(mut &em: Emitter, target: ast.Expr, meth: str, args: list[ast.Ex
 	# evaluated nowhere and mentioned by nothing.
 	raise c_diag(em, rule.Rule.ErrMethodArgs, f"the method `{meth}` on an Err takes no argument") if args.len() != 0
 
-	return f"zrt_str_dup(({c_expr(em, target, sb)}).msg)" if meth == "message"
+	return c_err_read(em, target, sb, "const char *", "zrt_str_dup((", ").msg)") if meth == "message"
 
+	# the cause comes out COUNTED: the optional is the reader's own and its drop gives the
+	# count back, while the chain stays the Err's
 	if meth == "unwrap" {
 		cn := c_opt_name(em, ast.Ty.TErr)
 		t := c_tmp(em, "zgt_ec")
-		head := "({ zrt_err *" + t + " = (" + c_expr(em, target, sb) + ").cause; "
-		return head + t + " != NULL ? (" + cn + "){ .tag = 0, .ok = *" + t + " } : (" + cn + "){ .tag = 1 }; })"
+		head := "({ zrt_err *" + t + " = ("
+		tail := ").cause; " + t + " != NULL ? (" + cn + "){ .tag = 0, .ok = zrt_err_copy(*" + t + ") } : (" + cn + "){ .tag = 1 }; })"
+		return c_err_read(em, target, sb, cn, head, tail)
 	}
 	return "(" + c_opt_name(em, ast.Ty.TByte) + "){ .tag = 1 }" if meth == "code"
 
 	raise c_err_method_unknown(em, meth)
+}
+
+# c_err_read renders `pre + <the Err> + post`, a read of an Err that keeps nothing of it. An
+# Err this expression made — `mk().message()`, `mk() is ValueError` — has no other holder, so
+# it is bound, read, and given back (#377); a named one is read where it stands.
+fn c_err_read(mut &em: Emitter, x: ast.Expr, sb: Subst, rty: str, pre: str, post: str) -> str {
+	rendered := c_expr(em, x, sb)
+	return pre + rendered + post if not c_owns_value(x)
+
+	em.used_rt = true
+	tv := c_tmp(em, "zgt_er")
+	rv := c_tmp(em, "zgt_ev")
+	return f"({{ zrt_err {tv} = {rendered}; {rty} {rv} = {pre}{tv}{post}; zrt_err_drop({tv}); {rv}; }})"
 }
 
 # c_carrier_method is the bridge between the two carriers — the one conversion the error
@@ -12317,9 +12393,8 @@ fn c_err_method(mut &em: Emitter, target: ast.Expr, meth: str, args: list[ast.Ex
 # `int` payloads in the corpus could not show, and the two conversions here are the path the
 # errors chapter tells a reader to take.
 #
-# The Right is dropped by value on the `ok()` path, exactly as `??` drops it — the carrier
-# held a copy and nothing releases it there either. That is one behaviour, not two, and if it
-# is a leak it is the same leak in both places.
+# The Right is dropped on the `ok()` path, exactly as `??` drops it: the carrier this
+# expression made is given back whole once its Left is copied out (c_carrier_temp_give).
 fn c_carrier_method(mut &em: Emitter, target: ast.Expr, meth: str, args: list[ast.Expr], tty: ast.Ty, sb: Subst) -> str {
 	if meth == "ok_or" and ast.ty_is_opt(tty) {
 		raise c_diag(em, rule.Rule.OkOrNoArg, "`ok_or` takes the error to answer an absence with, and none was given") if args.len() == 0
@@ -12342,12 +12417,17 @@ fn c_carrier_method(mut &em: Emitter, target: ast.Expr, meth: str, args: list[as
 		# forms are a closed set `ok_or` is not in, so an argument that printed or raised did
 		# it only when the optional happened to be absent — a conditional side effect the
 		# language does not have anywhere else, and one nothing marked.
+		#
+		# AND IT IS THIS EXPRESSION'S OWN (#377): a named Err is counted again, and a present
+		# optional — the branch that does not need it — gives it back. Moving it into the Right
+		# is the other branch's give-back. The optional itself is dropped when this expression
+		# made it, since the payload it holds was copied out.
 		e := c_tmp(em, "zgt_ke")
-		mut out := "({ " + c_type(ast.Ty.TErr) + " " + e + " = " + c_expr(em, args[0], sb) + "; "
+		mut out := "({ " + c_type(ast.Ty.TErr) + " " + e + " = " + c_copied(em, ast.Ty.TErr, args[0], sb) + "; "
 		out = out + on + " " + t + " = " + c_expr(em, target, sb) + "; " + rn + " " + r + ";"
-		out = out + " if (" + c_res_is_left(t) + ") { " + c_res_mark_left(r) + " " + c_res_put(em, ast.Ty.TEither(elem, ast.Ty.TErr), r, c_res_taken(em, tty, t, elem)) + " }"
+		out = out + " if (" + c_res_is_left(t) + ") { " + c_res_mark_left(r) + " " + c_res_put(em, ast.Ty.TEither(elem, ast.Ty.TErr), r, c_res_taken(em, tty, t, elem)) + " " + c_drop_stmt(em, ast.Ty.TErr, e) + " }"
 		out = out + " else { " + c_res_mark_right(r) + " " + c_res_err(r) + " = " + e + "; }"
-		return out + " " + r + "; })"
+		return out + c_carrier_temp_give(em, tty, target, t) + " " + r + "; })"
 	}
 	if meth == "ok" and c_is_either(tty) {
 		raise c_diag(em, rule.Rule.OkTakesNoArg, "`ok` forgets the Right and takes no argument") if args.len() != 0
@@ -12360,10 +12440,19 @@ fn c_carrier_method(mut &em: Emitter, target: ast.Expr, meth: str, args: list[as
 		mut out := "({ " + cn + " " + t + " = " + c_expr(em, target, sb) + "; " + on + " " + o + ";"
 		out = out + " if (" + c_res_is_left(t) + ") { " + c_res_mark_left(o) + " " + c_res_put(em, ast.Ty.TOpt(left), o, c_res_taken(em, tty, t, left)) + " }"
 		out = out + " else { " + c_res_mark_right(o) + " }"
-		return out + " " + o + "; })"
+		return out + c_carrier_temp_give(em, tty, target, t) + " " + o + "; })"
 	}
 
 	raise c_carrier_method_unknown(em, tty, meth)
+}
+
+# c_carrier_temp_give is the statement that gives back a carrier this expression made and
+# read its payload out of: the Left was copied, and a Right — an Err `ok()` forgets — is
+# dropped with it (#377). A borrowed carrier answers nothing; its holder gives it back.
+fn c_carrier_temp_give(mut &em: Emitter, tty: ast.Ty, target: ast.Expr, t: str) -> str {
+	d := c_carrier_temp_drop(em, tty, target)
+	return "" if d == ""
+	return f" {d}(&{t});"
 }
 
 # c_carrier_method_ret is the typing half. `ok_or` names the Err side itself, so the answer
@@ -12836,15 +12925,21 @@ fn c_free_method(mut &em: Emitter, target: ast.Expr, meth: str, args: list[ast.E
 		# directly. Asking the sig table first would find nothing, a template having no
 		# signature.
 		#
-		# THE MODULE THE PREFIX NAMES CHOOSES WHICH, where two files declare one (#380).
+		# THE MODULE THE PREFIX NAMES CHOOSES WHICH, where two files declare one (#380) — and a
+		# sibling file's prefix names that file (#391).
 		gk := c_ns_generic(em, tn, meth)
-		return c_call(em, gk, args, l, c, sb) if gk != "" and c_is_generic(em, gk)
+
+		# THE QUALIFIER ALREADY NAMED THE FILE. c_call asks c_chk_bare_fn of a free function,
+		# which is the rule for a spelling with no qualifier: a bare `least()` of a sibling's
+		# `pub` template is E3114, and `two.least(…)` has already written the spelling that
+		# rule would tell the reader to write.
+		return c_call(em, gk, args, l, c, sb, false) if gk != "" and c_is_generic(em, gk)
 
 		# AND A NAMESPACED GENERIC TYPE, for the same reason one line up: `boxmod.Box(4)` is
 		# the construction of a template that module declares, and a template has no signature
 		# either — so the check below reported the module as having no `Box` while it was
 		# sitting in the generic-type table.
-		return c_call(em, meth, args, l, c, sb) if c_gen_struct_row(em, meth) >= 0
+		return c_call(em, meth, args, l, c, sb, true) if c_gen_struct_row(em, meth) >= 0
 
 		# a REAL module and a member no module declares — the same rule the field path
 		# reports (c_fieldref), because it is the same mistake. Falling through said "the
@@ -12957,25 +13052,21 @@ fn c_recv_args(mut &em: Emitter, key: str, target: ast.Expr, args: list[ast.Expr
 	#
 	# A default that reads an earlier parameter puts every argument in a temporary
 	# (c_args_from), and those run before the receiver unless it is held in one as well.
-	seq := c_needs_order_args(args, c_ref_args(em, key, 1, args), 0) or c_defaults_read_earlier(em, key, 1, args.len(), c_args_filled(em, key, 1, args))
-	held := em.hold_recv
-	em.hold_recv = false
+	seq := c_needs_order_args(args, c_ref_args(em, key, 1, args), 0) or c_last_code(c_defaults_from(em, key, 1 + args.len())) >= 0 or c_defaults_read_earlier(em, key, 1, args.len(), c_args_filled(em, key, 1, args))
 	bound := seq and not c_is_ref_param(em, key, 0)
 	recv := c_ordered(em, bound, c_arg(em, key, 0, 0, target, sb))
-	return recv + c_args_from(em, key, 1, args, true, sb) if not held or not bound
 
-	# AN OPERATOR'S LEFT OPERAND, HELD ACROSS ITS RIGHT ONE. The receiver is a by-value
-	# parameter, so what the temporary holds is the callee's the moment the call is entered and
-	# this expression's until then; the hold ends on the last line before the call, after every
-	# argument has been bound.
-	row := c_param_row(em, key, 0)
+	# A RECEIVER THE CALL OWNS IS HELD ACROSS THE ARGUMENTS (c_hold, #326), as every earlier
+	# argument is (c_args_held): a by-value receiver is the callee's once the call is entered
+	# and this expression's until then, and a later argument that raises or leaves by a `?`
+	# never reaches the call. An operator's left operand, rewritten into `eq` or `less`, is the
+	# same receiver. It is bound only when something after it runs code (c_needs_order), so a
+	# bound receiver always has a later operand to be held across.
 	keep := em.rel_cnames.len()
-	if row >= 0 {
-		em.seq_pre = em.seq_pre + c_hold(em, em.pr_ty[row], recv)
+	if bound {
+		em.seq_pre = em.seq_pre + c_arg_hold(em, key, 0, target, recv)
 	}
-	rest := c_args_from(em, key, 1, args, true, sb)
-	em.seq_pre = em.seq_pre + c_unhold(em, keep)
-	return recv + rest
+	return recv + c_args_held(em, key, 1, args, true, sb, keep)
 }
 
 # c_call emits an enum-variant construction as a tagged-union literal, a struct
@@ -13140,7 +13231,7 @@ fn c_list_build(mut &em: Emitter, ety: ast.Ty, elems: list[ast.Expr], typed: boo
 # is told so (c_no_type_arg_list). The only brackets that go on from here are a BUILT-IN
 # TYPE's own, from `map[K, V](…)`, which names a type rather than instantiating a generic.
 fn c_call_written(mut &em: Emitter, name: str, args: list[ast.Expr], ts: list[ast.Ty], l: int, c: int, sb: Subst) -> str {
-	return c_call(em, name, args, l, c, sb) if ts.len() == 0
+	return c_call(em, name, args, l, c, sb, true) if ts.len() == 0
 
 	c_no_type_arg_list(em, name, ts)
 
@@ -13159,7 +13250,7 @@ fn c_call_written(mut &em: Emitter, name: str, args: list[ast.Expr], ts: list[as
 	c_builtin_check(em, name)
 	raise c_diag(em, rule.Rule.NotYetGenericConstructor, f"NotImplemented: `{name}[…](…)` as a constructor — this compiler builds an empty map with the literal `{{:}}` and an empty list with `[]`, so a built-in container's type arguments come from what it is bound to (GRAMMAR#type-args)") if name == "map"
 
-	return c_call(em, c_instantiate_at(em, name, ts), args, 0, 0, sb)
+	return c_call(em, c_instantiate_at(em, name, ts), args, 0, 0, sb, true)
 }
 
 # c_infer_call_written is the same choice for the pass that types a call rather than emits
@@ -13255,7 +13346,10 @@ fn c_call_through(mut &em: Emitter, v: str, fty: ast.Ty, args: list[ast.Expr], s
 #
 # `l` / `c` are where the callee's name was written; each branch that resolves it records the
 # answer in the name index, and 0, 0 is a call nobody wrote or one already recorded.
-fn c_call(mut &em: Emitter, name: str, args: list[ast.Expr], l: int, c: int, sb: Subst) -> str {
+# `bare` is whether this spelling has no qualifier. A namespaced generic is lowered through
+# here too — the specialization is an ordinary free function — and that call has already named
+# its file, so the bare-name rule (c_chk_bare_fn) stays quiet for it (#391).
+fn c_call(mut &em: Emitter, name: str, args: list[ast.Expr], l: int, c: int, sb: Subst, bare: bool) -> str {
 	# `set(xs)` IS A CONSTRUCTOR, and it is read here rather than anywhere a type is read,
 	# because `set` is not a declared name: GRAMMAR#map-lit's note is that a set has no literal
 	# — `{1}` cannot be told from a one-statement block — so the call IS the spelling.
@@ -13291,8 +13385,8 @@ fn c_call(mut &em: Emitter, name: str, args: list[ast.Expr], l: int, c: int, sb:
 	if c_err_kind(name) > 0 {
 		raise c_diag(em, rule.Rule.TestableNotConstructible, f"`{name}` is testable but not constructible: a sender able to raise the end-of-stream sentinel would close its channel wearing it, and its consumer would read the crash as a clean finish") if not c_err_constructible(name)
 		em.used_rt = true
-		return f"zrt_err_new_kind({c_err_kind(name)}, {c_err_msg(em, args[0], sb)})" if args.len() == 1
-		return f"zrt_err_new_kind({c_err_kind(name)}, {c_args(em, args, sb)})"
+		return f"zrt_err_own({c_err_kind(name)}, {c_err_msg(em, args[0], sb)})" if args.len() == 1
+		return f"zrt_err_own({c_err_kind(name)}, {c_args(em, args, sb)})"
 	}
 
 	# calling a BINDING that holds a function: cast the stored generic pointer back to the
@@ -13392,7 +13486,7 @@ fn c_call(mut &em: Emitter, name: str, args: list[ast.Expr], l: int, c: int, sb:
 	if em.want_index and c_is_generic(em, name) {
 		c_nx_use(em, l, c, c_tpl_written(name), c_nx_template(em, name))
 	}
-	return c_call(em, c_instantiate(em, name, args), args, 0, 0, sb) if c_is_generic(em, name)
+	return c_call(em, c_instantiate(em, name, args), args, 0, 0, sb, bare) if c_is_generic(em, name)
 
 	# A GENERIC TYPE'S CONSTRUCTOR SOLVES ITS OWN PARAMETERS, from the ARGUMENTS and never from
 	# where the answer lands — docs/core/type-system.md states it for a call, and a construction
@@ -13431,7 +13525,9 @@ fn c_call(mut &em: Emitter, name: str, args: list[ast.Expr], l: int, c: int, sb:
 		c_nx_use(em, l, c, name, c_nx_sig(em, sr))
 	}
 	c_chk_visible_fn(em, name, sr)
-	c_chk_bare_fn(em, name, sr)
+	if bare {
+		c_chk_bare_fn(em, name, sr)
+	}
 	c_chk_unsafe_fn(em, name, "calling it", sr)
 	return "0" if c_bare_ambiguous(em, name, c_fn_choices(em, name), false)
 
@@ -14028,6 +14124,22 @@ fn c_call_args(mut &em: Emitter, fname: str, args: list[ast.Expr], sb: Subst) ->
 # once here rather than in each caller, because getting it wrong passes a `mut &` argument
 # by value into the slot after the one that wanted its address.
 fn c_args_from(mut &em: Emitter, key: str, base: int, written: list[ast.Expr], lead: bool, sb: Subst) -> str {
+	return c_args_held(em, key, base, written, lead, sb, em.rel_cnames.len())
+}
+
+# c_args_held is c_args_from with the holds taken since `keep` ended where its own end: a
+# method's receiver, held by c_recv_args before its arguments are rendered, comes off in the
+# same pop as theirs.
+#
+# AN ARGUMENT THE CALLEE OWNS IS HELD ACROSS THE ONES AFTER IT (c_hold, #326). A by-value
+# parameter is given back by the callee's frame, and that frame is not entered until every
+# argument has answered: `f(ys, bad(1))` copied `ys` into its temporary, `bad` raised, and
+# the copy was nobody's. Each bound argument that owns something (c_arg_hold) is registered
+# where it is bound while a later one can still run code, and every hold comes off on the
+# last line before the call, so the callee's frame and the cleanup stack never both have it.
+# An argument left where it stands — a `mut &` one, or every one of a call nothing sequences —
+# is evaluated inside the call's own parentheses, and no hold spans it.
+fn c_args_held(mut &em: Emitter, key: str, base: int, written: list[ast.Expr], lead: bool, sb: Subst, keep: int) -> str {
 	# NAMED ARGUMENTS ARE REORDERED FIRST, so everything below this line sees a positional
 	# list and nothing downstream of it knows the form exists. The arity check included: a
 	# call that skipped a defaulted parameter in the middle is fully applied by the time it
@@ -14053,7 +14165,12 @@ fn c_args_from(mut &em: Emitter, key: str, base: int, written: list[ast.Expr], l
 	}
 
 	refs := c_ref_args(em, key, base, args)
-	seq := c_needs_order_args(args, refs, at)
+
+	# A DEFAULT THAT RUNS CODE sequences the call as a written argument that does: it is
+	# evaluated after every written one, and an argument the callee owns is held across it
+	# (#326) — which a temporary is needed for, and which C's own order would not give.
+	defs := c_defaults_from(em, key, base + args.len())
+	seq := c_needs_order_args(args, refs, at) or c_last_code(defs) >= 0
 
 	# a parameter a NAME skipped was filled from its default by c_args_named, and that default
 	# is lowered in its own file (c_default_enter), not in this one
@@ -14064,6 +14181,24 @@ fn c_args_from(mut &em: Emitter, key: str, base: int, written: list[ast.Expr], l
 	# arguments run in anyway. `prior` stays empty for every other call, and so does its C.
 	need := c_defaults_read_earlier(em, key, base, args.len(), filled)
 	mut prior: list[str] = []
+
+	# the last operand that runs code, counting the defaults appended after the written ones:
+	# an argument in front of it is held, and the one at it — bound last — never is
+	mut last := 0 - 1
+	mut k := 0
+	for k < args.len() {
+		if c_runs_code(args[k]) and not refs[k] {
+			last = k
+		}
+		k = k + 1
+	}
+	k = 0
+	for k < defs.len() {
+		if c_runs_code(defs[k]) {
+			last = args.len() + k
+		}
+		k = k + 1
+	}
 
 	mut out := ""
 	mut i := 0
@@ -14081,8 +14216,12 @@ fn c_args_from(mut &em: Emitter, key: str, base: int, written: list[ast.Expr], l
 			s = c_nosub()
 			saved = c_default_enter(em, key, base + i, base, prior)
 		}
-		v := c_ordered(em, (seq or need) and not refs[i], c_arg(em, key, base + i, i + 1, args[i], s))
+		bound := (seq or need) and not refs[i]
+		v := c_ordered(em, bound, c_arg(em, key, base + i, i + 1, args[i], s))
 		c_default_leave(em, saved)
+		if bound and i < last {
+			em.seq_pre = em.seq_pre + c_arg_hold(em, key, base + i, args[i], v)
+		}
 		if need {
 			prior.append(v)
 		}
@@ -14090,19 +14229,40 @@ fn c_args_from(mut &em: Emitter, key: str, base: int, written: list[ast.Expr], l
 		i = i + 1
 	}
 
+	# an appended default is bound as well while anything is held: left in the parentheses it
+	# would run after the holds came off, and one that raises would lose what they held
 	mut j := base + args.len()
-	for d in c_defaults_from(em, key, j) {
+	for d in defs {
 		if lead or j > base {
 			out = out + ", "
 		}
-		v := c_ordered(em, need, c_default_arg(em, key, j, base, prior, d))
+		bound := need or (em.rel_cnames.len() > keep and c_runs_code(d))
+		v := c_ordered(em, bound, c_default_arg(em, key, j, base, prior, d))
+		if bound and j - base < last {
+			em.seq_pre = em.seq_pre + c_arg_hold(em, key, j, d, v)
+		}
 		if need {
 			prior.append(v)
 		}
 		out = out + v
 		j = j + 1
 	}
+	em.seq_pre = em.seq_pre + c_unhold(em, keep)
 	return out
+}
+
+# c_arg_hold is c_hold for an argument bound to `tmp`, asked of the parameter it is passed to:
+# a by-value parameter of an owning type is the one the callee's frame gives back, so the
+# temporary holds what nobody else will until the call is entered. A `mut &` argument is the
+# caller's storage and a channel argument a borrow (c_arg), and neither is the call's to give
+# back; a literal names no storage (c_part_owns).
+fn c_arg_hold(mut &em: Emitter, key: str, idx: int, a: ast.Expr, tmp: str) -> str {
+	row := c_param_row(em, key, idx)
+
+	return "" if row < 0 or em.pr_ref[row] or ast.ty_is_chan(em.pr_ty[row])
+	return "" if not c_part_owns(em, em.pr_ty[row], a)
+
+	return c_hold(em, em.pr_ty[row], tmp)
 }
 
 # c_defaults_read_earlier is whether a default this call lowers — a slot a name skipped
@@ -14409,7 +14569,8 @@ fn c_call_releasing(mut &em: Emitter, cfn: str, key: str, args: list[ast.Expr], 
 	# later arguments first. The argument that owns something is already bound here, and one
 	# that does not joins it whenever anything after the first can tell.
 	refs := c_ref_args(em, key, 0, args)
-	seq := c_needs_order_args(args, refs, 1)
+	defs := c_defaults_from(em, key, args.len())
+	seq := c_needs_order_args(args, refs, 1) or c_last_code(defs) >= 0
 
 	# the temporaries a default reading an earlier parameter names, as c_args_from keeps them —
 	# declared among this call's own, since they are read inside its statement expression
@@ -14419,7 +14580,27 @@ fn c_call_releasing(mut &em: Emitter, cfn: str, key: str, args: list[ast.Expr], 
 	# AN END THE CALLER KEEPS IS HELD ACROSS THE CALL (c_hold_with), not only across the
 	# arguments after it: the callee borrows it, so a callee that raises leaves it the caller's
 	# to give back exactly as a later argument that raises does.
+	#
+	# AN ARGUMENT THE CALLEE OWNS IS HELD ONLY UNTIL THE CALL (c_arg_hold, #326), as c_args_held
+	# holds one: the callee's frame gives it back from there. The two kinds of hold end at
+	# different lines and one pop takes the newest first, so where any argument was held the
+	# pop before the call takes them all and the ends are held again (`ends`).
+	mut last := 0 - 1
+	mut k := 0
+	for k < args.len() {
+		if c_runs_code(args[k]) and not refs[k] {
+			last = k
+		}
+		k = k + 1
+	}
+	if c_last_code(defs) >= 0 {
+		last = args.len() + c_last_code(defs)
+	}
+
 	keep := em.rel_cnames.len()
+	mut owned := false
+	mut ends: list[str] = []
+	mut thunks: list[str] = []
 	mut decls := ""
 	mut call := cfn + "("
 	mut frees := ""
@@ -14434,6 +14615,11 @@ fn c_call_releasing(mut &em: Emitter, cfn: str, key: str, args: list[ast.Expr], 
 				on := c_tmp(em, "zgt_ord")
 				decls = decls + c_ord_decl(on, v)
 				v = on
+				if i < last {
+					hold := c_arg_hold(em, key, i, args[i], on)
+					decls = decls + hold
+					owned = owned or hold != ""
+				}
 			}
 		} else {
 			# the release below is by the PARAMETER's direction, so the owned end is narrowed to
@@ -14447,7 +14633,10 @@ fn c_call_releasing(mut &em: Emitter, cfn: str, key: str, args: list[ast.Expr], 
 			}
 			decls = decls + f"zrt_chan *{tn} = {v}; "
 			if row >= 0 {
-				decls = decls + c_hold_with(em, c_chan_defer_thunk(c_chan_dir(em.pr_ty[row])), tn)
+				th := c_chan_defer_thunk(c_chan_dir(em.pr_ty[row]))
+				decls = decls + c_hold_with(em, th, tn)
+				ends.append(tn)
+				thunks.append(th)
 			}
 			frees = frees + f"{rels[i]}({tn}); "
 			v = tn
@@ -14459,21 +14648,36 @@ fn c_call_releasing(mut &em: Emitter, cfn: str, key: str, args: list[ast.Expr], 
 		i = i + 1
 	}
 	mut j := args.len()
-	for d in c_defaults_from(em, key, j) {
+	for d in defs {
 		if j > 0 {
 			call = call + ", "
 		}
 		mut v := c_default_arg(em, key, j, 0, prior, d)
-		if need {
+		if need or (owned and c_runs_code(d)) {
 			on := c_tmp(em, "zgt_ord")
 			decls = decls + c_ord_decl(on, v)
 			v = on
+			if j < last {
+				hold := c_arg_hold(em, key, j, d, on)
+				decls = decls + hold
+				owned = owned or hold != ""
+			}
+		}
+		if need {
 			prior.append(v)
 		}
 		call = call + v
 		j = j + 1
 	}
 	call = call + ")"
+	if owned {
+		decls = decls + c_unhold(em, keep)
+		k = 0
+		for k < ends.len() {
+			decls = decls + c_hold_with(em, thunks[k], ends[k])
+			k = k + 1
+		}
+	}
 
 	frees = c_unhold(em, keep) + frees
 	ret := c_lookup_sig_ret(em, key)
@@ -15069,7 +15273,16 @@ fn c_fn_ty_of(mut &em: Emitter, n: str) -> ast.Ty {
 # in the same place, and it has to: the two compilers must agree about which operands are
 # sequenced or `make oracle` becomes a tripwire waiting for a program that can tell, so
 # moving the line is a change to both.
+#
+# A SEQUENCED ARGUMENT THE CALLEE OWNS IS HELD ACROSS THE ONES AFTER IT (c_hold, #326), as
+# c_args_held holds a named call's: the callee's frame gives a by-value parameter back, and
+# it is not entered when a later argument raises or leaves by a `?`.
 fn c_args_typed(mut &em: Emitter, ftys: list[ast.Ty], args: list[ast.Expr], sb: Subst, seq: bool) -> str {
+	keep := em.rel_cnames.len()
+	mut last := 0 - 1
+	if seq {
+		last = c_last_code(args)
+	}
 	mut out := ""
 	mut i := 0
 	for i < args.len() {
@@ -15099,9 +15312,14 @@ fn c_args_typed(mut &em: Emitter, ftys: list[ast.Ty], args: list[ast.Expr], sb: 
 
 		# the COPY is inside the temporary: hoisting the uncopied value would move the
 		# retain out of the run and leave the copy where the argument list is.
-		out = out + c_ordered(em, seq, val)
+		val = c_ordered(em, seq, val)
+		if i < last and i < ftys.len() and not c_ty_is_ref(ftys[i]) and not ast.ty_is_chan(ftys[i]) and c_part_owns(em, ftys[i], args[i]) {
+			em.seq_pre = em.seq_pre + c_hold(em, ftys[i], val)
+		}
+		out = out + val
 		i = i + 1
 	}
+	em.seq_pre = em.seq_pre + c_unhold(em, keep)
 	return out
 }
 
@@ -15442,18 +15660,23 @@ fn c_match(mut &em: Emitter, scrut: ast.Expr, arms: list[ast.Arm], sb: Subst) ->
 	# answers with a value of its own — a payload it binds is copied out on the way — so once
 	# the answer is in hand the scrutinee has nobody left. `match c_unmark(t) { … }` in
 	# c_is_fn leaked the Ty it matched on every call, which the language server paid on every
-	# check (#23). A match whose answer is void has nothing to hold across the drop, and one
-	# whose answer is untyped has no declaration to hold it in; both are left as they were.
+	# check (#23). A match whose answer is untyped has no declaration to hold it in, and is
+	# left as it was.
+	#
+	# A MATCH WHOSE ANSWER IS VOID gives it back too, after the arms, with nothing to hold
+	# across the drop. It was left alone, and `match res(9) { Right(e) => … }` kept the Err
+	# it matched on — and the str a Left held — until exit (#377).
 	mut rt := ast.Ty.TUnknown
 	if c_needs_copy(em, st) and arms.len() > 0 {
 		rt = c_infer_arm_body(em, arms[0], st)
 	}
-	if not c_is_nil_ty(rt) and not c_is_unknown(rt) {
+	if not c_is_unknown(rt) {
 		# held across the arms (c_hold): an arm runs the program's own code, and one that
 		# raises — or returns — never reaches the drop written after them
 		keep := em.rel_cnames.len()
 		hold := c_hold(em, st, tmp)
 		body := c_arms(em, arms, 0, tmp, st, sb)
+		return f"({{ {c_type(st)} {tmp} = {s}; {hold}{body}; {c_unhold(em, keep)}{c_drop_stmt(em, st, tmp)} }})" if c_is_nil_ty(rt)
 		rv := c_tmp(em, "zgt_mr")
 		return f"({{ {c_type(st)} {tmp} = {s}; {hold}__auto_type {rv} = {body}; {c_unhold(em, keep)}{c_drop_stmt(em, st, tmp)} {rv}; }})"
 	}
@@ -18365,9 +18588,11 @@ fn c_main_entry(mut &em: Emitter, own: ast.File, inits: str) -> str {
 	return wrap + "int main(void) {\n    return " + shim + "(__zerg_entry);\n}\n"
 }
 
-# c_main_shim is the one thing a concurrent program decides differently: it runs the entry
-# as coroutine 0 and drains the run queue afterwards, so a fire-and-forget `spawn` still
-# finishes. Both families arm the same root handler around the same wrapper.
+# c_main_shim is the one thing a concurrent program decides differently: the entry runs
+# as coroutine 0 under the scheduler. When that coroutine returns, the scheduler stops
+# handing out work — nothing queued is started and nothing parked is resumed
+# (docs/code/coroutine.md, Termination & deadlock). A fire-and-forget `spawn` is not
+# drained to completion. Both families arm the same root handler around the same wrapper.
 fn c_main_shim(mut &em: Emitter, conc: str, plain: str) -> str {
 	return conc if em.used_conc
 
@@ -18690,6 +18915,7 @@ fn c_recv_helper(mut &em: Emitter, elem: ast.Ty) -> str {
 	d = d + "    if (" + c_res_is_right("r") + ") {\n"
 	d = d + "        zrt_err e = zrt_chan_close_err(ch);\n"
 	d = d + "        if (e.kind != ZRT_ERR_STOP_ITERATION) { zrt_raise_err(e); }\n"
+	d = d + "        zrt_err_drop(e);\n"
 	d = d + "    }\n"
 	d = d + "    return r;\n}\n"
 	em.rcv_decls.append(d)
@@ -18825,10 +19051,19 @@ fn c_spawn(mut &em: Emitter, x: ast.Expr, ind: str) -> str {
 	th = th + " zrt_defer(" + dropfn + ", p);"
 	th = th + " " + cal.cname + "(" + call + "); }\n"
 	em.dfn_decls.append(th)
-	mut out := f"{ind}zg_spawnenv_{tag} *zgt_se{tag} = (zg_spawnenv_{tag}*)zrt_alloc(sizeof(zg_spawnenv_{tag}));\n"
+
+	# THE ARGUMENTS ARE EVALUATED BEFORE THE ENVIRONMENT IS ALLOCATED, each into a temporary of
+	# its own, and the environment is filled from them after (#326). Allocated first, it was
+	# nobody's while they ran: an argument that raised or left by a `?` — the first one included
+	# — lost the allocation and every capture already stored in it. A capture is held across the
+	# arguments after it (c_hold) until the last of them has answered, and from there to
+	# `zrt_spawn` nothing runs that could leave.
+	keep := em.rel_cnames.len()
+	last := c_last_code(args)
+	mut out := ""
 	mut j := 0
 	for j < args.len() {
-		entered := c_callee_enter(em, cal, j, f"zgt_se{tag}->f")
+		entered := c_callee_enter(em, cal, j, f"zgt_se{tag}_a")
 		mut v := c_captured(em, cal.key, j, args[j])
 		c_default_leave(em, entered)
 
@@ -18838,7 +19073,27 @@ fn c_spawn(mut &em: Emitter, x: ast.Expr, ind: str) -> str {
 		if dirs[j] >= 0 {
 			v = c_chan_into(em, args[j], v, c_infer(em, args[j]), dirs[j])
 		}
-		out = out + ind + "zgt_se" + tag + "->f" + strconv.to_string(j, 10) + " = " + v + ";\n"
+		an := f"zgt_se{tag}_a{strconv.to_string(j, 10)}"
+		at := c_captured_ty(em, cal.key, j, args[j])
+		out = out + ind + c_type(at) + " " + an + " = " + v + ";\n"
+		if j < last and dirs[j] >= 0 {
+			out = out + ind + c_hold_with(em, c_chan_defer_thunk(dirs[j]), an) + "\n"
+		} else if j < last {
+			hold := c_arg_hold(em, cal.key, j, args[j], an)
+			if hold != "" {
+				out = out + ind + hold + "\n"
+			}
+		}
+		j = j + 1
+	}
+	unhold := c_unhold(em, keep)
+	if unhold != "" {
+		out = out + ind + unhold + "\n"
+	}
+	out = out + f"{ind}zg_spawnenv_{tag} *zgt_se{tag} = (zg_spawnenv_{tag}*)zrt_alloc(sizeof(zg_spawnenv_{tag}));\n"
+	j = 0
+	for j < args.len() {
+		out = out + ind + "zgt_se" + tag + "->f" + strconv.to_string(j, 10) + " = zgt_se" + tag + "_a" + strconv.to_string(j, 10) + ";\n"
 		j = j + 1
 	}
 
@@ -19811,6 +20066,13 @@ fn c_defer_of(mut &em: Emitter, cal: Callee, ind: str) -> str {
 	# ONE STATEMENT PER FIELD, in order, rather than one initializer list: C leaves the order of
 	# an initializer's expressions unspecified, and a default that reads an earlier parameter
 	# reads the field that argument was stored in, which must already hold it.
+	#
+	# A FIELD STORED IS HELD ACROSS THE ONES AFTER IT (c_hold, #326) until the deferred call is
+	# registered: what a field holds is the callee's by-value parameter, given back by the
+	# callee's frame when the defer runs, and a later argument that raises or leaves by a `?`
+	# never registers it.
+	keep := em.rel_cnames.len()
+	last := c_last_code(args)
 	mut fields := ""
 	mut vals := ""
 	mut call := ""
@@ -19818,14 +20080,25 @@ fn c_defer_of(mut &em: Emitter, cal: Callee, ind: str) -> str {
 	for i < args.len() {
 		entered := c_callee_enter(em, cal, i, f"zgt_de{tag}.f")
 		ft := c_type(c_captured_ty(em, cal.key, i, args[i]))
+		fi := f"zgt_de{tag}.f{strconv.to_string(i, 10)}"
 		fields = fields + " " + ft + " f" + strconv.to_string(i, 10) + ";"
 		if i > 0 {
 			call = call + ", "
 		}
-		vals = f"{vals}{ind}zgt_de{tag}.f{strconv.to_string(i, 10)} = {c_captured(em, cal.key, i, args[i])};\n"
+		vals = f"{vals}{ind}{fi} = {c_captured(em, cal.key, i, args[i])};\n"
 		c_default_leave(em, entered)
+		if i < last {
+			hold := c_arg_hold(em, cal.key, i, args[i], fi)
+			if hold != "" {
+				vals = vals + ind + hold + "\n"
+			}
+		}
 		call = call + "e->f" + strconv.to_string(i, 10)
 		i = i + 1
+	}
+	unhold := c_unhold(em, keep)
+	if unhold != "" {
+		vals = vals + ind + unhold + "\n"
 	}
 	em.dfn_decls.append("typedef struct {" + fields + " } zg_denv_" + tag + ";\n")
 	em.dfn_decls.append("static void zg_dfn_" + tag + "(void *p) { zg_denv_" + tag + " *e = (zg_denv_" + tag + "*)p; " + cal.cname + "(" + call + "); }\n")
@@ -20032,7 +20305,15 @@ fn c_callee_raw(mut &em: Emitter, x: ast.Expr, what: str) -> Callee {
 			# a NAMESPACED generic, `spawn mod.work(x)` — the same flattening, so the same
 			# instantiation the direct form gets
 			gk := c_ns_generic(em, c_ns_root(tgt), m)
-			return c_callee_gen(em, c_instantiate(em, gk, margs), x) if gk != "" and c_is_generic(em, gk)
+			if gk != "" and c_is_generic(em, gk) {
+				# THE SAME VISIBILITY A CALL ASKS. The thunk names the specialization directly,
+				# so without this a `spawn two.least(…)` of a template private to `two.zg`
+				# reached it (#391). The bare-name rule is not this path's: the qualifier is
+				# already written, as it is on the ordinary namespaced call.
+				inst := c_instantiate(em, gk, margs)
+				c_chk_visible_fn(em, inst, c_sig_row(em, inst))
+				return c_callee_gen(em, inst, x)
+			}
 
 			# `mod.work()` — a module namespace flattens into the one program-wide function
 			# space, so a namespaced callee IS the free function of that name, exactly as an
@@ -22208,9 +22489,12 @@ fn c_fieldref(mut &em: Emitter, target: ast.Expr, fld: str, l: int, c: int, sb: 
 	#
 	# AND ITS MESSAGE IS STILL THE ERR'S. A field of an owned rvalue is the reader's own
 	# (c_is_borrow), which the other fields earn by being copied out of a temporary this read
-	# drops; an Err is never dropped, and the copy another holder of it shares its message with,
-	# so the message read out of one is counted once more here rather than handed over.
-	return f"zrt_str_retain({tgt}.{fld})" if c_is_err_ty(tt) and fld == "msg" and c_owns_value(target)
+	# drops — and the Err read here is dropped too (#377), so the message comes out as a copy
+	# of its own: zrt_str_dup, because a runtime-raised message is a C literal with no count.
+	if c_is_err_ty(tt) and fld == "msg" and c_owns_value(target) {
+		tv := c_tmp(em, "zgt_er")
+		return f"({{ zrt_err {tv} = {tgt}; const char *{tv}_m = zrt_str_dup({tv}.msg); zrt_err_drop({tv}); {tv}_m; }})"
+	}
 	return f"{tgt}.{fld}" if c_is_err_ty(tt)
 
 	# A FIELD THE TYPE DOES NOT HAVE was spelled `zg_<fld>` and handed to cc, which reported
@@ -22566,7 +22850,8 @@ fn c_forchan(mut &em: Emitter, var: str, iter: ast.Expr, t: ast.Ty, body: list[a
 	if owns {
 		out = out + in2 + f"  zrt_unwind_to({mark});\n"
 	}
-	out = out + in2 + "  if (zgt_ce.kind != ZRT_ERR_STOP_ITERATION) { zrt_raise_err(zgt_ce); } }\n"
+	out = out + in2 + "  if (zgt_ce.kind != ZRT_ERR_STOP_ITERATION) { zrt_raise_err(zgt_ce); }\n"
+	out = out + in2 + "  zrt_err_drop(zgt_ce); }\n"
 	c_scope_close(em, outer_scope)
 	return out + ind + "}\n"
 }
@@ -23184,6 +23469,12 @@ fn c_print(mut &em: Emitter, e: ast.Expr, ind: str) -> str {
 		em.used_rt = true
 		return f"{ind}{{ const char* zgt_ps = {ex}; printf(\"%s\\n\", zgt_ps); zrt_str_release(zgt_ps); }}\n"
 	}
+
+	# and an Err this statement made is given back the same way, once its message is shown
+	if c_is_err_ty(ty) and c_owns_value(e) {
+		em.used_rt = true
+		return f"{ind}{{ zrt_err zgt_pe = {ex}; printf(\"%s\\n\", zgt_pe.msg); zrt_err_drop(zgt_pe); }}\n"
+	}
 	return match ty {
 		Ty.TStr => f"{ind}printf(\"%s\\n\", {ex});\n"
 
@@ -23331,6 +23622,15 @@ fn c_iflet(mut &em: Emitter, name: str, value: ast.Expr, then_body: list[ast.Stm
 	in2 := ind + "    "
 	in3 := in2 + "    "
 	mut out := f"{ind}{{\n{in2}{cn} {tmp} = {val};\n"
+
+	# the carrier this statement materialised is given back on both sides, once its payload
+	# has been copied out. Only one that names no storage is this statement's to give back.
+	# The Right — an Err (#377) — goes here, before the `if`, since neither branch reads it;
+	# the Left inside the branch, once copied.
+	df := c_carrier_temp_drop(em, t, value)
+	if df != "" {
+		out = out + in2 + "if (" + c_res_is_right(tmp) + ") { " + df + "(&" + tmp + "); }\n"
+	}
 	out = out + in2 + "if (" + c_res_is_left(tmp) + ") {\n"
 
 	# THE BINDING OWNS WHAT c_res_taken COPIED OUT, and nothing gave it back. That is a
@@ -23354,10 +23654,6 @@ fn c_iflet(mut &em: Emitter, name: str, value: ast.Expr, then_body: list[ast.Stm
 	}
 	out = out + in3 + c_type(elem) + " " + cv + " = " + c_res_taken(em, t, tmp, elem) + ";\n" + give
 
-	# the payload has been copied out, so the carrier this statement materialised has nothing
-	# left to say. Only one that names no storage is this statement's to give back, and only
-	# the Left side has a payload — which is why the drop sits inside this branch.
-	df := c_carrier_temp_drop(em, t, value)
 	if df != "" {
 		out = out + in3 + df + "(&" + tmp + ");\n"
 	}
@@ -23586,8 +23882,12 @@ fn c_raise(mut &em: Emitter, x: ast.Expr, has_cause: bool, cause: ast.Expr, ind:
 
 # c_err_value renders an expression AS an Err: one that already is an Err passes through,
 # and anything else — a bare message — has one built around it.
+#
+# THE ERR RAISED IS THE RAISE'S OWN. The runtime keeps it in flight while the unwind drops
+# every binding on the way to the guard, so a named Err — `raise e` of a caught one — is
+# counted again here rather than handed over: the binding's drop gives back its own count.
 fn c_err_value(mut &em: Emitter, x: ast.Expr) -> str {
-	return c_expr(em, x, c_nosub()) if c_is_err_ctor(em, x) or c_is_err_ty(c_infer(em, x))
+	return c_copied(em, ast.Ty.TErr, x, c_nosub()) if c_is_err_ctor(em, x) or c_is_err_ty(c_infer(em, x))
 
 	# AND OTHERWISE A MESSAGE, which the fallback below assumed rather than checked: it wraps
 	# the operand in `zrt_err_new`, whose parameter is a `const char *`, so `raise 5` reached cc
@@ -23602,7 +23902,7 @@ fn c_err_value(mut &em: Emitter, x: ast.Expr) -> str {
 		check.chk_at(em, rule.Rule.RaiseCarriesErr, f"raise carries an `Err`, or a message to build one from — {ast.ty_name(t)} is neither; write `ValueError(…)`, or a `str`")
 	}
 
-	return f"zrt_err_new({c_err_msg(em, x, c_nosub())})"
+	return f"zrt_err_own(0, {c_err_msg(em, x, c_nosub())})"
 }
 
 # c_err_msg renders the message an Err is built around AS THE ERR'S OWN. The runtime stores
@@ -23623,7 +23923,9 @@ fn c_err_msg(mut &em: Emitter, x: ast.Expr, sb: Subst) -> str {
 # whatever C type it happened to be.
 fn c_err_cause(mut &em: Emitter, cause: ast.Expr) -> str {
 	raise c_diag(em, rule.Rule.FromCauseNotErr, f"a `from` cause is an `Err`, and {ast.ty_name(c_infer(em, cause))} is not one — bind the Err a `guard` gave back (`Right(e) => raise … from e`)") if not c_is_err_ctor(em, cause) and not c_is_err_ty(c_infer(em, cause))
-	return c_expr(em, cause, c_nosub())
+
+	# the chain TAKES its cause, so a named one is counted again, as the raised Err is
+	return c_copied(em, ast.Ty.TErr, cause, c_nosub())
 }
 
 fn c_is_err_ctor(mut &em: Emitter, x: ast.Expr) -> bool {
@@ -26705,7 +27007,7 @@ fn c_emit_unit_as(prog0: ast.File, own0: ast.File, ft: FileTypes, ms: Mods, whol
 	# is what makes that invariant hold for a multi-unit program, at the place it already lives,
 	# and it is what lets the declaration passes below go back to reading the WHOLE program.
 	seen := diags.len()
-	mut em := Emitter([], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], false, false, false, false, [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], 0, [], 0, [], [], false, "", "", [], [], ast.Ty.TVoid, 0, "", 0, 0, 0, 0, "", diags, 0, 0, [], [], [], [], [], false, 0, false, "", 0, false, false, [], [], [], [], [], [], [], [], [], [], [], "", want_lints, [], [], [], [], [], [], [], [], [], [], [], [], false, 0, [], [], "", c_nosub(), [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], false, ast.no_index(), [], [], [], [], [], [], [], [], [], [], [], [], false, false, [], [], [], [], [], [], [])
+	mut em := Emitter([], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], false, false, false, false, [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], 0, [], 0, [], [], false, "", "", [], [], ast.Ty.TVoid, 0, "", 0, 0, 0, 0, "", diags, 0, 0, [], [], [], [], [], false, 0, false, "", 0, false, false, [], [], [], [], [], [], [], [], [], [], [], "", want_lints, [], [], [], [], [], [], [], [], [], [], [], [], false, 0, [], [], "", c_nosub(), [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], false, ast.no_index(), [], [], [], [], [], [], [], [], [], [], [], [], false, [], [], [], [], [], [], [])
 
 	# ASSIGNED, NOT PASSED. Every argument above is a zero value, and `layering` asserts that
 	# — it lines the call up with the fields by KIND, which only works while nothing in it

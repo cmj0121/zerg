@@ -14845,6 +14845,11 @@ fn c_ident_val(mut &em: Emitter, n: str, l: int, c: int, sb: Subst) -> str {
 			c_nx_use(em, l, c, n, c_nx_sig(em, c_sig_row_of(em, n)))
 		}
 
+		# TWO IMPORTED MODULES BOTH DECLARE IT (#393). A bare call asks this and is E3114.
+		# Taking the name as a value used to emit the thunk anyway, and cc reported
+		# `undeclared function zg_m0_<name>` against a file under .zerg-cache.
+		return "0" if c_bare_ambiguous(em, n, c_fn_choices(em, n), false)
+
 		# NAMING ONE IS SAFE NOW, AND CALLING IT IS STILL CHECKED. This used to be refused —
 		# "naming it here would hand safe code the same call" — and it was true while a
 		# function TYPE could not carry the marker: the value became a plain `fn` and the
@@ -19986,6 +19991,11 @@ fn c_callee_raw(mut &em: Emitter, x: ast.Expr, what: str) -> Callee {
 	return c_callee_gen(em, c_instantiate(em, n, c_call_args_of(x)), x) if n != "" and c_is_generic(em, n)
 	if n != "" {
 		c_chk_callable(em, n, what)
+
+		# THE SAME AMBIGUITY A BARE CALL ASKS (#393). The thunk names a C symbol, so
+		# `spawn f()` and `defer f()` of a name two imported modules declare reached cc
+		# as `undeclared function zg_m0_f`. A namespaced callee has already chosen.
+		return Callee("0", [], "") if c_bare_ambiguous(em, n, c_fn_choices(em, n), false)
 
 		return c_callee_free(em, "", n, c_call_args_of(x), what)
 	}

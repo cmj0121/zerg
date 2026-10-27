@@ -428,29 +428,28 @@ to stderr is compared like any other. The output goes to a file in the run's dir
 process the example starts cannot keep the command waiting.
 
 The build, and then the run, may each take `--timeout` seconds — a whole number, one or more — and 60 unless it is
-given. When the limit is reached the child is killed together with the processes it started that are still its
-descendants; one an example started and left behind after a normal exit is not. A hangup, an interrupt (Ctrl-C) or
-a TERM kills the same processes and removes the run's directory and the generated source while a child is running;
-`zerg doc` has no handler of its own, so a signal that lands between two children leaves the directory behind.
+given. Each child leads a process group of its own, which what it starts joins. When the limit is reached that
+whole group is killed, including a process whose parent has already ended; one an example left behind after a
+normal exit is not. A hangup, an interrupt (Ctrl-C) or a TERM while a child is running kills the same group,
+removes the run's directory and the generated source, and exits 130. A signal that lands between two children ends
+`zerg doc` where it stands and leaves the directory behind.
 
-The directory, the joined streams and the limit come from host tools, the way `zerg build` depends on `cc`: `sh`,
-`ps`, `awk`, `mktemp`, `kill` and `sleep`, until [#196](https://github.com/cmj0121/zerg/issues/196) gives the runtime
-a child process that has all three. A host without `ps` or `awk` cannot stop a process tree, so each module's
-examples are reported as not run rather than run under a limit that does not hold. A build's
-report is copied into the finding up to its first `REPORT_LINES` lines (in `cmd/doc_run.zg`), with a line saying how
-many were cut.
+The directory, the joined streams and the limit are the runtime's own, so `--check` needs no host tool beyond the
+`cc` that `zerg build` already runs: a child started with its input empty and its output in a file, a wait with a
+deadline that kills the child's group, and a directory whose unique name is picked by the call that creates it.
+`zerg test` bounds its test processes with the same wait. A build's report is copied into the finding up to its
+first `REPORT_LINES` lines (in `cmd/doc_run.zg`), with a line saying how many were cut.
 
 A module's examples are wrong, and the run exits **1**, when any of these happen:
 
-| What happened                               | Reported at                                           |
-| ------------------------------------------- | ----------------------------------------------------- |
-| its program cannot be written               | the module's first example, with why                  |
-| the host has no `ps` or `awk`               | the module's first example — its examples are not run |
-| the program does not compile                | the module's first example, with the build's report   |
-| the build or the run outlasts `--timeout`   | the module's first example                            |
-| it exits with a status other than 0         | the module's first example, with what it wrote        |
-| a printed line is not its `output` line     | the example whose fence that line falls in            |
-| it prints more than its `output` fences say | the module's last example, with the first extra line  |
+| What happened                               | Reported at                                          |
+| ------------------------------------------- | ---------------------------------------------------- |
+| its program cannot be written               | the module's first example, with why                 |
+| the program does not compile                | the module's first example, with the build's report  |
+| the build or the run outlasts `--timeout`   | the module's first example                           |
+| it exits with a status other than 0         | the module's first example, with what it wrote       |
+| a printed line is not its `output` line     | the example whose fence that line falls in           |
+| it prints more than its `output` fences say | the module's last example, with the first extra line |
 
 Only the first difference in a module is reported: once one example prints a line too many or too few, every line
 after it is compared against the wrong claim. With no argument `--check` reads every module `zerg doc` lists, so

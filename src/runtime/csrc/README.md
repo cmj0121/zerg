@@ -38,9 +38,11 @@ the compiler emits.
 - **`entry.c`** — the program-entry shim (`zrt_run` sets up and runs `main`).
 - **`unwind.c`** — the abort / unwind mechanism and the `defer` cleanup stack.
 - **`sys.c`** — the minimal system surface: the process floor the self-hosted compiler is built on
-  (`zrt_exec`, `zrt_proc_spawn` / `zrt_proc_wait`, `zrt_mkdir`, `zrt_listdir`), and the `write` / `read` /
-  `open` / `close` syscall floor the stdlib `io`
-  lowers onto, abort reporting, the `Atomic[int]` operations, and the command-line `args`.
+  (`zrt_exec`, `zrt_proc_spawn` / `zrt_proc_wait`, `zrt_mkdir`, `zrt_listdir`), the child a tool runs under a
+  limit (`zrt_proc_start` with its streams in files and a process group of its own, `zrt_proc_wait_for` with a
+  deadline, `zrt_proc_kill`, and `zrt_mkdtemp` / `zrt_remove_dir` for a directory no other run shares), the
+  `write` / `read` / `open` / `close` syscall floor the stdlib `io` lowers onto, abort reporting, the
+  `Atomic[int]` operations, and the command-line `args`.
 
 ### Header & tests
 

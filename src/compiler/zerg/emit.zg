@@ -16804,6 +16804,7 @@ fn c_intrinsic_ret(name: str) -> ast.Ty {
 	return ast.Ty.TInt if name == "__zrt_time_unix" or name == "__zrt_time_mono"
 	return ast.Ty.TInt if name == "__zrt_path_kind"
 	return ast.Ty.TInt if name == "__zrt_trunc"
+	return ast.Ty.TUint if name == "__zrt_hash_word" or name == "__zrt_hash_text"
 	return ast.Ty.TInt if name == "__zrt_atomic_load" or name == "__zrt_atomic_store" or name == "__zrt_atomic_swap" or name == "__zrt_atomic_add"
 	return ast.Ty.TStr if name == "__zrt_getenv" or name == "__zrt_arch" or name == "__zrt_platform" or name == "__zrt_exe_path"
 	return ast.Ty.TStr if name == "__zrt_real_path"
@@ -20196,7 +20197,63 @@ fn c_needs_loop_unwind(mut &em: Emitter) -> bool {
 fn c_hashed_check(mut &em: Emitter, kt: ast.Ty, site: str) {
 	raise c_diag(em, rule.Rule.MapKeyHasNoHash, f"{site} of type {ast.ty_name(kt)} — it needs `Hash`, and a `float` has no equality a hash can agree with (docs/core/derive.md), so it can never be one") if c_is_float(kt)
 
-	raise c_diag(em, rule.Rule.NotYetMapKeyType, f"NotImplemented: {site} of type {ast.ty_name(kt)} — it needs `Hash`, and this compiler has one for `int` and for `str` (docs/code/collections.md)") if not c_is_int(kt) and not c_is_str(kt) and not c_is_unknown(kt)
+	# A DECLARED TYPE IS A KEY BY ITS OWN SPECS — `Eq` to compare two keys and `Hash` to find
+	# one — and a struct or an enum missing either is a program the reader closes by deriving
+	# it. That is a rule, not a gap, so it is answered before the NotImplemented below.
+	if c_is_decl_key_name(em, c_named_of(kt)) {
+		nm := c_named_of(kt)
+		mut miss := ""
+		if not c_impls(em, nm, "Eq") {
+			miss = "`Eq`"
+		}
+		if not c_impls(em, nm, "Hash") {
+			if miss != "" {
+				miss = miss + " and "
+			}
+			miss = miss + "`Hash`"
+		}
+		raise c_diag(em, rule.Rule.KeyTypeLacksEqHash, f"{site} of type {nm} — a key is compared with `Eq` and found with `Hash`, and `{nm}` has no {miss}. Write `#[derive(Eq, Hash)]` on it, or the missing `impl` (docs/code/collections.md)") if miss != ""
+		return
+	}
+
+	raise c_diag(em, rule.Rule.NotYetMapKeyType, f"NotImplemented: {site} of type {ast.ty_name(kt)} — it needs `Hash`, and this compiler has one for `int`, for `str` and for a declared struct or enum that implements it (docs/code/collections.md)") if not c_is_int(kt) and not c_is_str(kt) and not c_is_unknown(kt)
+}
+
+# c_is_decl_key_name is whether a key type is a STRUCT or an ENUM — the two declarations a
+# `#[derive(Hash)]` goes on. A `type X = Y` is not one: it carries Y's keying, which this
+# compiler has not built, and stays the NotImplemented it was.
+fn c_is_decl_key_name(mut &em: Emitter, nm: str) -> bool {
+	return false if nm == ""
+
+	return c_is_struct_name(em, nm) or c_is_enum_name(em, nm)
+}
+
+# c_key_thunks are the two functions a map's vtable calls for a key of a DECLARED type, and
+# each is the expression a program would write: `k.hash()`, and `a == b`. Both are rendered
+# by c_expr over two names bound to the key slots, as c_eq_pair renders a part, so the
+# receiver copies and the name mangling come from the one place that has them.
+#
+# THEY ARE DEFINED AFTER THE PROTOTYPES, with the witness tables, because each calls a program
+# method; the vtable that names them sits before the prototypes, so it is given a forward
+# declaration of each instead.
+fn c_key_thunks(mut &em: Emitter, kt: ast.Ty) -> list[str] {
+	id := c_ident_safe(c_type(kt))
+	hn := f"zg_keyhash_{id}"
+	en := f"zg_keyeq_{id}"
+	if not c_name_in(em.svt_names, hn) {
+		em.svt_names.append(hn)
+		ct := c_type(kt)
+		outer := c_scope_open(em)
+		c_env_row(em, "zgk_a", kt, "zgk_a", false, false)
+		c_env_row(em, "zgk_b", kt, "zgk_b", false, false)
+		h := c_expr(em, ast.Expr.EMethod(ast.Expr.EIdent("zgk_a", 0, 0), "hash", [], 0, 0), c_nosub())
+		e := c_expr(em, ast.Expr.EBinary("==", ast.Expr.EIdent("zgk_a", 0, 0), ast.Expr.EIdent("zgk_b", 0, 0)), c_nosub())
+		c_scope_close(em, outer)
+		em.mvt_decls.append(f"static size_t {hn}(const void *zg_k);\nstatic bool {en}(const void *zg_a, const void *zg_b);\n")
+		em.svt_decls.append(f"static size_t {hn}(const void *zg_k) {{\n    {ct} zgk_a = *(const {ct} *)zg_k;\n    return (size_t)({h});\n}}\n")
+		em.svt_decls.append(f"static bool {en}(const void *zg_a, const void *zg_b) {{\n    {ct} zgk_a = *(const {ct} *)zg_a;\n    {ct} zgk_b = *(const {ct} *)zg_b;\n    return {e};\n}}\n")
+	}
+	return [hn, en]
 }
 
 fn c_map_vt(mut &em: Emitter, kt: ast.Ty, vt: ast.Ty) -> str {
@@ -20205,18 +20262,19 @@ fn c_map_vt(mut &em: Emitter, kt: ast.Ty, vt: ast.Ty) -> str {
 		return name if n == name
 	}
 
-	# A KEY NEEDS `Hash`, and this compiler has two: int and str (GRAMMAR — a map key needs
-	# both equality and a hash, and neither is automatic). A `byte` key took the INT hash
-	# and eq, which read 8 bytes out of a 1-byte slot — so `{b'a': 1}` built, and the lookup
-	# that followed raised `KeyError` for a key that was right there. The seed has refused
+	# A KEY NEEDS `Hash`, and this compiler has int's, str's and a declared type's own
+	# (GRAMMAR — a map key needs both equality and a hash, and neither is automatic). A `byte`
+	# key took the INT hash and eq, which read 8 bytes out of a 1-byte slot — so `{b'a': 1}`
+	# built, and the lookup that followed raised `KeyError` for a key that was right there. The seed has refused
 	# this all along; `zerg` reached it by inference the day a byte literal carried its type.
 	# a key whose type inference could not name is left alone, as every other rule here
 	# does: guessing turns a typing gap into a refusal of a working program
 	# A `float` KEY IS NOT WAITING FOR ANYTHING. `docs/core/derive.md` refuses `Hash` on any
 	# `float` field — a float has no equality a hash can agree with — so there is no day this
 	# retires on, and `NotImplemented:` promised one. The rest of the range really is unbuilt:
-	# a `byte`, a `rune` and a `derive(Hash)` type are `collections.md`'s intended rule, and
-	# they keep the number (#87).
+	# a `byte`, a `rune`, a tuple and a typedef are `collections.md`'s intended rule, and they
+	# keep the number (#87). A STRUCT OR ENUM key is built — through its own `Eq` and `Hash`,
+	# which c_key_thunks calls.
 	c_hashed_check(em, kt, "a map key")
 
 	mut hash := "zrt_hash_int"
@@ -20224,6 +20282,11 @@ fn c_map_vt(mut &em: Emitter, kt: ast.Ty, vt: ast.Ty) -> str {
 	if c_is_str(kt) {
 		hash = "zrt_hash_str"
 		eq = "zrt_eq_str"
+	}
+	if c_is_decl_key_name(em, c_named_of(kt)) {
+		ths := c_key_thunks(em, kt)
+		hash = ths[0]
+		eq = ths[1]
 	}
 	em.mvt_names.append(name)
 
@@ -24372,7 +24435,7 @@ fn c_emit_file_at(f: ast.File, ms: Mods, mut &diags: list[ast.Diag]) -> str {
 # point of doing it this way — a hand-built one is a second spelling of what the parser
 # produces, and the two drift the day a spec grows a field. Three lines through the real
 # parser cannot disagree with the real parser.
-const ZG_BUILTIN_SPECS := "spec Into[T] {\n\tfn into() -> T\n}\n\nspec Eq {\n\tfn eq(o: This) -> bool\n\tfn ne(o: This) -> bool\n}\n\nspec Ord: Eq {\n\tfn less(o: This) -> bool\n}\n"
+const ZG_BUILTIN_SPECS := "spec Into[T] {\n\tfn into() -> T\n}\n\nspec Eq {\n\tfn eq(o: This) -> bool\n\tfn ne(o: This) -> bool\n}\n\nspec Ord: Eq {\n\tfn less(o: This) -> bool\n}\n\nspec Hash {\n\tfn hash() -> uint\n}\n"
 
 # c_with_builtin_specs adds them to a program that does not declare them itself. A program IS
 # allowed to declare its own `Into` or `Eq` — the check is by name, so a spec by that name
@@ -24552,15 +24615,18 @@ fn c_provided_at(sp: ast.SpecDecl, fn_d: ast.FnDecl) -> bool {
 	return false
 }
 
-# c_with_derived expands every `#[derive(…)]` into the impl it stands for.
-pub fn c_with_derived(ft: FileTypes, prog: ast.File) -> ast.File {
+# c_with_derived expands every `#[derive(…)]` into the impl it stands for. `prog` is whose
+# decorators are expanded — the whole program, or one unit — and `all` is the whole program
+# either way: a derive that asks whether a FIELD's type has a spec has to see that type's own
+# decorators, which a unit does not hold when the type is another module's.
+pub fn c_with_derived(ft: FileTypes, all: ast.File, prog: ast.File) -> ast.File {
 	mut out := prog
 	mut i := 0
 	for i < prog.derive_on.len() {
 		# A PRIVATE TYPE'S NEW NAME IS NOT SOURCE (c_ft_fresh): it holds a byte no identifier
 		# may, so the expansion is written back in its file's spelling, parsed, and renamed the
 		# way that file was — which is what the file would have got had it written the impl.
-		src := c_ft_says(ft, c_derive_src(prog, prog.derive_on[i], prog.derive_spec[i]))
+		src := c_ft_says(ft, c_derive_src(all, prog, prog.derive_on[i], prog.derive_spec[i]))
 
 		# AT THE DECLARATION'S FILE, inside the synthetic mark: the expansion is compiler-written
 		# (every privacy silence still applies) but the bare names it writes are that file's
@@ -24598,12 +24664,13 @@ pub fn c_with_derived(ft: FileTypes, prog: ast.File) -> ast.File {
 # named — the derivable set is compiler-owned and a user spec in a `#[derive(…)]` is an
 # error, because generating an impl from structure needs code that reads structure, and
 # nothing user-authored may.
-fn c_derive_src(prog: ast.File, target: str, nm: str) -> str {
+fn c_derive_src(all: ast.File, prog: ast.File, target: str, nm: str) -> str {
 	return c_obj_src(prog, target) if nm == "#obj"
 
-	raise c_derive_diag(prog, target, rule.Rule.NotYetDerive, f"NotImplemented: `#[derive({nm})]` — this compiler derives `Eq`, `Ord` and `From`; `Hash`, `Encode` and `Decode` are specified and unbuilt (docs/core/derive.md)") if nm == "Hash" or nm == "Encode" or nm == "Decode"
+	raise c_derive_diag(prog, target, rule.Rule.NotYetDerive, f"NotImplemented: `#[derive({nm})]` — this compiler derives `Eq`, `Ord`, `Hash` and `From`; `Encode` and `Decode` are specified and unbuilt (docs/core/derive.md)") if nm == "Encode" or nm == "Decode"
 	return c_derive_eq(prog, target) if nm == "Eq"
 	return c_derive_ord(prog, target) if nm == "Ord"
+	return c_derive_hash(all, prog, target) if nm == "Hash"
 	return c_derive_from(prog, target) if nm == "From"
 
 	# A `spec` YOU WROTE, on an ENUM. The two halves of `derive` answer to different rules
@@ -25445,6 +25512,174 @@ fn c_derive_ord_payload_cmp(n: int, i: int) -> str {
 	return f"zgd_l{k} < zgd_r{k}" if i == n - 1
 
 	return f"zgd_l{k} < zgd_r{k} or (zgd_l{k} == zgd_r{k} and {c_derive_ord_payload_cmp(n, i + 1)})"
+}
+
+# c_derive_hash writes the impl `#[derive(Hash)]` stands for: the one method `Hash` requires,
+# `fn hash() -> uint` (docs/core/specs.md), read out of the type's structure.
+#
+# THE RULE IS THE CHAPTER'S: mix field / tag hashes. A product folds its fields' hashes in
+# declaration order and a sum folds its payload's into a start that is the variant's own, so two
+# values `Eq` calls equal — the same fields, or the same variant with the same payload — fold
+# the same numbers in the same order and answer the same `uint`. That is the one law `Hash`
+# carries, and it is why each step is the field's OWN hash rather than anything read off its
+# bytes: a field's equality is its type's, so its hash has to be its type's too.
+#
+# `Eq` IS NOT REQUIRED HERE, unlike `Ord`: `spec Hash` names no super-spec, so `impl Hash` alone
+# is a program. What needs both is a KEY, and that is where the pair is asked for
+# (c_hashed_check).
+fn c_derive_hash(all: ast.File, prog: ast.File, target: str) -> str {
+	body := c_derive_hash_body(all, prog, target)
+	head := c_derive_head(prog, target)
+	ty := c_derive_applied(prog, target)
+	return f"{head}Hash for {ty} {{\n\tfn hash() -> uint {{\n\t\treturn {body}\n\t}}\n}}\n"
+}
+
+fn c_derive_hash_body(all: ast.File, prog: ast.File, target: str) -> str {
+	for sd in prog.structs {
+		if sd.name == target {
+			mut acc := "uint(0)"
+			for fl in sd.fields {
+				acc = c_derive_hash_mix(acc, c_derive_hash_of(all, prog, target, sd.tparams, f"the field `{fl.name}`", fl.ty, f"this.{fl.name}"))
+			}
+			return acc
+		}
+	}
+	for ed in prog.enums {
+		return c_derive_hash_variants(all, prog, ed, target) if ed.name == target
+	}
+
+	return c_derive_structureless(prog, target, "Hash")
+}
+
+# c_derive_hash_mix is one step of the fold: FNV-1a's, with a field's hash where FNV takes a
+# byte. The multiply WRAPS (`*%`) because a hash is meant to overflow — `*` would raise
+# `OverflowError` on the second field of almost any value.
+fn c_derive_hash_mix(acc: str, h: str) -> str {
+	return f"(({acc} ^ {h}) *% uint(1099511628211))"
+}
+
+# c_derive_hash_variants is the sum's rule. A FIELDLESS enum is its discriminant, the reading
+# `Eq` uses one operator over, so it hashes as that int does. A PAYLOAD enum matches the
+# variant, starts from the variant's position — so two variants carrying equal payloads still
+# differ — and folds the payload in as a struct folds its fields.
+fn c_derive_hash_variants(all: ast.File, prog: ast.File, ed: ast.EnumDecl, target: str) -> str {
+	return "__zrt_hash_word(int(this))" if not c_derive_has_payload(ed)
+
+	mut arms := ""
+	mut vi := 0
+	for vi < ed.variants.len() {
+		v := ed.variants[vi]
+		mut acc := f"uint({strconv.to_string(vi, 10)})"
+		mut binds := ""
+		mut i := 0
+		for i < v.fields.len() {
+			n := f"zgd_l{strconv.to_string(i, 10)}"
+			if i > 0 {
+				binds = binds + ", "
+			}
+			binds = binds + n
+			acc = c_derive_hash_mix(acc, c_derive_hash_of(all, prog, target, [], f"the payload of `{v.name}`", v.fields[i], n))
+			i = i + 1
+		}
+		mut pat := f"{target}.{v.name}"
+		if v.fields.len() > 0 {
+			pat = f"{target}.{v.name}({binds})"
+		}
+		arms = arms + f"\t\t\t{pat} => {acc}\n"
+		vi = vi + 1
+	}
+	return f"match this {{\n{arms}\t\t}}"
+}
+
+# c_derive_hash_of is ONE field's hash, as source: the leaf the runtime hashes an int or a str
+# KEY with for a scalar, and the field's own `hash()` for a declared type that has one. Every
+# other field is refused at the type the reader wrote — `what` names the field — and never
+# skipped: a field left out of the fold is still a legal hash, but a skip nobody was told about
+# is a derive that did not do what it said.
+fn c_derive_hash_of(all: ast.File, prog: ast.File, target: str, tps: list[str], what: str, t: ast.Ty, x: str) -> str {
+	return match t {
+		Ty.TInt      => f"__zrt_hash_word({x})"
+		Ty.TByte     => f"__zrt_hash_word(int({x}))"
+		Ty.TRune     => f"__zrt_hash_word(int({x}))"
+		Ty.TBool     => f"__zrt_hash_word(int({x}))"
+		Ty.TUint     => x
+		Ty.TStr      => f"__zrt_hash_text({x})"
+		Ty.TFloat    => c_derive_hash_float(prog, target, what)
+		Ty.TNamed(n) => c_derive_hash_named(all, prog, target, tps, what, n, x)
+		Ty.TFn(_, _) => c_derive_hash_identity(prog, target, what, t)
+		_            => c_derive_hash_other(prog, target, what, t)
+	}
+}
+
+# c_derive_hash_float is the field the chapter excludes by name. `float` opts out of `Hash`
+# because its equality is not reflexive — a `NaN` is unequal to itself — so no hash can be the
+# one `equal ⇒ same hash` asks for, and a composite holding one inherits that.
+fn c_derive_hash_float(prog: ast.File, target: str, what: str) -> str {
+	raise c_derive_diag(prog, target, rule.Rule.DeriveHashFloat, f"cannot derive `Hash` for `{target}`: {what} is a `float`, and `float` opts out of `Hash` — `NaN` is not equal to itself, so no hash agrees with its equality (docs/core/derive.md). Write `impl Hash for {target}` and say what the hash means")
+}
+
+# c_derive_hash_other is every remaining shape: a channel end, which is an identity like a
+# function value, and the containers, which are the unbuilt half.
+fn c_derive_hash_other(prog: ast.File, target: str, what: str, t: ast.Ty) -> str {
+	return c_derive_hash_identity(prog, target, what, t) if ast.ty_is_chan(t)
+
+	return c_derive_hash_unbuilt(prog, target, what, ast.ty_name(t))
+}
+
+fn c_derive_hash_identity(prog: ast.File, target: str, what: str, t: ast.Ty) -> str {
+	return c_derive_hash_none(prog, target, f"{what} is a `{ast.ty_name(t)}`, which is an identity rather than a value and has no `Hash`")
+}
+
+# c_derive_hash_none is the one place a field with NO `Hash` is refused — an identity, or a
+# declared type that carries none — because the rule is one rule whichever it is.
+fn c_derive_hash_none(prog: ast.File, target: str, why: str) -> str {
+	raise c_derive_diag(prog, target, rule.Rule.DeriveHashFieldNoHash, f"cannot derive `Hash` for `{target}`: {why} (docs/core/derive.md)")
+}
+
+fn c_derive_hash_named(all: ast.File, prog: ast.File, target: str, tps: list[str], what: str, n: str, x: str) -> str {
+	base := c_derive_hash_base(n)
+
+	return c_derive_hash_unbuilt(prog, target, what, n) if c_name_in(tps, base) or c_derive_is_typedef(all, base)
+	return f"{x}.hash()" if base == target or c_derive_has_hash(all, base)
+
+	return c_derive_hash_none(prog, target, f"{what} is a `{n}`, and `{base}` has no `Hash` to mix in. Write `#[derive(Hash)]` on `{base}`, or `impl Hash for {base}`")
+}
+
+fn c_derive_hash_unbuilt(prog: ast.File, target: str, what: str, tn: str) -> str {
+	raise c_derive_diag(prog, target, rule.Rule.NotYetDeriveHashField, f"NotImplemented: `#[derive(Hash)]` on `{target}`: {what} is a `{tn}`, and this compiler hashes a field that is an integer, a `bool`, a `str`, or a declared type with `Hash` (docs/core/derive.md)")
+}
+
+# c_derive_hash_base is an applied type's template name — `Box` for `Box[int]` — which is the
+# name a derive or an `impl[T]` is written against.
+fn c_derive_hash_base(n: str) -> str {
+	b := bytearray(n)
+	mut out: list[byte] = []
+	for c in b {
+		break if c == b'['
+		out.append(c)
+	}
+	return str(out)
+}
+
+fn c_derive_is_typedef(prog: ast.File, n: str) -> bool {
+	for td in prog.types {
+		return true if td.name == n
+	}
+	return false
+}
+
+# c_derive_has_hash is whether a declared type has `Hash` BEFORE any derive is expanded — so it
+# reads the decorators as well as the hand-written impls, the way c_derive_ord_needs_eq does.
+fn c_derive_has_hash(prog: ast.File, n: str) -> bool {
+	mut i := 0
+	for i < prog.derive_on.len() {
+		return true if prog.derive_on[i] == n and prog.derive_spec[i] == "Hash"
+		i = i + 1
+	}
+	for ip in prog.impls {
+		return true if ip.target == n and ip.on == "Hash"
+	}
+	return false
 }
 
 fn c_derive_eq(prog: ast.File, target: str) -> str {
@@ -26460,7 +26695,8 @@ fn c_emit_unit_as(prog0: ast.File, own0: ast.File, ft: FileTypes, ms: Mods, whol
 	# first left `zg_ArgKind_eq` declared, called, and defined nowhere — a link error against
 	# a function the program never spells. Each expands from its own derive list, so the unit
 	# gets exactly the impls whose decorators are in it.
-	f0 := c_with_spec_defaults_self(c_with_derived(ft, c_with_builtin_specs(prog0)))
+	prog1 := c_with_builtin_specs(prog0)
+	f0 := c_with_spec_defaults_self(c_with_derived(ft, prog1, prog1))
 
 	# THE FINDINGS SO FAR TRAVEL IN, in the `diags` slot. `chk_at_place` drops an exact repeat —
 	# same file, same line, same column, same sentence — so that one mistake earns one message;
@@ -26489,7 +26725,7 @@ fn c_emit_unit_as(prog0: ast.File, own0: ast.File, ft: FileTypes, ms: Mods, whol
 	# in these passes and in any added later — `f.fns` holds functions only.
 	c_build_generics(em, f0)
 	f := c_with_type_insts(em, c_with_spec_keys(c_without_templates(f0)))
-	own := c_with_impl_insts(em, c_with_spec_keys(c_without_templates(c_with_spec_defaults(f0, c_with_derived(ft, own0)))), false)
+	own := c_with_impl_insts(em, c_with_spec_keys(c_without_templates(c_with_spec_defaults(f0, c_with_derived(ft, prog0, own0)))), false)
 
 	# OVER `f0`, THE PROGRAM WITH ITS TEMPLATES STILL IN IT. A template is not a function
 	# to lower, which is what the removal above says, but it IS a name at the top level:

@@ -462,6 +462,9 @@ shipping compiler rather than a part of it (the line
 | `E4114` | `unsafe` written as part of a type                                                                    |
 | `E4115` | a raw `ptr` named outside an `unsafe { … }` group                                                     |
 | `E4116` | `get` asks about one index or key, and this gives …                                                   |
+| `E4117` | `#[derive(Hash)]` on a type with a `float` field                                                      |
+| `E4118` | `#[derive(Hash)]` over a field whose type has no `Hash`                                               |
+| `E4119` | a map key or set element of type … — a declared type with no `Eq` or no `Hash`                        |
 | `E5001` | this entry file declares no `fn main`                                                                 |
 | `E5002` | cannot resolve import `…`, and where it was looked for                                                |
 | `E5007` | `…` is a module this build compiles and this module did not import                                    |
@@ -521,6 +524,7 @@ shipping compiler rather than a part of it (the line
 | `E9112` | the array method `…`                                                                                  |
 | `E9117` | a slice of an array — its length is part of its type                                                  |
 | `E9118` | a spec value called or rendered, or an application named, while nothing implements it                 |
+| `E9119` | `#[derive(Hash)]` over a field whose `Hash` is not built                                              |
 
 They are reported the moment a file is **read**, before its imports are scanned — scanning
 them parses, and a parser handed unreadable text can only say something untrue about it.

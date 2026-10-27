@@ -2022,6 +2022,10 @@ fn chk_into_builtin(want: ast.Ty, got: ast.Ty) -> bool {
 # for entry. Both compilers build the same `src/stdlib/*.zg`, so a leaf one knows and the other
 # does not is a standard library that builds under only one of them.
 #
+# THE TWO HASH LEAVES ARE THE EXCEPTION, and no stdlib file names them: `__zrt_hash_word` and
+# `__zrt_hash_text` are what a `#[derive(Hash)]` body calls for an integer and a str field, and
+# the seed derives no `Hash` (src/bootstrap/README.md), so it never meets a call to either.
+#
 # It says nothing about WHO may call one. A primitive is the standard library's way down to the
 # machine and a program has no business writing one, but this compiler's own driver reaches for
 # `__zrt_exec`, `__zrt_exit` and `__zrt_listdir` in thirty places, several of which no stdlib
@@ -2039,6 +2043,9 @@ fn chk_intrinsic_params(name: str) -> list[ast.Ty] {
 	return [ast.Ty.TInt] if name == "__zrt_sleep_ns" or name == "__zrt_exit" or name == "__zrt_proc_wait"
 
 	return [ast.Ty.TFloat] if name == "__zrt_trunc"
+
+	return [ast.Ty.TInt] if name == "__zrt_hash_word"
+	return [ast.Ty.TStr] if name == "__zrt_hash_text"
 
 	return [ast.Ty.TList(ast.Ty.TStr)] if name == "__zrt_exec" or name == "__zrt_proc_spawn" or name == "__zrt_proc_open3"
 

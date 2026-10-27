@@ -449,6 +449,17 @@ pub enum Rule {
 	# `get` is the checked index, and it asks about ONE thing: a list's index or a map's key.
 	GetTakesOneArgument = 4116
 
+	# `#[derive(Hash)]` mixes each field's own hash, so each field must HAVE one: a `float`
+	# opts out of `Hash` by the chapter's own rule, and a declared type that carries no `Hash`
+	# (or a `chan` / `fn`, which are identities) has none to mix. Both are named at the field.
+	DeriveHashFloat = 4117
+	DeriveHashFieldNoHash = 4118
+
+	# a `map` key or a `set` element of a DECLARED type needs both halves of keying — `Eq` to
+	# compare and `Hash` to find — and the program closes the gap itself by deriving or writing
+	# the one that is missing.
+	KeyTypeLacksEqHash = 4119
+
 	# an optional has two sides and a `match` over one covers both, the way it covers an
 	# Either's two and a bool's two. `nil` names the absent side; a name binds the present one.
 	MatchMissingNil = 4103
@@ -601,6 +612,10 @@ pub enum Rule {
 	# reached cc. No value could be such a type yet, which is why this is a form waiting and
 	# not a mistake.
 	NotYetSpecTypeNoImpl = 9118
+
+	# a `#[derive(Hash)]` field whose type has `Hash` by the chapter's rule and not yet by this
+	# compiler: a container, a tuple, an optional, a typedef, or a type parameter.
+	NotYetDeriveHashField = 9119
 }
 
 # rule_code is the text a rule is reported under — the `E2004` a gate pins and a reader looks

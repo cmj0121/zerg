@@ -4138,18 +4138,18 @@ err_case err_cause_chain '		match guard { chain(mk(i)) } {
 			}
 		}'
 
-# AN ERR THE RUNTIME RAISED, read through its name (#405). Its message was the C literal the
-# abort passed, which has no count: `m := e.msg` retained it, reading a header out of the
-# bytes in front of the literal and writing a count back into them. The message is an immortal
-# cell now, so this binds it, copies the Err and reads it again, and every hold is given back.
+# AN ERR THE RUNTIME RAISED, held by name and read (#405). Its message was the C literal the
+# abort passed, which has no count, and a read that retained it read a header out of the bytes
+# in front of the literal. The message is an immortal cell now; this binds the Err, copies it
+# and reads the message through each, and every hold is given back.
 err_case err_runtime_msg '		zero := i - i
 		e := match guard { 7 / zero } {
 			Left(_) => ValueError("did not raise")
 			Right(x) => x
 		}
-		m := e.msg
+		m := e.message()
 		f := e
-		n = n + size(m) + size(f.msg)'
+		n = n + size(m) + size(f.message())'
 
 # The same read of the Err a force-unwrap raises, whose message the emitter writes.
 err_case err_force_msg '		o: int? = nil
@@ -4157,7 +4157,7 @@ err_case err_force_msg '		o: int? = nil
 			Left(_) => ValueError("did not raise")
 			Right(x) => x
 		}
-		m := e.msg
+		m := e.message()
 		n = n + size(m)'
 
 # --- a literal with no type of its own, at a position that has one (#332) -----------------

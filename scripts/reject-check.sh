@@ -9969,6 +9969,66 @@ pub fn f() -> int {
 }
 EOF
 
+# AND THE OTHER SPELLINGS OF THAT BARE NAME (#393). The call above is E3114. `spawn`, `defer`
+# and a value used to emit `zg_m0_f`, which cc refused as an undeclared function. Each form is
+# the one finding, at the name.
+reject a-bare-spawn-two-imported-modules-declare E3114 'and a bare name cannot choose between them — spell it `aa.f` or `bb.f`' one-finding <<'EOF'
+import (
+	"./bb"
+	"./aa"
+)
+
+fn main() {
+	spawn f()
+}
+--- aa/mod.zg
+pub fn f() -> int {
+	return 1
+}
+--- bb/mod.zg
+pub fn f() -> int {
+	return 2
+}
+EOF
+
+reject a-bare-defer-two-imported-modules-declare E3114 'and a bare name cannot choose between them — spell it `aa.f` or `bb.f`' one-finding <<'EOF'
+import (
+	"./bb"
+	"./aa"
+)
+
+fn main() {
+	defer f()
+}
+--- aa/mod.zg
+pub fn f() -> int {
+	return 1
+}
+--- bb/mod.zg
+pub fn f() -> int {
+	return 2
+}
+EOF
+
+reject a-bare-fn-value-two-imported-modules-declare E3114 'and a bare name cannot choose between them — spell it `aa.f` or `bb.f`' one-finding <<'EOF'
+import (
+	"./bb"
+	"./aa"
+)
+
+fn main() {
+	g := f
+}
+--- aa/mod.zg
+pub fn f() -> int {
+	return 1
+}
+--- bb/mod.zg
+pub fn f() -> int {
+	return 2
+}
+EOF
+
 # AN ASSOCIATED VALUE IS ITS TYPE'S, and two files' `impl P` blocks of one module may not each
 # give `P` a `K` — whatever their visibility, so the sentence says so rather than "make one
 # private". The seed builds it.

@@ -322,7 +322,8 @@ the call would be, and _E3114_ where that call would be.
 
 A bare name that two IMPORTED modules both declare is refused rather than picked: _E3114 `helper` is declared
 in `x.zg` and `y.zg`, and a bare name cannot choose between them_ names both spellings, `x.helper` and
-`y.helper`, and _E3116_ says the same of a constant.
+`y.helper`, and _E3116_ says the same of a constant. `spawn helper()`, `defer helper()` and `g := helper`
+are that same bare name, and the same finding.
 
 A private type is under the same rule. Two files that each declare a struct, enum or `type` of one name without
 `pub` declare two types, and each file's constructions, field reads, patterns and methods reach its own. What

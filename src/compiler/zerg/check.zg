@@ -366,16 +366,19 @@ pub fn chk_ty_is_this_file(mut &em: emit.Emitter, nm: str) {
 	here_mod := c_mod_of(em, em.at_path)
 	return if decl_mod == "" or here_mod == ""
 
+	# ONE SITE. A code reported from two places is two rules, and these two
+	# sentences are the two boundaries of this one.
+	mut msg := ""
 	if decl_mod != here_mod {
 		ns := chk_ty_mod_ns(em, decl_mod)
-		chk_at(em, rule.Rule.TypeFromSibling, f"the type `{nm}` is declared in another module, and a file names what it uses — spell it `{ns}.{nm}` (docs/runtime/package.md)")
-		return
+		msg = f"the type `{nm}` is declared in another module, and a file names what it uses — spell it `{ns}.{nm}` (docs/runtime/package.md)"
+	} else {
+		return if lint.is_test_file(ast.mod_name(em.at_path))
+
+		ns := ast.mod_name(chk_drop_zg(decl_path))
+		msg = f"the type `{nm}` is declared in `{decl_path}`, and a file names what it uses — write `import \"./{ns}\"` and spell it `{ns}.{nm}` (docs/runtime/package.md)"
 	}
-
-	return if lint.is_test_file(ast.mod_name(em.at_path))
-
-	ns := ast.mod_name(chk_drop_zg(decl_path))
-	chk_at(em, rule.Rule.TypeFromSibling, f"the type `{nm}` is declared in `{decl_path}`, and a file names what it uses — write `import \"./{ns}\"` and spell it `{ns}.{nm}` (docs/runtime/package.md)")
+	chk_at(em, rule.Rule.TypeFromSibling, msg)
 }
 
 # chk_ty_mod_ns is the qualifier a file already bound for the module a type comes from.

@@ -2283,11 +2283,9 @@ ZG
 # and `kept` when a twin did not, so a shape the compiler quietly stopped aborting is a `RUN`
 # failure here rather than a round that allocated and freed nothing of interest.
 #
-# What is NOT here is as deliberate. An earlier argument of a call or a method, held while a
-# later one raises, is the same class and still leaks unless it is a channel end, and so do a
-# `spawn`'s environment and a `defer`'s (#326); a shape that leaks on the path where nothing
-# raises is a different defect with an issue of its own. Neither is written into a case,
-# because a case that has to tolerate a leak counts nothing.
+# What is NOT here is as deliberate: a shape that leaks on the path where nothing raises is a
+# different defect with an issue of its own, and is not written into a case, because a case that
+# has to tolerate a leak counts nothing.
 abort_prelude='fn gone(v: int) -> int {
 	raise "a part that had to abort answered instead" if v >= 0
 	return 1
@@ -2874,6 +2872,334 @@ fn main() {
 }
 ZG
 
+# AN ARGUMENT ALREADY EVALUATED (#326). A by-value parameter is given back by the callee's
+# frame, and a later argument that raises means the frame is never entered: the copy of a named
+# list, an rvalue, a method's receiver named and not, a spec box, a generic's argument, named
+# arguments in and out of order, an argument in front of a default that raises, a closure's
+# environment, a call through a function value, an argument beside an owned channel end, the
+# fields a `defer` stored and a `spawn`'s environment, with the raise in its first argument too.
+case_abort abort_args yes <<'ZG'
+fn f(xs: list[int], n: int) -> int {
+	return xs.len() + n
+}
+
+fn f3(xs: list[int], s: str, n: int) -> int {
+	return xs.len() + bytearray(s).len() + n
+}
+
+fn g[T](xs: list[T], n: int) -> int {
+	return xs.len() + n
+}
+
+fn h(xs: list[int], n: int = bad(1)) -> int {
+	return xs.len() + n
+}
+
+fn ap(c: fn (int) -> int, n: int) -> int {
+	return c(n)
+}
+
+struct P {
+	pub xs: list[int]
+}
+
+impl P {
+	fn take(ys: list[int], n: int) -> int {
+		return this.xs.len() + ys.len() + n
+	}
+}
+
+spec Shape {
+	fn fit(xs: list[int], n: int) -> int
+}
+
+struct Lab {
+	pub parts: list[str]
+}
+
+impl Shape for Lab {
+	fn fit(xs: list[int], n: int) -> int {
+		return this.parts.len() + xs.len() + n
+	}
+}
+
+fn ml(n: int) -> Shape {
+	return Lab([word(n)])
+}
+
+fn source(n: int) -> chan[int] {
+	c := chan[int](2)
+	c <- n
+	return c
+}
+
+fn drained(xs: list[int], c: <-chan[int], n: int) -> int {
+	return xs.len() + n
+}
+
+fn note(xs: list[int], n: int) {
+	if xs.len() + n < 0 {
+		print "never"
+	}
+}
+
+fn work(xs: list[int], n: int, done: chan[int]) {
+	done <- xs.len() + n
+}
+
+fn named(i: int, k: int) -> int {
+	ys := mk(i)
+	return f(ys, bad(k))
+}
+
+fn rvalue(i: int, k: int) -> int {
+	return f(mk(i), bad(k))
+}
+
+fn three(i: int, k: int) -> int {
+	return f3(mk(i), word(i), bad(k))
+}
+
+fn method(i: int, k: int) -> int {
+	p := P(mk(i))
+	return p.take(mk(i + 1), bad(k))
+}
+
+fn method_rvalue(i: int, k: int) -> int {
+	return P(mk(i)).take(mk(i + 1), bad(k))
+}
+
+fn spec_named(i: int, k: int) -> int {
+	y := ml(i)
+	return y.fit(mk(i), bad(k))
+}
+
+fn spec_rvalue(i: int, k: int) -> int {
+	return ml(i).fit(mk(i), bad(k))
+}
+
+fn generic(i: int, k: int) -> int {
+	return g(mk(i), bad(k))
+}
+
+fn by_name(i: int, k: int) -> int {
+	return f(xs: mk(i), n: bad(k))
+}
+
+fn by_name_swapped(i: int, k: int) -> int {
+	return f(n: bad(k), xs: mk(i))
+}
+
+fn by_default(i: int, k: int) -> int {
+	return h(mk(i)) if k > 0
+	return h(mk(i), 0)
+}
+
+fn closure(i: int, k: int) -> int {
+	ys := mk(i)
+	return ap(
+		fn (x: int) -> int {
+			return x + ys.len()
+		},
+		bad(k)
+	)
+}
+
+fn value(i: int, k: int) -> int {
+	fv := f
+	return fv(mk(i), bad(k))
+}
+
+fn with_end(i: int, k: int) -> int {
+	return drained(mk(i), source(i), bad(k))
+}
+
+fn deferred(i: int, k: int) -> int {
+	defer note(mk(i), bad(k))
+	return 1
+}
+
+fn spawned(i: int, k: int) -> int {
+	done := chan[int](1)
+	spawn work(mk(i), bad(k), done)
+	return (<-done) ?? 0
+}
+
+fn spawned_first(i: int, k: int) -> int {
+	done := chan[int](1)
+	spawn work(mk(bad(k)), i, done)
+	return (<-done) ?? 0
+}
+
+fn main() {
+	mut n := 0
+	mut i := 0
+	r := rounds()
+	for i < r {
+		n = n + both(named, i) + both(rvalue, i) + both(three, i)
+		n = n + both(method, i) + both(method_rvalue, i)
+		n = n + both(spec_named, i) + both(spec_rvalue, i)
+		n = n + both(generic, i) + both(by_name, i) + both(by_name_swapped, i)
+		n = n + both(by_default, i) + both(closure, i) + both(value, i)
+		n = n + both(with_end, i) + both(deferred, i)
+		n = n + both(spawned, i) + both(spawned_first, i)
+		i = i + 1
+	}
+	print n
+}
+ZG
+
+# THE SAME ARGUMENT, LEFT BY AN EARLY EXIT (#326). A `?`, a `?? return`, a `?? break` and a
+# `?? continue` in a later argument leave before the callee's frame is entered, with no abort
+# to unwind: the call returned, assigned in a loop, a `match` scrutinee, an `if` binding, a
+# `with` resource, a `defer` and a `spawn` — whose environment was lost to an exit in its first
+# argument as well. Each answers -1 where it exits, which is the half `both` expects to abort.
+case_abort exit_args yes <<'ZG'
+fn may(k: int) -> int? {
+	return nil if k > 0
+	return 5
+}
+
+fn f(xs: list[int], n: int) -> int {
+	return xs.len() + n
+}
+
+fn some(xs: list[int], n: int) -> int? {
+	return xs.len() + n
+}
+
+fn pair(xs: list[int], n: int) -> list[int] {
+	return [xs.len(), n]
+}
+
+fn note(xs: list[int], n: int) {
+	if xs.len() + n < 0 {
+		print "never"
+	}
+}
+
+fn work(xs: list[int], n: int, done: chan[int]) {
+	done <- xs.len() + n
+}
+
+fn work_ints(n: int, m: int, done: chan[int]) {
+	done <- n + m
+}
+
+fn try_rvalue_of(i: int, k: int) -> int? {
+	return f(mk(i), may(k)?)
+}
+
+fn try_rvalue(i: int, k: int) -> int {
+	return try_rvalue_of(i, k) ?? -1
+}
+
+fn try_named_of(i: int, k: int) -> int? {
+	ys := mk(i)
+	return f(ys, may(k)?)
+}
+
+fn try_named(i: int, k: int) -> int {
+	return try_named_of(i, k) ?? -1
+}
+
+fn or_return(i: int, k: int) -> int {
+	return f(mk(i), may(k) ?? return -1)
+}
+
+fn or_break(i: int, k: int) -> int {
+	mut n := -1
+	for j in 0..2 {
+		n = f(mk(i + j), may(k) ?? break)
+	}
+	return n
+}
+
+fn or_continue(i: int, k: int) -> int {
+	mut n := -1
+	for j in 0..2 {
+		n = f(mk(i + j), may(k) ?? continue)
+	}
+	return n
+}
+
+fn scrutinee_of(i: int, k: int) -> int? {
+	return match f(mk(i), may(k)?) {
+		0 => 1
+		_ => 2
+	}
+}
+
+fn scrutinee(i: int, k: int) -> int {
+	return scrutinee_of(i, k) ?? -1
+}
+
+fn binding_of(i: int, k: int) -> int? {
+	if v := some(mk(i), may(k)?) {
+		return v
+	}
+	return 0
+}
+
+fn binding(i: int, k: int) -> int {
+	return binding_of(i, k) ?? -1
+}
+
+fn resource_of(i: int, k: int) -> int? {
+	with pair(mk(i), may(k)?) as xs {
+		return xs.len()
+	}
+	return 0
+}
+
+fn resource(i: int, k: int) -> int {
+	return resource_of(i, k) ?? -1
+}
+
+fn deferred_of(i: int, k: int) -> int? {
+	defer note(mk(i), may(k)?)
+	return 1
+}
+
+fn deferred(i: int, k: int) -> int {
+	return deferred_of(i, k) ?? -1
+}
+
+fn spawned_of(i: int, k: int) -> int? {
+	done := chan[int](1)
+	spawn work(mk(i), may(k)?, done)
+	return (<-done) ?? 0
+}
+
+fn spawned(i: int, k: int) -> int {
+	return spawned_of(i, k) ?? -1
+}
+
+fn spawned_first_of(i: int, k: int) -> int? {
+	done := chan[int](1)
+	spawn work_ints(may(k)?, i, done)
+	return (<-done) ?? 0
+}
+
+fn spawned_first(i: int, k: int) -> int {
+	return spawned_first_of(i, k) ?? -1
+}
+
+fn main() {
+	mut n := 0
+	mut i := 0
+	r := rounds()
+	for i < r {
+		n = n + both(try_rvalue, i) + both(try_named, i) + both(or_return, i)
+		n = n + both(or_break, i) + both(or_continue, i)
+		n = n + both(scrutinee, i) + both(binding, i) + both(resource, i)
+		n = n + both(deferred, i) + both(spawned, i) + both(spawned_first, i)
+		i = i + 1
+	}
+	print n
+}
+ZG
+
 # A KEY COPIED OUT OF A NAME (#340). A map literal copies a key it reads from something that
 # owns it — a name, a parameter, a field, an element — and the copy sat in a C temporary
 # nothing had registered while the entry's value was evaluated. The key is in the entry whose
@@ -3200,9 +3526,8 @@ ZG
 # These are for `zerg` alone. The seed has no map literal, no `set` and no closure value, and
 # on the early-exit shapes it is not the oracle: it leaves the pushed elements live itself.
 #
-# What is NOT here: a channel inside any holder, which is not counted in or out at all, and
-# the arguments of a call, a `spawn` or a `defer` (#326). Each is a defect of its own, and a
-# case that has to tolerate one counts nothing.
+# What is NOT here: a channel inside any holder, which is not counted in or out at all. It is
+# a defect of its own, and a case that has to tolerate one counts nothing.
 
 # A MAP ASSIGNED THROUGH A KEY SOMETHING ELSE OWNS (#327). `m[k] = v` handed the map the
 # caller's own text. A key the map did not have was then given back by both; one it already

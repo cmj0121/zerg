@@ -506,18 +506,20 @@ too narrow to earn an operator. Equality, where a type opts into it, is the **st
 **`is`** keyword is a different question — the **type-identity** test `x is T` on an existential (Type
 tests) — "what concrete type is boxed here?", never "are these two the same value?".
 
-> **[not yet]** Of the built-in specs this section describes, exactly three are declared: **`Eq`** above,
-> **`Ord`** below, and **`Into[T]`** ([Types](types.md#into--an-ordinary-conversion-spec)). `Hash`, `Error`,
-> `Iterator` / `Iterable`, the sealed `Ref`, and every operator spec — `Add`, `Sub`, `Mul`, `Div`, `BitAnd`,
-> `BitOr`, `BitXor`, `Not`, `Shl`, `Shr` — do not exist as declarations at all, so they cannot be named:
-> `impl Hash for P` reports _error: E3013 no spec named `Hash`_, the ordinary message for a spec nobody
-> wrote, and `impl BitAnd for P` reports it too. A type without `Ord` is refused by the operator rather than
-> by the spec: `P(1) < P(2)` reports _E3044 operator `<` orders two numbers or two strs, and these are P and
-> P_, which names the operand types and says nothing about the missing `Ord`. Several of the **behaviours**
-> are built in and reachable without their spec — `+` concatenating a `str`, the error taxonomy `Err` names
-> and the `message()` / `unwrap()` it answers, a `chan`'s refcounted close — but they are compiler-owned and
-> a user type cannot join them, with a `#[derive(Eq)]` on the type or without one. Everything from here to
-> the end of this chapter is specified against that gap.
+> **[not yet]** Of the built-in specs this section describes, exactly three are declared by the compiler:
+> **`Eq`** above, **`Ord`** below, and **`Into[T]`** ([Types](types.md#into--an-ordinary-conversion-spec)).
+> **`Hash`**, in the bullet below, names its method `fn hash() -> uint` and the law that where `eq` holds
+> the two calls answer the same `uint`. The compiler has not declared that spec, so the program there
+> reports _error: E3013 no spec named `Hash`_, the ordinary message for a spec nobody wrote. `Error`,
+> `Iterator` / `Iterable`, the sealed `Ref`, and every operator spec — `Add`, `Sub`, `Mul`, `Div`,
+> `BitAnd`, `BitOr`, `BitXor`, `Not`, `Shl`, `Shr` — do not exist as declarations at all, so they cannot be
+> named: `impl BitAnd for P` reports that same _E3013_. A type without `Ord` is refused by the operator
+> rather than by the spec: `P(1) < P(2)` reports _E3044 operator `<` orders two numbers or two strs, and
+> these are P and P_, which names the operand types and says nothing about the missing `Ord`. Several of the
+> **behaviours** are built in and reachable without their spec — `+` concatenating a `str`, the error
+> taxonomy `Err` names and the `message()` / `unwrap()` it answers, a `chan`'s refcounted close — but they
+> are compiler-owned and a user type cannot join them, with a `#[derive(Eq)]` on the type or without one.
+> Everything from here to the end of this chapter is specified against that gap.
 
 The remaining specs are likewise **opt-in** — implement (or derive) the spec to gain the capability; a
 generic bound gates on it:
@@ -528,8 +530,27 @@ generic bound gates on it:
   `Ordering`** value, only `less` and `Eq`. `str` orders **lexicographically by code point** (== byte
   order, its UTF-8 being valid — not locale collation, a separate stdlib concern); `float` opts out of
   both `Ord` and `Hash` (rationale below).
-- **`Hash`** — `map` / `set` keys, with `equal ⇒ same hash`. `str`, being immutable, is a natural key.
-  **[not yet]** — _E9054_ names it at a `derive`.
+- **`Hash`** — `map` / `set` keys. The method is `fn hash() -> uint`: where `eq` holds, the two `hash()`
+  calls answer the same `uint`, and the converse is not required. `str`, being immutable, is a natural
+  key. A `float` still opts out, below. **[not yet]** — the program is _E3013_, and _E9054_ names `Hash`
+  at a `derive`.
+
+```refused E3013
+struct Point {
+ pub x: int
+}
+
+impl Hash for Point {
+ fn hash() -> uint {
+  return uint(this.x)
+ }
+}
+
+fn main() {
+ print 1
+}
+```
+
 - **`Iterator`** / **`Iterable`** — the iteration protocol (**Iteration**, below).
 - **`Error`** (`Err`) — the error tier: `message() -> str`, `unwrap() -> Err?` (the underlying cause,
   `nil` if none), and `code() -> byte?` (an optional small code).
@@ -562,13 +583,13 @@ cannot short-circuit, so it is an ordinary operation, not a keyword). These, and
 operators (`?`, `??`, `?.`, `!`), are **fixed constructs — never overloadable**; the bitwise symbols
 (`& | ^ ~`, [Integer operations](types.md)) never collide with them.
 
-`float` sits out `Ord` and `Hash` — its `NaN` breaks a total order and the `equal ⇒ hash` law — so a
+`float` sits out `Ord` and `Hash` — its `NaN` breaks a total order and the `equal ⇒ same hash` law — so a
 `float` is never a sorted-collection element or a key, and a composite **containing** one inherits this
 transparently: a **derived `Eq`** compares the field with `==`, so it is **non-reflexive** for a
 `NaN`, and the type gets no `Ord`/`Hash` either. To key or sort such a type the author **implements them
 explicitly**, handling `float`'s two traps: a **reflexive** `eq` with **canonical `±0.0`** (equal, so
-must hash alike) for `Hash`, and a **total order** (IEEE `totalOrder`, `NaN` at an end) for `Ord`. A
-stdlib total-order/hashable `float` wrapper is deferred.
+the two `hash()` calls answer the same `uint`) for `Hash`, and a **total order** (IEEE `totalOrder`,
+`NaN` at an end) for `Ord`. A stdlib total-order/hashable `float` wrapper is deferred.
 
 **Iteration.** An **`Iterator[T]`** has `next() -> Result[T]` — `Left(v)` for the next element, or
 `Right(StopIteration)` at the end (**`StopIteration`** is a built-in `Err`). An **`Iterable[T]`** has

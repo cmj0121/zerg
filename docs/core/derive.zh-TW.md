@@ -233,8 +233,43 @@ impl Encode for User {                            # 生成，非手寫
 }
 ```
 
-sum 型別依 variant derive 也是同一套——**先 tag、再 payload**。當線上格式必須不同——換一個 key、或刻意不把
-某個欄位放上線——就**手寫 impl 而非 derive**；它取代生成的那一份，所以仍是唯一 canonical 實作，仍然沒有 macro。
+sum 型別依 variant derive 也是同一套——**先 tag、再 payload**。
+
+**位元組。** 全部是小端，也不補齊。`begin`、`field` 與 `end` 不寫任何位元組：交給 `field` 的名字是走訪，
+不是線上的位元組。`Sink` 寫出一個值的位元組，`Source` 把同一串讀回來。嵌在別的值裡的值——欄位、list 元素、
+payload、有值的 `T?` 裡的 `T`——走同一列，而自動 box 的遞迴槽寫的是那個值，不是那個 box。
+
+| 形式      | 位元組                                             |
+| --------- | -------------------------------------------------- |
+| `int`     | 8 個位元組、小端、二補數                           |
+| `uint`    | 8 個位元組、小端、無號                             |
+| `str`     | 一個 `uint` 的位元組數，再接那些 UTF-8 位元組      |
+| `list[T]` | 一個 `uint` 的元素數，再接每個元素                 |
+| `T?`      | 一個位元組：`0` 是 nil、`1` 是有值，有值才接上 `T` |
+| struct    | 欄位依宣告順序，前後都不加東西                     |
+| enum      | tag 寫成一個 `int`，再依序接每個 payload 值        |
+
+`int` 是有號 64 位元。`1` 是 `01 00 00 00 00 00 00 00`，`-1` 是 `ff ff ff ff ff ff ff ff`。`uint` 是無號
+64 位元，長度就是這樣一個值：`str` 數的是**位元組**、不是 code point，也不寫結尾的 NUL，所以 `"ab"` 是
+`02 00 00 00 00 00 00 00 61 62`。空的 `str` 或空的 `list` 是八個 `00`，後面什麼都沒有。
+
+`T?` 是一個位元組，nil 為 `00`、有值為 `01`，而且只有那個位元組是 `01` 時才接上 `T`。作為 `int?` 的 nil
+是 `00`。有值的 `7` 是 `01`，再接 `int` `7` 的八個位元組。這不是 enum 那條規則——optional 不是 tag 再加
+payload。
+
+struct 就是欄位依宣告順序排下去，前後都沒有別的：沒有名字、沒有個數。空的 struct 什麼都不寫。
+`struct P { x: int; y: int? }` 放著 `1` 與 nil 時，是那個 `int` 的八個位元組，再接一個 `00`。
+
+enum 先把 tag 寫成一個 `int`，再把括號裡的每個 payload 型別依序寫出。沒有 payload 的 variant 停在 tag。
+每個 variant 都沒有欄位時，tag 就是那個 variant 的 discriminant，也就是 `int(v)` 讀到的數，包含寫成
+`= n` 的。任一 variant 帶 payload 時，tag 是不透明的（`E4006`），所以那個數是從 `0` 起算的宣告序號。
+`enum E { A; B = 4 }` 把 `B` 寫成 `04 00 00 00 00 00 00 00`。`enum Shape { Dot; Line(int) }` 把 `Line(3)`
+寫成 `int` `1` 的八個位元組再接 `int` `3` 的八個位元組，把 `Dot` 寫成 `int` `0` 的八個位元組。
+
+`bool`、`byte`、`rune` 與 `float` 沒有列。`chan`、`Ref`、`fn` 與 handle 則是上面那張表已經排除的。
+
+當線上格式必須不同——換一個 key、或刻意不把某個欄位放上線——就**手寫 impl 而非 derive**；它取代生成的那一份，
+所以仍是唯一 canonical 實作，仍然沒有 macro。
 
 `Decode` 回傳 `Result[This]`，所以格式錯誤只是一般的 value-tier 失敗——happy path 免 `guard`、出錯以 `?`
 傳播——絕非 abort。（`Result[T]` 非 FFI-safe，但這裡無妨：`Encode`/`Decode` 是純 Zerg spec，永遠不跨

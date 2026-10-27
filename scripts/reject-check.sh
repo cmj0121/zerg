@@ -4792,6 +4792,53 @@ import pub "./one"
 import pub "./two"
 EOF
 
+# THE SAME NAME TAKEN AS A VALUE (#390). `f := least` used to emit the thunk without
+# asking the two questions the call above asks, so a sibling's private fn was a value
+# where the call is E3001. The `pub` sibling is E3114 alone, the spelling rule, which
+# speaks only once privacy has stayed quiet. The seed keys a function by its module and
+# builds both.
+reject a-sibling-private-fn-taken-as-a-value E3001 '`least` is not a public member of' seed-gap one-finding <<'EOF'
+import "./pair"
+
+fn main() {
+	print pair.both()
+}
+--- pair/one.zg
+fn least(a: int, b: int) -> int {
+	return a if a < b
+	return b
+}
+--- pair/two.zg
+pub fn both() -> int {
+	f := least
+	return f(2, 1)
+}
+--- pair/mod.zg
+import pub "./one"
+import pub "./two"
+EOF
+
+reject a-sibling-public-fn-taken-as-a-value E3114 'spell it `one.least`' seed-gap one-finding <<'EOF'
+import "./pair"
+
+fn main() {
+	print pair.both()
+}
+--- pair/one.zg
+pub fn least(a: int, b: int) -> int {
+	return a if a < b
+	return b
+}
+--- pair/two.zg
+pub fn both() -> int {
+	f := least
+	return f(2, 1)
+}
+--- pair/mod.zg
+import pub "./one"
+import pub "./two"
+EOF
+
 reject a-sibling-private-generic-named-bare E3001 '`least` is not a public member of' seed-gap one-finding <<'EOF'
 import "./pair"
 
@@ -9681,6 +9728,36 @@ import (
 )
 EOF
 
+# AND TAKEN AS A VALUE (#390). The call above is E3001 naming the sorted-first file; the
+# value used to reach that file's function with nothing said. The seed refuses the two
+# declarations themselves, so this case is not a seed gap.
+reject a-third-file-taking-a-name-two-files-keep-private E3001 'lib/aa.zg` — the file' one-finding <<'EOF'
+import "./lib"
+
+fn main() {
+	print lib.go()
+}
+--- lib/zz.zg
+fn helper() -> int {
+	return 2
+}
+--- lib/aa.zg
+fn helper() -> int {
+	return 1
+}
+--- lib/mm.zg
+pub fn go() -> int {
+	f := helper
+	return f()
+}
+--- lib/mod.zg
+import (
+	pub "./zz"
+	pub "./aa"
+	pub "./mm"
+)
+EOF
+
 # AND WHEN ONE OF THEM IS `pub`, the public one answers first: it is the one an import would
 # reach, so E3114's advice — import `zz` — is advice that works.
 reject a-third-file-calling-a-name-one-file-keeps-public E3114 'spell it `zz.helper`' one-finding <<'EOF'
@@ -9881,6 +9958,66 @@ import (
 
 fn main() {
 	print f()
+}
+--- aa/mod.zg
+pub fn f() -> int {
+	return 1
+}
+--- bb/mod.zg
+pub fn f() -> int {
+	return 2
+}
+EOF
+
+# AND THE OTHER SPELLINGS OF THAT BARE NAME (#393). The call above is E3114. `spawn`, `defer`
+# and a value used to emit `zg_m0_f`, which cc refused as an undeclared function. Each form is
+# the one finding, at the name.
+reject a-bare-spawn-two-imported-modules-declare E3114 'and a bare name cannot choose between them — spell it `aa.f` or `bb.f`' one-finding <<'EOF'
+import (
+	"./bb"
+	"./aa"
+)
+
+fn main() {
+	spawn f()
+}
+--- aa/mod.zg
+pub fn f() -> int {
+	return 1
+}
+--- bb/mod.zg
+pub fn f() -> int {
+	return 2
+}
+EOF
+
+reject a-bare-defer-two-imported-modules-declare E3114 'and a bare name cannot choose between them — spell it `aa.f` or `bb.f`' one-finding <<'EOF'
+import (
+	"./bb"
+	"./aa"
+)
+
+fn main() {
+	defer f()
+}
+--- aa/mod.zg
+pub fn f() -> int {
+	return 1
+}
+--- bb/mod.zg
+pub fn f() -> int {
+	return 2
+}
+EOF
+
+reject a-bare-fn-value-two-imported-modules-declare E3114 'and a bare name cannot choose between them — spell it `aa.f` or `bb.f`' one-finding <<'EOF'
+import (
+	"./bb"
+	"./aa"
+)
+
+fn main() {
+	g := f
 }
 --- aa/mod.zg
 pub fn f() -> int {

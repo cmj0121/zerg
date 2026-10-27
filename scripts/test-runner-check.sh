@@ -1151,6 +1151,45 @@ say "a run holding a test that never finished exited 0" $?
 grep -qE '^  ok    test_b_after_it$' "$tmp/slow.out"
 say "the tests after a hung one did not run" $?
 
+# THE PROCESS IS HELD TO THE LIMIT TOO (#196). With one worker, a test blocked in a child of its
+# own holds the only thread the driver's timer could run on, so the driver's deadline cannot
+# fire and only the runner's wait on the test PROCESS can end it: the in-process run is killed,
+# the test is re-run in a process of its own, and that one is killed in turn and reported STUCK.
+# The child the test started is in the killed group, so it must not outlive the run either.
+wmark="zerg-test-wedged-$$"
+mkdir -p "$tmp/wedge/a"
+cat >"$tmp/wedge/a/a_test.zg" <<EOF
+import "os"
+
+#[test]
+fn test_a_wedges() {
+	os.run(["sh", "-c", "sleep 30; : $wmark"])
+}
+
+#[test]
+fn test_b_after_it() {
+	assert true
+}
+EOF
+
+wstart=$(date +%s)
+ZRT_WORKERS=1 "$ZERG" test "$tmp/wedge" --timeout 1 >"$tmp/wedge.out" 2>&1
+wstatus=$?
+wtook=$(($(date +%s) - wstart))
+
+grep -qE '^  STUCK test_a_wedges$' "$tmp/wedge.out" &&
+	grep -qE '^        the test process did not finish within 7s and was killed' "$tmp/wedge.out"
+say "a test that holds its whole process was not reported STUCK by the process's limit" $?
+
+grep -qE '^  ok    test_b_after_it$' "$tmp/wedge.out" && [ "$wstatus" -ne 0 ] && [ "$wtook" -lt 28 ]
+say "a run holding a wedged process did not go on, exited 0, or waited the child out (${wtook}s)" $?
+
+ps -A -o args= >"$tmp/wedge.ps"
+grep -q "[z]erg-test-wedged-$$" "$tmp/wedge.ps"
+[ $? -ne 0 ]
+say "a child a wedged test started outlived the process that was killed" $?
+pkill -9 -f "$wmark" 2>/dev/null
+
 # --- a run pointed at one file --------------------------------------------------------------
 #
 # ITERATING ON ONE FILE IS THE COMMONEST THING ANYBODY DOES WITH A TEST RUNNER, and a walk that

@@ -255,7 +255,7 @@ _E4077_，也就是上文的同目錄規則。
 
 兩個**被 import 的** module 都宣告的裸名字會被拒絕，而不是挑一個：_E3114 `helper` is declared in `x.zg` and
 `y.zg`, and a bare name cannot choose between them_ 說出兩種拼法，`x.helper` 與 `y.helper`；常數則由 _E3116_
-說同樣的話。
+說同樣的話。`spawn helper()`、`defer helper()` 與 `g := helper` 是同一個裸名字，也是同一個錯誤。
 
 私有型別也受同一條規則管。兩個檔案各自不加 `pub` 宣告同名的 struct、enum 或 `type`，宣告的是兩個型別，每個檔案的
 建構、欄位讀取、pattern 與 method 都指向自己那一個。會被拒絕的是：一個檔案宣告了自己的 `P`，又在型別位置寫了

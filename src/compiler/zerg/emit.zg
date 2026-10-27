@@ -22450,14 +22450,13 @@ fn c_field_ty_of(mut &em: Emitter, target: ast.Expr, fld: str) -> ast.Ty {
 		return ast.Ty.TUnknown
 	}
 
-	# An Err is a RUNTIME struct, not a declared one, so its two readable fields are
-	# answered here. They are deliberately the whole set: a message to report and a kind
-	# to compare, which is what `Right(e)` needs to be worth binding.
+	# An Err is a RUNTIME struct, not a declared one, so its one readable field is answered
+	# here: a kind to compare. Its message is `message()`, which copies, and not a field —
+	# the seed never had `.msg`, and a field read retains whatever the runtime put there (#405).
 	if c_is_err_ty(t) {
-		return ast.Ty.TStr if fld == "msg"
 		return ast.Ty.TInt if fld == "kind"
 
-		raise c_diag(em, rule.Rule.ErrFieldUnknown, f"the field `{fld}` on an Err — it has `msg` and `kind`")
+		raise c_diag(em, rule.Rule.ErrFieldUnknown, f"the field `{fld}` on an Err — it has `kind`, and its message is `message()`")
 	}
 	return c_field_ty(em, c_named_of(t), fld)
 }
@@ -22638,16 +22637,7 @@ fn c_fieldref(mut &em: Emitter, target: ast.Expr, fld: str, l: int, c: int, sb: 
 		return f"{tgt}.f{fld}"
 	}
 
-	# an Err's fields are the runtime's own, so they carry no `zg_` mangling.
-	#
-	# AND ITS MESSAGE IS STILL THE ERR'S. A field of an owned rvalue is the reader's own
-	# (c_is_borrow), which the other fields earn by being copied out of a temporary this read
-	# drops — and the Err read here is dropped too (#377), so the message comes out as a copy
-	# of its own (zrt_str_dup), made before the drop gives the Err's count back.
-	if c_is_err_ty(tt) and fld == "msg" and c_owns_value(target) {
-		tv := c_tmp(em, "zgt_er")
-		return f"({{ zrt_err {tv} = {tgt}; const char *{tv}_m = zrt_str_dup({tv}.msg); zrt_err_drop({tv}); {tv}_m; }})"
-	}
+	# an Err's field is the runtime's own, so it carries no `zg_` mangling.
 	return f"{tgt}.{fld}" if c_is_err_ty(tt)
 
 	# A FIELD THE TYPE DOES NOT HAVE was spelled `zg_<fld>` and handed to cc, which reported

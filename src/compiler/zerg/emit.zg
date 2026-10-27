@@ -3555,9 +3555,10 @@ fn c_build_generics(mut &em: Emitter, f: ast.File) {
 # spelling a private type another file declares is given (c_ft_fresh) — and the program is
 # left as it was written. A bare `least(…)` is resolved to the key of the reader's own file
 # when it is looked up (c_generic_row), which is after a binding of that name has had its turn
-# to shadow it; a qualified `a.least(…)` to the key of the module it names (c_ns_generic).
-# `pub` changes nothing here: a public template is reached through its qualifier, and that is
-# what chooses. The key is spoken back as the written name in every finding (c_file_types).
+# to shadow it; a qualified `a.least(…)` to the key c_ns_generic resolves — the module's
+# template, or that sibling file's when the qualifier names one (#391). `pub` changes which
+# of a module's templates an outside qualifier may reach, not which file a sibling qualifier
+# named. The key is spoken back as the written name in every finding (c_file_types).
 #
 # A METHOD TEMPLATE IS NOT KEYED THIS WAY, because it is already its receiver's: `P#pick` and
 # `Q#pick` are two keys, and a private `P` two files declare is two types (c_file_types).
@@ -3631,14 +3632,19 @@ fn c_tpl_written(key: str) -> str {
 # plain function, or nothing. Handing the name back would let c_generic_row find the READER's
 # own template of that name, and `strconv.to_string` would call a local `to_string[T]`.
 #
-# A MODULE'S FILES MAY EACH DECLARE ONE, and only a `pub` one is the module's to offer: a
-# private one is the answer only when there is nothing else, and the visibility rule then
-# refuses the call as it refuses any private name. TWO PUBLIC ONES IN ONE MODULE are the
-# collision two plain functions of one module are (E4077), met here at the qualified call
-# rather than at the declaration, because each of them is answerable until something names
-# the module's.
+# A MODULE'S FILES MAY EACH DECLARE ONE. A qualifier that names the MODULE — `lib.least`
+# from outside — offers a `pub` one, and a private one only when nothing public is there;
+# the visibility rule then refuses that call as it refuses any private name. TWO PUBLIC ONES
+# are the collision two plain functions of one module are (E4077), met here at that qualified
+# call rather than at the declaration, because a template is gone before the declaration walk.
+#
+# A SIBLING FILE'S QUALIFIER NAMES THAT FILE (#391), as `two.helper` does (c_ns_sibling_file).
+# It does not prefer another file's `pub` template, and it does not raise the collision: the
+# file was named. A private template there is the visibility rule's (E3001), naming that file.
 fn c_ns_generic(mut &em: Emitter, ns: str, name: str) -> str {
 	return name if not em.gen_filed
+
+	sib := c_ns_sibling_file(em, ns)
 
 	mut found := -1
 	mut found_pub := false
@@ -3648,17 +3654,23 @@ fn c_ns_generic(mut &em: Emitter, ns: str, name: str) -> str {
 		if c_tpl_keyed(em.gen_names[i], name) {
 			keyed = true
 			t := em.gen_tpls[i]
-
-			# NOT THE "NO MODULE" ANSWER c_ns_names_mod gives a declaration without one: the entry
-			# file has none, and its own `to_string[T]` is not what `strconv.to_string` names.
-			m := check.c_mod_of(em, t.path)
-			if m != "" and c_ns_names_mod(em, ns, m) {
-				if found < 0 or (t.is_pub and not found_pub) {
+			if sib != "" {
+				if t.path == sib and found < 0 {
 					found = i
-					found_pub = t.is_pub
-				} else if t.is_pub {
-					prev := em.gen_tpls[found]
-					raise c_mod_flat_collide(t.path, t.line, t.col, name, prev.path)
+				}
+			} else {
+				# NOT THE "NO MODULE" ANSWER c_ns_names_mod gives a declaration without one: the
+				# entry file has none, and its own `to_string[T]` is not what `strconv.to_string`
+				# names.
+				m := check.c_mod_of(em, t.path)
+				if m != "" and c_ns_names_mod(em, ns, m) {
+					if found < 0 or (t.is_pub and not found_pub) {
+						found = i
+						found_pub = t.is_pub
+					} else if t.is_pub {
+						prev := em.gen_tpls[found]
+						raise c_mod_flat_collide(t.path, t.line, t.col, name, prev.path)
+					}
 				}
 			}
 		}
@@ -8249,14 +8261,17 @@ fn c_ns_scope(mut &em: Emitter, n: str, name: str) -> str {
 	return c_ns_scope_if(em, n, c_name_in(em.fk_names, name))
 }
 
-# c_ns_scope_if is c_ns_scope for a name `keyed` says files of one module declare — a free
-# function's (fk_names) or a module constant's (kc_names).
-fn c_ns_scope_if(mut &em: Emitter, n: str, keyed: bool) -> str {
+# c_ns_sibling_file is the FILE a namespace names when the file being emitted imported a
+# sibling of its own module — `import "./two"` written in a file of that module — or "" when
+# the namespace names another module, names nothing, or names a file this unit does not hold.
+# A plain function's qualifier and a template's qualifier ask it the same question (#391):
+# the module alone would answer the module's `pub` declaration.
+fn c_ns_sibling_file(mut &em: Emitter, n: str) -> str {
 	mod := c_ns_mod_of(em, n)
-	return mod if mod == "" or not keyed
+	return "" if mod == ""
 
 	here := em.at_path
-	return mod if mod != check.c_mod_of(em, here)
+	return "" if mod != check.c_mod_of(em, here)
 
 	mut want := ""
 	mut i := 0
@@ -8266,6 +8281,8 @@ fn c_ns_scope_if(mut &em: Emitter, n: str, keyed: bool) -> str {
 		}
 		i = i + 1
 	}
+	return "" if want == ""
+
 	i = 0
 	for i < em.unit_paths.len() {
 		p := em.unit_paths[i]
@@ -8273,6 +8290,18 @@ fn c_ns_scope_if(mut &em: Emitter, n: str, keyed: bool) -> str {
 
 		i = i + 1
 	}
+	return ""
+}
+
+# c_ns_scope_if is c_ns_scope for a name `keyed` says files of one module declare — a free
+# function's (fk_names) or a module constant's (kc_names).
+fn c_ns_scope_if(mut &em: Emitter, n: str, keyed: bool) -> str {
+	mod := c_ns_mod_of(em, n)
+	return mod if mod == "" or not keyed
+
+	sib := c_ns_sibling_file(em, n)
+	return sib if sib != ""
+
 	return mod
 }
 
@@ -12836,15 +12865,21 @@ fn c_free_method(mut &em: Emitter, target: ast.Expr, meth: str, args: list[ast.E
 		# directly. Asking the sig table first would find nothing, a template having no
 		# signature.
 		#
-		# THE MODULE THE PREFIX NAMES CHOOSES WHICH, where two files declare one (#380).
+		# THE MODULE THE PREFIX NAMES CHOOSES WHICH, where two files declare one (#380) — and a
+		# sibling file's prefix names that file (#391).
 		gk := c_ns_generic(em, tn, meth)
-		return c_call(em, gk, args, l, c, sb) if gk != "" and c_is_generic(em, gk)
+
+		# THE QUALIFIER ALREADY NAMED THE FILE. c_call asks c_chk_bare_fn of a free function,
+		# which is the rule for a spelling with no qualifier: a bare `least()` of a sibling's
+		# `pub` template is E3114, and `two.least(…)` has already written the spelling that
+		# rule would tell the reader to write.
+		return c_call(em, gk, args, l, c, sb, false) if gk != "" and c_is_generic(em, gk)
 
 		# AND A NAMESPACED GENERIC TYPE, for the same reason one line up: `boxmod.Box(4)` is
 		# the construction of a template that module declares, and a template has no signature
 		# either — so the check below reported the module as having no `Box` while it was
 		# sitting in the generic-type table.
-		return c_call(em, meth, args, l, c, sb) if c_gen_struct_row(em, meth) >= 0
+		return c_call(em, meth, args, l, c, sb, true) if c_gen_struct_row(em, meth) >= 0
 
 		# a REAL module and a member no module declares — the same rule the field path
 		# reports (c_fieldref), because it is the same mistake. Falling through said "the
@@ -13140,7 +13175,7 @@ fn c_list_build(mut &em: Emitter, ety: ast.Ty, elems: list[ast.Expr], typed: boo
 # is told so (c_no_type_arg_list). The only brackets that go on from here are a BUILT-IN
 # TYPE's own, from `map[K, V](…)`, which names a type rather than instantiating a generic.
 fn c_call_written(mut &em: Emitter, name: str, args: list[ast.Expr], ts: list[ast.Ty], l: int, c: int, sb: Subst) -> str {
-	return c_call(em, name, args, l, c, sb) if ts.len() == 0
+	return c_call(em, name, args, l, c, sb, true) if ts.len() == 0
 
 	c_no_type_arg_list(em, name, ts)
 
@@ -13159,7 +13194,7 @@ fn c_call_written(mut &em: Emitter, name: str, args: list[ast.Expr], ts: list[as
 	c_builtin_check(em, name)
 	raise c_diag(em, rule.Rule.NotYetGenericConstructor, f"NotImplemented: `{name}[…](…)` as a constructor — this compiler builds an empty map with the literal `{{:}}` and an empty list with `[]`, so a built-in container's type arguments come from what it is bound to (GRAMMAR#type-args)") if name == "map"
 
-	return c_call(em, c_instantiate_at(em, name, ts), args, 0, 0, sb)
+	return c_call(em, c_instantiate_at(em, name, ts), args, 0, 0, sb, true)
 }
 
 # c_infer_call_written is the same choice for the pass that types a call rather than emits
@@ -13255,7 +13290,10 @@ fn c_call_through(mut &em: Emitter, v: str, fty: ast.Ty, args: list[ast.Expr], s
 #
 # `l` / `c` are where the callee's name was written; each branch that resolves it records the
 # answer in the name index, and 0, 0 is a call nobody wrote or one already recorded.
-fn c_call(mut &em: Emitter, name: str, args: list[ast.Expr], l: int, c: int, sb: Subst) -> str {
+# `bare` is whether this spelling has no qualifier. A namespaced generic is lowered through
+# here too — the specialization is an ordinary free function — and that call has already named
+# its file, so the bare-name rule (c_chk_bare_fn) stays quiet for it (#391).
+fn c_call(mut &em: Emitter, name: str, args: list[ast.Expr], l: int, c: int, sb: Subst, bare: bool) -> str {
 	# `set(xs)` IS A CONSTRUCTOR, and it is read here rather than anywhere a type is read,
 	# because `set` is not a declared name: GRAMMAR#map-lit's note is that a set has no literal
 	# — `{1}` cannot be told from a one-statement block — so the call IS the spelling.
@@ -13392,7 +13430,7 @@ fn c_call(mut &em: Emitter, name: str, args: list[ast.Expr], l: int, c: int, sb:
 	if em.want_index and c_is_generic(em, name) {
 		c_nx_use(em, l, c, c_tpl_written(name), c_nx_template(em, name))
 	}
-	return c_call(em, c_instantiate(em, name, args), args, 0, 0, sb) if c_is_generic(em, name)
+	return c_call(em, c_instantiate(em, name, args), args, 0, 0, sb, bare) if c_is_generic(em, name)
 
 	# A GENERIC TYPE'S CONSTRUCTOR SOLVES ITS OWN PARAMETERS, from the ARGUMENTS and never from
 	# where the answer lands — docs/core/type-system.md states it for a call, and a construction
@@ -13431,7 +13469,9 @@ fn c_call(mut &em: Emitter, name: str, args: list[ast.Expr], l: int, c: int, sb:
 		c_nx_use(em, l, c, name, c_nx_sig(em, sr))
 	}
 	c_chk_visible_fn(em, name, sr)
-	c_chk_bare_fn(em, name, sr)
+	if bare {
+		c_chk_bare_fn(em, name, sr)
+	}
 	c_chk_unsafe_fn(em, name, "calling it", sr)
 	return "0" if c_bare_ambiguous(em, name, c_fn_choices(em, name), false)
 
@@ -20033,7 +20073,15 @@ fn c_callee_raw(mut &em: Emitter, x: ast.Expr, what: str) -> Callee {
 			# a NAMESPACED generic, `spawn mod.work(x)` — the same flattening, so the same
 			# instantiation the direct form gets
 			gk := c_ns_generic(em, c_ns_root(tgt), m)
-			return c_callee_gen(em, c_instantiate(em, gk, margs), x) if gk != "" and c_is_generic(em, gk)
+			if gk != "" and c_is_generic(em, gk) {
+				# THE SAME VISIBILITY A CALL ASKS. The thunk names the specialization directly,
+				# so without this a `spawn two.least(…)` of a template private to `two.zg`
+				# reached it (#391). The bare-name rule is not this path's: the qualifier is
+				# already written, as it is on the ordinary namespaced call.
+				inst := c_instantiate(em, gk, margs)
+				c_chk_visible_fn(em, inst, c_sig_row(em, inst))
+				return c_callee_gen(em, inst, x)
+			}
 
 			# `mod.work()` — a module namespace flattens into the one program-wide function
 			# space, so a namespaced callee IS the free function of that name, exactly as an

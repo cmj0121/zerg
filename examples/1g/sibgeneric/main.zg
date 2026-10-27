@@ -1,0 +1,16 @@
+# A sibling file's qualifier names that file's generic.
+#   zerg build examples/1g/sibgeneric/main.zg
+# Expected output:
+#   1
+#   2
+#
+# TWO `pub` TEMPLATES OF ONE NAME (#391). `one.zg` and `two.zg` each declare `fn least[T]`,
+# and they answer differently: `one.least` is the first argument, `two.least` the second. A
+# third file of the module imports each sibling and writes the qualifier, so the call is that
+# file's template. From outside, `pair.least` cannot choose and is E4077.
+import "./pair"
+
+fn main() {
+	print pair.from_one()
+	print pair.from_two()
+}

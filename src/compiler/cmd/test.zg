@@ -451,6 +451,7 @@ fn run_one(bin: str, sel: str, rep: str, names: list[str], i: int, secs: int, mu
 	}
 	mut argv: list[str] = []
 	argv.append(bin)
+
 	limit := process_limit(secs, 1)
 	code := run_limited(argv, "", "", limit)
 	mut mine: list[str] = [rep, sel, bin]

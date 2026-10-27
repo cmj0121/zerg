@@ -65,10 +65,14 @@ filesystem.
 | `textDocument/documentSymbol`                                 | `file_symbols` — the parsed file's declarations    |
 | `textDocument/definition` · `references`                      | the [name index](#a-name-answers-from-one-index)   |
 | `textDocument/hover`                                          | `doc_decl_at` — the document `zerg doc` prints     |
+| `textDocument/completion` · `signatureHelp`                   | [the same index](#four-more-views-of-the-index)    |
+| `workspace/symbol` · `prepareRename` · `rename`               | [the same index](#four-more-views-of-the-index)    |
 
 **`initialize` declares a capability for every request above past the document sync** —
 `documentFormattingProvider`, `codeActionProvider`, `documentSymbolProvider`, `definitionProvider`,
-`referencesProvider`, `hoverProvider` — which is the part a client reads before it sends anything.
+`referencesProvider`, `hoverProvider`, `completionProvider`, `signatureHelpProvider`,
+`workspaceSymbolProvider`, `renameProvider` with `prepareProvider` — which is the part a client reads
+before it sends anything.
 Every other request is answered with a **method-not-found error**, not with silence: a client left
 waiting for a reply it will never get stops sending the next one, and the editor goes quiet with
 nothing said.
@@ -605,18 +609,89 @@ by renaming nothing.
 
 - **Read a comment.** The index finds the declaration and stops there; the document that declaration
   carries is [the hover](#hover-is-the-declarations-document), extracted when it is asked for.
-- **Completion, signature help, workspace symbol, rename.** Each is a view of this index, and each is
-  #194.
 - **A template nobody instantiated.** A generic body is walked once per specialization, so a template
   no call reaches is never walked and its names have no entries.
 - **A contract.** A spec requirement and each method keeping it are separate declarations. Renaming
-  one alone breaks the program by design, and what a rename does with a contract is #194's to decide.
+  one alone breaks the program by design, so [a rename](#four-more-views-of-the-index) refuses it.
 - **A name an or-pattern binds.** `A(x) | B(x)` binds `x` on each side, and the body reads whichever
   matched — two declarations for one name, so it answers `null` rather than one of them.
 - **One declaration for a shared use.** A field, a named argument, a variant pattern or a method a
   generic body resolves two ways — the method with no common requirement — answers with every
-  declaration it resolved to, never with whichever instantiation was walked first. Which of them a
-  rename should take is #194's to decide.
+  declaration it resolved to, never with whichever instantiation was walked first. A rename takes them
+  all together.
+
+## Four more views of the index
+
+Completion, signature help, workspace symbol and rename are each a reading of
+[the index](#a-name-answers-from-one-index) `definition` answers from, so a completion never offers a
+name a jump could not reach, and a rename edits exactly the places `references` lists.
+
+| Request                                 | The reading                                         |
+| --------------------------------------- | --------------------------------------------------- |
+| `textDocument/completion`               | the declarations in scope at the place              |
+| `textDocument/signatureHelp`            | the function the innermost call's name resolved to  |
+| `workspace/symbol`                      | every declaration a name is looked up by            |
+| `textDocument/prepareRename` · `rename` | every use of that declaration, checked by the build |
+
+**What the walk could not record, the parse does.** A scope ends where a block ends, and which
+argument a place is in is a matter of the parentheses and commas around it; the lowering walk
+resolves neither. The parser stands on each `}` and each `)` already, so it records every block's
+extent and every argument list beside the declarations, as it records a type parameter's scope, and
+`nx_program` copies them into the same index once the walk returns — with the contracts (each `spec`
+and `impl … for` body) and which declarations are the top level of their file. The walk adds the two
+facts only it knows: which binders scope the block after them, and the end of the statement a binding
+is declared in, since a binding is not in scope in its own initializer.
+
+**Completion is the compiler's scoping rule**, read off those rows:
+
+| Declaration                                       | In scope                                                 |
+| ------------------------------------------------- | -------------------------------------------------------- |
+| a top-level declaration                           | its whole file, and no other (E3114)                     |
+| a local                                           | from its statement's end to its block's end              |
+| a loop variable, an `if let`, a pattern's binder  | the block after it on its line, or the rest of that line |
+| a parameter                                       | the rest of its signature, and its function's body       |
+| a type parameter                                  | the declaration that wrote it                            |
+| a field, a method, a variant, an `impl`'s binding | nowhere as a bare name: each follows a `.`               |
+
+A top-level declaration of another file is named through an import, `pub` or not (E3114). A binder
+an arm writes with no block after it is in scope for the rest of its line. A name declared twice in
+scope answers once, with the innermost. The list is the whole list
+(`isIncomplete: false`): an editor filters by what was typed, and a server that filtered too would be
+a second rule for what matches.
+
+**A signature is a function's.** Its label is the signature `zerg doc` prints — the hover's fence, by
+the same extraction — and its parameters are those the index recorded between the function's name and
+its body, each marked where its name stands in the label. A call whose name resolved to a type or a
+variant is a construction, and a call through a binding is a value's; neither is given a signature it
+would have to make up.
+
+**The workspace is the program** the last check loaded — the buffer's own, and every module it
+imports, the standard library included — not a directory. A local, a parameter and a type parameter
+are not looked up from outside their body, so they are not listed.
+
+**A rename is asked of the compiler before it is offered.** The edits are the uses of the declaration
+under the cursor and of every declaration a shared use of it may also be — `P.n` and `Q.n` through a
+generic `x.n` — taken together. Then the program is loaded with every edit applied, to open buffers or
+not, and checked as a keystroke is: the rename stands only if the compiler says what it said before,
+and every renamed place resolves, in the new program's own index, to declarations whose uses are
+exactly the places renamed. A new name a use would read differently is refused with the place it
+would change, instead of being handed to the editor to find out. Three refusals need no check, and
+`prepareRename` gives them before anything is typed:
+
+- **an import** — the namespace it binds is its path's last segment;
+- **the standard library** — the program uses it and does not own it;
+- **a contract** — a `spec`'s requirement and each `impl … for` keeping it are separate declarations,
+  and renaming one alone breaks the program.
+
+`make lsp` holds each to `zerg build`. At each probe of a fixture, completion offers as values exactly
+the fixture's names that build when written there: one offered that does not build is out of scope,
+and one that builds and is not offered is a scope the index lost. Every name the compiler resolved in
+the names fixture is offered where it is written. A call has a signature exactly when its name
+resolves to a function, labelled as the hover labels it, with as many parameters as the call passes
+and the argument each place is in. Every declaration in the outline is a workspace symbol at the
+outline's place. Every rename's edits are the references the index's own rename property holds to the
+build, a sample is applied and built here, and a capture is refused where the edits it would have made
+change what the program says.
 
 ## Hover is the declaration's document
 
@@ -812,18 +887,16 @@ it, and where an editor file must repeat one, a diff holds the two together.**
 
 Tracked as issue [#15](https://github.com/cmj0121/zerg/issues/15).
 
-| Missing                                           | Waiting on                                                    |
-| ------------------------------------------------- | ------------------------------------------------------------- |
-| `completion`, `signatureHelp`, `workspace/symbol` | #194 — views of the same index                                |
-| `rename`                                          | #194 — and what a rename does with a spec contract            |
-| `semanticTokens`                                  | `Kind`'s variants cannot be matched outside the `zerg` module |
-| incremental sync, debounce, cancellation          | a measurement; Phase 1 re-checks the program per keystroke    |
+| Missing                                  | Waiting on                                                    |
+| ---------------------------------------- | ------------------------------------------------------------- |
+| member completion, after a `.`           | the index holding the type of the expression before the `.`   |
+| `semanticTokens`                         | `Kind`'s variants cannot be matched outside the `zerg` module |
+| incremental sync, debounce, cancellation | a measurement; Phase 1 re-checks the program per keystroke    |
 
-Those rows and the hover above them were one gap, and [the name
-index](#a-name-answers-from-one-index) is what closed its first half: given a path and a position,
-what is declared there and where. [The hover](#hover-is-the-declarations-document) is the second half
-— the document of the declaration it finds — and what is left reads the same index rather than
-building a second one: the declarations in scope at a position, and every use of one.
+The first row is the one view of a name [the index](#four-more-views-of-the-index) cannot give yet:
+what may follow a `.` is the members of the type of what stands before it, and the index records
+declarations and uses, not the type each expression has. It is a fact the walk knows as it resolves,
+so it is the index that grows to hold it, not a handler that reads the buffer.
 
 `semanticTokens` is a different kind of missing and worth naming as such: it would need a table
 mapping token kinds to LSP token types, which is exactly the sort of **repeated list of language

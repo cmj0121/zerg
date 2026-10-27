@@ -1893,9 +1893,12 @@ fn c_carrier_decl(mut &em: Emitter, c: ast.Ty) -> str {
 	# kind StopIteration) is still told apart from a crash without this having to build the
 	# prefix itself. It used to, in a `zg_err_kindname` prelude that was a second copy of
 	# the taxonomy's numbering.
-	mut fail := "zrt_raise_err(zrt_err_new(\"force-unwrap of a Right\"));"
+	#
+	# The message is a str CELL (c_str_cell), never a bare literal through zrt_err_new: the
+	# Err reaches a guard, and binding its `.msg` retains what it holds (#405).
+	mut fail := f"zrt_raise_err(zrt_err_own(0, {c_str_cell(em, "force-unwrap of a Right")}));"
 	if ast.ty_is_opt(c) {
-		fail = "zrt_raise_err(zrt_err_new(\"force-unwrap of nil\"));"
+		fail = f"zrt_raise_err(zrt_err_own(0, {c_str_cell(em, "force-unwrap of nil")}));"
 	} else if c_is_err_ty(c_either_right(c)) {
 		# a COPY: `r` is the caller's carrier, which its holder gives back as the unwind
 		# passes it, so the Err in flight holds counts of its own (#377). A carrier the
@@ -1995,7 +1998,8 @@ fn c_carrier_boxed_body(mut &em: Emitter, c: ast.Ty, name: str, left: ast.Ty, ct
 	# the payload comes out as a value of its own, exactly as the inline form's does — the
 	# cell is shared, so what is handed back is a copy of what is in it
 	d = d + f"static {ct} zg_force_{name}({name} r) {{\n"
-	d = d + "    if (" + c_res_is_right("r") + ") { zrt_raise_err(zrt_err_new(\"force-unwrap of nil\")); }\n"
+	nil_err := f"zrt_err_own(0, {c_str_cell(em, "force-unwrap of nil")})"
+	d = d + "    if (" + c_res_is_right("r") + ") { zrt_raise_err(" + nil_err + "); }\n"
 	d = d + f"    return {c_copy_of(em, left, f"(*({ct}*)zrt_ref_payload(r.ok))")};\n}}\n"
 
 	d = d + f"static void zg_drop_{name}({name} *r) {{\n"

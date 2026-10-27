@@ -1246,6 +1246,32 @@ pub struct File {
 	# tp_scopes are the extents of the declarations that have type parameters (TyScope), under
 	# the same rule: appended by the parser, never read by it.
 	pub tp_scopes: list[TyScope]
+
+	# blocks are the extents of every `{ … }` block the parser read — from its `{` to just past
+	# its `}`, in the order each one CLOSED, so a file's blocks come sorted by where they end.
+	# They are where a local stops being in scope, which is a fact about the text the parser
+	# holds and nothing downstream can recover: a block is a plain `list[Stmt]` (#194). Appended,
+	# never read, here.
+	pub blocks: list[TyScope]
+
+	# calls are the ARGUMENT LISTS the parser read (CallAt), under the same rule. A call node
+	# carries where its callee was written and no more, and which argument a place is in is a
+	# question about the parentheses and commas around it.
+	pub calls: list[CallAt]
+}
+
+# CallAt is one argument list as written: the callee's name token — the token before the `(`,
+# or 0, 0 when that token is not a name (`fs[0](…)`) — the `(`, the place just past the `)`, and
+# each comma that separates two of ITS arguments, as line, column pairs in one list.
+pub struct CallAt {
+	pub path: str
+	pub line: int
+	pub col: int
+	pub open_line: int
+	pub open_col: int
+	pub end_line: int
+	pub end_col: int
+	pub commas: list[int]
 }
 
 # TyUse is one type name as written: the name, the file, and the place and BYTE LENGTH of its
@@ -1349,6 +1375,22 @@ pub struct TopStmt {
 #   sh_use sh_decl             a SHARED use — one a generic body resolves to a different
 #                              declaration per instantiation, so it has no one answer — and
 #                              each declaration it resolved to, a row per pair; its u_decl is -1
+#   d_flags                    what the walk and the program say about a declaration that its
+#                              kind does not: NF_TOP, NF_HEAD, NF_MEMBER
+#   d_from_line d_from_col     where a local's scope BEGINS when that is not its name: the end
+#                              of the statement declaring it, or 0, 0
+#   b_*                        every block's extent, as File.blocks holds it — sorted by where
+#                              it ends within a file
+#   o_*                        every contract's extent: a `spec`, and an `impl … for`
+#   k_* k_comma                every argument list (File.calls): the callee's token, the `(`,
+#                              the place past the `)`, and the first of its commas in m_*
+#   m_line m_col               those commas, each call's in a run
+#   t_*                        every extent a type parameter is in scope over (File.tp_scopes)
+#
+# THE LATER COLUMNS ARE THE PROGRAM'S SHAPE, not the walk's: `nx_program` copies them from the
+# parsed program after the walk returns. Scope, the argument a place is in, and which members
+# keep a contract are what completion, signature help and rename ask (#194), and each is a view
+# of these rows rather than a second reading of the source.
 #
 # NOT ONE STRING PER DECLARATION, and that is what the index costs a session. A string kept per
 # row is a small allocation made in the middle of the walk and kept after everything around it
@@ -1378,6 +1420,34 @@ pub struct NameIndex {
 	pub u_decl: list[int]
 	pub sh_use: list[int]
 	pub sh_decl: list[int]
+	pub d_flags: list[int]
+	pub d_from_line: list[int]
+	pub d_from_col: list[int]
+	pub b_file: list[int]
+	pub b_line: list[int]
+	pub b_col: list[int]
+	pub b_end_line: list[int]
+	pub b_end_col: list[int]
+	pub o_file: list[int]
+	pub o_line: list[int]
+	pub o_col: list[int]
+	pub o_end_line: list[int]
+	pub o_end_col: list[int]
+	pub k_file: list[int]
+	pub k_line: list[int]
+	pub k_col: list[int]
+	pub k_open_line: list[int]
+	pub k_open_col: list[int]
+	pub k_end_line: list[int]
+	pub k_end_col: list[int]
+	pub k_comma: list[int]
+	pub m_line: list[int]
+	pub m_col: list[int]
+	pub t_file: list[int]
+	pub t_line: list[int]
+	pub t_col: list[int]
+	pub t_end_line: list[int]
+	pub t_end_col: list[int]
 	pub d_slots: list[int]
 	pub u_slots: list[int]
 	pub last_path: str
@@ -1386,7 +1456,7 @@ pub struct NameIndex {
 
 # no_index is the empty index — what a walk that was not asked for one carries.
 pub fn no_index() -> NameIndex {
-	return NameIndex([], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], "", -1)
+	return NameIndex([], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], "", -1)
 }
 
 # What kind of declaration a row is. Numbers rather than words for the reason the struct says.
@@ -1554,6 +1624,9 @@ pub fn nx_decl(mut &nx: NameIndex, path: str, line: int, col: int, name: str, ki
 	nx.d_kind.append(kind)
 	nx.d_mod.append(nx_mod_of(nx, mod))
 	nx.d_off.append(nx.d_text.len())
+	nx.d_flags.append(0)
+	nx.d_from_line.append(0)
+	nx.d_from_col.append(0)
 	b := bytearray(name)
 	for c in b {
 		nx.d_text.append(c)
@@ -1710,6 +1783,467 @@ pub fn nx_is_use_of(nx: NameIndex, u: int, d: int) -> bool {
 		i = i + 1
 	}
 	return false
+}
+
+# --- the program's shape, and the views that read it (#194) ---------------------------------
+#
+# Completion, signature help, workspace symbol and rename are each a question about a name the
+# index already holds — the declarations in scope at a place, the declaration a call resolves
+# to, every declaration, every use of one — and each is answered below from the rows, with no
+# reading of the source. What the walk could not record while it resolved is the SHAPE of the
+# program around a name, and `nx_program` copies that in from the parse.
+
+# What `d_flags` holds, one bit each:
+#
+#   NF_TOP     declared at the top level of its file — a function, a type, a module-level
+#              binding, an import — and so in scope throughout that file and in no other: a
+#              file names what it uses from a sibling through an import (E3114), `pub` or not
+#   NF_HEAD    a binder whose scope is the block AFTER it rather than the rest of the one it is
+#              in: a loop variable, an `if let`, a pattern's binder, a `select` arm's
+#   NF_MEMBER  a binding an `impl` body declares, named through its type as a field is
+pub const NF_TOP := 1
+pub const NF_HEAD := 2
+pub const NF_MEMBER := 4
+
+pub fn nx_has(nx: NameIndex, d: int, flag: int) -> bool {
+	return d >= 0 and d < nx.d_flags.len() and (nx.d_flags[d] / flag) % 2 == 1
+}
+
+pub fn nx_mark(mut &nx: NameIndex, d: int, flag: int) {
+	return if d < 0 or d >= nx.d_flags.len() or nx_has(nx, d, flag)
+
+	nx.d_flags[d] = nx.d_flags[d] + flag
+}
+
+# nx_from says local `d` comes into scope at a place after its name — the end of the statement
+# declaring it, since a binding is not in scope in its own initializer.
+pub fn nx_from(mut &nx: NameIndex, d: int, line: int, col: int) {
+	return if d < 0 or d >= nx.d_from_line.len() or line <= 0
+
+	nx.d_from_line[d] = line
+	nx.d_from_col[d] = col
+}
+
+# nx_program copies the program's shape into the index once the walk has returned: the blocks
+# and argument lists the parser read, the contracts, and which declarations are the top level
+# of their file. A declaration the walk never recorded gains nothing here, so a place
+# the compiler did not resolve stays a place nothing answers about.
+pub fn nx_program(mut &nx: NameIndex, f: File) {
+	for b in f.blocks {
+		fi := nx_file_of(nx, b.path)
+		if fi >= 0 {
+			nx.b_file.append(fi)
+			nx.b_line.append(b.line)
+			nx.b_col.append(b.col)
+			nx.b_end_line.append(b.end_line)
+			nx.b_end_col.append(b.end_col)
+		}
+	}
+	for k in f.calls {
+		fi := nx_file_of(nx, k.path)
+		if fi >= 0 {
+			nx.k_file.append(fi)
+			nx.k_line.append(k.line)
+			nx.k_col.append(k.col)
+			nx.k_open_line.append(k.open_line)
+			nx.k_open_col.append(k.open_col)
+			nx.k_end_line.append(k.end_line)
+			nx.k_end_col.append(k.end_col)
+			nx.k_comma.append(nx.m_line.len())
+			mut i := 0
+			for i + 1 < k.commas.len() {
+				nx.m_line.append(k.commas[i])
+				nx.m_col.append(k.commas[i + 1])
+				i = i + 2
+			}
+		}
+	}
+	for sc in f.tp_scopes {
+		fi := nx_file_of(nx, sc.path)
+		if fi >= 0 {
+			nx.t_file.append(fi)
+			nx.t_line.append(sc.line)
+			nx.t_col.append(sc.col)
+			nx.t_end_line.append(sc.end_line)
+			nx.t_end_col.append(sc.end_col)
+		}
+	}
+	for ip in f.impls {
+		nx_contract(nx, ip.path, ip.line, ip.col, ip.end_line, ip.end_col)
+	}
+
+	# the top-level declarations are found by place, through a table built once here: the walk's
+	# own is gone (nx_seal), and a scan per declaration is the program's size squared
+	mut slots := nx_rehash(nx.d_file, nx.d_line, nx.d_col, nx_grown(nx.d_file.len() + 1))
+	for sp in f.specs {
+		nx_contract(nx, sp.path, sp.line, sp.col, sp.end_line, sp.end_col)
+		nx_top(nx, slots, sp.path, sp.name_line, sp.name_col)
+	}
+	for fd in f.fns {
+		if fd.recv == "" {
+			nx_top(nx, slots, fd.path, fd.name_line, fd.name_col)
+		}
+	}
+	for sd in f.structs {
+		nx_top(nx, slots, sd.path, sd.name_line, sd.name_col)
+	}
+	for ed in f.enums {
+		nx_top(nx, slots, ed.path, ed.name_line, ed.name_col)
+	}
+	for td in f.types {
+		nx_top(nx, slots, td.path, td.name_line, td.name_col)
+	}
+	for c in f.consts {
+		if c.recv == "" {
+			nx_top(nx, slots, c.path, c.name_line, c.name_col)
+		} else {
+			fi := nx_file_id(nx, c.path)
+			if fi >= 0 {
+				nx_mark(nx, slots[nx_slot(slots, nx.d_file, nx.d_line, nx.d_col, fi, c.name_line, c.name_col)] - 1, NF_MEMBER)
+			}
+		}
+	}
+	for im in f.imports {
+		nx_top(nx, slots, im.at, im.name_line, im.name_col)
+	}
+}
+
+# An inherent `impl` is not in File.impls, so every one recorded here is a contract's.
+fn nx_contract(mut &nx: NameIndex, path: str, line: int, col: int, el: int, ec: int) {
+	fi := nx_file_of(nx, path)
+	return if fi < 0
+
+	nx.o_file.append(fi)
+	nx.o_line.append(line)
+	nx.o_col.append(col)
+	nx.o_end_line.append(el)
+	nx.o_end_col.append(ec)
+}
+
+fn nx_top(mut &nx: NameIndex, mut &slots: list[int], path: str, line: int, col: int) {
+	f := nx_file_id(nx, path)
+	return if f < 0
+
+	nx_mark(nx, slots[nx_slot(slots, nx.d_file, nx.d_line, nx.d_col, f, line, col)] - 1, NF_TOP)
+}
+
+# nx_file_id is a path's id in `files`, or -1 — nx_file_of without the recording.
+pub fn nx_file_id(nx: NameIndex, path: str) -> int {
+	mut f := 0
+	for f < nx.files.len() {
+		return f if nx.files[f] == path
+		f = f + 1
+	}
+	return -1
+}
+
+fn nx_lt(al: int, ac: int, bl: int, bc: int) -> bool {
+	return al < bl or (al == bl and ac < bc)
+}
+
+# nx_in_contract is whether declaration `d` sits inside a `spec` or an `impl … for` — one side of
+# a contract, whose other sides are declarations of their own.
+pub fn nx_in_contract(nx: NameIndex, d: int) -> bool {
+	mut i := 0
+	for i < nx.o_file.len() {
+		return true if nx.o_file[i] == nx.d_file[d] and nx_lt(nx.o_line[i], nx.o_col[i], nx.d_line[d], nx.d_col[d]) and nx_lt(nx.d_line[d], nx.d_col[d], nx.o_end_line[i], nx.o_end_col[i])
+		i = i + 1
+	}
+	return false
+}
+
+# nx_is_member is whether a declaration is named only through something before a `.` — a field,
+# a method, a variant, or a binding an `impl` body declares — and so is no BARE name anywhere.
+pub fn nx_is_member(nx: NameIndex, d: int) -> bool {
+	k := nx.d_kind[d]
+	return k == NK_FIELD or k == NK_METHOD or k == NK_VARIANT or nx_has(nx, d, NF_MEMBER)
+}
+
+# --- scope ---
+#
+# nx_in_scope answers for every declaration at once: which of them a bare name written at `line`,
+# `col` of `path` may read. It is the compiler's scoping rule read off the rows:
+#
+#   a top-level declaration   anywhere in its file, and nowhere else (NF_TOP)
+#   a local                   from its name to the end of the innermost block holding it
+#   a binder before a block   inside that block — the first one that opens after it, on its
+#                             own line, or, for a pattern arm with no block, the rest of the line
+#   a parameter               in the rest of its signature, and inside the body of the function
+#                             it is written in: the first block after it, with no other function
+#                             declared between
+#   a type parameter          inside the declaration that wrote it (File.tp_scopes)
+#
+# A FILE'S BLOCKS ARE SORTED BY WHERE THEY END (File.blocks), which is what makes a local's rule
+# one pass: a block that ends at or before the place has CLOSED there, and a local inside a
+# closed block is out of scope. Walking that order backwards meets each outermost closed block
+# before anything inside it, so only those are kept, and each local is asked against them.
+pub fn nx_in_scope(nx: NameIndex, path: str, line: int, col: int) -> list[bool] {
+	mut out: list[bool] = []
+	f := nx_file_id(nx, path)
+
+	# the blocks open at the place, and the outermost of those already closed
+	mut open: list[int] = []
+	mut closed: list[int] = []
+	mut i := nx.b_file.len() - 1
+	for i >= 0 {
+		if nx.b_file[i] == f {
+			if not nx_lt(line, col, nx.b_end_line[i], nx.b_end_col[i]) {
+				k := closed.len()
+				if k == 0 or not nx_lt(nx.b_line[closed[k - 1]], nx.b_col[closed[k - 1]], nx.b_line[i], nx.b_col[i]) {
+					closed.append(i)
+				}
+			} else if nx_lt(nx.b_line[i], nx.b_col[i], line, col) {
+				open.append(i)
+			}
+		}
+		i = i - 1
+	}
+
+	# and for each open block, the start of the block that opens last before it and the last
+	# function declared before it — the two things a binder of that block must follow
+	mut prev_block: list[int] = []
+	mut prev_fn: list[int] = []
+	for b in open {
+		prev_block.append(nx_last_block_before(nx, f, nx.b_line[b], nx.b_col[b]))
+		prev_fn.append(nx_last_fn_before(nx, f, nx.b_line[b], nx.b_col[b]))
+	}
+
+	# and for the place itself the same two: a parameter is in scope in the rest of its signature
+	# when neither a block nor another function has begun since it
+	mut here: list[int] = [nx_last_block_before(nx, f, line, col), nx_last_fn_before(nx, f, line, col)]
+
+	mut d := 0
+	for d < nx.d_file.len() {
+		out.append(nx_visible(nx, d, f, line, col, open, prev_block, prev_fn, closed, here))
+		d = d + 1
+	}
+	return out
+}
+
+fn nx_visible(nx: NameIndex, d: int, f: int, line: int, col: int, open: list[int], prev_block: list[int], prev_fn: list[int], closed: list[int], here: list[int]) -> bool {
+	return false if f < 0 or nx.d_file[d] != f or nx_is_member(nx, d)
+	return true if nx_has(nx, d, NF_TOP)
+
+	dl := nx.d_line[d]
+	dc := nx.d_col[d]
+	k := nx.d_kind[d]
+	return nx_tp_holds(nx, d, line, col) if k == NK_TPARAM
+
+	param := k == NK_PARAM
+	if param and nx_lt(dl, dc, line, col) {
+		hb := here[0]
+		hf := here[1]
+		in_sig := (hb < 0 or nx_lt(nx.b_line[hb], nx.b_col[hb], dl, dc)) and (hf < 0 or nx_lt(nx.d_line[hf], nx.d_col[hf], dl, dc))
+		return true if in_sig
+	}
+	if param or nx_has(nx, d, NF_HEAD) {
+		mut j := 0
+		for j < open.len() {
+			b := open[j]
+			pb := prev_block[j]
+			after := pb < 0 or nx_lt(nx.b_line[pb], nx.b_col[pb], dl, dc)
+			if after and nx_lt(dl, dc, nx.b_line[b], nx.b_col[b]) {
+				if param {
+					pf := prev_fn[j]
+					return true if pf < 0 or nx_lt(nx.d_line[pf], nx.d_col[pf], dl, dc)
+				} else {
+					return true if nx.b_line[b] == dl
+				}
+			}
+			j = j + 1
+		}
+		return not param and line == dl and dc < col
+	}
+
+	# a local: in scope from the end of the statement declaring it, and inside no block that has
+	# closed by then
+	return false if not nx_lt(dl, dc, line, col)
+	return false if nx.d_from_line[d] > 0 and nx_lt(line, col, nx.d_from_line[d], nx.d_from_col[d])
+
+	for b in closed {
+		return false if nx_lt(nx.b_line[b], nx.b_col[b], dl, dc) and nx_lt(dl, dc, nx.b_end_line[b], nx.b_end_col[b])
+	}
+	return true
+}
+
+# nx_tp_holds is whether type parameter `d` is in scope at a place: inside the innermost extent
+# that holds its declaration (File.tp_scopes says why that one).
+fn nx_tp_holds(nx: NameIndex, d: int, line: int, col: int) -> bool {
+	mut best := -1
+	mut i := 0
+	for i < nx.t_file.len() {
+		if nx.t_file[i] == nx.d_file[d] and not nx_lt(nx.d_line[d], nx.d_col[d], nx.t_line[i], nx.t_col[i]) and nx_lt(nx.d_line[d], nx.d_col[d], nx.t_end_line[i], nx.t_end_col[i]) {
+			if best < 0 or nx_lt(nx.t_line[best], nx.t_col[best], nx.t_line[i], nx.t_col[i]) {
+				best = i
+			}
+		}
+		i = i + 1
+	}
+	return false if best < 0
+
+	return not nx_lt(line, col, nx.t_line[best], nx.t_col[best]) and nx_lt(line, col, nx.t_end_line[best], nx.t_end_col[best])
+}
+
+fn nx_has_int(xs: list[int], x: int) -> bool {
+	for v in xs {
+		return true if v == x
+	}
+	return false
+}
+
+fn nx_last_block_before(nx: NameIndex, f: int, line: int, col: int) -> int {
+	mut best := -1
+	mut i := 0
+	for i < nx.b_file.len() {
+		if nx.b_file[i] == f and nx_lt(nx.b_line[i], nx.b_col[i], line, col) and (best < 0 or nx_lt(nx.b_line[best], nx.b_col[best], nx.b_line[i], nx.b_col[i])) {
+			best = i
+		}
+		i = i + 1
+	}
+	return best
+}
+
+fn nx_last_fn_before(nx: NameIndex, f: int, line: int, col: int) -> int {
+	mut best := -1
+	mut d := 0
+	for d < nx.d_file.len() {
+		k := nx.d_kind[d]
+		if nx.d_file[d] == f and (k == NK_FN or k == NK_METHOD) and nx_lt(nx.d_line[d], nx.d_col[d], line, col) and (best < 0 or nx_lt(nx.d_line[best], nx.d_col[best], nx.d_line[d], nx.d_col[d])) {
+			best = d
+		}
+		d = d + 1
+	}
+	return best
+}
+
+# --- calls ---
+
+# nx_call_at is the innermost argument list a place is inside — after its `(`, before its `)` —
+# or -1.
+pub fn nx_call_at(nx: NameIndex, path: str, line: int, col: int) -> int {
+	f := nx_file_id(nx, path)
+	mut best := -1
+	mut k := 0
+	for k < nx.k_file.len() {
+		if nx.k_file[k] == f and nx_lt(nx.k_open_line[k], nx.k_open_col[k], line, col) and nx_lt(line, col, nx.k_end_line[k], nx.k_end_col[k]) {
+			if best < 0 or nx_lt(nx.k_open_line[best], nx.k_open_col[best], nx.k_open_line[k], nx.k_open_col[k]) {
+				best = k
+			}
+		}
+		k = k + 1
+	}
+	return best
+}
+
+# nx_arg_at is which argument of call `k` a place is in: the commas of that list before it.
+pub fn nx_arg_at(nx: NameIndex, k: int, line: int, col: int) -> int {
+	mut hi := nx.m_line.len()
+	if k + 1 < nx.k_comma.len() {
+		hi = nx.k_comma[k + 1]
+	}
+	mut n := 0
+	mut i := nx.k_comma[k]
+	for i < hi {
+		if nx_lt(nx.m_line[i], nx.m_col[i], line, col) {
+			n = n + 1
+		}
+		i = i + 1
+	}
+	return n
+}
+
+# nx_params_of is the parameters of function `d`, in the order written: the parameters recorded
+# after its name and before its body — the first block after it — with no other function
+# declared between. A function the walk recorded no parameters for answers none.
+pub fn nx_params_of(nx: NameIndex, d: int) -> list[int] {
+	mut out: list[int] = []
+	f := nx.d_file[d]
+	dl := nx.d_line[d]
+	dc := nx.d_col[d]
+
+	# where the parameters must stop: the body, or the next function, whichever is first
+	mut sl := -1
+	mut sc := -1
+	mut i := 0
+	for i < nx.b_file.len() {
+		if nx.b_file[i] == f and nx_lt(dl, dc, nx.b_line[i], nx.b_col[i]) and (sl < 0 or nx_lt(nx.b_line[i], nx.b_col[i], sl, sc)) {
+			sl = nx.b_line[i]
+			sc = nx.b_col[i]
+		}
+		i = i + 1
+	}
+	mut e := 0
+	for e < nx.d_file.len() {
+		k := nx.d_kind[e]
+		if e != d and nx.d_file[e] == f and (k == NK_FN or k == NK_METHOD) and nx_lt(dl, dc, nx.d_line[e], nx.d_col[e]) and (sl < 0 or nx_lt(nx.d_line[e], nx.d_col[e], sl, sc)) {
+			sl = nx.d_line[e]
+			sc = nx.d_col[e]
+		}
+		e = e + 1
+	}
+	e = 0
+	for e < nx.d_file.len() {
+		if nx.d_kind[e] == NK_PARAM and nx.d_file[e] == f and nx_lt(dl, dc, nx.d_line[e], nx.d_col[e]) and (sl < 0 or nx_lt(nx.d_line[e], nx.d_col[e], sl, sc)) {
+			mut j := out.len()
+			out.append(e)
+			for j > 0 and nx_lt(nx.d_line[e], nx.d_col[e], nx.d_line[out[j - 1]], nx.d_col[out[j - 1]]) {
+				out[j] = out[j - 1]
+				j = j - 1
+			}
+			out[j] = e
+		}
+		e = e + 1
+	}
+	return out
+}
+
+# --- rename ---
+
+# nx_group is the declarations one rename has to take together: `ds`, and every declaration a
+# SHARED use of any of them may also be — `P.n` and `Q.n` through a generic body's `x.n` — closed
+# over, since a use renamed with one candidate and not the other reads the other's old name.
+pub fn nx_group(nx: NameIndex, ds: list[int]) -> list[int] {
+	mut out: list[int] = []
+	for d in ds {
+		if not nx_has_int(out, d) {
+			out.append(d)
+		}
+	}
+	mut grew := true
+	for grew {
+		grew = false
+		mut i := 0
+		for i < nx.sh_use.len() {
+			if nx_has_int(out, nx.sh_decl[i]) {
+				for c in nx_decls_of(nx, nx.sh_use[i]) {
+					if not nx_has_int(out, c) {
+						out.append(c)
+						grew = true
+					}
+				}
+			}
+			i = i + 1
+		}
+	}
+	return out
+}
+
+# nx_uses_of is every use that resolves to any of `ds`, in the order recorded — the places a
+# rename edits.
+pub fn nx_uses_of(nx: NameIndex, ds: list[int]) -> list[int] {
+	mut out: list[int] = []
+	mut u := 0
+	for u < nx.u_decl.len() {
+		mut hit := false
+		for d in ds {
+			hit = hit or nx_is_use_of(nx, u, d)
+		}
+		if hit {
+			out.append(u)
+		}
+		u = u + 1
+	}
+	return out
 }
 
 # last_segment is the name a module path ends with — `util/text` ends with `text`. It is

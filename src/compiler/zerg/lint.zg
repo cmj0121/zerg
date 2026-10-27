@@ -177,6 +177,9 @@ pub fn check_and_lint(srcs: list[str], paths: list[str], ms: emit.Mods, mut &dia
 pub fn check_lint_index(srcs: list[str], paths: list[str], ms: emit.Mods, mut &diags: list[ast.Diag], mut &nx: ast.NameIndex, mut &notes: list[ast.Diag]) -> list[Finding] {
 	prog := emit.merge_files_at(srcs, paths)
 	notes = emit.lint_index_of(prog, ms, diags, nx)
+
+	# and the program's shape around the names, which the parse holds and the walk does not
+	ast.nx_program(nx, prog)
 	return lint_after(srcs, paths, ms, prog, notes, emit.walk_notes_kept(diags))
 }
 

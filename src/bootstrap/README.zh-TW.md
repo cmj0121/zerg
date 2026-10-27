@@ -19,6 +19,9 @@ zerg0 build -o out --keep-c f.zg   # 指定輸出路徑，並保留產生的 .c
 
 `build` 是唯一的子命令。失敗時在 stderr 印出 `file:line:col: message` 並以非零值結束——足以定位問題，不多說。
 
+沒有 `--emit lib`，因此沒有 C 標頭檔，也不會回報標頭檔漏掉了什麼（docs/runtime/ffi.md）：種子建置的是程式，
+而它唯一要建的那個程式有 `main`。
+
 ## 自舉鏈
 
 ```text

@@ -12,10 +12,16 @@ Zerg package 如何與 **C ABI** 交界——這是唯一一處 Zerg 值變成 C
 
 > **[not yet]** **import 那條邊**還沒有。出貨的標準函式庫裡沒有 `ffi` 模組，所以 `import "ffi"` 就在 import 那一
 > 步失敗——_E5002 cannot resolve import `ffi` under any source root_——而標註 `handle` 的 binding 會在寫下它的地方
-> 被拒絕，回報為 _E4056 no type named `handle` (the binding `h`)_。**export** 那條邊，`--emit lib` 只寫出 object、
-> **不產生 header**，也沒有任何東西回報哪些 `pub` 宣告會被排除在 header 之外。一個既沒開分組、也沒標記 `fn` 的
+> 被拒絕，回報為 _E4056 no type named `handle` (the binding `h`)_。一個既沒開分組、也沒標記 `fn` 的
 > 頂層 `unsafe` 是一個畸形的分組，而且會這樣說——_E2075 a top-level `unsafe` opens a GROUP or marks a `fn`_，那是
 > 一個 parse 的拒絕、指名的不是任何未建形式，因為 `unsafe struct P { … }` 在這個文法的任何位置都推不出來。
+>
+> **[not yet]** 在 **export** 那條邊，今天跨得過去的是基本型別，以及由它們組成的 struct。一個 `pub` 宣告的型別若是
+> 下表對應得到、而這個編譯器還沒有 C 形式的——`str`、`list`、optional 或 `Either`、enum、函式值、`type`——就會被
+> 回報並排除在 header 之外：_E9120 NotImplemented: `greet` is left out of the C header: the C boundary has no form
+> for `str` yet_。帶有 module 層級狀態的建置，它的每個 `pub` 函式也一樣：那份狀態只由 Zerg `main` 之前的 shim
+> 設定，而 C 呼叫者不會跑它；建置中另一個 module 也宣告的名字亦然，它的符號帶的是 module 標記，而不是
+> `zg_<name>`。
 
 ## 內聯組語
 
@@ -214,6 +220,12 @@ Zerg 永不隱式釋放它，也永不替 C 保留一個 Zerg buffer。字元與
 struct by value、`mut &this` 變成指向它的指標（就地）——所以建議的 handle-wrapper method 以普通函式的形式抵達 C。
 一個**非** FFI-safe 的 `pub` root 宣告會被**回報並排除**於 header 之外，而非靜默丟棄：一個 package 大可對 Zerg
 依賴者提供比對 C 更豐富的 API，而該診斷讓 C ABI 誠實地反映真正跨界的東西。一個不回傳值的 Zerg 函式對映到 C `void`。
+
+header 寫在 **object 旁邊**，名字是把 `.o` 換掉——`-o lib/calc.o` 寫出 `lib/calc.h`，include guard 為
+`ZG_CALC_H`——在函式原型之前收納每個匯出簽章提到的 struct 的 layout，欄位拼成 `zg_<field>`。被排除的宣告以
+`warning:` 連同位置回報，例如 _E4120 `first` is left out of the C header: a generic `fn` is not FFI-safe_，而
+library 照樣建置。C 呼叫者連結這個 object，以及 Zerg program 會連結的那些 runtime 單元，因為 object 自己的本體會
+呼叫它們。
 
 **符號名穩定且不 mangle。** C 的符號空間是扁平的,穩定 ABI 又不容 mangle,所以匯出名是決定性的:它是固定前綴底下的
 宣告名,method 再帶上它的型別。扁平匯出面上的名稱衝突在 library 模式下是編譯錯誤。(確切方案,以及是否提供逐宣告的

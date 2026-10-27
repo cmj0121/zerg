@@ -11855,9 +11855,8 @@ fn c_display(t: ast.Ty, inner: str) -> str {
 
 		# an Err shows as what went wrong, the same text `print e` writes — the third
 		# spelling of one question, which fell to the integer arm and cast a `zrt_err`
-		# to `long long` for cc to report. The copy is zrt_str_dup's own reason: a msg
-		# may be a managed payload, an immortal cell or a raised literal, and the caller
-		# releases what this answers.
+		# to `long long` for cc to report. The caller releases what this answers, so it
+		# is a str of its own: a copy, the read `e.message()` makes.
 		Ty.TErr => f"zrt_str_dup(({inner}).msg)"
 		_       => f"zrt_display_int((int64_t)({inner}))"
 	}
@@ -22613,7 +22612,7 @@ fn c_fieldref(mut &em: Emitter, target: ast.Expr, fld: str, l: int, c: int, sb: 
 	# AND ITS MESSAGE IS STILL THE ERR'S. A field of an owned rvalue is the reader's own
 	# (c_is_borrow), which the other fields earn by being copied out of a temporary this read
 	# drops — and the Err read here is dropped too (#377), so the message comes out as a copy
-	# of its own: zrt_str_dup, because a runtime-raised message is a C literal with no count.
+	# of its own (zrt_str_dup), made before the drop gives the Err's count back.
 	if c_is_err_ty(tt) and fld == "msg" and c_owns_value(target) {
 		tv := c_tmp(em, "zgt_er")
 		return f"({{ zrt_err {tv} = {tgt}; const char *{tv}_m = zrt_str_dup({tv}.msg); zrt_err_drop({tv}); {tv}_m; }})"

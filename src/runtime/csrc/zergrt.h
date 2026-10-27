@@ -391,11 +391,12 @@ enum {
 	ZRT_ERR_ASSERTION      = 11, /* AssertionError: a claim `assert` made that did not hold */
 };
 
-/* AN ERR OWNS WHAT IT HOLDS, when it says so. `owned` is set on an Err a program built
- * (zrt_err_own): its msg is a counted str cell, and the Err holds one count on it. The
- * runtime's own aborts carry a plain C string literal, which has no cell header to count,
- * so they build with zrt_err_new and leave the flag clear. zrt_err_copy and zrt_err_drop
- * read the flag; nothing else may retain or release an Err's msg.
+/* AN ERR OWNS WHAT IT HOLDS, when it says so. `owned` is set on every Err that carries a
+ * message: its msg is a counted str cell, and the Err holds one count on it. A program's Err
+ * hands its own cell over (zrt_err_own); the runtime's own aborts pass a plain C string
+ * literal, which has no cell header to count, so zrt_err_new COPIES it into one (#405) —
+ * a reader that binds `e.msg` retains it like any other str. Only the zeroed Err, whose
+ * msg is NULL, leaves the flag clear. zrt_err_copy and zrt_err_drop read the flag.
  *
  * `cause` is the payload of a counted cell (zrt_err_chain) and is counted whatever the
  * flag says: a copy shares the chain and the last holder frees it. */
@@ -497,8 +498,8 @@ _Noreturn void zrt_abort_kind(int kind, const char *msg);
 /* --- Err value + carrying abort (unwind.c, Decision D) -------------------- */
 
 /* zrt_err_new builds an Err with the given message, no cause, and the generic kind
- * (ZRT_ERR_NONE). The message is BORROWED for the life of the program: this is the
- * constructor for a C string literal, which nothing counts. */
+ * (ZRT_ERR_NONE). The message is a C string the caller keeps (a literal, as a rule) and
+ * the Err holds a counted COPY of it, so its msg is a str like any other. */
 zrt_err zrt_err_new(const char *msg);
 
 /* zrt_err_own builds the Err a program constructs: msg is a counted str cell and the
@@ -512,7 +513,7 @@ zrt_err zrt_err_copy(zrt_err e);
 void    zrt_err_drop(zrt_err e);
 
 /* zrt_err_new_kind builds an Err with a built-in KIND (a ZRT_ERR_* value) and message,
- * no cause — the value a `raise ValueError("…")` carries. */
+ * no cause — the value an intrinsic ValueError carries. It copies msg as zrt_err_new does. */
 zrt_err zrt_err_new_kind(int kind, const char *msg);
 
 /* zrt_err_chain attaches a cause to an Err ALREADY BUILT: `raise e from c` records c
@@ -858,9 +859,8 @@ static inline int64_t zrt_trunc(double v) {
  * raises EncodingError on violation, going FROM a str never fails. */
 zrt_list zrt_str_bytes(const char *s);
 zrt_list zrt_str_runes(const char *s);
-/* zrt_str_dup copies a C string into a managed cell. It is how an `Err`'s message is read:
- * a zrt_err's msg may be a managed payload, an immortal literal cell, or a plain string
- * literal the runtime raised with, and only a copy is correct for all three. */
+/* zrt_str_dup copies a C string into a managed cell. It is how `e.message()` reads an
+ * `Err`'s message, which is a counted or immortal cell whoever raised it (zrt_err_new). */
 const char *zrt_str_dup(const char *s);
 
 const char *zrt_str_from_bytes(zrt_list bytes);

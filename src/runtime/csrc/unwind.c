@@ -20,6 +20,7 @@
 #include "zergrt.h"
 
 #include <stdlib.h>
+#include <string.h> /* memcpy, strlen */
 
 /* the current unwind bundle: the one cleanup stack (grown on demand) and the
  * innermost abort handler. For a non-concurrent program this is the whole program's
@@ -200,19 +201,49 @@ zrt_err zrt_err_new(const char *msg) {
 	return zrt_err_new_kind(ZRT_ERR_NONE, msg);
 }
 
-zrt_err zrt_err_new_kind(int kind, const char *msg) {
+static zrt_err err_make(int kind, const char *msg) {
 	zrt_err e;
 	e.msg = msg;
 	e.cause = NULL;
 	e.kind = kind;
-	e.owned = 0;
+	e.owned = msg != NULL;
 	return e;
 }
 
+/* msg_cell COPIES a runtime message into a counted str cell (#405). An Err the runtime raised
+ * used to carry the C literal itself, borrowed, and the Err's flag said so — but a reader does
+ * not see the flag: `y := e.msg` retains what it binds, and retaining a literal reads a count
+ * header out of the bytes in front of it. Giving the message a cell here makes every Err's msg
+ * a str, so no reader of it has to know who raised it.
+ *
+ * IT RUNS INSIDE AN ABORT, and allocating can abort: zrt_alloc's own failure is
+ * zrt_abort("out of memory"), which comes straight back here. The flag says so the second
+ * time, and that message gets the static, immortal cell instead. The first call never
+ * resumes — zrt_abort does not return — so the second is the one that clears the flag. */
+static const char *msg_cell(const char *msg) {
+	static ZRT_THREAD_LOCAL bool building;
+	static struct {
+		zrt_ref_hdr h;
+		char        b[sizeof("out of memory")];
+	} oom = {{ZRT_RC_IMMORTAL, NULL}, "out of memory"};
+	if (building) {
+		building = false;
+		return (const char *)zrt_ref_payload(&oom);
+	}
+	building = true;
+	size_t n = strlen(msg) + 1;
+	char  *p = (char *)zrt_ref_payload(zrt_ref_alloc(n, NULL));
+	building = false;
+	memcpy(p, msg, n);
+	return p;
+}
+
+zrt_err zrt_err_new_kind(int kind, const char *msg) {
+	return err_make(kind, msg != NULL ? msg_cell(msg) : NULL);
+}
+
 zrt_err zrt_err_own(int kind, const char *msg) {
-	zrt_err e = zrt_err_new_kind(kind, msg);
-	e.owned = 1;
-	return e;
+	return err_make(kind, msg);
 }
 
 /* the cause is the PAYLOAD of a counted cell, so its header is the word pair before it —

@@ -76,6 +76,7 @@ entry 檔，加上它所 import 的模組。
 | [`1g/initagain/`](1g/initagain)     | 第二個 module 再 import 同一個，那些 `init()` 不會再跑           |
 | [`1g/initidle/`](1g/initidle)       | 程式沒有 import 的 module 不會跑它的 `init()`                    |
 | [`1g/initorder/`](1g/initorder)     | 兩個互不相干的常數 —— 打破平手的是模組**名稱**，不是 import 順序 |
+| [`1g/spawnmod/`](1g/spawnmod)       | `spawn` 只寫在被 import 的模組裡，`main` 依然在排程器下執行      |
 | [`1g/stdlibwins/`](1g/stdlibwins)   | 裸名字永遠是標準函式庫,即使旁邊就有一個同名的專案模組            |
 | [`1g/reexport/`](1g/reexport)       | `import pub`——一個模組把另一個模組的名字放到自己的表面上         |
 | [`1g/spec/`](1g/spec)               | 在一個模組宣告、在另一個模組實作的 `spec`                        |

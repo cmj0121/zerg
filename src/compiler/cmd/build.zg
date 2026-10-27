@@ -139,8 +139,24 @@ fn build_stage(files: list[str], emit: str, out: str, jobs: int) {
 		for u in units {
 			trees.append(zerg.merge_files_at(u.srcs, u.paths))
 		}
+
+		prog := zerg.merge_asts(trees)
+		ms := unit.unit_mods(units)
+		last := trees.len() - 1
+
+		# AN ENTRY WITH A `main` STILL ASKS THE WHOLE PROGRAM whether it uses the scheduler,
+		# though only this unit is written: a `spawn` in a module it imports is what decides
+		# which shim that `main` runs under (#392). A main-less module needs no answer.
+		mut conc := false
+		if zerg.c_has_main(trees[last]) {
+			mut ui := 0
+			for ui < last and not conc {
+				conc = zerg.unit_conc(prog, trees[ui], ms)
+				ui = ui + 1
+			}
+		}
 		mut diags: list[zerg.Diag] = []
-		obj_code := zerg.emit_unit_at(zerg.merge_asts(trees), trees[trees.len() - 1], unit.unit_mods(units), diags)
+		obj_code := zerg.emit_unit_at(prog, trees[last], ms, conc, diags)
 		diag.report_diags(diags, unit.unit_srcs(units), unit.unit_paths(units))
 		compile_to(obj_code, out_or(out, drop_ext(files[0]) + ".o"), true)
 		return

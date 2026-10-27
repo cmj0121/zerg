@@ -388,6 +388,13 @@ byte(N)` and `byte(N * 3)` are compile errors. The seed folds the literal alone:
   `function "m__helper" is already declared`; it refuses a `pub` one beside a private one the
   same way, which `zerg` builds too. It costs the bootstrap nothing: no two files of one module
   in the compiler's own sources declare one private name.
+- **A SIBLING'S FUNCTION NAMED BARE — CALLED, OR TAKEN AS A VALUE — IS ACCEPTED.** The file is the
+  unit of privacy, so `zerg` reports `E3001` for a private one and `E3114` for a `pub` one, and
+  `f := helper` is the same finding as `helper()`. The seed keys a function by its module, so a
+  file that did not declare the name still reaches the sibling's. It costs the bootstrap nothing:
+  no source the seed compiles names a sibling's function bare. `scripts/reject-check.sh`'s
+  `a-sibling-private-fn-named-bare`, `a-sibling-private-fn-taken-as-a-value` and
+  `a-sibling-public-fn-taken-as-a-value` carry the `seed-gap` marker.
 - **AN INCLUSIVE RANGE WITH NO UPPER BOUND is accepted, and the arm it is written on never
   matches.** `GRAMMAR#range-arm` gives `..=` a mandatory bound, and the parser reads a missing
   one as `nil` — which a program may also write out, `1..=nil`. `zerg` refuses the shape

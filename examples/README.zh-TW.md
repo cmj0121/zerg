@@ -78,6 +78,7 @@ entry 檔，加上它所 import 的模組。
 | [`1g/spawnmod/`](1g/spawnmod)       | `spawn` 只寫在被 import 的模組裡，`main` 依然在排程器下執行      |
 | [`1g/stdlibwins/`](1g/stdlibwins)   | 裸名字永遠是標準函式庫,即使旁邊就有一個同名的專案模組            |
 | [`1g/reexport/`](1g/reexport)       | `import pub`——一個模組把另一個模組的名字放到自己的表面上         |
+| [`1g/hashkey/`](1g/hashkey)         | 欄位是另一個 module 的 `#[derive(Hash)]` 型別的 key              |
 | [`1g/spec/`](1g/spec)               | 在一個模組宣告、在另一個模組實作的 `spec`                        |
 | [`1g/implfor/`](1g/implfor)         | 本模組的 spec，供給一個透過 import 取得的型別                    |
 | [`1g/strings/`](1g/strings)         | 標準函式庫的 `strings`，從頭到尾走一遍                           |

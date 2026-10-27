@@ -9189,6 +9189,15 @@ fn c_shallower(mut &em: Emitter) {
 # leaving a declaration in the enclosing expression's wrapper.
 fn c_expr(mut &em: Emitter, e: ast.Expr, sb: Subst) -> str {
 	c_deeper(em)
+
+	# ASKED OF THE TREE THE READER WROTE, and only from the outermost entry. c_ns_unqualify
+	# turns `aa.P(1)` into a bare call before a method or a field renders its receiver, and
+	# that rewritten call is lowered by c_expr again — a check on every entry would refuse
+	# the qualified spelling along with the bare one. A nested entry is already inside this
+	# one, so the walk here has seen what the reader wrote.
+	if em.depth == 1 {
+		c_bare_type_walk(em, e, 0)
+	}
 	keep := em.seq_pre
 	em.seq_pre = ""
 	out := c_expr_node(em, c_ns_unqualify(em, e), c_sub_active(em, sb))
@@ -9198,6 +9207,88 @@ fn c_expr(mut &em: Emitter, e: ast.Expr, sb: Subst) -> str {
 	return out if pre == ""
 
 	return f"({{ {pre}{out}; }})"
+}
+
+# c_bare_type_walk is chk_ty_is_this_file over a construction the source wrote. expr_parts
+# stops at a block, and a block's statements are part of the same expression, so those are
+# walked here too — otherwise a `{ P(1) }` lowered from inside this expression would be
+# seen only as the bare call the rewrite manufactures.
+fn c_bare_type_walk(mut &em: Emitter, e: ast.Expr, d: int) {
+	return if d > parser.ZG_MAX_NESTING
+
+	c_bare_type_ctor(em, e)
+	for p in ast.expr_parts(e) {
+		c_bare_type_walk(em, p, d + 1)
+	}
+	c_bare_type_stmts(em, c_expr_stmts(e), d)
+}
+
+fn c_bare_type_stmts(mut &em: Emitter, body: list[ast.Stmt], d: int) {
+	for s in body {
+		for e in ast.stmt_exprs(s) {
+			c_bare_type_walk(em, e, d + 1)
+		}
+		c_bare_type_stmts(em, ast.stmt_kids(s), d)
+	}
+}
+
+# c_expr_stmts is the statement list an expression carries, or none. A closure's body is
+# the same kind of list as a block's: expr_parts keeps only the parameter defaults.
+fn c_expr_stmts(e: ast.Expr) -> list[ast.Stmt] {
+	return match e {
+		Expr.EBlock(body) => body
+		Expr.EGuard(body) => body
+		Expr.EUnsafe(body) => body
+		Expr.EFn(_, _, _, body) => body
+		_ => c_no_stmts()
+	}
+}
+
+fn c_no_stmts() -> list[ast.Stmt] {
+	mut out: list[ast.Stmt] = []
+	return out
+}
+
+# c_bare_type_ctor is chk_ty_is_this_file at a construction. A call that names a struct,
+# a typedef or a generic struct's template is a use of that type; a call that names a
+# function is not, and the function rule is a different question asked of a different row.
+#
+# The place is the call's own. This walk runs before the emitter has stood on that node,
+# and a finding that kept the statement's marker would point at the statement instead.
+fn c_bare_type_ctor(mut &em: Emitter, e: ast.Expr) {
+	name := c_written_call_name(e)
+	return if name == ""
+
+	if c_is_struct_name(em, name) or c_is_typedef(em, name) or c_gen_struct_row(em, name) >= 0 {
+		at := c_call_place(e)
+		keep_line := em.at_line
+		keep_col := em.at_col
+		keep_end_line := em.at_end_line
+		keep_end_col := em.at_end_col
+		if at.0 != 0 {
+			c_mark(em, at.0, at.1)
+		}
+		check.chk_ty_is_this_file(em, name)
+		c_mark_to(em, keep_line, keep_col, keep_end_line, keep_end_col)
+	}
+}
+
+# c_call_place is where a call was written, or (0, 0) when the node is not one.
+fn c_call_place(e: ast.Expr) -> (int, int) {
+	return match e {
+		Expr.ECall(_, _, _, l, c) => (l, c)
+		_ => (0, 0)
+	}
+}
+
+# c_written_call_name is the callee of a call the source wrote as a name, or "" when
+# the node is any other expression. A qualified construction is an EMethod until
+# c_ns_unqualify rewrites it, which is what keeps this from seeing one.
+fn c_written_call_name(e: ast.Expr) -> str {
+	return match e {
+		Expr.ECall(name, _, _, _, _) => name
+		_ => ""
+	}
 }
 
 fn c_expr_node(mut &em: Emitter, e: ast.Expr, sb: Subst) -> str {

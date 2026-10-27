@@ -4840,6 +4840,123 @@ import pub "./two"
 import pub "./three"
 EOF
 
+# A SIBLING QUALIFIER NAMES THAT FILE'S TEMPLATE (#391). `two.least` is `two.zg`'s even when
+# `one.zg` is recorded first and declares `least` too. Both are private, so the finding is
+# E3001 naming `two.zg`: naming `one.zg` would be the module scan keeping the first file.
+reject a-sibling-qualifier-naming-that-files-private-generic E3001 'pair/two.zg` — the file' one-finding <<'EOF'
+import "./pair"
+
+fn main() {
+	print pair.go()
+}
+--- pair/one.zg
+fn least[T](a: T, b: T) -> T {
+	return a
+}
+--- pair/two.zg
+fn least[T](a: T, b: T) -> T {
+	return b
+}
+--- pair/mm.zg
+import "./two"
+
+pub fn go() -> int {
+	return two.least(1, 2)
+}
+--- pair/mod.zg
+import (
+	pub "./one"
+	pub "./two"
+	pub "./mm"
+)
+EOF
+
+# AND WHEN THE OTHER FILE'S IS `pub`. The module scan prefers that public template, so
+# `two.least` used to be answered from `one.zg` — or told to spell `two.least`, which this
+# file already does. The private file was named, and the finding names it.
+reject a-sibling-qualifier-naming-the-private-generic-beside-a-public-one E3001 'pair/two.zg` — the file' one-finding <<'EOF'
+import "./pair"
+
+fn main() {
+	print pair.go()
+}
+--- pair/one.zg
+pub fn least[T](a: T, b: T) -> T {
+	return a
+}
+--- pair/two.zg
+fn least[T](a: T, b: T) -> T {
+	return b
+}
+--- pair/mm.zg
+import "./two"
+
+pub fn go() -> int {
+	return two.least(1, 2)
+}
+--- pair/mod.zg
+import (
+	pub "./one"
+	pub "./two"
+	pub "./mm"
+)
+EOF
+
+# `spawn` OF THE SAME QUALIFIER. The thunk names the specialization directly, so the visibility
+# rule has to be asked there too: otherwise a private template `two.zg` keeps is reached.
+reject a-sibling-private-generic-spawned E3001 'pair/two.zg` — the file' one-finding <<'EOF'
+import "./pair"
+
+fn main() {
+	print pair.go()
+}
+--- pair/one.zg
+fn least[T](a: T, b: T) -> T {
+	return a
+}
+--- pair/two.zg
+fn least[T](a: T, b: T) -> T {
+	return b
+}
+--- pair/mm.zg
+import "./two"
+
+pub fn go() -> int {
+	spawn two.least(1, 2)
+	return 0
+}
+--- pair/mod.zg
+import (
+	pub "./one"
+	pub "./two"
+	pub "./mm"
+)
+EOF
+
+# TWO `pub` TEMPLATES, NAMED AS THE MODULE. A sibling qualifier chooses its file; the module's
+# qualifier cannot. The collision is reported at the second public template, which is where
+# the scan sees it (E4077).
+reject two-public-generics-of-one-module-named-from-outside E4077 'both define `least`' <<'EOF'
+import "./pair"
+
+fn main() {
+	print pair.least(1, 2)
+}
+--- pair/one.zg
+pub fn least[T](a: T, b: T) -> T {
+	return a
+}
+--- pair/two.zg
+pub fn least[T](a: T, b: T) -> T {
+	return b
+}
+--- pair/mod.zg
+import (
+	pub "./one"
+	pub "./two"
+)
+EOF
+
 reject an-unsafe-group-generic-called-from-safe E3083 '`poke` is declared inside a module-level' <<'EOF'
 unsafe {
 	fn poke[T](x: T) -> T {

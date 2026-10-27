@@ -125,7 +125,7 @@ impl Show for Shape {
 ## 可 derive 的 spec 清單
 
 這組受祝福的 spec——每個都有一份 compiler 擁有的 canonical 結構解讀。每一個都經由 `derive` **opt-in**;
-**沒有**自動導出的相等,也沒有隱含的 `Object` spec。**`Eq`**、**`From`** 與 **`Ord`** 已建;**`Hash`**、
+**沒有**自動導出的相等,也沒有隱含的 `Object` spec。**`Eq`**、**`From`**、**`Ord`** 與 **`Hash`** 已建;
 **`Encode`** 與 **`Decode`** 在此規範、但 **[not yet]**——指名其一是 `E9054`。
 
 標在**泛型**目標上的 derive,會為它的每一次實例化各推導一份:`#[derive(Eq)] struct Box[T]` 是一個用該型別自己的
@@ -161,6 +161,16 @@ variant 一個 arm,arm 裡面再對另一個運算元做第二層 `match`。tag 
 用 `==` 比較——那是編譯錯誤、不是靜默的結構化 default。`Ord` 要求 `Eq`(super-spec `spec Ord: Eq`),所以
 `#[derive(Ord)]` 也逼你一併 derive——或手寫——`Eq`。
 
+`Hash` 只要求一個 method,`fn hash() -> uint`(見 [Spec 與 Generics](specs.zh-TW.md)),而 derive 把它寫成一次
+fold:product 依宣告順序混入每個欄位自己的 hash,sum 則把 payload 混進一個以 variant 位置為起點的值,所以帶著相等
+payload 的兩個 variant 仍然不同。整數、`bool` 與 `str` 欄位的 hash 與 `int`、`str` key 相同;宣告型別的欄位呼叫
+它自己的 `hash()`。於是 derive 出的 `Eq` 判為相等的兩個值,fold 進同樣的數、答出同一個 `uint`。`Hash` 不要求
+`Eq`——`spec Hash` 不指名 super-spec——但 `map` key 與 `set` 元素兩者都需要,缺其一的宣告型別在那裡被拒
+(`E4119`)。`float` 欄位在 decorator 處被拒(`E4117`),型別沒有 `Hash` 可混入的欄位也是(`E4118`)。
+
+> **[not yet]** 章節承諾有 `Hash`、而本 compiler 尚未建置的欄位——`list`、tuple、optional、typedef 或型別參數——是
+> _E9119 NotImplemented: `#[derive(Hash)]` on `P`: the field `xs` is a `list[int]`_。
+
 不符要求的欄位會讓 derive 變成**點名該欄位的編譯錯誤**，絕不靜默略過——`#[derive(Ord)]` 若含 `float`
 欄位會被拒，正如 [Spec 與 Generics](specs.zh-TW.md) 裡手寫規則所要求（`float` 無 total order；請手寫並以
 canonical `±0.0`、把 `NaN` 放在一端來處理）。
@@ -189,7 +199,7 @@ canonical `±0.0`、把 `NaN` 放在一端來處理）。
 ## Serialization——完整範例
 
 > **[not yet]** `Encode` / `Decode`——以及下方用到的 `Sink` / `Source` spec——都已規範、但尚未實作;
-> 今天 `#[derive(Encode, Decode)]` 是 _E9054_,`Hash` 也是同一個答案。以下範例展示的是
+> 今天 `#[derive(Encode, Decode)]` 是 _E9054_。以下範例展示的是
 > 結構化 derive **意圖中**的樣貌。
 
 serialization 正是 structural derive 存在的目的：一種機械式、逐欄位的對映，沒人該為每個型別手寫，但它

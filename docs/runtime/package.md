@@ -488,9 +488,9 @@ imported explicitly like any package: `io`, `math`, further collections, and the
 Because the prelude is built-in rather than an implicit import, "no ambient imports" holds without
 exception.
 
-> **[not yet]** Of the built-in specs the prelude promises, only **`Eq`** and **`Into[T]`** exist.
-> `Ord`, `Hash`, `Error`, `Iterator` / `Iterable`, `Ref` and the operator specs are not declared, so
-> `impl Ord for P` reports _E3013 no spec named `Ord`_ — nothing in the program declares one. `set` and `Ref[T]`
+> **[not yet]** Of the built-in specs the prelude promises, only **`Eq`**, **`Ord`**, **`Hash`** and
+> **`Into[T]`** exist. `Error`, `Iterator` / `Iterable`, `Ref` and the operator specs are not declared, so
+> `impl Error for P` reports _E3013 no spec named `Error`_ — nothing in the program declares one. `set` and `Ref[T]`
 > are likewise absent — `list` and `map` are the containers there are.
 
 ### Testing & visibility

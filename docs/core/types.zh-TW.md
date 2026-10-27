@@ -295,8 +295,8 @@ tuple 會因為那個部分被拒絕（`E4020`）。`<` `<=` `>` `>=` 也一樣�
 `list`、`map` 與 `set` 沒有順序。
 
 > **[not yet]** `Hash` 是這條規則還沒建的那一半：拿 tuple 當 map key 是 _E9052
-> NotImplemented: a map key of type (int, int) — it needs `Hash`, and this compiler has one for `int` and
-> for `str`_。
+> NotImplemented: a map key of type (int, int) — it needs `Hash`, and this compiler has one for `int`, for
+> `str` and for a declared struct or enum that implements it_。
 > **解構**已經建好,而且是讀回一個 tuple 的日常方式——`(a, b) := two()`。沒有括號的 `a, b := two()` 不是一個
 > 形式:GRAMMAR#bind-target 導出的 tuple 形狀是帶括號的,所以逗號上報的是標點(_E2005 expected a newline or
 > `;` to separate statements, found `,`_)。

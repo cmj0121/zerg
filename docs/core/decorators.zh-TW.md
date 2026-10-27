@@ -32,9 +32,10 @@
 
 - **`#[derive(Spec, …)]`** — 掛在 `struct` / `enum`。依型別的**結構**生成每個所列 blessed spec 的 canonical impl。
   受祝福集合是 **`Eq`** 與 **`Ord`**——都已建置,會在一個 `struct` 與一個 `enum`(帶不帶 payload 都算)上生成正確的
-  `==` / `!=` 與 `<` `<=` `>` `>=`——以及 **`Hash`**、**`Encode`**、**`Decode`**,各自已規範、但 **[not yet]**:
-  指名其中一個是一次乾淨的拒絕,_E9054 NotImplemented: `#[derive(Hash)]` — this compiler derives `Eq`, `Ord`
-  and `From`; `Hash`, `Encode` and `Decode` are specified and unbuilt_。`Eq` 與 `Ord` 都能觸及**帶 payload 的**
+  `==` / `!=` 與 `<` `<=` `>` `>=`——以及 **`Hash`**(已建置,生成 `fn hash() -> uint`)、**`Encode`**、
+  **`Decode`**,後兩者已規範、但 **[not yet]**:指名其中一個是一次乾淨的拒絕,_E9054 NotImplemented:
+  `#[derive(Encode)]` — this compiler derives `Eq`, `Ord`, `Hash` and `From`; `Encode` and `Decode` are
+  specified and unbuilt_。`Eq` 與 `Ord` 都能觸及**帶 payload 的**
   `enum`,做法是同時比對兩側的 tag 與 payload。
   **沒有自動 derive 的 `Object`**。使用者 spec 不可在 **struct** 上被 derive——`E4024`——而在 **`enum`** 上則任何
   spec 都可以,因為生成的 impl 是委派給 payload、而不是讀取結構。見 **[Derive & Default Behavior](derive.zh-TW.md)**。

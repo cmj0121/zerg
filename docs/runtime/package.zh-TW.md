@@ -392,9 +392,9 @@ ambient-OS 函式（`env`、時鐘、亂數）。
 
 因為 prelude 是 built-in、而不是隱式 import，「無 ambient import」就毫無例外地成立。
 
-> **[not yet]** prelude 承諾的 built-in spec 中，只有 **`Eq`** 與 **`Into[T]`** 存在。`Ord`、`Hash`、`Error`、
-> `Iterator` / `Iterable`、`Ref` 與運算子 spec 都沒有宣告，所以 `impl Ord for P` 會回報程式中沒有任何東西以那個名字
-> 宣告過 spec。`set` 與 `Ref[T]` 同樣不存在——現有的容器就是 `list` 與 `map`。
+> **[not yet]** prelude 承諾的 built-in spec 中，只有 **`Eq`**、**`Ord`**、**`Hash`** 與 **`Into[T]`** 存在。
+> `Error`、`Iterator` / `Iterable`、`Ref` 與運算子 spec 都沒有宣告，所以 `impl Error for P` 會回報程式中沒有任何
+> 東西以那個名字宣告過 spec。`set` 與 `Ref[T]` 同樣不存在——現有的容器就是 `list` 與 `map`。
 
 ### 測試與可見性（Testing & visibility）
 

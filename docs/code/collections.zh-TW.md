@@ -68,12 +68,15 @@ ys.append(4)               # 增長 · ys[0] = 9  # 改 · ys = [2, 4]  # 重指
 compiler 無法檢查的契約：**equal ⇒ same hash**。因為 key 是用凍結快照 **copy-in** 進去的，所以就算是 `mut`
 collection 也能拿來當 key。
 
-> **狀態。** 預期的規則——**任何 `Eq + Hash` 型別**皆可當 key——是 **[not yet]**。這個階段 `map` 的 key 僅限
-> **`int`** 或 **`str`**:`byte`、`rune` 或 `derive(Hash)` 型別是 _E9052 NotImplemented: a map key of type … —
-> a key needs `Hash`, and this compiler has one for `int` and for `str`_。`derive(Hash)` 與一般的 keyed 型別
-> 尚未建置。**`float`** key 是另一個答案,而且不是 `[not yet]` 那一種:[Derive 與預設行為](../core/derive.zh-TW.md)
-> 在任何 `float` 欄位上都拒絕 `Hash`,所以它沒有退場的那一天——_E4079 a map key of type float — a key needs
-> `Hash`, and a `float` has no equality a hash can agree with_。
+**`struct`** 或 **`enum`** 透過它自己的 `Eq` 與 `Hash`(derive 或手寫)當 key:`eq` 判為相等的兩個 key 是同一個
+entry。缺其一的是 _E4119 a map key of type P — a key is compared with `Eq` and found with `Hash`, and `P` has no
+`Hash`_,程式以 `#[derive(Eq, Hash)]` 補上。
+
+> **狀態。** 預期規則的其餘部分——**任何 `Eq + Hash` 型別**皆可當 key——是 **[not yet]**:`byte`、`rune`、tuple 或 typedef
+> 是 _E9052 NotImplemented: a map key of type … — it needs `Hash`, and this compiler has one for `int`, for `str` and
+> for a declared struct or enum that implements it_。**`float`** key 是另一個答案,而且不是 `[not yet]` 那一種:[Derive 與
+> 預設行為](../core/derive.zh-TW.md) 在任何 `float` 欄位上都拒絕 `Hash`,所以它沒有退場的那一天——_E4079 a map key of type
+> float — a key needs `Hash`, and a `float` has no equality a hash can agree with_。
 
 ## 存取——`[]` 斷言、`.get` 檢查
 
@@ -91,7 +94,7 @@ collection 也能拿來當 key。
 > 站在 `in` 的左邊一樣，而且掃到第一個相符就停。元素型別**沒有** `Eq` 是 _E3118_，那個缺口是程式自己用
 > `#[derive(Eq)]` 補上的；無名元素若有這樣的部分，被拒絕的是那個部分（_E4020_）。
 >
-> **[not yet]** `map` 與 `set` 用的是雜湊，而這裡只有 `int` 與 `str` 有 `Hash`：對一個 `map[list[int], V]` 做
+> **[not yet]** `map` 與 `set` 用的是雜湊，而這裡只有 `int`、`str` 與宣告型別有 `Hash`：對一個 `map[list[int], V]` 做
 > `k in m` 是 _E9052 NotImplemented: a map key of type list[int] — it needs `Hash`_，也就是那個 map 在被建出來
 > 的地方本來就會遇到的拒絕。
 >

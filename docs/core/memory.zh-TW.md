@@ -97,9 +97,6 @@ mutability 屬於**實例（instance）**——也就是 binding——不是型�
 部分；`Ref` 值永遠共享、絕不被複製。(作為**實作細節**,程式產生的 runtime `str` 值在內部同樣被 refcount、並於最後
 使用處釋放——表面沒有改變。)
 
-> **[deviation]** `Err` 帶著的、程式產生的 `str` 不一定會被還回去:用 runtime `str` 建出的 `Err`,當 `??` 丟掉
-> 這個 `Err` 時,它的訊息永遠不會被釋放(#320)。答案不變;那塊儲存空間要到程式結束才會回收。
-
 對**明確的** refcounted 值而言,**refcount 在構造上就是 cycle-complete**,所以不需要循環收集器、也不需要 weak
 reference:`Ref[T]` 的 referent 在**盒子建構時就固定**(要指別處就建一個新的 `Ref`),而值 immutable-by-default、又是
 bottom-up 建構,沒有辦法讓一個既存的 `Ref` 回頭指向後建的值——參照循環永遠形不成,所以「最後持有者釋放」永遠是完整

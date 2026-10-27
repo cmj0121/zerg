@@ -228,6 +228,8 @@ static void chan_free(zrt_chan *ch) {
 		}
 		zrt_free(ch->buf);
 	}
+	zrt_err_drop(ch->err);
+	zrt_err_drop(ch->crash_err);
 	zrt_free(ch);
 }
 
@@ -236,17 +238,18 @@ static void chan_free(zrt_chan *ch) {
  * wakes — freeing stays with rc. When senders has reached zero no sender can be parked,
  * so sendq is empty here.
  *
- * The Err is stored BY VALUE, and the value is all the channel owns: `msg` and `cause`
- * are pointers into storage the crashing coroutine never owned either — a message is a
- * literal or an interned string and a cause is a heap box, both leaked for the MVP like
- * every other Err. So the copy outlives the stack it came from, which it must: the
- * coroutine that crashed is unwinding as this runs, and by the time a receiver reads
- * the Err that coroutine is gone. */
+ * The Err is TAKEN: the channel holds counts of its own on the message and the cause
+ * (zrt_err_copy, made by the caller), gives them back in chan_free, and hands a receiver
+ * a further copy (zrt_chan_close_err). So the Err outlives the stack it came from, which
+ * it must: the coroutine that crashed is unwinding as this runs, and by the time a
+ * receiver reads the Err that coroutine is gone. A channel already closed drops it. */
 static void chan_close(zrt_chan *ch, zrt_err err) {
 	if (ch->closed) {
+		zrt_err_drop(err);
 		return;
 	}
 	ch->closed = true;
+	zrt_err_drop(ch->err);
 	ch->err = err;
 	/* wq_pop, not wq_take: a close wakes every waiter and claims none of them — a select
 	 * parked on a recv arm here must keep its one fire for the arm it eventually takes. */
@@ -289,7 +292,7 @@ void zrt_chan_sender_release(zrt_chan *ch) {
 	/* remembered BEFORE the count is tested: this handle may not be the one that takes it
 	 * to zero, and the crash has to outlive the difference */
 	if (ch->crash_err.kind == ZRT_ERR_STOP_ITERATION && zrt_crash_active()) {
-		ch->crash_err = zrt_taken_err();
+		ch->crash_err = zrt_taken_err_copy();
 	}
 	if (--ch->senders == 0) {
 		/* the last sender left: auto-close. A crashing sender (Fork-C) hands the channel
@@ -298,7 +301,7 @@ void zrt_chan_sender_release(zrt_chan *ch) {
 		 * receiver cannot read is a crash reason lost. chan_close wakes the parked
 		 * receivers, so it runs with the lock held — waking takes the scheduler lock,
 		 * which is the allowed order. */
-		chan_close(ch, ch->crash_err);
+		chan_close(ch, zrt_err_copy(ch->crash_err));
 	}
 	bool last = (--ch->rc == 0);
 	zrt_mutex_unlock(&ch->lock);
@@ -448,7 +451,7 @@ int zrt_chan_recv(zrt_chan *ch, void *out) {
 
 zrt_err zrt_chan_close_err(zrt_chan *ch) {
 	zrt_mutex_lock(&ch->lock);
-	zrt_err e = ch->err;
+	zrt_err e = zrt_err_copy(ch->err);
 	zrt_mutex_unlock(&ch->lock);
 	return e;
 }

@@ -15,11 +15,18 @@ describes what runs.
 > **[not yet]** The **import edge** is not. There is no `ffi` module in the shipped standard library, so
 > `import "ffi"` fails at the import itself — _E5002 cannot resolve import `ffi` under any source root_ —
 > and a binding annotated `handle` is refused where it is written, as _E4056 no type named `handle` (the
-> binding `h`)_. On the **export edge** a `--emit lib` build writes an object and **no header**, and nothing
-> reports which `pub` declarations would have been left out of one. A top-level `unsafe` that opens neither
+> binding `h`)_. A top-level `unsafe` that opens neither
 > a group nor a `fn` is a malformed group and says so — _E2075 a top-level `unsafe` opens a GROUP or marks a
 > `fn`_ — which is a parse refusal naming no unbuilt form, because `unsafe struct P { … }` is not a shape
 > this grammar derives anywhere.
+>
+> **[not yet]** On the **export edge**, what crosses today is the primitives and the structs built from them. A
+> `pub` declaration whose types the table below maps and this compiler has no C form for — a `str`, a `list`, an
+> optional or an `Either`, an enum, a function value, a `type` — is reported and left out of the header:
+> _E9120 NotImplemented: `greet` is left out of the C header: the C boundary has no form for `str` yet_. So is
+> every `pub` function of a build with module-level state, which only the shim before a Zerg `main` sets up, and
+> a C caller runs none; and so is a name another module of the build also declares, whose symbol carries a
+> module tag rather than `zg_<name>`.
 
 ## Inline assembly
 
@@ -250,6 +257,13 @@ recommended handle-wrapper methods reach C as ordinary functions. A `pub` root d
 **not** FFI-safe is **reported and left out** of the header rather than silently dropped: a package may
 legitimately offer a richer API to Zerg dependents than it can to C, and the diagnostic keeps the C ABI
 honest about what actually crosses. A Zerg function that returns nothing maps to C `void`.
+
+The header is written **beside the object**, under its name with the `.o` replaced — `-o lib/calc.o`
+writes `lib/calc.h`, include-guarded as `ZG_CALC_H` — and holds the layout of every struct an exported
+signature names, fields spelled `zg_<field>`, ahead of the prototypes. A declaration left out is
+reported under `warning:` with its place, as _E4120 `first` is left out of the C header: a generic `fn`
+is not FFI-safe_, and the library still builds. A C caller links the object and the runtime units a
+Zerg program links, since the object's own bodies call into them.
 
 **Symbol names are stable and unmangled.** C's symbol space is flat and a stable ABI forbids mangling, so
 an exported name is deterministic: it is the declaration name under a fixed prefix, and a method also

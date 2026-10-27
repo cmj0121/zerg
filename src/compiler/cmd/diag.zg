@@ -55,13 +55,23 @@ pub fn lex_diags_of(srcs: list[str], paths: list[str], mut &diags: list[zerg.Dia
 pub fn report_diags(diags: list[zerg.Diag], srcs: list[str], paths: list[str]) {
 	return if diags.len() == 0
 	for d in diags {
-		io.ewrite(render_diag(d, diag_source(d.path, srcs, paths)))
+		io.ewrite(render_diag("error", d, diag_source(d.path, srcs, paths)))
 	}
 	n := strconv.to_string(diags.len(), 10)
 	if diags.len() > 1 {
 		io.ewrite(f"zerg: {n} error(s)\n")
 	}
 	__zrt_exit(1)
+}
+
+# report_left says what a library build left out of its C header, and goes on: each is a
+# `pub` declaration Zerg callers still have, so the build it is reported from still succeeds
+# (docs/runtime/ffi.md). It is drawn like a diagnostic — code, place, line, caret — under
+# `warning:`, because a reader has to be able to tell it from a finding that stopped the build.
+pub fn report_left(diags: list[zerg.Diag], srcs: list[str], paths: list[str]) {
+	for d in diags {
+		io.ewrite(render_diag("warning", d, diag_source(d.path, srcs, paths)))
+	}
 }
 
 # diag_code_prefix puts the rule's identity in FRONT of the sentence, and answers nothing at
@@ -86,8 +96,8 @@ fn diag_code_prefix(d: zerg.Diag) -> str {
 # The source line is omitted when the file cannot be found — a diagnostic is still a
 # diagnostic without it, and guessing at a line nobody read would be worse than saying
 # less.
-fn render_diag(d: zerg.Diag, src: str) -> str {
-	mut out := f"error: {diag_code_prefix(d)}{d.msg}\n"
+fn render_diag(severity: str, d: zerg.Diag, src: str) -> str {
+	mut out := f"{severity}: {diag_code_prefix(d)}{d.msg}\n"
 	line_s := strconv.to_string(d.line, 10)
 	if d.line > 0 {
 		out = out + zerg.place_line(d.path, d.line, d.col) + "\n"

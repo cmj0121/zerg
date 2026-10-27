@@ -23,6 +23,9 @@ zerg0 build -o out --keep-c f.zg   # choose the output path, keep the generated 
 `build` is the only subcommand. Failures print `file:line:col: message` on stderr and exit
 nonzero — enough to locate the problem, no more.
 
+There is no `--emit lib`, and so no C header and no report of what one leaves out
+(docs/runtime/ffi.md): the seed builds a program, and the one program it has to build has a `main`.
+
 ## The bootstrap chain
 
 ```text

@@ -284,6 +284,12 @@ jobs:
       - name: Every program that is not Zerg, is rejected
         run: make reject
 
+      # --- 7b-lib. a C caller of a library ---------------------------------------
+      # `--emit lib` writes a header, and this is the only job that compiles C including
+      # one, links it against the object, and runs it.
+      - name: A C file includes a library's header, links, and runs
+        run: make ffi-export
+
       # --- 7b''. the values that outlive their scope -----------------------------
       # The leak gate that needs neither LeakSanitizer nor the private corpus, which is
       # why it is HERE — on both platforms, on every fork — rather than beside

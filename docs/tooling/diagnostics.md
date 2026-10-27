@@ -7,10 +7,12 @@ An `F` or an `L` code is what a **tool** says about a program that already build
 [formatter](fmt.md) and the [linter](lint.md) carry their own.
 
 These are not advisory. A program that hits one does not build, so each is a **compile
-error** the build stops on. They carry codes because a code is a **stable identity for a
-rule** where a sentence is not: prose gets better, and a gate that pins the sentence turns
-red when it does. The codes group by the **kind of question** a code answers, which is also the
-order a build meets them:
+error** the build stops on — except two, `E4120` and `E9120`. Each names a `pub` declaration a
+`--emit lib` build leaves out of its C header, printed under `warning:` while the library still
+builds: the declaration is still part of its Zerg API ([FFI](../runtime/ffi.md)). They carry codes
+because a code is a **stable identity for a rule** where a sentence is not: prose gets better, and a
+gate that pins the sentence turns red when it does. The codes group by the **kind of question** a code
+answers, which is also the order a build meets them:
 
 | Range   | Stage    | The question it answers                                            |
 | ------- | -------- | ------------------------------------------------------------------ |
@@ -465,6 +467,7 @@ shipping compiler rather than a part of it (the line
 | `E4117` | `#[derive(Hash)]` on a type with a `float` field                                                      |
 | `E4118` | `#[derive(Hash)]` over a field whose type has no `Hash`                                               |
 | `E4119` | a map key or set element of type … — a declared type with no `Eq` or no `Hash`                        |
+| `E4120` | `…` is left out of the C header: it is not FFI-safe — a warning                                       |
 | `E5001` | this entry file declares no `fn main`                                                                 |
 | `E5002` | cannot resolve import `…`, and where it was looked for                                                |
 | `E5007` | `…` is a module this build compiles and this module did not import                                    |
@@ -525,6 +528,7 @@ shipping compiler rather than a part of it (the line
 | `E9117` | a slice of an array — its length is part of its type                                                  |
 | `E9118` | a spec value called or rendered, or an application named, while nothing implements it                 |
 | `E9119` | `#[derive(Hash)]` over a field whose `Hash` is not built                                              |
+| `E9120` | `…` is left out of the C header: the boundary has no C form for it yet — a warning                    |
 
 They are reported the moment a file is **read**, before its imports are scanned — scanning
 them parses, and a parser handed unreadable text can only say something untrue about it.

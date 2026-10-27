@@ -24173,15 +24173,41 @@ pub fn check_files_diag(srcs: list[str], paths: list[str], ms: Mods, mut &diags:
 	mut lints: list[ast.Diag] = []
 	mut nx := ast.no_index()
 	f := merge_files_at(srcs, paths)
-	c_emit_unit(f, f, ms, true, false, true, false, diags, lints, nx)
+	mut conc := false
+	c_emit_unit(f, f, ms, true, false, true, false, conc, diags, lints, nx)
 }
 
 # emit_unit_at is emit_unit that also reports what it found. A build refuses to hand the
 # C to cc when this list comes back non-empty.
-pub fn emit_unit_at(prog: ast.File, own: ast.File, ms: Mods, mut &diags: list[ast.Diag]) -> str {
+#
+# `conc` CROSSES THE UNITS, in and out. In, it says a unit emitted before this one uses the
+# scheduler; out, it says that or this unit does. Whether `main` runs under the scheduler is
+# a fact about the PROGRAM, and each unit only sees its own bodies: decided per unit, an
+# entry whose only `spawn` sat in an imported module picked the plain shim, and the spawned
+# task never ran (#392). The entry is the last unit a driver emits (load_unit appends a unit
+# after the ones it imports), so threading one flag through the loop is enough.
+pub fn emit_unit_at(prog: ast.File, own: ast.File, ms: Mods, mut &conc: bool, mut &diags: list[ast.Diag]) -> str {
 	mut lints: list[ast.Diag] = []
 	mut nx := ast.no_index()
-	return c_emit_unit(prog, own, ms, false, false, false, false, diags, lints, nx)
+	return c_emit_unit(prog, own, ms, false, false, false, false, conc, diags, lints, nx)
+}
+
+# unit_conc is whether lowering `own` touches the scheduler, asked by a driver that does not
+# emit that unit itself — `--emit lib` writes only its entry, and an entry with a `main` still
+# needs the answer emit_unit_at's `conc` carries. It walks in CHECK mode and keeps no finding,
+# an abort included: the unit is not what that build reports on.
+pub fn unit_conc(prog: ast.File, own: ast.File, ms: Mods) -> bool {
+	mut diags: list[ast.Diag] = []
+	mut lints: list[ast.Diag] = []
+	mut nx := ast.no_index()
+	mut conc := false
+	got := guard {
+		c_emit_unit(prog, own, ms, false, false, true, false, conc, diags, lints, nx)
+	}
+	return match got {
+		Either.Left(_)  => conc
+		Either.Right(_) => conc
+	}
 }
 
 # lint_conversions_of is the L5xx family, and it is the one lint that cannot be answered from
@@ -24217,7 +24243,8 @@ fn c_lint_walk(f: ast.File, ms: Mods, want_index: bool, mut &diags: list[ast.Dia
 	# MERGED ONCE and handed over twice. emit_unit's own comment records that re-parsing the
 	# whole program per unit "is where its time went", and two calls in one argument list is
 	# that mistake at its smallest.
-	c_emit_unit(f, f, ms, true, true, true, want_index, diags, lints, nx)
+	mut conc := false
+	c_emit_unit(f, f, ms, true, true, true, want_index, conc, diags, lints, nx)
 
 	return [] if not walk_notes_kept(diags)
 
@@ -24313,7 +24340,8 @@ pub fn merge_asts(fs: list[ast.File]) -> ast.File {
 fn c_emit_file_at(f: ast.File, ms: Mods, mut &diags: list[ast.Diag]) -> str {
 	mut lints: list[ast.Diag] = []
 	mut nx := ast.no_index()
-	return c_emit_unit(f, f, ms, true, false, false, false, diags, lints, nx)
+	mut conc := false
+	return c_emit_unit(f, f, ms, true, false, false, false, conc, diags, lints, nx)
 }
 
 # c_emit_unit lowers ONE compilation unit. `prog` is the whole program — every type and
@@ -26380,16 +26408,16 @@ fn c_ft_unindex(ft: FileTypes, mut &nx: ast.NameIndex) {
 # c_emit_unit is c_emit_unit_as over a program whose private types are their files' — the
 # table built from the WHOLE program, so a unit and the program it is compiled against agree
 # on every new name — with every finding spoken back in the written spelling.
-fn c_emit_unit(prog0: ast.File, own0: ast.File, ms: Mods, whole: bool, want_lints: bool, checking: bool, want_index: bool, mut &diags: list[ast.Diag], mut &lints: list[ast.Diag], mut &nx: ast.NameIndex) -> str {
+fn c_emit_unit(prog0: ast.File, own0: ast.File, ms: Mods, whole: bool, want_lints: bool, checking: bool, want_index: bool, mut &conc: bool, mut &diags: list[ast.Diag], mut &lints: list[ast.Diag], mut &nx: ast.NameIndex) -> str {
 	ft := c_file_types(prog0)
-	return c_emit_unit_as(prog0, own0, ft, ms, whole, want_lints, checking, want_index, diags, lints, nx) if ft.at.len() == 0 and ft.say_to.len() == 0
+	return c_emit_unit_as(prog0, own0, ft, ms, whole, want_lints, checking, want_index, conc, diags, lints, nx) if ft.at.len() == 0 and ft.say_to.len() == 0
 
 	prog := c_with_file_types(ft, prog0)
 	own := c_with_file_types(ft, own0)
 	d0 := diags.len()
 	l0 := lints.len()
 	got := guard {
-		c_emit_unit_as(prog, own, ft, ms, whole, want_lints, checking, want_index, diags, lints, nx)
+		c_emit_unit_as(prog, own, ft, ms, whole, want_lints, checking, want_index, conc, diags, lints, nx)
 	}
 	c_ft_unsay(ft, diags, d0)
 	c_ft_unsay(ft, lints, l0)
@@ -26413,7 +26441,7 @@ fn c_emit_unit(prog0: ast.File, own0: ast.File, ms: Mods, whole: bool, want_lint
 # (c_lowered). The returned C is empty, which is what a caller in this mode asked for.
 #
 # `want_index` asks for the name index as well, handed back in `nx` (lint_index_of says who asks).
-fn c_emit_unit_as(prog0: ast.File, own0: ast.File, ft: FileTypes, ms: Mods, whole: bool, want_lints: bool, checking: bool, want_index: bool, mut &diags: list[ast.Diag], mut &lints: list[ast.Diag], mut &nx: ast.NameIndex) -> str {
+fn c_emit_unit_as(prog0: ast.File, own0: ast.File, ft: FileTypes, ms: Mods, whole: bool, want_lints: bool, checking: bool, want_index: bool, mut &conc: bool, mut &diags: list[ast.Diag], mut &lints: list[ast.Diag], mut &nx: ast.NameIndex) -> str {
 	# the derive expansion runs over the program the builtin specs are already in, because
 	# what it writes is `impl Eq for …` and the spec that names has to be there to meet it.
 	#
@@ -26658,6 +26686,13 @@ fn c_emit_unit_as(prog0: ast.File, own0: ast.File, ft: FileTypes, ms: Mods, whol
 	# Running the walk and discarding what it produced is the same shape `c_lowered` already
 	# gives the `check` stage: the findings are the point, the text is the by-product.
 	inits := c_const_assigns(em, f) + c_init_calls(em, f)
+
+	# THE PROGRAM'S SCHEDULER, not this unit's: `conc` says an earlier unit uses it (#392,
+	# emit_unit_at says why it is carried), and this unit hands the union on.
+	if conc {
+		em.used_conc = true
+	}
+	conc = em.used_conc
 
 	mut mainw := ""
 	if c_has_main(own) {

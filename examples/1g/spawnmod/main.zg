@@ -1,0 +1,14 @@
+# A `spawn` inside an imported module runs `main` under the scheduler.
+#   zerg build examples/1g/spawnmod/main.zg
+# Expected output:
+#   30
+#
+# `main` itself spawns nothing and touches no channel: the producer and the channel it sends
+# on are both inside `work`. Whether `main` runs under the scheduler is a fact about the
+# PROGRAM, not about the file `main` is written in, so the producer runs and its four squares
+# arrive (#392).
+import "./work"
+
+fn main() {
+	print work.sum_squares(4) # 1 + 4 + 9 + 16
+}

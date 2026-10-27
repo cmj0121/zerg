@@ -1,0 +1,31 @@
+# The module that spawns. `main` imports it and spawns nothing of its own.
+
+# squares sends the first `n` squares, and the channel closes when it returns: it is the
+# only sender left.
+fn squares(out: chan[int]<-, n: int) {
+	mut i := 1
+
+	for i <= n {
+		out <- i * i
+		i = i + 1
+	}
+}
+
+# source starts the producer and hands back the receiving end alone.
+fn source(n: int) -> <-chan[int] {
+	ch := chan[int]()
+	spawn squares(ch, n)
+
+	return ch
+}
+
+# sum_squares adds up what the producer sends.
+pub fn sum_squares(n: int) -> int {
+	mut total := 0
+
+	for v in source(n) {
+		total = total + v
+	}
+
+	return total
+}

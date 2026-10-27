@@ -14841,9 +14841,17 @@ fn c_ident_val(mut &em: Emitter, n: str, l: int, c: int, sb: Subst) -> str {
 	# only reached when nothing has bound the name, so a binding always wins — which is the
 	# ordinary scoping rule, and it means a local can shadow a function without surprise.
 	if c_is_free_fn(em, n) and not c_is_bound(em, n) {
+		# THE SAME TWO QUESTIONS A BARE CALL ASKS (#390), and the row is read once for both
+		# of them and for the name index. This used to emit the thunk without asking, so
+		# `f := helper` built where `helper()` is E3001 — a sibling's private fn — and when
+		# two files kept a private one the value reached the sorted-first declaring file. A
+		# `pub` sibling is E3114, which speaks only once the privacy rule has stayed quiet.
+		sr := c_sig_row_of(em, n)
 		if em.want_index {
-			c_nx_use(em, l, c, n, c_nx_sig(em, c_sig_row_of(em, n)))
+			c_nx_use(em, l, c, n, c_nx_sig(em, sr))
 		}
+		c_chk_visible_fn(em, n, sr)
+		c_chk_bare_fn(em, n, sr)
 
 		# NAMING ONE IS SAFE NOW, AND CALLING IT IS STILL CHECKED. This used to be refused —
 		# "naming it here would hand safe code the same call" — and it was true while a

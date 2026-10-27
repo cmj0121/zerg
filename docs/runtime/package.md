@@ -317,7 +317,8 @@ A third file of that module writing the name bare reaches neither, since a sibli
 an import. Where a declaring file keeps it `pub`, the finding names that file and says how to import it —
 _E3114_ for a function, _E3116_ for a constant. Where every declaring file keeps it private, that advice could
 not work, and the finding is _E3001_ naming the first declaring file in sorted order, sorted so that it is the
-same file on every run.
+same file on every run. A function taken as a value is that same bare name. `f := helper` is _E3001_ where
+the call would be, and _E3114_ where that call would be.
 
 A bare name that two IMPORTED modules both declare is refused rather than picked: _E3114 `helper` is declared
 in `x.zg` and `y.zg`, and a bare name cannot choose between them_ names both spellings, `x.helper` and

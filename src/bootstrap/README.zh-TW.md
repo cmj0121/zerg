@@ -306,6 +306,11 @@ chan[int]() }`——或任何不是字面值、模組常數，或它們之間算
   （`examples/1g/filefns`）。種子只用模組替函式定鍵，在第二個那裡停下，說
   `function "m__helper" is already declared`；一個 `pub` 的和一個私有的並排，它也一樣拒絕，而 `zerg`
   同樣建得起來。這對 bootstrap 不花任何代價：編譯器自己的原始碼裡，沒有同一個模組的兩個檔案宣告同一個私有名字。
+- **兄弟檔案的函式被裸名使用——無論是呼叫，或是當成值——都會被接受。** 檔案是隱私的單位，所以 `zerg`
+  對私有的報 `E3001`、對 `pub` 的報 `E3114`，而 `f := helper` 與 `helper()` 是同一個發現。種子只用模組替
+  函式定鍵，所以沒有宣告這個名字的檔案仍然到達兄弟檔案的那個。這對 bootstrap 不花任何代價：種子編譯的
+  原始碼沒有裸名使用兄弟檔案的函式。`scripts/reject-check.sh` 的 `a-sibling-private-fn-named-bare`、
+  `a-sibling-private-fn-taken-as-a-value` 與 `a-sibling-public-fn-taken-as-a-value` 帶著 `seed-gap` 標記。
 - **沒有上界的 inclusive range 會被接受，而寫著它的那個 arm 永遠不會成立。** `GRAMMAR#range-arm` 規定
   `..=` 的上界是必要的，而剖析器把缺席的那個讀成 `nil`——那也是一支程式寫得出來的東西，`1..=nil`。`zerg`
   不論它從哪裡來都拒絕這個形式（`E3136`）。種子把缺席的上界讀成 0，於是那個 arm 對每一個值都是假的，`match`

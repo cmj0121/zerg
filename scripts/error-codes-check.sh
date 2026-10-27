@@ -69,7 +69,7 @@ DOC=${DOC:-docs/tooling/diagnostics.md}
 # none in this one, inside a commit that updated two other zh-TW pages, which means the
 # omission was not a decision anybody made.
 DOC_ZH=${DOC_ZH:-docs/tooling/diagnostics.zh-TW.md}
-GATES=${GATES:-"scripts/refuse-check.sh scripts/reject-check.sh"}
+GATES=${GATES:-"scripts/refuse-check.sh scripts/reject-check.sh scripts/ffi-export-check.sh"}
 
 fail=0
 

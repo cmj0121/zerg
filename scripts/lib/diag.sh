@@ -125,6 +125,15 @@ opens_with_code() {
 	return 1
 }
 
+# warns_with_code <text> <code> — the same fact for a report that does NOT stop the build: a
+# `--emit lib` header's left-out declaration opens `warning: <code>` instead (cmd/diag.zg).
+warns_with_code() {
+	case $(printf '%s\n' "$1" | head -1) in
+	"warning: $2 "*) return 0 ;;
+	esac
+	return 1
+}
+
 # place_is <text> <suffix-regex> — the positive half of has_place: some `-->` line's place
 # ENDS with the given regex (e.g. "case\.zg:1:1"), for a case that pins WHICH line a rule
 # points at rather than only that one exists. It lives here beside has_place because the

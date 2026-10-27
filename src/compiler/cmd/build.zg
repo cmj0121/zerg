@@ -12,6 +12,7 @@ import "./layout"
 import "./source"
 import "./unit"
 import (
+	"ascii"
 	"cli"
 	"io"
 	"strconv"
@@ -155,10 +156,18 @@ fn build_stage(files: list[str], emit: str, out: str, jobs: int) {
 				ui = ui + 1
 			}
 		}
+
 		mut diags: list[zerg.Diag] = []
-		obj_code := zerg.emit_unit_at(prog, trees[last], ms, conc, diags)
+		obj := out_or(out, drop_ext(files[0]) + ".o")
+		hpath := header_path(obj)
+		mut ex := zerg.export_for(header_guard(hpath))
+		obj_code := zerg.emit_lib_at(prog, trees[last], ms, conc, diags, ex)
 		diag.report_diags(diags, unit.unit_srcs(units), unit.unit_paths(units))
-		compile_to(obj_code, out_or(out, drop_ext(files[0]) + ".o"), true)
+		diag.report_left(ex.left, unit.unit_srcs(units), unit.unit_paths(units))
+		compile_to(obj_code, obj, true)
+		guard {
+			io.write_file(hpath, bytearray(ex.header))
+		}
 		return
 	}
 
@@ -274,14 +283,54 @@ fn write_result(text: str, out: str) {
 	}
 }
 
+# header_path is where a library's C header goes: beside the object, under its name with the
+# `.o` replaced — `-o lib/add.o` writes `lib/add.h`. An object spelled without `.o` keeps its
+# whole name and gains `.h`, so the header can never be the object.
+fn header_path(obj: str) -> str {
+	return obj + ".h" if not layout.has_suffix(obj, ".o")
+
+	return drop_tail(obj, 2) + ".h"
+}
+
+# header_guard is the include guard a header is written under: its file name, upper-cased,
+# every byte a C identifier cannot hold made `_`, behind `ZG_` so it cannot open with a digit
+# — `add.h` is `ZG_ADD_H`.
+fn header_guard(hpath: str) -> str {
+	b := bytearray(hpath)
+	mut start := 0
+	mut i := 0
+	for i < b.len() {
+		if b[i] == b'/' {
+			start = i + 1
+		}
+		i = i + 1
+	}
+	mut out: list[byte] = []
+	i = start
+	for i < b.len() {
+		if ascii.is_alnum(b[i]) {
+			out.append(ascii.fold_upper(b[i]))
+		} else {
+			out.append(b'_')
+		}
+		i = i + 1
+	}
+	return "ZG_" + str(out)
+}
+
 # drop_ext removes a trailing ".zg" so `zerg build hello.zg` writes `hello`.
 fn drop_ext(path: str) -> str {
 	return path if not layout.has_suffix(path, ".zg")
 
-	b := bytearray(path)
+	return drop_tail(path, 3)
+}
+
+# drop_tail is `s` without its last `n` bytes — a suffix its caller has already matched.
+fn drop_tail(s: str, n: int) -> str {
+	b := bytearray(s)
 	mut out: list[byte] = []
 	mut i := 0
-	for i < b.len() - 3 {
+	for i < b.len() - n {
 		out.append(b[i])
 		i = i + 1
 	}

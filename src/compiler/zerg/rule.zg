@@ -479,6 +479,11 @@ pub enum Rule {
 	ListPatternNotAList = 4084
 	MutateAValueNotAPlace = 4081
 
+	# a `pub` declaration a `--emit lib` header leaves out because it is not FFI-safe
+	# (docs/runtime/ffi.md). It is REPORTED, and it does not stop the build: the declaration is
+	# still part of the Zerg API, and the library still builds without it.
+	ExportNotFfiSafe = 4120
+
 	# building — the program as a set of files, which no single file's text answers: imports resolved
 	# before anything is lexed, and `fn main` looked for after everything is emitted
 	EntryHasNoMain = 5001
@@ -616,6 +621,11 @@ pub enum Rule {
 	# a `#[derive(Hash)]` field whose type has `Hash` by the chapter's rule and not yet by this
 	# compiler: a container, a tuple, an optional, a typedef, or a type parameter.
 	NotYetDeriveHashField = 9119
+
+	# a `pub` declaration a `--emit lib` header leaves out because the boundary has no form
+	# for it YET: a type with no C form built, module state only a Zerg `main` sets up, a
+	# symbol that carries a module tag. Reported without stopping the build, like E4120.
+	NotYetExportForm = 9120
 }
 
 # rule_code is the text a rule is reported under — the `E2004` a gate pins and a reader looks

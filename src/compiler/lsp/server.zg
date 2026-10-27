@@ -97,6 +97,10 @@ struct Server {
 	# LSP's: a 0-based line and UTF-16 columns, converted once when stored (ls_nx_utf16).
 	pub nx: zerg.NameIndex
 	pub has_nx: bool
+
+	# nx_codes is the code of every finding the check that built `nx` made, in its order — what a
+	# rename is held to when it asks the compiler about the renamed program (ls_rename_holds)
+	pub nx_codes: list[str]
 }
 
 # Report is what ONE check answers: the open buffers it speaks for, and each one's diagnostics
@@ -125,7 +129,8 @@ struct Change {
 pub fn serve(load: fn (str, list[str], list[str]) -> Program) -> int {
 	mut docs: list[Doc] = []
 	mut buf: list[byte] = []
-	mut s := Server(docs, buf, false, false, zerg.no_index(), false)
+	mut codes: list[str] = []
+	mut s := Server(docs, buf, false, false, zerg.no_index(), false, codes)
 	for {
 		body := ls_read_frame(s)
 		break if s.stop
@@ -307,6 +312,16 @@ fn ls_handle(mut &s: Server, body: str, load: fn (str, list[str], list[str]) -> 
 		ls_reply(id, ls_references_result(s, json.get(msg, "params")))
 	} else if method == "textDocument/hover" {
 		ls_reply(id, ls_hover_result(s, json.get(msg, "params"), load))
+	} else if method == "textDocument/completion" {
+		ls_reply(id, ls_completion_result(s, json.get(msg, "params")))
+	} else if method == "textDocument/signatureHelp" {
+		ls_reply(id, ls_signature_result(s, json.get(msg, "params"), load))
+	} else if method == "workspace/symbol" {
+		ls_reply(id, ls_workspace_symbol_result(s, json.get(msg, "params")))
+	} else if method == "textDocument/prepareRename" {
+		ls_prepare_rename_reply(s, id, json.get(msg, "params"))
+	} else if method == "textDocument/rename" {
+		ls_rename_reply(s, id, json.get(msg, "params"), load)
 	} else if has_id {
 		# EVERY request gets an answer. A client that is left waiting for one it will never
 		# get is a client that stops sending the next one, and the editor goes quiet with
@@ -373,6 +388,21 @@ fn ls_initialize_result() -> json.Val {
 	# And that declaration's DOCUMENT (#192) — the comment `zerg doc` prints for it, extracted
 	# by `zerg doc`'s own reader rather than by a second one living here.
 	json.put_bool(caps, "hoverProvider", true)
+
+	# And the four further views of that one index (#194): the names in scope at a place, the
+	# signature of the call around it, every declaration of the program, and a rename — offered
+	# with `prepareProvider`, so an editor asks first whether the place can be renamed at all and
+	# shows the compiler's reason when it cannot.
+	mut cp: list[json.Field] = []
+	json.put_bool(cp, "resolveProvider", false)
+	json.put(caps, "completionProvider", json.of_obj(cp))
+	mut sh: list[json.Field] = []
+	json.put(sh, "triggerCharacters", json.of_list([json.of_str("("), json.of_str(",")]))
+	json.put(caps, "signatureHelpProvider", json.of_obj(sh))
+	json.put_bool(caps, "workspaceSymbolProvider", true)
+	mut rn: list[json.Field] = []
+	json.put_bool(rn, "prepareProvider", true)
+	json.put(caps, "renameProvider", json.of_obj(rn))
 
 	mut info: list[json.Field] = []
 	json.put_str(info, "name", "zerg")
@@ -777,6 +807,7 @@ fn ls_check_program(mut &s: Server, uri: str, prog: Program, said: list[str], su
 		ls_nx_utf16(nx, prog.paths, prog.srcs)
 		s.nx = nx
 		s.has_nx = true
+		s.nx_codes = ls_diag_codes(ds)
 	}
 
 	# AND THE FINDINGS PARTITIONED BY FILE. Each open buffer of this program gets the findings
@@ -1054,6 +1085,74 @@ fn ls_nx_utf16(mut &nx: zerg.NameIndex, paths: list[str], srcs: list[str]) {
 		nx.d_line[i] = nx.d_line[i] - 1
 		i = i + 1
 	}
+
+	# and the program's shape (ast.nx_program): where a local's scope begins, every block, type
+	# parameter scope, contract and argument list, each end against its own line
+	i = 0
+	for i < nx.d_file.len() {
+		if nx.d_from_line[i] > 0 {
+			f := nx.d_file[i]
+			nx.d_from_col[i] = ls_u16_of(text[f], starts[f], nx.d_from_line[i], nx.d_from_col[i])
+			nx.d_from_line[i] = nx.d_from_line[i] - 1
+		}
+		i = i + 1
+	}
+	i = 0
+	for i < nx.b_file.len() {
+		f := nx.b_file[i]
+		nx.b_col[i] = ls_u16_of(text[f], starts[f], nx.b_line[i], nx.b_col[i])
+		nx.b_line[i] = nx.b_line[i] - 1
+		nx.b_end_col[i] = ls_u16_of(text[f], starts[f], nx.b_end_line[i], nx.b_end_col[i])
+		nx.b_end_line[i] = nx.b_end_line[i] - 1
+		i = i + 1
+	}
+	i = 0
+	for i < nx.t_file.len() {
+		f := nx.t_file[i]
+		nx.t_col[i] = ls_u16_of(text[f], starts[f], nx.t_line[i], nx.t_col[i])
+		nx.t_line[i] = nx.t_line[i] - 1
+		nx.t_end_col[i] = ls_u16_of(text[f], starts[f], nx.t_end_line[i], nx.t_end_col[i])
+		nx.t_end_line[i] = nx.t_end_line[i] - 1
+		i = i + 1
+	}
+	i = 0
+	for i < nx.o_file.len() {
+		f := nx.o_file[i]
+		nx.o_col[i] = ls_u16_of(text[f], starts[f], nx.o_line[i], nx.o_col[i])
+		nx.o_line[i] = nx.o_line[i] - 1
+		nx.o_end_col[i] = ls_u16_of(text[f], starts[f], nx.o_end_line[i], nx.o_end_col[i])
+		nx.o_end_line[i] = nx.o_end_line[i] - 1
+		i = i + 1
+	}
+	i = 0
+	for i < nx.k_file.len() {
+		f := nx.k_file[i]
+		nx.k_col[i] = ls_u16_of(text[f], starts[f], nx.k_line[i], nx.k_col[i])
+		nx.k_line[i] = nx.k_line[i] - 1
+		nx.k_open_col[i] = ls_u16_of(text[f], starts[f], nx.k_open_line[i], nx.k_open_col[i])
+		nx.k_open_line[i] = nx.k_open_line[i] - 1
+		nx.k_end_col[i] = ls_u16_of(text[f], starts[f], nx.k_end_line[i], nx.k_end_col[i])
+		nx.k_end_line[i] = nx.k_end_line[i] - 1
+
+		# a call's commas are the run from its own first to the next call's
+		mut hi := nx.m_line.len()
+		if i + 1 < nx.k_comma.len() {
+			hi = nx.k_comma[i + 1]
+		}
+		mut m := nx.k_comma[i]
+		for m < hi {
+			nx.m_col[m] = ls_u16_of(text[f], starts[f], nx.m_line[m], nx.m_col[m])
+			nx.m_line[m] = nx.m_line[m] - 1
+			m = m + 1
+		}
+		i = i + 1
+	}
+}
+
+# ls_u16_of is the UTF-16 column of a 1-based line and byte column of one file — `b` its bytes
+# and `st` where its lines start. A place nobody wrote (0, 0) comes out at column 0.
+fn ls_u16_of(b: list[byte], st: list[int], line: int, col: int) -> int {
+	return ls_utf16_from(b, ls_start_of(st, line - 1), col - 1)
 }
 
 fn ls_line_starts(b: list[byte]) -> list[int] {
@@ -1270,6 +1369,577 @@ fn ls_hover_src(nx: zerg.NameIndex, d: int, path: str, text: str, prog: Program)
 
 fn ls_hover_fence(sig: str) -> str {
 	return f"```zerg\n{sig}\n```"
+}
+
+# --- views of the index: completion, signature help, workspace symbol, rename (#194) ----------
+#
+# Four more questions about a name, and none of them a new analysis. Each is a reading of the
+# index `definition` answers from — the declarations in scope at a place (ast.nx_in_scope), the
+# declaration a call's name resolved to, every declaration the program makes, and every use of
+# one — so a completion can never offer what a jump could not reach, and a rename edits exactly
+# the places `references` lists. What the walk could not record while it resolved — where a block
+# ends, which argument a place is in — rides in from the parse (ast.nx_program), into the same
+# index, rather than being read back out of the buffer here.
+
+# ls_completion_result is every name a bare identifier at the place may read, as the compiler
+# scopes them. A name declared twice in scope answers once, with the declaration that wins: the
+# innermost local over anything further out.
+#
+# It is the WHOLE list and says so (`isIncomplete` false): an editor filters by what was typed,
+# and a server that filtered too would be a second rule for what matches.
+fn ls_completion_result(s: Server, params: json.Val) -> json.Val {
+	return json.null() if not s.has_nx
+
+	path := ls_uri_path(json.as_str(json.walk(params, "textDocument", "uri")))
+	line := json.as_int(json.walk(params, "position", "line"))
+	ch := json.as_int(json.walk(params, "position", "character"))
+	nx := s.nx
+	vis := zerg.nx_in_scope(nx, path, line, ch)
+
+	# locals first, the innermost of a spelling kept — the visible ones all enclose the place,
+	# so the one declared last is the one a name there reads
+	mut names: list[str] = []
+	mut picks: list[int] = []
+	mut d := 0
+	for d < vis.len() {
+		if vis[d] and not zerg.nx_has(nx, d, zerg.NF_TOP) {
+			nm := zerg.nx_name(nx, d)
+			k := ls_str_at(names, nm)
+			if k < 0 {
+				names.append(nm)
+				picks.append(d)
+			} else if ls_pos_lt(nx.d_line[picks[k]], nx.d_col[picks[k]], nx.d_line[d], nx.d_col[d]) {
+				picks[k] = d
+			}
+		}
+		d = d + 1
+	}
+	d = 0
+	for d < vis.len() {
+		if vis[d] and zerg.nx_has(nx, d, zerg.NF_TOP) {
+			nm := zerg.nx_name(nx, d)
+			if ls_str_at(names, nm) < 0 {
+				names.append(nm)
+				picks.append(d)
+			}
+		}
+		d = d + 1
+	}
+
+	mut items: list[json.Val] = []
+	for p in picks {
+		mut fs: list[json.Field] = []
+		json.put_str(fs, "label", zerg.nx_name(nx, p))
+		json.put_int(fs, "kind", ls_completion_kind(nx.d_kind[p]))
+		json.put_str(fs, "detail", zerg.nk_word(nx.d_kind[p]))
+		items.append(json.of_obj(fs))
+	}
+	mut out: list[json.Field] = []
+	json.put_bool(out, "isIncomplete", false)
+	json.put(out, "items", json.of_list(items))
+	return json.of_obj(out)
+}
+
+fn ls_str_at(xs: list[str], x: str) -> int {
+	mut i := 0
+	for i < xs.len() {
+		return i if xs[i] == x
+		i = i + 1
+	}
+	return -1
+}
+
+# ls_completion_kind is LSP's CompletionItemKind for a declaration's kind (ast.NK_*).
+fn ls_completion_kind(kind: int) -> int {
+	return 3 if kind == zerg.NK_FN       # Function
+	return 2 if kind == zerg.NK_METHOD   # Method
+	return 5 if kind == zerg.NK_FIELD    # Field
+	return 20 if kind == zerg.NK_VARIANT # EnumMember
+	return 22 if kind == zerg.NK_STRUCT  # Struct
+	return 13 if kind == zerg.NK_ENUM    # Enum
+	return 8 if kind == zerg.NK_SPEC     # Interface
+	return 7 if kind == zerg.NK_TYPE     # Class
+	return 21 if kind == zerg.NK_CONST   # Constant
+	return 9 if kind == zerg.NK_IMPORT   # Module
+	return 25 if kind == zerg.NK_TPARAM  # TypeParameter
+
+	return 6 # Variable: a local or a parameter
+}
+
+# ls_signature_result is the signature of the call a place is inside: the innermost argument
+# list around it (ast.nx_call_at), the declaration that call's name resolved to — `definition`'s
+# answer at that name — and which of its parameters the place is in.
+#
+# THE LABEL IS THE DOCUMENT'S, as a hover's fence is: the signature `zerg doc` prints, extracted
+# by its reader from the declaration's source. A declaration the document does not reach is
+# spelled from what the index holds — its name and its parameters' names. The parameters are
+# the index's too (ast.nx_params_of), each marked in the label where its name stands.
+#
+# Only a FUNCTION has a signature here. A call whose name resolved to a type or a variant is a
+# construction, and a call through a binding is a value's; neither has parameters the index
+# recorded, so neither is given a signature it would have to make up.
+fn ls_signature_result(s: Server, params: json.Val, load: fn (str, list[str], list[str]) -> Program) -> json.Val {
+	return json.null() if not s.has_nx
+
+	uri := json.as_str(json.walk(params, "textDocument", "uri"))
+	path := ls_uri_path(uri)
+	line := json.as_int(json.walk(params, "position", "line"))
+	ch := json.as_int(json.walk(params, "position", "character"))
+	nx := s.nx
+	k := zerg.nx_call_at(nx, path, line, ch)
+	return json.null() if k < 0
+
+	u := zerg.nx_use_at(nx, path, nx.k_line[k], nx.k_col[k])
+	return json.null() if u < 0
+
+	mut ds: list[int] = []
+	for d in zerg.nx_decls_of(nx, u) {
+		if nx.d_kind[d] == zerg.NK_FN or nx.d_kind[d] == zerg.NK_METHOD {
+			ds.append(d)
+		}
+	}
+	return json.null() if ds.len() == 0
+
+	# the source of a declaration in another file is fetched as a hover fetches it (ls_hover_result)
+	text := ls_doc_text(s, uri)
+	mut fetch := false
+	for d in ds {
+		fetch = fetch or nx.files[nx.d_file[d]] != path
+	}
+	mut prog := program([], [], [], [], [], [])
+	if fetch {
+		prog = ls_load(s, path, load)
+	}
+
+	arg := zerg.nx_arg_at(nx, k, line, ch)
+	mut sigs: list[json.Val] = []
+	for d in ds {
+		sigs.append(ls_signature(nx, d, ls_hover_src(nx, d, path, text, prog)))
+	}
+	mut fs: list[json.Field] = []
+	json.put(fs, "signatures", json.of_list(sigs))
+	json.put_int(fs, "activeSignature", 0)
+	json.put_int(fs, "activeParameter", arg)
+	return json.of_obj(fs)
+}
+
+# ls_signature is one declaration as LSP's SignatureInformation.
+fn ls_signature(nx: zerg.NameIndex, d: int, src: str) -> json.Val {
+	name := zerg.nx_name(nx, d)
+	ps := zerg.nx_params_of(nx, d)
+	at := zerg.doc_decl_at(src, nx.files[nx.d_file[d]], nx.d_line[d] + 1, name)
+	mut label := at.sig
+	if not at.ok {
+		label = f"{zerg.nk_word(nx.d_kind[d])} {name}("
+		mut i := 0
+		for i < ps.len() {
+			if i > 0 {
+				label = label + ", "
+			}
+			label = label + zerg.nx_name(nx, ps[i])
+			i = i + 1
+		}
+		label = label + ")"
+	}
+
+	# each parameter is its name's place in the label, searched in order after the `(` — so a
+	# parameter called like the function, or like a type in an earlier one, is found where it is
+	lb := bytearray(label)
+	mut seek := ls_byte_index(lb, b'(', 0)
+	mut pars: list[json.Val] = []
+	for p in ps {
+		pn := zerg.nx_name(nx, p)
+		lo := ls_word_index(lb, bytearray(pn), seek + 1)
+		mut pf: list[json.Field] = []
+		if lo >= 0 {
+			hi := lo + bytearray(pn).len()
+			json.put(pf, "label", json.of_list([json.Val.Int(ls_utf16_col(lb, lo)), json.Val.Int(ls_utf16_col(lb, hi))]))
+			seek = hi
+		} else {
+			json.put_str(pf, "label", pn)
+		}
+		pars.append(json.of_obj(pf))
+	}
+	mut fs: list[json.Field] = []
+	json.put_str(fs, "label", label)
+	json.put(fs, "parameters", json.of_list(pars))
+	if at.ok and at.doc.len() > 0 {
+		mut doc := at.doc[0]
+		mut i := 1
+		for i < at.doc.len() {
+			doc = doc + "\n" + at.doc[i]
+			i = i + 1
+		}
+		mut mf: list[json.Field] = []
+		json.put_str(mf, "kind", "markdown")
+		json.put_str(mf, "value", doc)
+		json.put(fs, "documentation", json.of_obj(mf))
+	}
+	return json.of_obj(fs)
+}
+
+fn ls_byte_index(b: list[byte], c: byte, start: int) -> int {
+	mut i := start
+	for i < b.len() {
+		return i if b[i] == c
+		i = i + 1
+	}
+	return -1
+}
+
+# ls_word_index is where `w` stands in `b` at or after `start` as a whole word, or -1.
+fn ls_word_index(b: list[byte], w: list[byte], start: int) -> int {
+	mut i := start
+	if i < 0 {
+		i = 0
+	}
+	for i + w.len() <= b.len() {
+		mut same := true
+		mut j := 0
+		for same and j < w.len() {
+			same = b[i + j] == w[j]
+			j = j + 1
+		}
+		before := i == 0 or not ls_is_word(b[i - 1])
+		after := i + w.len() == b.len() or not ls_is_word(b[i + w.len()])
+		return i if same and before and after
+		i = i + 1
+	}
+	return -1
+}
+
+# ls_workspace_symbol_result is every declaration of the program a name is looked up by — the
+# functions, types and constants of each file, and the members of each type — whose name holds
+# the query, in either case. A local, a parameter and a type parameter are not
+# looked up from outside the body they are written in, so they are not listed.
+#
+# THE WORKSPACE IS THE PROGRAM the last check loaded, which is the buffer's program and every
+# module it imports — the standard library included — and not a directory: a file nothing
+# imports is in no program, and the compiler has nothing to say about its names.
+fn ls_workspace_symbol_result(s: Server, params: json.Val) -> json.Val {
+	mut out: list[json.Val] = []
+	return json.of_list(out) if not s.has_nx
+
+	q := ls_lower(json.as_str(json.get(params, "query")))
+	nx := s.nx
+	mut d := 0
+	for d < nx.d_file.len() {
+		k := nx.d_kind[d]
+		listed := (zerg.nx_has(nx, d, zerg.NF_TOP) and k != zerg.NK_IMPORT) or zerg.nx_is_member(nx, d)
+		if listed {
+			name := zerg.nx_name(nx, d)
+			if ls_has_sub(ls_lower(name), q) {
+				mut fs: list[json.Field] = []
+				json.put_str(fs, "name", name)
+				json.put_int(fs, "kind", ls_symbol_kind(zerg.nk_word(k)))
+				json.put(fs, "location", ls_decl_location(nx, d))
+				json.put_str(fs, "containerName", zerg.mod_name(nx.mods[nx.d_mod[d]]))
+				out.append(json.of_obj(fs))
+			}
+		}
+		d = d + 1
+	}
+	return json.of_list(out)
+}
+
+fn ls_has_sub(s: str, q: str) -> bool {
+	a := bytearray(s)
+	b := bytearray(q)
+	mut i := 0
+	for i + b.len() <= a.len() {
+		mut j := 0
+		for j < b.len() and a[i + j] == b[j] {
+			j = j + 1
+		}
+		return true if j == b.len()
+		i = i + 1
+	}
+	return false
+}
+
+# --- rename ---
+#
+# A rename is the uses `references` lists, edited — of the declaration under the cursor and of
+# every declaration a shared use of it may also be (ast.nx_group). Before an edit is offered it
+# is asked of the COMPILER: the program with every edit applied is checked again, and the rename
+# stands only if the compiler says what it said before and every renamed place resolves, in the
+# new program's own index, to declarations whose uses are exactly the places renamed. A new name
+# that a use would now read differently — one already in scope, one that shadows — is refused
+# with the place it would change, instead of being handed to the editor to find out.
+
+# Renaming is what a rename takes, or the sentence that says why there is none: the declarations,
+# the uses that will be edited, and the name they are written as now.
+struct Renaming {
+	pub why: str
+	pub ds: list[int]
+	pub us: list[int]
+	pub old: str
+}
+
+fn ls_renaming(s: Server, params: json.Val) -> Renaming {
+	none: list[int] = []
+	u := ls_use_under(s, params)
+	return Renaming("no name the compiler resolved is written here", none, none, "") if u < 0
+
+	nx := s.nx
+	ds := zerg.nx_group(nx, zerg.nx_decls_of(nx, u))
+	old := zerg.nx_name(nx, ds[0])
+	for d in ds {
+		k := nx.d_kind[d]
+		m := nx.mods[nx.d_mod[d]]
+
+		return Renaming(f"`{old}` is the namespace an import binds, which is the last segment of its path — change the path, or bind it with `as`", none, none, old) if k == zerg.NK_IMPORT
+		return Renaming(f"`{old}` is declared in the standard library ({zerg.mod_name(m)}), which this program uses and does not own", none, none, old) if ls_starts_with(m, "stdlib:")
+		return Renaming(f"`{old}` is a member of a contract — a `spec`'s requirement and each `impl … for` keeping it are separate declarations, and renaming one alone breaks the program", none, none, old) if (k == zerg.NK_METHOD or k == zerg.NK_FN) and zerg.nx_in_contract(nx, d)
+	}
+	return Renaming("", ds, zerg.nx_uses_of(nx, ds), old)
+}
+
+# prepareRename is whether the place can be renamed and what: the use's range, and the name.
+fn ls_prepare_rename_reply(s: Server, id: json.Val, params: json.Val) {
+	r := ls_renaming(s, params)
+	if r.why != "" {
+		ls_error_reply(id, -32803, r.why)
+		return
+	}
+
+	nx := s.nx
+	u := ls_use_under(s, params)
+	mut fs: list[json.Field] = []
+	json.put(fs, "range", ls_range_of(nx.u_line[u], nx.u_col[u], nx.u_line[u], nx.u_col[u] + nx.u_len[u]))
+	json.put_str(fs, "placeholder", r.old)
+	ls_reply(id, json.of_obj(fs))
+}
+
+fn ls_rename_reply(s: Server, id: json.Val, params: json.Val, load: fn (str, list[str], list[str]) -> Program) {
+	fresh := json.as_str(json.get(params, "newName"))
+	if not zerg.is_name(fresh) {
+		ls_error_reply(id, -32803, f"`{fresh}` is not a name — a rename writes one identifier, which is not a keyword")
+		return
+	}
+	r := ls_renaming(s, params)
+	if r.why != "" {
+		ls_error_reply(id, -32803, r.why)
+		return
+	}
+	uri := json.as_str(json.walk(params, "textDocument", "uri"))
+	why := ls_rename_holds(s, uri, r, fresh, load)
+	if why != "" {
+		ls_error_reply(id, -32803, why)
+		return
+	}
+
+	# the edits, one list per file in the order the index recorded the files
+	nx := s.nx
+	mut files: list[json.Field] = []
+	mut f := 0
+	for f < nx.files.len() {
+		mut edits: list[json.Val] = []
+		for u in r.us {
+			if nx.u_file[u] == f {
+				mut ef: list[json.Field] = []
+				json.put(ef, "range", ls_range_of(nx.u_line[u], nx.u_col[u], nx.u_line[u], nx.u_col[u] + nx.u_len[u]))
+				json.put_str(ef, "newText", fresh)
+				edits.append(json.of_obj(ef))
+			}
+		}
+		if edits.len() > 0 {
+			json.put(files, ls_path_uri(nx.files[f]), json.of_list(edits))
+		}
+		f = f + 1
+	}
+	mut fs: list[json.Field] = []
+	json.put(fs, "changes", json.of_obj(files))
+	ls_reply(id, json.of_obj(fs))
+}
+
+# ls_rename_holds is the rename CHECKED — "" when it holds, and otherwise the sentence saying
+# where it does not. The program is loaded with the renamed texts standing in for every file the
+# rename edits, open or not, and checked as a keystroke is checked.
+fn ls_rename_holds(s: Server, uri: str, r: Renaming, fresh: str, load: fn (str, list[str], list[str]) -> Program) -> str {
+	nx := s.nx
+	path := ls_uri_path(uri)
+	prog := ls_load(s, path, load)
+	mut paths := ls_doc_paths(s)
+	mut texts := ls_doc_texts(s)
+	mut f := 0
+	for f < nx.files.len() {
+		mut at: list[int] = []
+		for u in r.us {
+			if nx.u_file[u] == f {
+				at.append(nx.u_line[u])
+				at.append(nx.u_col[u])
+			}
+		}
+		if at.len() > 0 {
+			p := nx.files[f]
+			k := ls_str_at(paths, p)
+			if k >= 0 {
+				texts[k] = ls_renamed_text(texts[k], at, bytearray(r.old).len(), fresh)
+			} else {
+				paths.append(p)
+				texts.append(ls_renamed_text(ls_src_of(prog.paths, prog.srcs, p), at, bytearray(r.old).len(), fresh))
+			}
+		}
+		f = f + 1
+	}
+
+	res := guard {
+		load(path, paths, texts)
+	}
+	lerr := match res {
+		Either.Left(_)  => ""
+		Either.Right(e) => ls_raised(e)
+	}
+	return f"renaming `{r.old}` to `{fresh}` leaves a program that does not load: {lerr}" if lerr != ""
+
+	p2 := match res {
+		Either.Left(p)  => p
+		Either.Right(_) => program([], [], [], [], [], [])
+	}
+
+	mut ds: list[zerg.Diag] = []
+	mut nx2 := zerg.no_index()
+	mut notes: list[zerg.Diag] = []
+	err := match guard {
+		zerg.check_lint_index(p2.srcs, p2.paths, zerg.mods_of(p2.paths, p2.mods, p2.imp_at, p2.imp_path, p2.imp_mod), ds, nx2, notes)
+		ds.len()
+	} {
+		Either.Left(_)  => ""
+		Either.Right(e) => ls_raised(e)
+	}
+	return f"renaming `{r.old}` to `{fresh}` leaves a program the compiler refuses: {err}" if err != ""
+
+	if not ls_same_strs(ls_diag_codes(ds), s.nx_codes) {
+		for d in ds {
+			return f"renaming `{r.old}` to `{fresh}` changes what the compiler says: {d.code} {d.msg}" if not ls_has_str(s.nx_codes, d.code)
+		}
+		return f"renaming `{r.old}` to `{fresh}` changes what the compiler says about the program"
+	}
+	ls_nx_utf16(nx2, p2.paths, p2.srcs)
+
+	# where each renamed place stands now: a column later on its line by the renamed places before it
+	delta := bytearray(fresh).len() - bytearray(r.old).len()
+	mut want_f: list[str] = []
+	mut want_l: list[int] = []
+	mut want_c: list[int] = []
+	for u in r.us {
+		mut before := 0
+		for v in r.us {
+			if nx.u_file[v] == nx.u_file[u] and nx.u_line[v] == nx.u_line[u] and nx.u_col[v] < nx.u_col[u] {
+				before = before + 1
+			}
+		}
+		want_f.append(nx.files[nx.u_file[u]])
+		want_l.append(nx.u_line[u])
+		want_c.append(nx.u_col[u] + before * delta)
+	}
+	mut got: list[int] = []
+	mut i := 0
+	for i < want_f.len() {
+		u2 := zerg.nx_use_at(nx2, want_f[i], want_l[i], want_c[i])
+		return f"after renaming `{r.old}` to `{fresh}`, the name at {ls_place_of(want_f[i], want_l[i], want_c[i])} resolves to nothing" if u2 < 0
+
+		for d in zerg.nx_decls_of(nx2, u2) {
+			got.append(d)
+		}
+		i = i + 1
+	}
+	for u2 in zerg.nx_uses_of(nx2, zerg.nx_group(nx2, got)) {
+		p := nx2.files[nx2.u_file[u2]]
+		mut hit := false
+		i = 0
+		for i < want_f.len() {
+			hit = hit or (want_f[i] == p and want_l[i] == nx2.u_line[u2] and want_c[i] == nx2.u_col[u2])
+			i = i + 1
+		}
+		return f"renaming `{r.old}` to `{fresh}` changes what the name at {ls_place_of(p, nx2.u_line[u2], nx2.u_col[u2])} reads" if not hit
+	}
+	return ""
+}
+
+# ls_place_of is a place as a reader writes one: the path, a 1-based line and column.
+fn ls_place_of(path: str, line: int, col: int) -> str {
+	return f"{path}:{line + 1}:{col + 1}"
+}
+
+# ls_diag_codes is the code of every finding, in the order the check made them — what a rename
+# must leave as it was.
+fn ls_diag_codes(ds: list[zerg.Diag]) -> list[str] {
+	mut out: list[str] = []
+	for d in ds {
+		out.append(d.code)
+	}
+	return out
+}
+
+fn ls_same_strs(a: list[str], b: list[str]) -> bool {
+	return false if a.len() != b.len()
+
+	mut i := 0
+	for i < a.len() {
+		return false if a[i] != b[i]
+		i = i + 1
+	}
+	return true
+}
+
+# ls_renamed_text is `text` with the name `old_len` bytes long at each place of `at` — a 0-based
+# line and a UTF-16 column, in pairs — written as `fresh`.
+fn ls_renamed_text(text: str, at: list[int], old_len: int, fresh: str) -> str {
+	b := bytearray(text)
+	st := ls_line_starts(b)
+	mut offs: list[int] = []
+	mut i := 0
+	for i + 1 < at.len() {
+		o := ls_byte_at(b, ls_start_of(st, at[i]), at[i + 1])
+		mut j := offs.len()
+		offs.append(o)
+		for j > 0 and offs[j - 1] > o {
+			offs[j] = offs[j - 1]
+			j = j - 1
+		}
+		offs[j] = o
+		i = i + 2
+	}
+
+	nb := bytearray(fresh)
+	mut out: list[byte] = []
+	mut k := 0
+	for o in offs {
+		for k < o {
+			out.append(b[k])
+			k = k + 1
+		}
+		for c in nb {
+			out.append(c)
+		}
+		k = o + old_len
+	}
+	for k < b.len() {
+		out.append(b[k])
+		k = k + 1
+	}
+	return str(out)
+}
+
+# ls_byte_at is the byte offset `u16` UTF-16 units into the line starting at `at` — the inverse of
+# ls_utf16_from, by the same rule.
+fn ls_byte_at(b: list[byte], at: int, u16: int) -> int {
+	mut n := 0
+	mut i := at
+	for i < b.len() and n < u16 and b[i] != b'\n' {
+		c := int(b[i])
+		n = n + 1
+		if c >= 240 {
+			n = n + 1
+		}
+		i = i + 1
+		for i < b.len() and int(b[i]) >= 128 and int(b[i]) < 192 {
+			i = i + 1
+		}
+	}
+	return i
 }
 
 fn ls_location(path: str, line: int, col: int, len: int) -> json.Val {

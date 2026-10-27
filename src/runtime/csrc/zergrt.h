@@ -391,11 +391,12 @@ enum {
 	ZRT_ERR_ASSERTION      = 11, /* AssertionError: a claim `assert` made that did not hold */
 };
 
-/* AN ERR OWNS WHAT IT HOLDS, when it says so. `owned` is set on an Err a program built
- * (zrt_err_own): its msg is a counted str cell, and the Err holds one count on it. The
- * runtime's own aborts carry a plain C string literal, which has no cell header to count,
- * so they build with zrt_err_new and leave the flag clear. zrt_err_copy and zrt_err_drop
- * read the flag; nothing else may retain or release an Err's msg.
+/* AN ERR OWNS WHAT IT HOLDS, when it says so. `owned` is set on an Err built with
+ * zrt_err_own: its msg is a counted or immortal str cell, and the Err holds one count on it.
+ * That is every Err the shipping compiler or the runtime's own aborts build (#405), so a
+ * reader that binds `e.msg` retains a cell. zrt_err_new borrows a plain C string and leaves
+ * the flag clear; only the seed builds with it. zrt_err_copy and zrt_err_drop read the
+ * flag; nothing else may retain or release an Err's msg.
  *
  * `cause` is the payload of a counted cell (zrt_err_chain) and is counted whatever the
  * flag says: a copy shares the chain and the last holder frees it. */
@@ -484,21 +485,40 @@ void zrt_handler_pop(zrt_frame *frame);
 /* zrt_abort unwinds cleanups up to the innermost handler (running every pending
  * defer/drop along the way) and longjmps to it; with no handler it reports the
  * message and exits non-zero. This is the single exit that `raise`, `x!`, an
- * alias violation and OOM all funnel through. */
-_Noreturn void zrt_abort(const char *msg);
-
-/* zrt_abort_kind is zrt_abort carrying a built-in error KIND (a ZRT_ERR_* value), so a
+ * alias violation and OOM all funnel through.
+ *
+ * zrt_abort_kind is zrt_abort carrying a built-in error KIND (a ZRT_ERR_* value), so a
  * guard-recovered intrinsic abort (int-parse ValueError, a checked-conversion
  * OverflowError, io IOError, the str bridge's EncodingError, a bounds IndexError/
  * KeyError) reifies to the matching nameable kind. `zrt_abort(msg)` is the ZRT_ERR_NONE
- * case. */
-_Noreturn void zrt_abort_kind(int kind, const char *msg);
+ * case.
+ *
+ * BOTH TAKE A STRING LITERAL, and are macros so that they can (#405). The message becomes
+ * the Err a guard recovers, and a program that binds `e.msg` retains it — which reads a
+ * count header in front of the bytes. A bare literal has none, so each call site puts its
+ * literal in a static IMMORTAL cell, the shape the emitters give a str literal, and hands
+ * the cell to zrt_abort_cell. Nothing is allocated, so an out-of-memory abort is as safe as
+ * any other, and nothing is left for a holder that never drops its Err to leak. A pointer
+ * where the literal belongs does not compile: the cell's array cannot be initialised from
+ * one, which is the check. */
+_Noreturn void zrt_abort_cell(int kind, const char *msg);
+
+#define ZRT_ABORT_LIT(kind, lit)                                                            \
+	do {                                                                                     \
+		static struct {                                                                      \
+			zrt_ref_hdr h;                                                                   \
+			char        b[sizeof(lit)];                                                      \
+		} zrt_lit_ = {{ZRT_RC_IMMORTAL, NULL}, lit};                                         \
+		zrt_abort_cell((kind), zrt_lit_.b);                                                  \
+	} while (0)
+#define zrt_abort(lit)            ZRT_ABORT_LIT(ZRT_ERR_NONE, lit)
+#define zrt_abort_kind(kind, lit) ZRT_ABORT_LIT(kind, lit)
 
 /* --- Err value + carrying abort (unwind.c, Decision D) -------------------- */
 
 /* zrt_err_new builds an Err with the given message, no cause, and the generic kind
- * (ZRT_ERR_NONE). The message is BORROWED for the life of the program: this is the
- * constructor for a C string literal, which nothing counts. */
+ * (ZRT_ERR_NONE). The message is BORROWED for the life of the program and is not a cell, so
+ * an Err a program can bind must not be built with it: the seed's emitter is its user. */
 zrt_err zrt_err_new(const char *msg);
 
 /* zrt_err_own builds the Err a program constructs: msg is a counted str cell and the
@@ -512,7 +532,7 @@ zrt_err zrt_err_copy(zrt_err e);
 void    zrt_err_drop(zrt_err e);
 
 /* zrt_err_new_kind builds an Err with a built-in KIND (a ZRT_ERR_* value) and message,
- * no cause — the value a `raise ValueError("…")` carries. */
+ * no cause. It borrows msg as zrt_err_new does. */
 zrt_err zrt_err_new_kind(int kind, const char *msg);
 
 /* zrt_err_chain attaches a cause to an Err ALREADY BUILT: `raise e from c` records c
@@ -858,9 +878,8 @@ static inline int64_t zrt_trunc(double v) {
  * raises EncodingError on violation, going FROM a str never fails. */
 zrt_list zrt_str_bytes(const char *s);
 zrt_list zrt_str_runes(const char *s);
-/* zrt_str_dup copies a C string into a managed cell. It is how an `Err`'s message is read:
- * a zrt_err's msg may be a managed payload, an immortal literal cell, or a plain string
- * literal the runtime raised with, and only a copy is correct for all three. */
+/* zrt_str_dup copies a C string into a managed cell. It is how `e.message()` reads an
+ * `Err`'s message: a copy is the reader's own, whatever the message is. */
 const char *zrt_str_dup(const char *s);
 
 const char *zrt_str_from_bytes(zrt_list bytes);

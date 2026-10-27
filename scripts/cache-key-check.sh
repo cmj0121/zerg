@@ -75,4 +75,41 @@ if [[ "$first" == "$second" ]]; then
 	exit 1
 fi
 
-printf 'cache-key-check: two compilers, two keys — the cache names what filled it\n'
+# THE RUNTIME HEADER is the third input the program's C does not carry: the C includes it,
+# and its inline helpers and macros are compiled into the PROGRAM's object. Keyed on the C
+# alone, a changed header read back objects built against the old one (#405: a function that
+# became a macro left cached objects calling a symbol nothing defined, and the link failed).
+# So the same program is built against a copy of the runtime whose header differs by one
+# trailing comment, and the PROGRAM unit's key must change. A program unit is the object
+# with an emitted `.c` beside it; the runtime units' keys hashed the header already, so
+# comparing every key would pass without the fix.
+mkdir -p "$tmp/rt"
+cp src/runtime/csrc/* "$tmp/rt/"
+printf '/* cache-key-check: the header changed */\n' >>"$tmp/rt/zergrt.h"
+
+prog_keys() {
+	local cache=$1
+	find "$cache" -name '*.o.c' -exec basename {} .o.c \; | sort | tr '\n' ' '
+}
+
+build_into "$tmp/c3" "$PATH" >/dev/null
+plain=$(prog_keys "$tmp/c3")
+rm -rf "$tmp/c4"
+ZERG_RUNTIME="$tmp/rt" ZERG_CACHE="$tmp/c4" "$ZERG" build "$tmp/p.zg" -o "$tmp/out" >/dev/null 2>&1 || {
+	printf 'cache-key-check: the build against the copied runtime failed\n' >&2
+	exit 1
+}
+changed=$(prog_keys "$tmp/c4")
+
+if [[ -z "$plain" || -z "$changed" ]]; then
+	printf 'cache-key-check: no program unit was cached — the `.c` beside it is how this finds one\n' >&2
+	exit 1
+fi
+
+if [[ "$plain" == "$changed" ]]; then
+	printf 'cache-key-check: the same program key under two runtime headers — %s\n' "$plain" >&2
+	printf 'cache-key-check: zergrt.h is not in a program unit'"'"'s key, so a changed header reads back stale objects\n' >&2
+	exit 1
+fi
+
+printf 'cache-key-check: two compilers, two keys; two headers, two program keys — the cache names what filled it\n'

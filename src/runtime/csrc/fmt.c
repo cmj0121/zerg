@@ -83,17 +83,12 @@ const char *zrt_str_concat(const char *a, const char *b) {
 	return p;
 }
 
-/* zrt_str_dup COPIES a C string into a managed cell, and is what an `Err`'s message is read
- * through. `zrt_str_retain` cannot serve there: it recovers a cell header from the byte
- * BEFORE the payload, and a zrt_err's msg is very often not a payload at all — every abort
- * the runtime raises itself passes a plain string literal ("index out of range"
- * in list.c, and its like in str.c, map.c, sys.c and conv.c). Retaining one of those reads
- * eight bytes of .rodata as a refcount and writes them back, which is a bus error on a good
- * day and silent corruption on a bad one.
- *
- * Copying costs an allocation per read and needs no invariant about where the message came
- * from, which is the property worth paying for: the caller owns what it is handed, whoever
- * raised it. */
+/* zrt_str_dup COPIES a C string into a managed cell, and is what `e.message()` reads an
+ * `Err`'s message through. It was the only correct read while a runtime abort carried a plain
+ * string literal ("index out of range" in list.c, and its like elsewhere): retaining one
+ * reads eight bytes of .rodata as a refcount and writes them back. The runtime's aborts carry
+ * an immortal cell now (zrt_abort, #405), but an Err the seed built still borrows; the copy
+ * costs an allocation per read and needs no invariant about where the message came from. */
 const char *zrt_str_dup(const char *s) {
 	if (s == NULL) {
 		s = "";
@@ -221,14 +216,12 @@ const char *zrt_ascii_escape(const char *s) {
 /* spec_reject ends the run naming the spec that could not be rendered. A spec is written
  * in the source, so this is deterministic for a given program: the same run always ends
  * the same way, which is what makes it a diagnosis rather than a crash. */
-_Noreturn static void spec_reject(const char *why) {
-	zrt_abort_kind(ZRT_ERR_VALUE, why);
-}
+#define spec_reject(why) zrt_abort_kind(ZRT_ERR_VALUE, why) /* a macro: it takes a literal */
 
 /* spec_digits reads a run of digits into a bounded value. It stops accumulating at the
- * limit rather than wrapping, so the refusal below is reached with a number to name and
- * the accumulation itself is never undefined. */
-static long spec_digits(const char *s, size_t *i, size_t n, long limit, const char *why) {
+ * limit rather than wrapping, so the accumulation itself is never undefined, and answers -1
+ * past it: the caller names the field, because the refusal takes a literal (zrt_abort_kind). */
+static long spec_digits(const char *s, size_t *i, size_t n, long limit) {
 	long v = 0;
 	while (*i < n && s[*i] >= '0' && s[*i] <= '9') {
 		if (v <= limit) {
@@ -236,10 +229,7 @@ static long spec_digits(const char *s, size_t *i, size_t n, long limit, const ch
 		}
 		(*i)++;
 	}
-	if (v > limit) {
-		spec_reject(why);
-	}
-	return v;
+	return v > limit ? -1 : v;
 }
 
 
@@ -293,12 +283,16 @@ static void parse_spec(const char *s, fmt_spec *f) {
 		}
 		i++;
 	}
-	f->width = spec_digits(s, &i, n, ZRT_FMT_MAX_WIDTH,
-	                       "a format spec's width is past what this runtime pads to");
+	f->width = spec_digits(s, &i, n, ZRT_FMT_MAX_WIDTH);
+	if (f->width < 0) {
+		spec_reject("a format spec's width is past what this runtime pads to");
+	}
 	if (i < n && s[i] == '.') {
 		i++;
-		f->prec = spec_digits(s, &i, n, ZRT_FMT_MAX_WIDTH,
-		                      "a format spec's precision is past what this runtime produces");
+		f->prec = spec_digits(s, &i, n, ZRT_FMT_MAX_WIDTH);
+		if (f->prec < 0) {
+			spec_reject("a format spec's precision is past what this runtime produces");
+		}
 	}
 	if (i < n) {
 		f->type = s[i];

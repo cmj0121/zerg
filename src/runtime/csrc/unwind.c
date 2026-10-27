@@ -182,17 +182,12 @@ static _Noreturn void zrt_unwind_abort(zrt_err e) {
 	exit(1);
 }
 
-_Noreturn void zrt_abort(const char *msg) {
-	/* A string abort still stashes an Err so a surrounding `guard` recovers a value
-	 * (with the message) rather than nothing; behaviour is otherwise unchanged. */
-	g_tls.taken = zrt_err_new(msg);
-	zrt_unwind_abort(g_tls.taken);
-}
-
-_Noreturn void zrt_abort_kind(int kind, const char *msg) {
-	/* Like zrt_abort, but the stashed Err carries a built-in KIND so a guard-recovered
-	 * intrinsic error is distinguishable (`err is ValueError`, etc.). */
-	g_tls.taken = zrt_err_new_kind(kind, msg);
+_Noreturn void zrt_abort_cell(int kind, const char *msg) {
+	/* The abort still stashes an Err so a surrounding `guard` recovers a value (with the
+	 * message and the KIND, so `err is ValueError` holds) rather than nothing. The message
+	 * is the immortal cell zrt_abort/zrt_abort_kind built around their literal, so the Err
+	 * owns it like any other str and a reader may keep it (#405). */
+	g_tls.taken = zrt_err_own(kind, msg);
 	zrt_unwind_abort(g_tls.taken);
 }
 

@@ -191,9 +191,16 @@ static void hand_to_receiver(zrt_chan *ch, zrt_waiter *r, const void *val) {
  * spec names StopIteration, which is an ordinary ending and not a failure. Giving it a
  * kind of its own is what lets a receiver tell a clean close from a crash without
  * matching on a message — and the taxonomy has no way to raise StopIteration from
- * Zerg, so no crash Err can wear this kind by accident. */
+ * Zerg, so no crash Err can wear this kind by accident.
+ *
+ * Its message is a static IMMORTAL cell handed to zrt_err_own, so a receiver that binds
+ * `e.msg` of a clean close retains a cell and not a bare literal (#405). */
 static zrt_err chan_stop_iteration(void) {
-	return zrt_err_new_kind(ZRT_ERR_STOP_ITERATION, "channel closed");
+	static struct {
+		zrt_ref_hdr h;
+		char        b[sizeof("channel closed")];
+	} msg = {{ZRT_RC_IMMORTAL, NULL}, "channel closed"};
+	return zrt_err_own(ZRT_ERR_STOP_ITERATION, msg.b);
 }
 
 zrt_chan *zrt_chan_new(size_t elemsz, size_t cap, zrt_drop_fn drop) {

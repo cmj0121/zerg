@@ -9,6 +9,16 @@
  */
 #include "zergrt.h"
 
+/* root_landed is every entry's abort landing: zrt_abort already reported the error and ran
+ * the cleanups down to the frame's mark, so what is left is the frame itself and the Err the
+ * abort carried. Nothing reads that Err after the report, and a message the runtime raised is
+ * a counted cell (#405), so the landing takes it and gives it back. */
+static int root_landed(zrt_frame *frame) {
+	zrt_handler_pop(frame);
+	zrt_err_drop(zrt_taken_err());
+	return 1;
+}
+
 int zrt_run(zrt_main_fn fn) {
 	zrt_frame frame;
 	zrt_fault_init(); /* a stack overflow from here on dies with its name */
@@ -19,9 +29,7 @@ int zrt_run(zrt_main_fn fn) {
 		zrt_handler_pop(&frame);
 		return zrt_result_is_err(r) ? 1 : 0;
 	}
-	/* abort landed here: zrt_abort already ran cleanups down to frame.mark */
-	zrt_handler_pop(&frame);
-	return 1;
+	return root_landed(&frame);
 }
 
 /* zrt_run_args is zrt_run for a `fn main(args: list[str]) -> Result[nil]` program: it
@@ -38,8 +46,7 @@ int zrt_run_args(zrt_main_args_fn fn, zrt_list args) {
 		zrt_handler_pop(&frame);
 		return zrt_result_is_err(r) ? 1 : 0;
 	}
-	zrt_handler_pop(&frame);
-	return 1;
+	return root_landed(&frame);
 }
 
 /* zrt_main_run_nil / _int / _args are zrt_run for the three entry shapes that answer no
@@ -66,8 +73,7 @@ int zrt_main_run_nil(void (*fn)(void)) {
 		zrt_handler_pop(&frame);
 		return 0;
 	}
-	zrt_handler_pop(&frame);
-	return 1;
+	return root_landed(&frame);
 }
 
 /* zrt_main_run_int carries main's value out as the process's status; an abort answers 1,
@@ -82,8 +88,7 @@ int zrt_main_run_int(int64_t (*fn)(void)) {
 		zrt_handler_pop(&frame);
 		return (int)rc;
 	}
-	zrt_handler_pop(&frame);
-	return 1;
+	return root_landed(&frame);
 }
 
 /* zrt_main_run_args hands the args list on, on the same terms as zrt_run_args: main owns
@@ -98,8 +103,7 @@ int zrt_main_run_args(void (*fn)(zrt_list), zrt_list args) {
 		zrt_handler_pop(&frame);
 		return 0;
 	}
-	zrt_handler_pop(&frame);
-	return 1;
+	return root_landed(&frame);
 }
 
 /* zrt_main_run_args_int is the fourth corner: args in, an exit code out. Both compilers
@@ -116,6 +120,5 @@ int zrt_main_run_args_int(int64_t (*fn)(zrt_list), zrt_list args) {
 		zrt_handler_pop(&frame);
 		return (int)rc;
 	}
-	zrt_handler_pop(&frame);
-	return 1;
+	return root_landed(&frame);
 }

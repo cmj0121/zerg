@@ -264,7 +264,9 @@ _E4077_，也就是上文的同目錄規則。
 私有的**泛型**函式也一樣。template 屬於它的檔案：兩個檔案各自宣告私有的 `fn least[T]`，宣告的是兩個
 template，不論它們是兩個 module 還是同一個 module 的兩個檔案；裸呼叫 `least(…)` 指的是自己檔案那一個，每個
 instance 也各自是一個 C 符號（`examples/1g/generics`）。兩個 module 同名的公開泛型經由各自的限定詞抵達，與兩個
-一般函式一樣。同一個 module 裡的兩個 `pub` 泛型是一個公開名字出現兩次，對它的限定呼叫是 _E4077_。
+一般函式一樣。同一個 module 裡的兩個 `pub` 泛型，在限定詞指名的是 module 時，是一個公開名字出現兩次：從外面寫
+`lib.least` 是 _E4077_。兄弟檔案的限定詞指名的是那個檔案，跟 `two.helper` 一樣。`two.least` 是 `two.zg` 的
+template，私有的那一個是 _E3001_，並指出那個檔案（`examples/1g/sibgeneric`）。
 
 例外是 `pub` 型別的私有**方法**：另一個 module 目前叫得到它。那是編譯器的缺口而不是語言的規則，`zerg lint` 也因此
 以整支程式來判斷這種方法（[lint](../tooling/lint.zh-TW.md)）。

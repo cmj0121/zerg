@@ -89,6 +89,11 @@ func (c *checker) inferCall(n *ast.Call) Type {
 			c.synthArgs(n)
 			return types.Unknown
 		}
+		if msg := c.bareTypeElsewhere(id.Name); msg != "" {
+			c.errorf(id.Span(), "%s", msg)
+			c.synthArgs(n)
+			return Invalid
+		}
 		c.errorf(id.Span(), "undefined function %q", id.Name)
 		c.synthArgs(n)
 		return Invalid

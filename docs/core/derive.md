@@ -258,10 +258,50 @@ impl Encode for User {                            # generated, not written
 }
 ```
 
-A sum type derives over its variants the same way — **tag, then payload**. When the wire format must
-differ — a different key, a field deliberately left off the wire — **hand-write the impl instead of
-deriving**; it replaces the generated one, so there is still one canonical implementation and still no
-macro.
+A sum type derives over its variants the same way — **tag, then payload**.
+
+**The bytes.** Everything is little-endian, and nothing is padded. `begin`, `field` and `end` write
+nothing: the name given to `field` is the walk, not a byte on the wire. A `Sink` writes a value's bytes
+and a `Source` reads those same bytes back. A value nested in another — a field, a list element, a
+payload, the `T` of a present `T?` — uses the same row, and an auto-boxed recursive slot is the value,
+not the box.
+
+| Form      | Bytes                                                  |
+| --------- | ------------------------------------------------------ |
+| `int`     | 8 bytes, little-endian, two's complement               |
+| `uint`    | 8 bytes, little-endian, unsigned                       |
+| `str`     | a `uint` byte count, then those UTF-8 bytes            |
+| `list[T]` | a `uint` element count, then each element              |
+| `T?`      | one byte: `0` is nil, `1` is present, then the `T`     |
+| struct    | its fields, in declaration order, and nothing else     |
+| enum      | its tag as an `int`, then each payload value, in order |
+
+An `int` is the signed 64-bit. `1` is `01 00 00 00 00 00 00 00`, and `-1` is `ff ff ff ff ff ff ff ff`.
+A `uint` is the unsigned 64-bit, and a count is one of those: a `str` counts **bytes**, not code points,
+and writes no trailing NUL, so `"ab"` is `02 00 00 00 00 00 00 00 61 62`. An empty `str` or an empty
+`list` is eight `00` bytes and then nothing.
+
+A `T?` is one byte, `00` for nil and `01` for present, and the `T` follows only when that byte is `01`.
+Nil as an `int?` is `00`. A present `7` is `01` and then the eight bytes of the `int` `7`. This is not
+the enum rule — an optional is not a tag plus a payload.
+
+A struct is its fields in declaration order and nothing around them: no names, no count. An empty struct
+writes nothing. A `struct P { x: int; y: int? }` holding `1` and nil is the eight bytes of that `int`
+and then one `00`.
+
+An enum writes its tag as an `int`, then each payload type in the parentheses, in order. A variant with
+no payload stops at the tag. When every variant is fieldless the tag is that variant's discriminant, the
+number `int(v)` reads, including one written `= n`. When any variant carries a payload the tag is opaque
+(`E4006`), so the number is the declaration index counting from `0`. `enum E { A; B = 4 }` writes `B` as
+`04 00 00 00 00 00 00 00`. `enum Shape { Dot; Line(int) }` writes `Line(3)` as the eight bytes of `int`
+`1` and then the eight bytes of `int` `3`, and writes `Dot` as the eight bytes of `int` `0`.
+
+A `bool`, a `byte`, a `rune` and a `float` have no row. A `chan`, a `Ref`, a `fn` and a handle are
+already excluded by the table above.
+
+When the wire format must differ — a different key, a field deliberately left off the wire —
+**hand-write the impl instead of deriving**; it replaces the generated one, so there is still one
+canonical implementation and still no macro.
 
 `Decode` returns `Result[This]`, so a malformed input is an ordinary value-tier failure — `guard`-free
 on the happy path, `?`-propagated on error — never an abort. (`Result[T]` is not FFI-safe, but that's

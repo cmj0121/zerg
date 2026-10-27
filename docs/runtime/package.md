@@ -334,7 +334,9 @@ So is a private GENERIC function. A template is its file's: two files that each 
 `fn least[T]` declare two templates, whether they are two modules or two files of one, a bare `least(…)` is
 its own file's, and each instance is a C symbol of its own (`examples/1g/generics`). Two modules' public
 generics of one name are reached through their qualifier, as two plain functions are. Two `pub` ones in ONE
-module are one public name twice, and a qualified call to it is _E4077_.
+module are one public name twice when the qualifier names the module: `lib.least` from outside is _E4077_.
+A sibling file's qualifier names that file, as `two.helper` does. `two.least` is `two.zg`'s template, and a
+private one is _E3001_ naming that file (`examples/1g/sibgeneric`).
 
 The exception is a private METHOD of a `pub` type: another module can call it today. That is the compiler's
 gap rather than the language's rule, and `zerg lint` judges such a method by the whole program for that reason

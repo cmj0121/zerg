@@ -65,6 +65,7 @@ entry 檔，加上它所 import 的模組。
 | [`1g/pubconst/`](1g/pubconst)       | `pub COUNT := 3` 是真正的成員；模組繫結不需要 `const`            |
 | [`1g/pubname/`](1g/pubname)         | 兩個模組可以宣告同一個公開名字；由限定呼叫來選                   |
 | [`1g/generics/`](1g/generics)       | 多個檔案中同名的泛型各屬於自己的檔案；由限定呼叫來選             |
+| [`1g/sibgeneric/`](1g/sibgeneric)   | 兄弟檔案的限定詞 `two.least` 抵達那個檔案的 template             |
 | [`1g/filefns/`](1g/filefns)         | 多個檔案中同名的私有函式各屬於自己的檔案                         |
 | [`1g/fileconsts/`](1g/fileconsts)   | 多個檔案中同名的私有模組常數各屬於自己的檔案                     |
 | [`1g/modconst/`](1g/modconst)       | 模組常數是同一個物件，不管在哪裡讀都一樣                         |

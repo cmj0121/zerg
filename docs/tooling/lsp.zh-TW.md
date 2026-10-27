@@ -671,9 +671,9 @@ GB——而在下面第二趟走訪拿掉之後重新量,它變小了,但仍然�
 `return`、自由函式的引數、spawn 或 `for … in` 接下它時,一個端點都只被計數一次。還不成立的地方,和 `main` 上
 一樣:一個擁有的端點——呼叫的結果,`mk()`——交給方法引數、struct 欄位、list 元素或 `defer` 引數時,它的計數會留
 下來,而對它做 `defer` 可能死結而不只是漏;一個丟棄 channel 端點的陳述式,單獨寫的 `buffered()`,也會留下計數,因
-為丟棄還回去的是會被複製的值,而 channel 是計數的。`make lsp` 要求 N 次檢查的 session 不超過一次檢查的 session
-的 K 倍,這看的是整體的漏;`make mem-check` 要求每一種漏的形狀各自漏零,這才是逐一形狀的保證;corpus 則在
-sanitizer 底下跑過每一個這樣的使用者。
+為丟棄還回去的是會被複製的值,而 channel 是計數的。`make lsp` 要求同一個 session 裡,第一次檢查之後 malloc
+仍未歸還的位元組,在後面的檢查維持原數。負載不會移動這個差,而這就是整體的漏怎麼被看到的。`make mem-check`
+要求每一種漏的形狀各自漏零,這才是逐一形狀的保證,corpus 則在 sanitizer 底下跑過每一個這樣的使用者。
 
 **第二趟走訪也沒了。** 一次檢查的時間大約有一半,是因為 `publishDiagnostics` 把程式走了**兩趟**——一趟拿錯誤,
 再在 `lint_program` 裡用自己的 merge、自己的走訪拿 `L5xx` conversion lint。`check_and_lint` 用一趟走訪同時回答兩者:

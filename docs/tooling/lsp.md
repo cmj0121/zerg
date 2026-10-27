@@ -872,8 +872,9 @@ yet, the same on `main`: an owned end — a call's result, `mk()` — handed to 
 struct field, a list element or a `defer` argument keeps its count, and a `defer` of one can
 deadlock rather than only leak; and a statement that discards a channel end, `buffered()` on its
 own, keeps its count too, because the discard gives back values that are copied, and a channel is
-counted. `make lsp` holds a session of N checks to K times a session of one, which sees the leak in
-aggregate; `make mem-check` holds each leaking shape to zero, which is the per-shape guarantee; and
+counted. `make lsp` holds the bytes malloc still has outstanding after further checks of one session
+to the bytes after the first. Load does not move that difference, and it is what sees the leak in
+aggregate. `make mem-check` holds each leaking shape to zero, which is the per-shape guarantee, and
 the corpus runs every one of those consumers under the sanitizers.
 
 **The second walk is gone too.** Roughly half of a check's time was that `publishDiagnostics` walked

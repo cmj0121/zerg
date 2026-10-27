@@ -3628,4 +3628,434 @@ elif [ "$ca_rc" -ne 0 ]; then
 	echo "lsp-check: a quick fix is not the check's answer, or costs a walk of its own"
 	exit 1
 fi
+# --- 14. completion, signature help, workspace symbol and rename are views of the index -----
+#
+# Four more questions about a name, answered from the one index `definition` reads (#194), and
+# each held to the compiler rather than to a list written here:
+#
+#   completion  at each `# probe` line of the fixture below, the bare names it offers as values
+#               are exactly the fixture's spellings that `zerg build` accepts written there —
+#               a name offered that does not build is out of scope, one that builds and is not
+#               offered is a scope the index lost. And over the names fixture of section 7,
+#               every name the compiler resolved is offered where it is written.
+#   signature   every call written in the names fixture: a signature exactly when the name
+#               resolves to a function, its label the document's (hover's fence), its
+#               parameters as many as the call passes, and the argument a place is in.
+#   workspace   every declaration the outline lists is found by name at the outline's place,
+#               and nothing found is a declaration the outline does not have.
+#   rename      every declaration of the names fixture: refused for an import, the standard
+#               library and a contract, and otherwise the edits are exactly its references and
+#               those of the declarations a shared place joins it to — the edits section 7
+#               holds to the compiler; a sample is applied and built here. A new name a use
+#               would read differently is refused, and the naive edit it refuses must change
+#               what the program says, or the refusal is not earned.
+mkdir -p "$tmp/views"
+cat >"$tmp/views/main.zg" <<'ZG'
+import "strings"
+
+LIMIT := 3
+
+struct Acc {
+	pub n: int
+}
+
+impl Acc {
+	BASE := 10
+
+	fn bump(by: int) -> int {
+		# probe method
+		return this.n + by + Acc.BASE
+	}
+}
+
+enum Shape {
+	Dot
+	Sq(int)
+}
+
+fn area(s: Shape) -> int {
+	return match s {
+		Shape.Sq(side) => {
+			# probe arm
+			side * side
+		}
+		Shape.Dot => 0
+	}
+}
+
+fn scale(v: int, by: int = 2) -> int {
+	return v * by
+}
+
+fn other(q: int) -> int {
+	hidden := q + 1
+	# probe other
+	return hidden
+}
+
+fn main() {
+	x := 1
+	if x > 0 {
+		inner := 2
+		print inner
+	}
+	# probe after-if
+	for i in [1, 2] {
+		# probe loop
+		print i
+	}
+	f := fn (z: int) -> int {
+		# probe lambda
+		return z + x
+	}
+	total := scale(x, by: 3) + other(f(x)) + LIMIT
+	print total + area(Shape.Sq(2)) + Acc(1).bump(2)
+	print strings.has_prefix("ab", "a")
+	later := 5
+	print later
+}
+ZG
+if ! "$ZERG" build --emit check "$tmp/views/main.zg" >/dev/null 2>"$tmp/views.cc"; then
+	echo "VIEWS     the completion fixture does not build, so there is nothing to hold completion to"
+	sed 's/^/  /' "$tmp/views.cc"
+	exit 1
+fi
+if ! "$PY" - "$ZERG" "$tmp/views" "$tmp/names" <<'PYEOF'
+import json, os, re, shutil, subprocess, sys
+
+zerg, views, names = sys.argv[1], sys.argv[2], sys.argv[3]
+VMAIN = os.path.join(views, "main.zg")
+MAIN, LIB = os.path.join(names, "main.zg"), os.path.join(names, "lib.zg")
+src = {p: open(p, encoding="utf-8").read() for p in (VMAIN, MAIN, LIB)}
+bad = 0
+
+
+def check(ok, what, got):
+    global bad
+    if not ok:
+        print("VIEWS     %s — got %r" % (what, got))
+        bad += 1
+
+
+def uri_of(p):
+    return "file://" + os.path.abspath(p)
+
+
+def frame(m):
+    b = json.dumps(m).encode()
+    return b"Content-Length: %d\r\n\r\n%s" % (len(b), b)
+
+
+# one session per program: the entry is opened once and every request is a frame after it
+def ask(path, reqs):
+    msgs = [{"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {"capabilities": {}}},
+            {"jsonrpc": "2.0", "method": "textDocument/didOpen", "params": {"textDocument": {
+                "uri": uri_of(path), "languageId": "zerg", "version": 1, "text": src[path]}}}]
+    for k, (method, params) in enumerate(reqs):
+        msgs.append({"jsonrpc": "2.0", "id": 100 + k, "method": method, "params": params})
+    msgs += [{"jsonrpc": "2.0", "id": 2, "method": "shutdown"}, {"jsonrpc": "2.0", "method": "exit"}]
+    out = subprocess.run([zerg, "lsp"], input=b"".join(frame(m) for m in msgs),
+                         stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, timeout=300).stdout
+    got, i = {}, 0
+    while i < len(out):
+        j = out.find(b"\r\n\r\n", i)
+        if j < 0:
+            break
+        n = int(re.search(rb"Content-Length:\s*(\d+)", out[i:j], re.I).group(1))
+        f = json.loads(out[j + 4:j + 4 + n].decode("utf-8"))
+        if f.get("id") == 1:
+            got["caps"] = f["result"]["capabilities"]
+        elif "id" in f and f["id"] >= 100:
+            got[f["id"] - 100] = f
+        i = j + 4 + n
+    return got.get("caps"), [got.get(k, {"error": "no reply"}) for k in range(len(reqs))]
+
+
+def at(p, line, ch):
+    return {"textDocument": {"uri": uri_of(p)}, "position": {"line": line, "character": ch}}
+
+
+def place(loc):
+    return (loc["uri"][len("file://"):], loc["range"]["start"]["line"], loc["range"]["start"]["character"])
+
+
+def u16(text, k):
+    return len(text[:k].encode("utf-16-le")) // 2
+
+
+# --- completion, held to the build ---
+lines = src[VMAIN].split("\n")
+probes = [(ln, len(t) - len(t.lstrip("\t")), t.strip()[len("# probe "):]) for ln, t in enumerate(lines) if t.strip().startswith("# probe ")]
+# the spellings asked about are the fixture's names that resolve to a declaration somewhere in it,
+# which leaves out every keyword and built-in type without a list of them
+vt = [(ln, m.start(), m.group(0)) for ln, t in enumerate(lines)
+      for m in re.finditer(r"[A-Za-z_][A-Za-z0-9_]*", re.sub(r'"[^"]*"|#.*', lambda m: " " * len(m.group(0)), t))]
+_, vdefs = ask(VMAIN, [("textDocument/definition", at(VMAIN, ln, c)) for ln, c, _ in vt])
+spellings = sorted({n for (_, _, n), d in zip(vt, vdefs) if d.get("result")})
+caps, replies = ask(VMAIN, [("textDocument/completion", at(VMAIN, ln, col)) for ln, col, _ in probes])
+for key in ("completionProvider", "signatureHelpProvider", "workspaceSymbolProvider", "renameProvider"):
+    check(key in (caps or {}), "initialize advertises %s" % key, caps)
+VALUE = ("binding", "parameter", "fn", "const")
+held = 0
+for (ln, col, what), r in zip(probes, replies):
+    items = (r.get("result") or {}).get("items", [])
+    offered = {i["label"] for i in items if i.get("detail") in VALUE}
+    builds = set()
+    for name in spellings:
+        t = list(lines)
+        t[ln] = "\t" * col + "zq_probe := %s" % name
+        d = views + ".probe"
+        shutil.rmtree(d, ignore_errors=True)
+        os.mkdir(d)
+        open(os.path.join(d, "main.zg"), "w", encoding="utf-8").write("\n".join(t))
+        if subprocess.run([zerg, "build", "--emit", "check", os.path.join(d, "main.zg")],
+                          stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=120).returncode == 0:
+            builds.add(name)
+    held += len(spellings)
+    check(offered == builds, "completion at the %s probe offers the values that build there (offered and not built: %s; built and not offered: %s)"
+          % (what, sorted(offered - builds), sorted(builds - offered)), None)
+    check(all(i.get("detail") not in ("field", "method", "variant") for i in items),
+          "completion at the %s probe offers no member as a bare name" % what, [i["label"] for i in items if i.get("detail") in ("field", "method", "variant")])
+check(len(probes) >= 6 and len(spellings) >= 20, "the completion fixture has its probes and its names", (len(probes), len(spellings)))
+
+# --- completion, over every name the compiler resolved ---
+# each identifier of the names fixture that is not a member (after `.`), not a named argument or
+# a field written in a construction (before `:`), and not a declaration's own name, is offered
+# where it is written
+toks = []
+for p in (MAIN, LIB):
+    for ln, text in enumerate(src[p].split("\n")):
+        code = re.sub(r'"[^"]*"', lambda m: " " * len(m.group(0)), text.split("#")[0])
+        for m in re.finditer(r"[A-Za-z_][A-Za-z0-9_]*", code):
+            if code[:m.start()].rstrip().endswith(".") or code[m.end():].lstrip().startswith(":"):
+                continue
+            toks.append((p, ln, u16(text, m.start()), m.group(0)))
+_, defs = ask(MAIN, [("textDocument/definition", at(p, ln, ch)) for p, ln, ch, _ in toks])
+used = [(t, d["result"]) for t, d in zip(toks, defs) if isinstance(d.get("result"), dict)]
+used = [(t, d) for t, d in used if place(d) != (os.path.abspath(t[0]), t[1], t[2])]
+_, comps = ask(MAIN, [("textDocument/completion", at(p, ln, ch)) for (p, ln, ch, _), _ in used])
+for ((p, ln, ch, name), _), r in zip(used, comps):
+    labels = {i["label"] for i in (r.get("result") or {}).get("items", [])}
+    check(name in labels, "completion at %s:%d:%d offers `%s`, which the compiler resolved there" % (os.path.basename(p), ln + 1, ch + 1, name), None)
+check(len(used) >= 60, "most of the names fixture's names are asked about", len(used))
+
+# --- signature help ---
+calls = []
+for p in (MAIN, LIB):
+    for ln, text in enumerate(src[p].split("\n")):
+        # a string is blanked to letters, not spaces: it is an argument as much as a name is
+        code = re.sub(r'"[^"]*"', lambda m: "s" * len(m.group(0)), text.split("#")[0])
+        for m in re.finditer(r"([A-Za-z_][A-Za-z0-9_]*)\(", code):
+            if code[:m.start()].endswith("fn "):
+                continue
+            # the argument starts: after the `(`, and after each comma at its own depth
+            starts, depth, k = [m.end()], 0, m.end()
+            while k < len(code):
+                c = code[k]
+                if c in "([":
+                    depth += 1
+                elif c in ")]":
+                    if depth == 0:
+                        break
+                    depth -= 1
+                elif c == "," and depth == 0:
+                    starts.append(k + 1)
+                k += 1
+            empty = code[m.end():k].strip() == ""
+            calls.append((p, ln, u16(text, m.start(1)), m.group(1), [u16(text, s) for s in starts], 0 if empty else len(starts)))
+_, cdefs = ask(MAIN, [("textDocument/definition", at(p, ln, ch)) for p, ln, ch, _, _, _ in calls])
+_, chov = ask(MAIN, [("textDocument/hover", at(p, ln, ch)) for p, ln, ch, _, _, _ in calls])
+reqs = []
+for p, ln, _, _, starts, _ in calls:
+    for s in starts:
+        reqs.append(("textDocument/signatureHelp", at(p, ln, s)))
+_, sigs = ask(MAIN, reqs)
+k, fns = 0, 0
+for (p, ln, ch, name, starts, nargs), d, h in zip(calls, cdefs, chov):
+    target = d.get("result")
+    if isinstance(target, list):
+        # a shared place: its signatures are the candidates', and hover shows each under a rule
+        k += len(starts)
+        continue
+    is_fn = False
+    if isinstance(target, dict):
+        tp, tl, tc = place(target)
+        decl = (src.get(tp) or open(tp, encoding="utf-8").read()).split("\n")[tl]
+        m2 = re.search(r"\bfn\s+(%s)\b" % re.escape(name), decl)
+        is_fn = m2 is not None and u16(decl, m2.start(1)) == tc
+    fence = ((h.get("result") or {}).get("contents") or {}).get("value", "")
+    sig = fence.split("\n")[1] if fence.startswith("```zerg\n") else None
+    for i, s in enumerate(starts):
+        r = sigs[k].get("result")
+        k += 1
+        where = "%s:%d:%d `%s(`" % (os.path.basename(p), ln + 1, ch + 1, name)
+        if not is_fn:
+            check(r is None, "%s is not a function's call and has no signature" % where, r)
+            continue
+        if not isinstance(r, dict) or not r.get("signatures"):
+            check(False, "%s calls a function and has a signature" % where, r)
+            continue
+        one = r["signatures"][0]
+        check(one["label"] == sig, "%s is labelled with the document's signature" % where, (one["label"], sig))
+        check(len(one["parameters"]) == nargs or "=" in one["label"], "%s passes as many arguments as its signature has parameters" % where, (len(one["parameters"]), nargs))
+        check(r["activeParameter"] == i, "%s at its argument %d is in parameter %d" % (where, i, i), r["activeParameter"])
+        fns += i == 0
+check(fns >= 15, "the names fixture's function calls are asked about", fns)
+
+# --- workspace symbol ---
+# the outline is asked of each file as an open buffer, which is what it answers for
+outs = [ask(p, [("textDocument/documentSymbol", {"textDocument": {"uri": uri_of(p)}})])[1][0] for p in (MAIN, LIB)]
+outlined = set()
+def walk(p, syms):
+    for s in syms:
+        if s["kind"] not in (2, 5):  # an import binds a namespace and an impl names no declaration
+            r = s["selectionRange"]["start"]
+            outlined.add((s["name"], os.path.abspath(p), r["line"], r["character"]))
+        walk(p, s.get("children") or [])
+for p, o in zip((MAIN, LIB), outs):
+    walk(p, o.get("result") or [])
+names_of = sorted({n for n, _, _, _ in outlined})
+_, found = ask(MAIN, [("workspace/symbol", {"query": n}) for n in names_of] + [("workspace/symbol", {"query": ""})])
+for n, r in zip(names_of, found):
+    hits = {(e["name"],) + place(e["location"]) for e in (r.get("result") or [])}
+    for o in outlined:
+        if o[0] == n:
+            check(o in hits, "workspace/symbol `%s` finds the declaration the outline has at %s:%d:%d" % (n, os.path.basename(o[1]), o[2] + 1, o[3] + 1), None)
+    check(all(n.lower() in h[0].lower() for h in hits), "workspace/symbol `%s` finds only names holding it" % n, None)
+every = {(e["name"],) + place(e["location"]) for e in (found[-1].get("result") or [])}
+mine = {e for e in every if e[1] in (os.path.abspath(MAIN), os.path.abspath(LIB))}
+# the outline lists a spec by its name and nothing under it; a requirement is a declaration a
+# name is looked up by, so the workspace has it — and nothing else the outline does not
+def in_spec(e):
+    ls = src[e[1]].split("\n")
+    above = [t for t in ls[:e[2]] if t and not t[0].isspace()]
+    return ls[e[2]].startswith("\tfn ") and above != [] and above[-1].startswith("spec ")
+check(outlined <= mine, "every declaration of the fixture's outline is a workspace symbol (missing: %s)" % sorted(outlined - mine)[:5], None)
+check(all(in_spec(e) for e in mine - outlined), "a workspace symbol the outline does not list is a spec's requirement", sorted(e for e in mine - outlined if not in_spec(e))[:5])
+check(any(in_spec(e) for e in mine - outlined), "the fixture's spec requirements are workspace symbols", sorted(mine - outlined))
+check(len(every) > len(mine), "the workspace is the program, the standard library it imports included", len(every))
+
+# --- rename ---
+def edits_of(r):
+    out = set()
+    for u, es in ((r.get("result") or {}).get("changes") or {}).items():
+        for e in es:
+            out.add((u[len("file://"):], e["range"]["start"]["line"], e["range"]["start"]["character"]))
+    return out
+
+def build_out(files):
+    d = names + ".views-rename"
+    shutil.rmtree(d, ignore_errors=True)
+    os.mkdir(d)
+    for p, t in files.items():
+        open(os.path.join(d, os.path.basename(p)), "w", encoding="utf-8").write(t)
+    exe = os.path.join(d, "prog")
+    b = subprocess.run([zerg, "build", "--emit", "bin", "-o", exe, os.path.join(d, "main.zg")],
+                       stdout=subprocess.PIPE, stderr=subprocess.STDOUT, timeout=300)
+    if b.returncode != 0:
+        return "build failed: " + b.stdout.decode("utf-8").replace(d, names)[:300]
+    return subprocess.run([exe], stdout=subprocess.PIPE, stderr=subprocess.STDOUT, timeout=60).stdout.decode("utf-8")
+
+def apply(edits, fresh):
+    files = {p: src[p] for p in (MAIN, LIB)}
+    for p, line, ch in sorted(edits, key=lambda x: (x[0], x[1], -x[2])):
+        ls = files[p].split("\n")
+        t = ls[line]
+        k, n = 0, 0
+        while n < ch:
+            n += len(t[k].encode("utf-16-le")) // 2
+            k += 1
+        m = re.match(r"[A-Za-z_][A-Za-z0-9_]*", t[k:])
+        ls[line] = t[:k] + fresh + t[k + len(m.group(0)):]
+        files[p] = "\n".join(ls)
+    return files
+
+# every declaration any identifier of the fixture answers with — a member after a `.` included
+every_tok = [(p, ln, u16(text, m.start())) for p in (MAIN, LIB) for ln, text in enumerate(src[p].split("\n"))
+             for m in re.finditer(r"[A-Za-z_][A-Za-z0-9_]*", re.sub(r'"[^"]*"', lambda m: " " * len(m.group(0)), text.split("#")[0]))]
+_, all_defs = ask(MAIN, [("textDocument/definition", at(*t)) for t in every_tok])
+decls = set()
+for r in all_defs:
+    a = r.get("result")
+    for x in (a if isinstance(a, list) else [a] if isinstance(a, dict) else []):
+        decls.add(place(x))
+decls = sorted(d for d in decls if d[0] in (os.path.abspath(MAIN), os.path.abspath(LIB)))
+_, refs = ask(MAIN, [("textDocument/references", dict(at(*d), context={"includeDeclaration": True})) for d in decls])
+_, preps = ask(MAIN, [("textDocument/prepareRename", at(*d)) for d in decls])
+_, rens = ask(MAIN, [("textDocument/rename", dict(at(*d), newName="zq_fresh")) for d in decls])
+by_ref = {d: {place(x) for x in (r.get("result") or [])} for d, r in zip(decls, refs)}
+# a refusal names its reason: three the index answers before anything is edited, which
+# prepareRename gives as well, and one the compiler gives when the renamed program is checked
+why = {"an import": 0, "the standard library": 0, "a contract": 0, "the compiler": 0}
+CHEAP = (("an import", "namespace an import binds"), ("the standard library", "declared in the standard library"),
+         ("a contract", "member of a contract"))
+renamed = []
+for d, pr, rn in zip(decls, preps, rens):
+    where = "%s:%d:%d" % (os.path.basename(d[0]), d[1] + 1, d[2] + 1)
+    if "error" in rn:
+        msg = rn["error"].get("message", "")
+        kind = [w for w, said in CHEAP if said in msg]
+        if kind:
+            check("error" in pr and pr["error"].get("message") == msg, "prepareRename at %s refuses what rename refuses" % where, pr)
+        else:
+            check(re.search(r"leaves a program|changes what|resolves to nothing", msg) is not None,
+                  "the rename refused at %s names the place the compiler would read differently" % where, msg)
+            kind = ["the compiler"]
+        why[kind[0]] += 1
+        continue
+    got = edits_of(rn)
+    # and the references of every declaration that shares a place with them: a shared place is a
+    # reference of each declaration it may be
+    want, grow = set(by_ref[d]), True
+    while grow:
+        grow = False
+        for e, rs in by_ref.items():
+            if rs & want and not rs <= want:
+                want |= rs
+                grow = True
+    check(got == want, "the rename at %s edits exactly its references (extra: %s; missing: %s)" % (where, sorted(got - want)[:3], sorted(want - got)[:3]), None)
+    check(isinstance(pr.get("result"), dict) and pr["result"].get("placeholder") == src[d[0]].split("\n")[d[1]][d[2]:d[2] + len(pr["result"].get("placeholder", ""))],
+          "prepareRename at %s offers the name written there" % where, pr.get("result"))
+    renamed.append((d, got))
+# and a name the standard library declares, asked where the fixture uses it
+lib_uses = [at(MAIN, i, t.index(n) + len(n) - len(n.split(".")[-1])) for i, t in enumerate(src[MAIN].split("\n")) for n in ("strings.has_prefix", "math.trunc") if n in t]
+_, std = ask(MAIN, [("textDocument/rename", dict(u, newName="zq_fresh")) for u in lib_uses])
+for r in std:
+    check("declared in the standard library" in (r.get("error") or {}).get("message", ""), "renaming a name the standard library declares is refused", r)
+    why["the standard library"] += 1
+for w, floor in (("an import", 2), ("the standard library", 2), ("a contract", 6), ("the compiler", 1)):
+    check(why[w] >= floor, "at least %d renames are refused as %s" % (floor, w), why[w])
+check(len(renamed) >= 30, "enough declarations are renamed to mean something", len(renamed))
+
+# a sample, applied and built: a local, a parameter, a field, a function another file declares,
+# and a group a shared place joins
+base = build_out({p: src[p] for p in (MAIN, LIB)})
+sample = [r for r in renamed if len({e[0] for e in r[1]}) > 1][:1] + [r for r in renamed if len(r[1]) >= 6][:2] + renamed[::max(1, len(renamed) // 3)][:3]
+for d, got in sample:
+    check(build_out(apply(got, "zq_fresh")) == base, "the rename at %s:%d:%d builds and prints what the program did" % (os.path.basename(d[0]), d[1] + 1, d[2] + 1), None)
+
+# capture: `q` in main renamed to `sh`, which a later line still reads as the earlier binding,
+# is refused — and the edits it refuses do change what the program says, so the refusal is the
+# compiler's. (`x` renamed to `k` is the other half: `k` is in scope too, but nothing after the
+# new binding reads the old one, so that rename is valid and is not refused.)
+ql = [i for i, t in enumerate(src[MAIN].split("\n")) if t.strip().startswith("q := lib.Point(")][0]
+xl = [i for i, t in enumerate(src[MAIN].split("\n")) if t.strip() == "x := 5"][0]
+_, cap = ask(MAIN, [("textDocument/rename", dict(at(MAIN, ql, 1), newName="sh")),
+                    ("textDocument/references", dict(at(MAIN, ql, 1), context={"includeDeclaration": True})),
+                    ("textDocument/rename", dict(at(MAIN, xl, 1), newName="k"))])
+check("error" in cap[0] and "`sh`" in cap[0]["error"].get("message", ""), "renaming `q` to `sh`, which a later line reads, is refused", cap[0])
+naive = build_out(apply({place(x) for x in (cap[1].get("result") or [])}, "sh"))
+check(naive != base, "the edits a refused capture would make change what the program builds or prints", naive[:200])
+check(build_out(apply(edits_of(cap[2]), "k")) == base, "renaming `x` to `k`, which shadows a binding nothing after it reads, builds and prints what it did", edits_of(cap[2]))
+_, nm = ask(MAIN, [("textDocument/rename", dict(at(MAIN, xl, 1), newName="for")), ("textDocument/rename", dict(at(MAIN, xl, 1), newName="a b"))])
+check(all("error" in r for r in nm), "a rename to a keyword or to two words is refused", nm)
+
+print("VIEWS     %d completion probes held to %d builds, %d resolved names offered where written, %d calls with a signature, %d outline symbols found by name, %d renames equal to their references (refused: %s)"
+      % (len(probes), held, len(used), fns, len(outlined), len(renamed), ", ".join("%d %s" % (v, k) for k, v in sorted(why.items()))))
+sys.exit(1 if bad else 0)
+PYEOF
+then
+	echo "lsp-check: completion, signature help, workspace symbol or rename is not a view of the index the compiler built"
+	exit 1
+fi
 echo "lsp-check: $ran buffers agree with the compiler, $outlined outlines are the parser's own, $members module members are checked against their module, formatting is fmt's answer, every protocol case holds, the dump carries the type parameters the outline cannot show, a check is one walk, a name answers with the declaration the compiler resolved it to, a long session stays in the band of one check, a hover is the document zerg doc prints for it, the outline is a view of the program, an outline of the largest source is not a walk of it, every open buffer is the program the editor holds, a keystroke asks once per program, and a quick fix is the check's answer and costs no walk of its own${not_judged:+ — NOT JUDGED on this host: ${not_judged#, }}"

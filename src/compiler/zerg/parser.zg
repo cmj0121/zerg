@@ -70,6 +70,11 @@ pub struct Parser {
 	# tp_scopes — the extent of each declaration that has type parameters (File.tp_scopes),
 	# appended when the declaration ends and never read
 	pub tp_scopes: list[ast.TyScope]
+
+	# blocks and calls — every block's extent and every argument list (File.blocks, File.calls),
+	# appended when each one closes and never read
+	pub blocks: list[ast.TyScope]
+	pub calls: list[ast.CallAt]
 }
 
 fn cur(mut &p: Parser) -> token.Token {
@@ -725,6 +730,14 @@ fn p_take_ty_uses(mut &p: Parser, mut &hp: Parser) {
 	for u in hp.ty_uses {
 		p.ty_uses.append(u)
 	}
+
+	# and the blocks and argument lists inside it, which sit at the file's places (fstr_place)
+	for b in hp.blocks {
+		p.blocks.append(b)
+	}
+	for k in hp.calls {
+		p.calls.append(k)
+	}
 }
 
 # --- types ---------------------------------------------------------------------
@@ -1341,7 +1354,7 @@ fn conv_ty(name: str) -> ast.Ty {
 # than a second door that says it by default.
 pub fn parse_at(src: str, path: str) -> ast.File {
 	toks := lexer.tokenize(src)
-	mut p := Parser(toks, 0, "", path, false, 0, 0, [], [], [], [])
+	mut p := Parser(toks, 0, "", path, false, 0, 0, [], [], [], [], [], [])
 	mut imports: list[ast.ImportDecl] = []
 	mut structs: list[ast.StructDecl] = []
 	mut enums: list[ast.EnumDecl] = []
@@ -1625,7 +1638,7 @@ pub fn parse_at(src: str, path: str) -> ast.File {
 	# not the end of the file, because that is where the reader has to go.
 	raise p_diag_at(p, unsafe_line, unsafe_col, rule.Rule.UnsafeGroupUnterminated, "this module-level `unsafe { … }` group is never closed — a group marks a context and the context has to end, or every declaration after it is read as being inside") if in_unsafe
 
-	return ast.File(imports, structs, enums, specs, impls, fns, types, consts, derive_on, derive_spec, derive_at, stmts, p.ty_quals, p.ty_apps, p.ty_uses, p.tp_scopes)
+	return ast.File(imports, structs, enums, specs, impls, fns, types, consts, derive_on, derive_spec, derive_at, stmts, p.ty_quals, p.ty_apps, p.ty_uses, p.tp_scopes, p.blocks, p.calls)
 }
 
 # p_take_top_stmt records a top-level statement for the build to refuse, and is the one
@@ -3311,6 +3324,7 @@ fn parse_with(mut &p: Parser) -> ast.Stmt {
 
 fn parse_block(mut &p: Parser) -> list[ast.Stmt] {
 	p_deeper(p)
+	open := cur(p)
 	expect(p, token.Kind.LBrace)
 	mut body: list[ast.Stmt] = []
 	mut deco_seen := false
@@ -3346,6 +3360,8 @@ fn parse_block(mut &p: Parser) -> list[ast.Stmt] {
 	}
 	expect(p, token.Kind.RBrace)
 	p_shallower(p)
+	be := p_ended(p)
+	p.blocks.append(ast.TyScope(p.path, open.line, open.col, be.line, be.col))
 	return body
 }
 
@@ -3821,7 +3837,7 @@ fn parse_assert(mut &p: Parser) -> ast.Stmt {
 # token list: `p` and `p.toks` cannot both be `mut &` in one call — they alias — and a list is
 # copy-on-write, so the value here is a refcount and not the file.
 fn p_scratch(mut &p: Parser, toks: list[token.Token], pos: int) -> Parser {
-	return Parser(toks, pos, p.impl_ty, p.path, p.saw_this, p.depth, p.edepth, [], [], [], [])
+	return Parser(toks, pos, p.impl_ty, p.path, p.saw_this, p.depth, p.edepth, [], [], [], [], [], [])
 }
 
 # p_assert_claims is the split: one claim per conjunct of a top-level `and` chain, and ONE
@@ -4676,6 +4692,14 @@ pub fn p_builtin_type_ctor(name: str) -> bool {
 }
 
 fn parse_call_args(mut &p: Parser) -> list[ast.Expr] {
+	# the callee is the token before the `(` when that token is a name — `f(`, `x.m(` — and
+	# nothing a reader could ask about otherwise
+	open := cur(p)
+	mut name := token.Token(token.Kind.Eof, "", "", 0, 0)
+	if p.pos > 0 and p.toks[p.pos - 1].kind == token.Kind.Ident {
+		name = p.toks[p.pos - 1]
+	}
+	mut commas: list[int] = []
 	p_advance(p) # '('
 	mut args: list[ast.Expr] = []
 	for not p_at(p, token.Kind.RParen) and not p_at(p, token.Kind.Eof) {
@@ -4693,15 +4717,28 @@ fn parse_call_args(mut &p: Parser) -> list[ast.Expr] {
 			p_advance(p)
 			p_advance(p)
 			args.append(ast.Expr.ENamedArg(nm, parse_expr(p), nt.line, nt.col))
+			p_call_comma(p, commas)
 			p_list_sep(p, token.Kind.RParen, ")", "an argument list")
 			continue
 		}
 
 		args.append(parse_expr(p))
+		p_call_comma(p, commas)
 		p_list_sep(p, token.Kind.RParen, ")", "an argument list")
 	}
 	expect(p, token.Kind.RParen)
+	e := p_ended(p)
+	p.calls.append(ast.CallAt(p.path, name.line, name.col, open.line, open.col, e.line, e.col, commas))
 	return args
+}
+
+# p_call_comma notes where the comma after an argument stands, before the separator rule reads it.
+fn p_call_comma(mut &p: Parser, mut &commas: list[int]) {
+	return if not p_at(p, token.Kind.Comma)
+
+	t := cur(p)
+	commas.append(t.line)
+	commas.append(t.col)
 }
 
 fn parse_primary(mut &p: Parser) -> ast.Expr {

@@ -838,9 +838,11 @@ fn doc_fn_sig(fd: ast.FnDecl) -> str {
 		out = out + "]"
 	}
 
+	# a METHOD's first parameter is the `this` the parser prepended, and is not written; an
+	# associated fn has none, so its first parameter is the first one written (FnDecl.is_assoc)
 	out = out + "("
 	mut k := 0
-	if fd.recv != "" {
+	if fd.recv != "" and not fd.is_assoc {
 		k = 1
 	}
 	mut first := true
@@ -887,10 +889,10 @@ fn doc_fn_word(fd: ast.FnDecl) -> str {
 }
 
 # doc_is_mut_fn answers whether a declaration is a `mut fn`. Only a method can be one — a free
-# function has no receiver to mutate — so `recv` is asked first, and the answer is then the
-# receiver's own `mut &`.
+# function and an associated fn have no receiver to mutate — so that is asked first, and the
+# answer is then the receiver's own `mut &`.
 fn doc_is_mut_fn(fd: ast.FnDecl) -> bool {
-	return false if fd.recv == ""
+	return false if fd.recv == "" or fd.is_assoc
 	return fd.params[0].is_ref
 }
 

@@ -2463,6 +2463,17 @@ fn c_nx_bind_to(mut &em: Emitter, row: int, d: int) {
 fn c_nx_bind_new(mut &em: Emitter, start: int, name: str, line: int, col: int, first: bool) {
 	return if not em.want_index
 
+	row := c_nx_row_of(em, start, name, first)
+	c_nx_bind(em, row, line, col, ast.NK_LOCAL)
+
+	# a binder made BEFORE the body it scopes is in scope inside that body alone (ast.NF_HEAD)
+	if first and row >= 0 {
+		ast.nx_mark(em.nx, em.env_nx[row], ast.NF_HEAD)
+	}
+}
+
+# c_nx_row_of is the row a statement made for `name` since `start` — the first or the last.
+fn c_nx_row_of(mut &em: Emitter, start: int, name: str, first: bool) -> int {
 	mut row := -1
 	mut i := start
 	for i < em.env_names.len() {
@@ -2471,18 +2482,21 @@ fn c_nx_bind_new(mut &em: Emitter, start: int, name: str, line: int, col: int, f
 		}
 		i = i + 1
 	}
-	c_nx_bind(em, row, line, col, ast.NK_LOCAL)
+	return row
 }
 
 # c_nx_pat_decl is the declaration a pattern binder makes, or -1 for a pattern that binds none.
+# A pattern's binder is in scope in its arm, after it (ast.NF_HEAD).
 fn c_nx_pat_decl(mut &em: Emitter, pt: ast.Pat) -> int {
 	return -1 if not em.want_index
 
-	return match pt {
+	d := match pt {
 		Pat.PBind(n, l, c) => c_nx_decl(em, em.at_path, l, c, n, ast.NK_LOCAL)
 		Pat.PAs(_, n, l, c) => c_nx_decl(em, em.at_path, l, c, n, ast.NK_LOCAL)
 		_ => -1
 	}
+	ast.nx_mark(em.nx, d, ast.NF_HEAD)
+	return d
 }
 
 # c_nx_sub is the declaration a substitution's text stands for, or -1 for an alias the lowering
@@ -2851,9 +2865,17 @@ fn c_nx_pos_lt(al: int, ac: int, bl: int, bc: int) -> bool {
 fn c_let_at(mut &em: Emitter, name: str, ty: ast.Ty, has_type: bool, is_mut: bool, is_const: bool, ival: ast.Expr, l: int, c: int, ind: str) -> str {
 	return c_let(em, name, ty, has_type, is_mut, is_const, ival, ind) if not em.want_index
 
+	# the statement's end, read before the initializer's walk moves the marker: a binding comes
+	# into scope there, and not inside its own initializer (ast.nx_from)
+	el := em.at_end_line
+	ec := em.at_end_col
 	start := em.env_names.len()
 	out := c_let(em, name, ty, has_type, is_mut, is_const, ival, ind)
-	c_nx_bind_new(em, start, name, l, c, false)
+	row := c_nx_row_of(em, start, name, false)
+	c_nx_bind(em, row, l, c, ast.NK_LOCAL)
+	if row >= 0 {
+		ast.nx_from(em.nx, em.env_nx[row], el, ec)
+	}
 	return out
 }
 
@@ -19509,6 +19531,9 @@ fn c_select(mut &em: Emitter, arms: list[ast.SelArm], ind: str, loop: bool) -> s
 			# what left `env_cval` one row short of the rest (c_add_var_named).
 			c_add_var_named(em, a.bind, elem, f"zgt_rv{tag}_{k - 1}", false, false)
 			c_nx_bind(em, em.env_names.len() - 1, a.bind_line, a.bind_col, ast.NK_LOCAL)
+			if em.want_index {
+				ast.nx_mark(em.nx, em.env_nx[em.env_names.len() - 1], ast.NF_HEAD)
+			}
 		}
 		c_live_restore(em, entry)
 
@@ -25038,6 +25063,8 @@ pub fn merge_asts(fs: list[ast.File]) -> ast.File {
 	mut ty_apps: list[ast.TyApp] = []
 	mut ty_uses: list[ast.TyUse] = []
 	mut tp_scopes: list[ast.TyScope] = []
+	mut blocks: list[ast.TyScope] = []
+	mut calls: list[ast.CallAt] = []
 	for f in fs {
 		for q in f.ty_quals {
 			ty_quals.append(q)
@@ -25050,6 +25077,12 @@ pub fn merge_asts(fs: list[ast.File]) -> ast.File {
 		}
 		for sc in f.tp_scopes {
 			tp_scopes.append(sc)
+		}
+		for b in f.blocks {
+			blocks.append(b)
+		}
+		for k in f.calls {
+			calls.append(k)
 		}
 		for c in f.consts {
 			consts.append(c)
@@ -25095,7 +25128,7 @@ pub fn merge_asts(fs: list[ast.File]) -> ast.File {
 	# because it reads one file at a time, and the length is part of the TYPE — so it has to
 	# become a number before anything compares two types, and this is the one door every path
 	# into the emitter goes through.
-	return generic.gen_resolve_lens(ast.File(imports, structs, enums, specs, impls, fns, types, consts, derive_on, derive_spec, derive_at, stmts, ty_quals, ty_apps, ty_uses, tp_scopes))
+	return generic.gen_resolve_lens(ast.File(imports, structs, enums, specs, impls, fns, types, consts, derive_on, derive_spec, derive_at, stmts, ty_quals, ty_apps, ty_uses, tp_scopes, blocks, calls))
 }
 
 fn c_emit_file_at(f: ast.File, ms: Mods, mut &diags: list[ast.Diag]) -> str {

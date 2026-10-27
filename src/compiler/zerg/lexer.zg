@@ -898,6 +898,23 @@ pub fn lex_diags(src: str, path: str) -> list[ast.Diag] {
 	return out
 }
 
+# is_name is whether `s` is ONE identifier, as this lexer reads one: not a keyword, not two
+# words, and nothing the lexer refuses. A rename asks it of the name it is handed, because a name
+# that does not lex as one is a rename to something that is not a name.
+pub fn is_name(s: str) -> bool {
+	return false if lex_diags(s, "").len() > 0
+
+	toks := tokenize(s)
+	return false if toks.len() < 2 or toks[0].kind != token.Kind.Ident or toks[0].lexeme != s
+
+	mut i := 1
+	for i < toks.len() {
+		return false if toks[i].kind != token.Kind.Semi and not is_eof(toks[i].kind)
+		i = i + 1
+	}
+	return true
+}
+
 # tokenize_trivia lexes with comments retained. Three passes want them: `zerg fmt` writes
 # them back out, `zerg desugar` carries them across the rewrite, and `zerg doc` reads a
 # declaration's documentation off them — which is why the comment no longer names one of the

@@ -284,7 +284,7 @@ pub fn gen_resolve_lens(f: ast.File) -> ast.File {
 	for sp in f.specs {
 		specs.append(ast.SpecDecl(sp.name, sp.params, sp.supers, sp.super_args, gen_len_fns(gen_len_view(lt, vs, sp.path), sp.reqs), sp.is_pub, sp.path, sp.line, sp.col, sp.name_line, sp.name_col, sp.end_line, sp.end_col))
 	}
-	return ast.File(f.imports, structs, enums, specs, f.impls, fns, types, consts, f.derive_on, f.derive_spec, f.derive_at, f.stmts, f.ty_quals, f.ty_apps, f.ty_uses, f.tp_scopes)
+	return ast.File(f.imports, structs, enums, specs, f.impls, fns, types, consts, f.derive_on, f.derive_spec, f.derive_at, f.stmts, f.ty_quals, f.ty_apps, f.ty_uses, f.tp_scopes, f.blocks, f.calls)
 }
 
 # LenTable is every folded module constant with the FILE that declares it, row for row.

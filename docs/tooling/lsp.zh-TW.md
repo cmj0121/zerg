@@ -55,9 +55,13 @@ module 擁有協定;driver 擁有檔案系統。
 | `textDocument/documentSymbol`                                 | `file_symbols`——被剖析的檔案裡的宣告         |
 | `textDocument/definition` · `references`                      | [名稱索引](#一個名字從同一份索引回答)        |
 | `textDocument/hover`                                          | `doc_decl_at`——`zerg doc` 印的那份文件       |
+| `textDocument/completion` · `signatureHelp`                   | [同一份索引](#索引的另外四個視角)            |
+| `workspace/symbol` · `prepareRename` · `rename`               | [同一份索引](#索引的另外四個視角)            |
 
 `initialize` 為上表文件同步之外的**每一個請求宣告 capability**——`documentFormattingProvider`、
-`codeActionProvider`、`documentSymbolProvider`、`definitionProvider`、`referencesProvider`、`hoverProvider`——外加
+`codeActionProvider`、`documentSymbolProvider`、`definitionProvider`、`referencesProvider`、`hoverProvider`、
+`completionProvider`、`signatureHelpProvider`、`workspaceSymbolProvider`,
+以及帶 `prepareProvider` 的 `renameProvider`——外加
 `textDocumentSync: 1`。其他每一個請求都會收到 **method-not-found 錯誤**,而不是沉默。一個在等永遠不會來的回覆的 client 會停止送下一個請求,然後編輯器就靜掉了,什麼也沒說。
 
 **session 是一台狀態機,而 exit status 是它的一部分。** `shutdown` 之後 server 只接受 `exit`;之後才到的 request 會收
@@ -473,14 +477,71 @@ definition 的 references 裡,而且沒有宣告在同拼寫的名字回不出�
 **它不做的事。**
 
 - **讀一則註解。** 索引找到宣告就停在那裡;那個宣告帶著的文件是 [hover](#hover-是宣告的文件),在被問到時才抽取。
-- **completion、signature help、workspace symbol、rename。** 每一個都是這份索引的一個視角,每一個都是 #194。
 - **沒有人實例化的樣板。** 泛型本體每個特化走一次,所以沒有呼叫抵達的樣板從未被走訪,它的名字沒有條目。
-- **契約。** spec 的 requirement 與每個遵守它的 method 是各自的宣告。單獨改名其中一個,依設計就會弄壞程式,而 rename 要怎麼
-  處理契約是 #194 的決定。
+- **契約。** spec 的 requirement 與每個遵守它的 method 是各自的宣告。單獨改名其中一個,依設計就會弄壞程式,所以
+  [rename](#索引的另外四個視角) 拒絕它。
 - **or-pattern 綁的名字。** `A(x) | B(x)` 在兩側各綁一次 `x`,本體讀的是匹配到的那一側——一個名字兩個宣告,所以回 `null`,
   而不是其中一個。
 - **共用使用點的單一宣告。** 泛型本體以兩種方式解析的 field、具名引數、variant pattern,或沒有共同 requirement 的
-  method,回答它解析到的每一個宣告,而不是先被走訪的那個實例化。rename 該帶走哪一個,是 #194 的決定。
+  method,回答它解析到的每一個宣告,而不是先被走訪的那個實例化。rename 把它們全部一起帶走。
+
+## 索引的另外四個視角
+
+completion、signature help、workspace symbol 與 rename,每一個都是 `definition` 回答所依據的那份
+[索引](#一個名字從同一份索引回答)的一種讀法,所以 completion 永遠不會提供跳轉到不了的名字,而 rename 編輯的正是
+`references` 列出的那些位置。
+
+| 請求                                    | 讀法                                 |
+| --------------------------------------- | ------------------------------------ |
+| `textDocument/completion`               | 該位置在範圍內的宣告                 |
+| `textDocument/signatureHelp`            | 最內層呼叫的名字解析到的函式         |
+| `workspace/symbol`                      | 會被人用名字查找的每一個宣告         |
+| `textDocument/prepareRename` · `rename` | 那個宣告的每一個使用點,由 build 檢查 |
+
+**走訪記不下來的,由剖析記下。** 範圍在區塊結束的地方結束,而一個位置是第幾個引數,取決於它周圍的括號與逗號;降階
+走訪兩者都不解析。parser 本來就站在每一個 `}` 與每一個 `)` 上,所以它像記錄型別參數的範圍那樣,在宣告旁記下每個區塊
+的範圍與每個引數列,而 `nx_program` 在走訪返回後把它們抄進同一份索引——連同契約(每個 `spec` 與 `impl … for` 的本體)
+以及哪些宣告是其檔案的頂層。走訪補上只有它知道的兩件事:哪些綁定者的範圍是它後面的區塊,以及宣告一個綁定的那個
+陳述式在哪裡結束,因為綁定在它自己的初始值裡不在範圍內。
+
+**completion 就是編譯器的範圍規則**,從這些列讀出來:
+
+| 宣告                                  | 在範圍內的地方                             |
+| ------------------------------------- | ------------------------------------------ |
+| 頂層宣告                              | 它所在的整個檔案,其他檔案都不是(E3114)     |
+| 區域綁定                              | 從它的陳述式結束,到它的區塊結束            |
+| 迴圈變數、`if let`、pattern 的綁定者  | 它那一行之後的區塊,或那一行剩下的部分      |
+| 參數                                  | 它的簽章剩下的部分,以及它所屬函式的本體    |
+| 型別參數                              | 寫下它的那個宣告                           |
+| field、method、variant、`impl` 的綁定 | 任何地方都不是裸名字:每一個都接在 `.` 後面 |
+
+另一個檔案的頂層宣告要透過 import 命名,不論是否 `pub`(E3114)。arm 寫下、後面沒有區塊的綁定者,在那一行剩下的部分
+在範圍內。在範圍內被宣告兩次的名字只回答一次,取最內層的那個。清單是完整的清單(`isIncomplete: false`):編輯器會依已輸入的
+文字過濾,而 server 若也過濾,就是第二條「什麼算符合」的規則。
+
+**signature 是函式的。** 它的 label 是 `zerg doc` 印的簽章——hover 的 fence,出自同一個抽取——而它的參數是索引在函式
+名字與本體之間記下的那些,每一個都標在它的名字在 label 裡的位置。名字解析到型別或 variant 的呼叫是建構,透過綁定的
+呼叫是某個值的呼叫;兩者都不會被給一個必須捏造的 signature。
+
+**workspace 就是程式**,也就是上一次檢查載入的那一個——buffer 自己的程式,以及它 import 的每一個 module,標準函式庫也
+包含在內——而不是一個目錄。區域綁定、參數與型別參數不會從它們的本體外被查找,所以不列出。
+
+**rename 在被提供之前,先問過編譯器。** 編輯的是游標處宣告的使用點,以及它的共用使用點可能也是的每一個宣告的使用點——
+透過泛型的 `x.n` 連在一起的 `P.n` 與 `Q.n`——一起改。接著程式以套用了每一處編輯的版本載入,不論那些檔案是否開著,並像
+一次按鍵那樣檢查:只有在編譯器說的話與之前相同,而且每一個被改名的位置在新程式自己的索引裡,解析到的宣告其使用點恰好
+就是被改名的那些位置時,rename 才成立。一個會讓某個使用點讀到不同東西的新名字會被拒絕,並指出它會改變的位置,而不是
+交給編輯器去發現。有三種拒絕不需要檢查,`prepareRename` 在輸入任何東西之前就會給出:
+
+- **import**——它綁定的 namespace 是它路徑的最後一段;
+- **標準函式庫**——程式使用它,但不擁有它;
+- **契約**——`spec` 的 requirement 與每個遵守它的 `impl … for` 是各自的宣告,單獨改名其中一個會弄壞程式。
+
+`make lsp` 把每一項都對到 `zerg build`。在一個 fixture 的每個探測點,completion 以值的身分提供的,恰好是 fixture 裡寫在
+那裡就能 build 的名字:提供了卻 build 不過的,是在範圍外;build 得過卻沒提供的,是索引弄丟的範圍。編譯器在名稱 fixture
+裡解析的每一個名字,都會在它被寫下的地方被提供。一個呼叫恰好在它的名字解析到函式時才有 signature,label 與 hover 的
+一致,參數數量與呼叫傳入的相同,並指出每個位置是第幾個引數。大綱裡的每一個宣告都是位在大綱所示位置的 workspace
+symbol。每一次 rename 的編輯,都等於索引自己的 rename 性質已對到 build 的那些 references,其中一部分在這裡實際套用並
+build,而一次捕獲會在它將做的編輯會改變程式所說的話時被拒絕。
 
 ## hover 是宣告的文件
 
@@ -628,16 +689,15 @@ diff 把兩邊綁在一起。**
 追蹤在 issue [#15](https://github.com/cmj0121/zerg/issues/15),它是兩半共同掛靠的傘:每次檢查的成本,以及一個能回答
 「一個名字在哪裡被宣告」的索引。
 
-| 缺的                                              | 在等                                                |
-| ------------------------------------------------- | --------------------------------------------------- |
-| `completion`、`signatureHelp`、`workspace/symbol` | #194——同一份索引的視角                              |
-| `rename`                                          | #194——以及 rename 要怎麼處理 spec 契約              |
-| `semanticTokens`                                  | `Kind` 的 variant 無法在 `zerg` module 之外被 match |
-| 增量同步、debounce、取消                          | 一次量測;Phase 1 每次按鍵都重檢整個程式             |
+| 缺的                      | 在等                                                |
+| ------------------------- | --------------------------------------------------- |
+| `.` 之後的成員 completion | 索引記下 `.` 前面那個運算式的型別                   |
+| `semanticTokens`          | `Kind` 的 variant 無法在 `zerg` module 之外被 match |
+| 增量同步、debounce、取消  | 一次量測;Phase 1 每次按鍵都重檢整個程式             |
 
-上面那幾列與 hover 原本是同一個缺口,而[名稱索引](#一個名字從同一份索引回答)補上了它的前半:給一個 path 與一個位置,
-那裡宣告了什麼、在哪裡。[hover](#hover-是宣告的文件)是後半——它找到的那個宣告的文件——剩下的讀同一份索引,而不是再建
-第二份:某個位置在範圍內的宣告,以及一個宣告的每個使用點。
+第一列是[索引](#索引的另外四個視角)目前還給不了的、關於名字的唯一一個視角:`.` 之後可以接什麼,是它前面那個東西的型別的
+成員,而索引記錄的是宣告與使用點,不是每個運算式的型別。那是走訪在解析時就知道的事實,所以要長大來容納它的是索引,
+而不是一個去讀 buffer 的 handler。
 
 `semanticTokens` 是另一種缺,值得這樣點名:它會需要一張把 token kind 對映到 LSP token type 的表,而那正是上一節存在
 就是為了防止的那種**重複的語言事實清單**。vim 語法檔已經在為 Zerg 上色,而且它有 gate。

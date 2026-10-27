@@ -18364,9 +18364,11 @@ fn c_main_entry(mut &em: Emitter, own: ast.File, inits: str) -> str {
 	return wrap + "int main(void) {\n    return " + shim + "(__zerg_entry);\n}\n"
 }
 
-# c_main_shim is the one thing a concurrent program decides differently: it runs the entry
-# as coroutine 0 and drains the run queue afterwards, so a fire-and-forget `spawn` still
-# finishes. Both families arm the same root handler around the same wrapper.
+# c_main_shim is the one thing a concurrent program decides differently: the entry runs
+# as coroutine 0 under the scheduler. When that coroutine returns, the scheduler stops
+# handing out work — nothing queued is started and nothing parked is resumed
+# (docs/code/coroutine.md, Termination & deadlock). A fire-and-forget `spawn` is not
+# drained to completion. Both families arm the same root handler around the same wrapper.
 fn c_main_shim(mut &em: Emitter, conc: str, plain: str) -> str {
 	return conc if em.used_conc
 

@@ -365,6 +365,7 @@ int main(void) {
         zrt_map_index(&km, &bad); /* longjmps to fr */
     } else {
         aborted = 1;
+        zrt_err_drop(zrt_taken_err()); /* the landing takes the Err, as an emitted guard does */
     }
     zrt_handler_pop(&fr);
     zrt_map_drop(&km);

@@ -10241,6 +10241,115 @@ pub fn f() -> int {
 }
 EOF
 
+# A BARE NAME ONE IMPORTED MODULE DECLARES is the file rule one boundary further out (#394): an
+# import binds a namespace and nothing else, so a `pub` name of another module is spelled through
+# it, as a sibling file's is. Each shape a bare name reaches a function or a constant by — a call,
+# a read, a fn value, a `defer`, an array length — names the spelling the file bound. The seed
+# has refused all of them as undefined names since it was written.
+reject a-bare-constant-another-module-declares E3116 'another module, and a file names what it uses — spell it `aa.LIMIT`' one-finding <<'EOF'
+import "./aa"
+
+fn main() {
+	print LIMIT
+}
+--- aa/mod.zg
+pub const LIMIT := 1
+EOF
+
+reject a-bare-call-another-module-declares E3114 'another module, and a file names what it uses — spell it `aa.f`' one-finding <<'EOF'
+import "./aa"
+
+fn main() {
+	print f()
+}
+--- aa/mod.zg
+pub fn f() -> int {
+	return 1
+}
+EOF
+
+# THE SPELLING IS THE BINDING THE FILE WROTE, so an `as` rename is what the sentence names.
+reject a-bare-call-a-renamed-module-declares E3114 'spell it `bb.f`' one-finding <<'EOF'
+import "./aa" as bb
+
+fn main() {
+	print f()
+}
+--- aa.zg
+pub fn f() -> int {
+	return 1
+}
+EOF
+
+reject a-bare-fn-value-another-module-declares E3114 'another module, and a file names what it uses — spell it `aa.f`' one-finding <<'EOF'
+import "./aa"
+
+fn main() {
+	g := f
+	print g()
+}
+--- aa/mod.zg
+pub fn f() -> int {
+	return 1
+}
+EOF
+
+reject a-bare-defer-another-module-declares E3114 'another module, and a file names what it uses — spell it `aa.f`' one-finding <<'EOF'
+import "./aa"
+
+fn main() {
+	defer f()
+	print 1
+}
+--- aa/mod.zg
+pub fn f() -> int {
+	return 1
+}
+EOF
+
+reject a-bare-constant-another-module-declares-as-an-array-length E3116 'spell it `aa.LIMIT`' one-finding <<'EOF'
+import "./aa"
+
+fn main() {
+	xs: [int; LIMIT] = [0; 2]
+	print xs[0]
+}
+--- aa/mod.zg
+pub const LIMIT := 2
+EOF
+
+reject a-bare-constant-another-module-declares-in-a-constant E3116 'spell it `aa.LIMIT`' one-finding <<'EOF'
+import "./aa"
+
+const MORE := LIMIT + 1
+
+fn main() {
+	print MORE
+}
+--- aa/mod.zg
+pub const LIMIT := 1
+EOF
+
+# A MODULE THIS FILE NEVER IMPORTED has no namespace here, so the sentence names the module's
+# own last segment — what an import of it with no `as` would bind — as E3115 does for a type.
+reject a-bare-call-a-module-this-file-never-imported-declares E3114 'another module, and a file names what it uses — spell it `aa.f`' one-finding <<'EOF'
+import "./lib"
+
+fn main() {
+	print lib.g() + f()
+}
+--- lib/mod.zg
+import "/aa"
+
+pub fn g() -> int {
+	return aa.f()
+}
+--- aa/mod.zg
+pub fn f() -> int {
+	return 1
+}
+EOF
+
 # AN ASSOCIATED VALUE IS ITS TYPE'S, and two files' `impl P` blocks of one module may not each
 # give `P` a `K` — whatever their visibility, so the sentence says so rather than "make one
 # private". The seed builds it.

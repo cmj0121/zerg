@@ -257,8 +257,9 @@ A type naming another type is never such a cycle — only a constant whose initi
 its own value.
 
 A file beside the entry file is reached the way every other file is: `import "./beside"`, and then
-`beside.helper()`. Naming it bare is _E4016 undefined function `helper`_ — not an exception the entry
-makes, but the rule, since #57 gives no file a namespace it is in merely by sitting in a directory.
+`beside.helper()`. Naming it bare is _E3114_, which says to spell it `beside.helper` (or _E4016 undefined
+function `helper`_ with no import) — not an exception the entry makes, but the rule, since #57 gives no file a
+namespace it is in merely by sitting in a directory.
 
 A **single file is a module** wherever a directory would be one — `import "./sib"` beside a `sib.zg`
 resolves to that file and its `pub` names, and the standard library is fifteen of them in one flat
@@ -324,6 +325,14 @@ A bare name that two IMPORTED modules both declare is refused rather than picked
 in `x.zg` and `y.zg`, and a bare name cannot choose between them_ names both spellings, `x.helper` and
 `y.helper`, and _E3116_ says the same of a constant. `spawn helper()`, `defer helper()` and `g := helper`
 are that same bare name, and the same finding.
+
+A bare function or constant ONE imported module declares is refused too, because an import binds a namespace
+and nothing else (#394). With `import "./aa"`, a bare `f()` is _E3114 `f` is declared in another module, and a
+file names what it uses — spell it `aa.f`_, and a bare `LIMIT` is _E3116_ naming `aa.LIMIT`. The spelling is the
+one this file bound, so `import "./aa" as bb` is told `bb.f`; a module re-exporting it lends its name, and a file
+that bound neither is told the module's own last segment. A call, a read, a function used as a value, a `spawn`
+or `defer` callee, a constant's initializer and an array length all answer it. A private one stays _E3001_, as
+above.
 
 A private type is under the same rule. Two files that each declare a struct, enum or `type` of one name without
 `pub` declare two types, and each file's constructions, field reads, patterns and methods reach its own. What

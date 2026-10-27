@@ -193,15 +193,14 @@ static void hand_to_receiver(zrt_chan *ch, zrt_waiter *r, const void *val) {
  * matching on a message — and the taxonomy has no way to raise StopIteration from
  * Zerg, so no crash Err can wear this kind by accident.
  *
- * Its message is a static IMMORTAL cell, handed to zrt_err_own: every channel is built
- * holding one of these, and zrt_err_new_kind would copy the text onto the heap per channel
- * (#405) for a message that never changes. */
+ * Its message is a static IMMORTAL cell handed to zrt_err_own, so a receiver that binds
+ * `e.msg` of a clean close retains a cell and not a bare literal (#405). */
 static zrt_err chan_stop_iteration(void) {
 	static struct {
 		zrt_ref_hdr h;
 		char        b[sizeof("channel closed")];
 	} msg = {{ZRT_RC_IMMORTAL, NULL}, "channel closed"};
-	return zrt_err_own(ZRT_ERR_STOP_ITERATION, (const char *)zrt_ref_payload(&msg));
+	return zrt_err_own(ZRT_ERR_STOP_ITERATION, msg.b);
 }
 
 zrt_chan *zrt_chan_new(size_t elemsz, size_t cap, zrt_drop_fn drop) {
@@ -211,9 +210,7 @@ zrt_chan *zrt_chan_new(size_t elemsz, size_t cap, zrt_drop_fn drop) {
 	ch->senders = 1; /* the new bidirectional handle is a sender */
 	ch->closed = false;
 	ch->err = chan_stop_iteration(); /* zrt_alloc is malloc: never leave the reason garbage */
-	/* a clean end until a sender says otherwise, and a HOLDER of it: chan_free drops both
-	 * fields, so a second name for the one Err must carry a count of its own (#405) */
-	ch->crash_err = zrt_err_copy(ch->err);
+	ch->crash_err = ch->err; /* a clean end until a sender says otherwise */
 	ch->elemsz = elemsz;
 	ch->drop = drop;
 	ch->cap = cap;
@@ -302,7 +299,6 @@ void zrt_chan_sender_release(zrt_chan *ch) {
 	/* remembered BEFORE the count is tested: this handle may not be the one that takes it
 	 * to zero, and the crash has to outlive the difference */
 	if (ch->crash_err.kind == ZRT_ERR_STOP_ITERATION && zrt_crash_active()) {
-		zrt_err_drop(ch->crash_err); /* the clean end it replaces is this field's to give back */
 		ch->crash_err = zrt_taken_err_copy();
 	}
 	if (--ch->senders == 0) {

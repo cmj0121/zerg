@@ -313,6 +313,10 @@ byte)` compiles to a truncation and cc warns about the generated C. `zerg` refus
   environment struct and hands it to the call through the fn value's own env slot; the seed
   turns a capturing lambda away — "a closure used as a value is not yet supported" — and is
   the narrower compiler here.
+- **`#[derive(Hash)]` is refused, and so is a key of a declared type.** `zerg` derives `Hash` and keys
+  a `map` or a `set` by a struct's or an enum's own `Eq` and `Hash`; the seed keeps `Eq` and `Ord` as its
+  blessed set and keys by `int` and `str` alone. Its only input never needs either, so it is the narrower
+  compiler here rather than the wrong one.
 - **`#[derive(S)]` on an ENUM is refused for a spec you wrote.** The delegating half of
   `derive` — each arm handing the call to its payload — is a rewrite that exists for any
   spec, so `zerg` derives it. The seed keeps one blessed set for both halves and turns the

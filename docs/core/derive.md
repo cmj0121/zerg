@@ -134,8 +134,8 @@ Two shapes are **refused**, and both for the same reason — the rewrite does no
 ## The derivable specs
 
 The blessed set — each with a canonical structural reading the compiler owns. Every one is **opt-in**
-via `derive`; there is **no auto-derived equality** and no implicit `Object` spec. **`Eq`** and **`From`**
-and **`Ord`** are built; **`Hash`**, **`Encode`** and **`Decode`** are specified here and **[not yet]** —
+via `derive`; there is **no auto-derived equality** and no implicit `Object` spec. **`Eq`**, **`From`**,
+**`Ord`** and **`Hash`** are built; **`Encode`** and **`Decode`** are specified here and **[not yet]** —
 naming one is `E9054`.
 
 A derive on a **generic** target derives for every instantiation of it: `#[derive(Eq)] struct Box[T]` is
@@ -179,6 +179,19 @@ a compile error, not a silent structural default. `Ord` requires `Eq` (the super
 where the decorator is written (`E4099`). A `float` field is refused the same way (`E4098`): `NaN` is
 neither less than, equal to nor greater than anything, so no order over one is total.
 
+`Hash` requires a single method, `fn hash() -> uint` ([Specs & Generics](specs.md)), and the derive
+writes it as a fold: a product mixes each field's own hash in declaration order, and a sum mixes its
+payload into a start that is the variant's position, so two variants carrying equal payloads still differ.
+An integer, a `bool` and a `str` field hash as an `int` and a `str` key do; a declared field calls its own
+`hash()`. Two values a derived `Eq` calls equal therefore fold the same numbers and answer the same
+`uint`. `Hash` does not require `Eq` — `spec Hash` names no super-spec — but a `map` key and a `set`
+element need both, and a declared type missing either is refused there (`E4119`). A `float` field is
+refused at the decorator (`E4117`), and so is a field whose type has no `Hash` to mix (`E4118`).
+
+> **[not yet]** A field whose `Hash` the chapters promise and this compiler has not built — a `list`, a
+> tuple, an optional, a typedef or a type parameter — is _E9119 NotImplemented: `#[derive(Hash)]` on
+> `P`: the field `xs` is a `list[int]`_.
+
 `Ord` requires a single method, `less`. The other three orderings are written out of it at the operator
 rather than required of an implementer — and each operand appears once, `a <= b` lowering to
 `not (b < a)` rather than to `a < b or a == b`, so a call on either side runs once.
@@ -214,7 +227,7 @@ Cross-cutting cases fall out of the existing memory model, no new rule:
 ## Serialization — the worked example
 
 > **[not yet]** `Encode` / `Decode` — and the `Sink` / `Source` specs used below — are specified
-> but not implemented; `#[derive(Encode, Decode)]` is _E9054_ today, which is also what `Hash` answers.
+> but not implemented; `#[derive(Encode, Decode)]` is _E9054_ today.
 > The example below illustrates the **intended** shape of structural derivation for when they land.
 
 Serialization is the case structural derive exists to serve: a mechanical, field-by-field mapping no

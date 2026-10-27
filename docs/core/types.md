@@ -350,8 +350,8 @@ part with no `Eq` is refused for that part (`E4020`). So are `<` `<=` `>` `>=`: 
 and no `Ord` — is refused for that part (`E3044`). A `list`, a `map` and a `set` have no order.
 
 > **[not yet]** `Hash` is the half of the rule that is not built: a tuple as a map key is _E9052
-> NotImplemented: a map key of type (int, int) — it needs `Hash`, and this compiler has one for `int` and
-> for `str`_.
+> NotImplemented: a map key of type (int, int) — it needs `Hash`, and this compiler has one for `int`, for
+> `str` and for a declared struct or enum that implements it_.
 > **Destructuring** is built and is the ordinary way to read one — `(a, b) := two()`. The unparenthesized
 > `a, b := two()` is not a form: GRAMMAR#bind-target derives the tuple shape with its brackets, so what the
 > comma reports is punctuation (_E2005 expected a newline or `;` to separate statements, found `,`_).

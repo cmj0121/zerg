@@ -1,0 +1,21 @@
+# A key whose field is another module's `#[derive(Hash)]` type.
+#   zerg build examples/1g/hashkey/main.zg
+# Expected output:
+#   2
+#   true
+#
+# `Seg` mixes the hash of a `geo.Pt`, whose `Hash` is derived in `geo` and not here (#293).
+# The two equal segments are one element of the set, so it holds two and not three.
+import "./geo"
+
+#[derive(Eq, Hash)]
+struct Seg {
+	pub a: geo.Pt
+	pub b: geo.Pt
+}
+
+fn main() {
+	s := set([Seg(geo.Pt(0, 0), geo.Pt(1, 1)), Seg(geo.Pt(0, 0), geo.Pt(1, 1)), Seg(geo.Pt(1, 1), geo.Pt(0, 0))])
+	print s.len()
+	print Seg(geo.Pt(1, 1), geo.Pt(0, 0)) in s
+}

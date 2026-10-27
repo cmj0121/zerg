@@ -281,6 +281,14 @@ size_t zrt_hash_str(const void *key) {
 	return (size_t)h;
 }
 
+uint64_t zrt_hash_word(int64_t v) {
+	return (uint64_t)zrt_hash_int(&v);
+}
+
+uint64_t zrt_hash_text(const char *s) {
+	return (uint64_t)zrt_hash_str(&s);
+}
+
 bool zrt_eq_str(const void *a, const void *b) {
 	const char *x = *(const char *const *)a;
 	const char *y = *(const char *const *)b;

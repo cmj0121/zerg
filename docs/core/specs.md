@@ -30,11 +30,11 @@ inherent methods are invisible. So:
 - **Equality, ordering, and hashing are opt-in, never automatic.** There is **no auto-implemented
   `Object` spec** and no implicit `==`. A type gains structural equality (`==` / `!=`) only through
   **`#[derive(Eq)]`** or a hand-written `impl Eq`, a total order through `derive(Ord)`, and a hash through
-  `derive(Hash)` (both **[not yet]** — _E9054_); comparing two values of a type that has no `Eq` impl is a compile
+  `derive(Hash)`; comparing two values of a type that has no `Eq` impl is a compile
   error. The structural memory operations above are the exception, because they are properties of the
   representation rather than behavior a spec abstracts. The compiler-owned **structural derivation** that
-  backs `derive` (built for **`Eq`** and **`Ord`** on a `struct` and on an `enum`, payload or not;
-  **[not yet]** for `Hash`, `Encode`, `Decode` — _E9054_) is the
+  backs `derive` (built for **`Eq`**, **`Ord`** and **`Hash`** on a `struct` and on an `enum`, payload or
+  not; **[not yet]** for `Encode`, `Decode` — _E9054_) is the
   [Derive & Default Behavior](derive.md) reference.
 
 A `spec` may also be used **as a type**, not only a bound: a spec-typed value holds any implementing
@@ -506,20 +506,17 @@ too narrow to earn an operator. Equality, where a type opts into it, is the **st
 **`is`** keyword is a different question — the **type-identity** test `x is T` on an existential (Type
 tests) — "what concrete type is boxed here?", never "are these two the same value?".
 
-> **[not yet]** Of the built-in specs this section describes, exactly three are declared by the compiler:
-> **`Eq`** above, **`Ord`** below, and **`Into[T]`** ([Types](types.md#into--an-ordinary-conversion-spec)).
-> **`Hash`**, in the bullet below, names its method `fn hash() -> uint` and the law that where `eq` holds
-> the two calls answer the same `uint`. The compiler has not declared that spec, so the program there
-> reports _error: E3013 no spec named `Hash`_, the ordinary message for a spec nobody wrote. `Error`,
-> `Iterator` / `Iterable`, the sealed `Ref`, and every operator spec — `Add`, `Sub`, `Mul`, `Div`,
-> `BitAnd`, `BitOr`, `BitXor`, `Not`, `Shl`, `Shr` — do not exist as declarations at all, so they cannot be
-> named: `impl BitAnd for P` reports that same _E3013_. A type without `Ord` is refused by the operator
-> rather than by the spec: `P(1) < P(2)` reports _E3044 operator `<` orders two numbers or two strs, and
-> these are P and P_, which names the operand types and says nothing about the missing `Ord`. Several of the
-> **behaviours** are built in and reachable without their spec — `+` concatenating a `str`, the error
-> taxonomy `Err` names and the `message()` / `unwrap()` it answers, a `chan`'s refcounted close — but they
-> are compiler-owned and a user type cannot join them, with a `#[derive(Eq)]` on the type or without one.
-> Everything from here to the end of this chapter is specified against that gap.
+> **[not yet]** Of the built-in specs this section describes, exactly four are declared by the compiler: **`Eq`** above,
+> **`Ord`** and **`Hash`** below, and **`Into[T]`** ([Types](types.md#into--an-ordinary-conversion-spec)). `Error`,
+> `Iterator` / `Iterable`, the sealed `Ref`, and every operator spec — `Add`, `Sub`, `Mul`, `Div`, `BitAnd`, `BitOr`,
+> `BitXor`, `Not`, `Shl`, `Shr` — do not exist as declarations at all, so they cannot be named: `impl BitAnd for P`
+> reports _error: E3013 no spec named `BitAnd`_, the ordinary message for a spec nobody wrote. A type without `Ord` is
+> refused by the operator rather than by the spec: `P(1) < P(2)` reports _E3044 operator `<` orders two numbers or two
+> strs, and these are P and P_, which names the operand types and says nothing about the missing `Ord`. Several of the
+> **behaviours** are built in and reachable without their spec — `+` concatenating a `str`, the error taxonomy `Err`
+> names and the `message()` / `unwrap()` it answers, a `chan`'s refcounted close — but they are compiler-owned and a
+> user type cannot join them, with a `#[derive(Eq)]` on the type or without one. Everything from here to the end of this
+> chapter is specified against that gap.
 
 The remaining specs are likewise **opt-in** — implement (or derive) the spec to gain the capability; a
 generic bound gates on it:
@@ -532,10 +529,12 @@ generic bound gates on it:
   both `Ord` and `Hash` (rationale below).
 - **`Hash`** — `map` / `set` keys. The method is `fn hash() -> uint`: where `eq` holds, the two `hash()`
   calls answer the same `uint`, and the converse is not required. `str`, being immutable, is a natural
-  key. A `float` still opts out, below. **[not yet]** — the program is _E3013_, and _E9054_ names `Hash`
-  at a `derive`.
+  key. A `float` still opts out, below. A key needs `Eq` beside `Hash` — `spec Hash` names no super-spec,
+  so the pair is asked for where the key is ([Collections](../code/collections.md)). Two equal `Point`s
+  below are one element, so the program prints `2`.
 
-```refused E3013
+```zerg
+#[derive(Eq)]
 struct Point {
  pub x: int
 }
@@ -547,7 +546,7 @@ impl Hash for Point {
 }
 
 fn main() {
- print 1
+ print set([Point(1), Point(1), Point(2)]).len()
 }
 ```
 

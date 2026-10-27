@@ -1,0 +1,6 @@
+# A type that derives its `Hash` in the module that declares it.
+#[derive(Eq, Hash)]
+pub struct Pt {
+	pub x: int
+	pub y: int
+}

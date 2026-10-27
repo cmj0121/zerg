@@ -74,13 +74,16 @@ it through `derive(Hash)` or by hand — keeping "what can be a key" an opt-in, 
 author owns the contract the compiler can't check: **equal ⇒ same hash**. Because a key is **copied in** as a
 frozen snapshot, even a `mut` collection is usable as one.
 
-> **Status.** The intended rule — **any `Eq + Hash` type** as a key — is **[not yet]**. This phase a `map`
-> key is restricted to **`int`** or **`str`**: a `byte`, a `rune` or a `derive(Hash)` type is _E9052
-> NotImplemented: a map key of type … — a key needs `Hash`, and this compiler has one for `int` and for
-> `str`_. `derive(Hash)` and general keyed types are not built. A **`float`** key is a different answer and
-> not a `[not yet]` one: [Derive & Default Behavior](../core/derive.md) refuses `Hash` on any `float` field,
-> so there is no day it retires on — _E4079 a map key of type float — a key needs `Hash`, and a `float` has
-> no equality a hash can agree with_.
+A **`struct`** or an **`enum`** is a key through its own `Eq` and `Hash`, derived or hand-written: two keys
+`eq` calls equal are one entry. One missing either is _E4119 a map key of type P — a key is compared with
+`Eq` and found with `Hash`, and `P` has no `Hash`_, which the program closes with `#[derive(Eq, Hash)]`.
+
+> **Status.** The rest of the intended rule — **any `Eq + Hash` type** as a key — is **[not yet]**: a `byte`, a `rune`,
+> a tuple or a typedef is _E9052 NotImplemented: a map key of type … — it needs `Hash`, and this compiler has one for
+> `int`, for `str` and for a declared struct or enum that implements it_. A **`float`** key is a different answer and
+> not a `[not yet]` one: [Derive & Default Behavior](../core/derive.md) refuses `Hash` on any `float` field, so there is
+> no day it retires on — _E4079 a map key of type float — a key needs `Hash`, and a `float` has no equality a hash can
+> agree with_.
 
 ## Access — `[]` asserts, `.get` checks
 
@@ -101,7 +104,8 @@ Indexing mirrors the force-vs-check split of `!` / `?`:
 > closes itself by writing `#[derive(Eq)]` on the type; an unnamed element with such a part is refused for
 > that part (_E4020_).
 >
-> **[not yet]** A `map` or a `set` hashes instead, and only an `int` or a `str` has a `Hash` here: `k in m`
+> **[not yet]** A `map` or a `set` hashes instead, and only an `int`, a `str` and a declared type have a
+> `Hash` here: `k in m`
 > for a `map[list[int], V]` is _E9052 NotImplemented: a map key of type list[int] — it needs `Hash`_, the
 > refusal that map already meets where it is built.
 >

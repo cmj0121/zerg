@@ -749,15 +749,16 @@ fn main() {
 EOF
 
 # A SPEC THE PRELUDE PROMISES AND NOBODY DECLARES. `E3013` is cased for one name; the chapters
-# name six more, and `Hash` is the one a reader meets first through `map` keys.
-expect "$ZERG" impl-hash-no-such-spec E3013 'no spec named `Hash`' <<'EOF'
+# name more. `Hash` was this case until the compiler declared it; `Error` is the one a reader
+# meets next, through the error tier.
+expect "$ZERG" impl-error-no-such-spec E3013 'no spec named `Error`' <<'EOF'
 struct P {
 	pub a: int
 }
 
-impl Hash for P {
-	fn hash() -> int {
-		return 1
+impl Error for P {
+	fn message() -> str {
+		return "p"
 	}
 }
 
@@ -1681,7 +1682,7 @@ fn main() {
 EOF
 
 expect "$ZERG" derive-of-an-unbuilt-spec E9054 <<'EOF'
-#[derive(Hash)]
+#[derive(Encode)]
 struct P {
 	pub x: int
 }
@@ -2368,7 +2369,8 @@ EOF
 # It needs two modules, which this harness writes one file for, so the case lives in the
 # multi-module example instead: see examples/1g/reexport.
 
-# A KEY NEEDS `Hash`, and this compiler has one for `int` and one for `str`. A `byte` key
+# A KEY NEEDS `Hash`, and this compiler has one for `int`, one for `str`, and a declared
+# type's own. A `byte` key
 # took the INT hash and eq, which read 8 bytes out of a 1-byte slot — so `{b'a': 1}` built
 # and the lookup that followed raised `KeyError` for a key that was right there.
 expect "$ZERG" map-key-without-a-hash E9052 <<'EOF'
@@ -3238,13 +3240,40 @@ fn main() {
 }
 EOF
 
-expect "$ZERG" set-of-something-unhashable E9052 'a set element of type P' <<'EOF'
+# A DECLARED TYPE IS A KEY BY ITS OWN `Eq` AND `Hash`, and one with neither is a program the
+# reader closes — not a form waiting. Each half is cased: a case that only ever lacked both
+# would still pass if the rule asked about one of them.
+expect "$ZERG" set-of-something-unhashable E4119 'has no `Eq` and `Hash`' <<'EOF'
 struct P {
 	pub a: int
 }
 
 fn main() {
 	print set([P(1)]).len()
+}
+EOF
+
+expect "$ZERG" map-key-with-eq-and-no-hash E4119 'a map key of type P — a key is compared with `Eq` and found with `Hash`, and `P` has no `Hash`' <<'EOF'
+#[derive(Eq)]
+struct P {
+	pub a: int
+}
+
+fn main() {
+	m := {P(1): 1}
+	print m.len()
+}
+EOF
+
+expect "$ZERG" set-element-with-hash-and-no-eq E4119 'has no `Eq`.' <<'EOF'
+#[derive(Hash)]
+enum Color {
+	Red
+	Blue
+}
+
+fn main() {
+	print set([Color.Red]).len()
 }
 EOF
 
@@ -3851,18 +3880,84 @@ fn main() {
 EOF
 
 # `is` names one of the built-in error kinds here, where GRAMMAR#cmp-expr takes any type-name.
-# ONE CODE, SEVERAL FORMS. `E9054` names four derives and this file cased one of them; the
-# other three were refused correctly and pinned by nothing, so a regression in any of them
-# would have been caught by no gate. The same shape is why `E9056` has a case per list method
-# rather than one for the family.
-expect "$ZERG" derive-hash E9054 '`#[derive(Hash)]`' <<'EOF'
-#[derive(Hash)]
+# ONE CODE, SEVERAL FORMS. `E9054` names each derive this compiler has not built, and a case
+# per derive pins each: one case standing for the family would let a regression in the other
+# go unseen. The same shape is why `E9056` has a case per list method rather than one for the
+# family.
+#
+# `Hash` LEFT THIS LIST when it was built. What is still refused about it is a FIELD: one the
+# chapter excludes (a `float`), one with no `Hash` to mix (a declared type without one, or an
+# identity), and one whose `Hash` the chapter promises and this compiler has not built.
+expect "$ZERG" derive-hash-over-a-float E4117 'the field `r` is a `float`' <<'EOF'
+#[derive(Eq, Hash)]
 struct P {
-	pub x: int
+	pub a: int
+	pub r: float
 }
 
 fn main() {
 	print 1
+}
+EOF
+
+expect "$ZERG" derive-hash-over-a-float-payload E4117 'the payload of `Big` is a `float`' <<'EOF'
+#[derive(Hash)]
+enum E {
+	Small(int)
+	Big(float)
+}
+
+fn main() {
+	print 1
+}
+EOF
+
+expect "$ZERG" derive-hash-over-a-field-with-none E4118 '`Q` has no `Hash`' <<'EOF'
+#[derive(Eq)]
+struct Q {
+	pub a: int
+}
+
+#[derive(Hash)]
+struct P {
+	pub q: Q
+}
+
+fn main() {
+	print 1
+}
+EOF
+
+expect "$ZERG" derive-hash-over-a-channel E4118 'is an identity' <<'EOF'
+#[derive(Hash)]
+struct P {
+	pub c: chan[int]
+}
+
+fn main() {
+	print 1
+}
+EOF
+
+expect "$ZERG" derive-hash-over-a-list E9119 'the field `xs` is a `list[int]`' <<'EOF'
+#[derive(Hash)]
+struct P {
+	pub xs: list[int]
+}
+
+fn main() {
+	print 1
+}
+EOF
+
+expect "$ZERG" derive-hash-over-a-type-parameter E9119 'the field `v` is a `T`' <<'EOF'
+#[derive(Hash)]
+struct Box[T] {
+	pub v: T
+}
+
+fn main() {
+	print Box(1).v
 }
 EOF
 

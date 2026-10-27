@@ -322,6 +322,13 @@ bool   zrt_eq_int(const void *a, const void *b);
 size_t zrt_hash_str(const void *key);
 bool   zrt_eq_str(const void *a, const void *b);
 
+/* zrt_hash_word / zrt_hash_text are the same two hashes taken BY VALUE, as a `uint`: they are
+ * the leaves `__zrt_hash_word` / `__zrt_hash_text` lower onto, which a `#[derive(Hash)]` body
+ * calls for an integer field and a str field (docs/core/derive.md). An int field and an int
+ * key therefore hash alike, and so do a str field and a str key. */
+uint64_t zrt_hash_word(int64_t v);
+uint64_t zrt_hash_text(const char *s);
+
 /* --- abort / unwind + cleanup(defer) stack (unwind.c) -------------------- */
 
 /* zrt_cleanup is one pending deferred action on the cleanup stack: a thunk and

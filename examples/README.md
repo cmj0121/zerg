@@ -82,6 +82,7 @@ specification. Each of these is a **directory**: an entry file and the modules i
 | [`1g/spawnmod/`](1g/spawnmod)       | a `spawn` written only in an imported module still starts the scheduler      |
 | [`1g/stdlibwins/`](1g/stdlibwins)   | a bare name is the standard library, beside a project module of that name    |
 | [`1g/reexport/`](1g/reexport)       | `import pub` — a module putting another module's name on its surface         |
+| [`1g/hashkey/`](1g/hashkey)         | a key whose field is another module's `#[derive(Hash)]` type                 |
 | [`1g/spec/`](1g/spec)               | a `spec` declared in one module and implemented in another                   |
 | [`1g/implfor/`](1g/implfor)         | a spec of THIS module, supplied for a type reached through an import         |
 | [`1g/strings/`](1g/strings)         | the standard library's `strings`, exercised end to end                       |

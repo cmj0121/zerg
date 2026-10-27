@@ -610,7 +610,7 @@ TOP = {"start": {"line": 0, "character": 0}, "end": {"line": 0, "character": 0}}
 
 for name, text, what in [
     ("abort-parse.zg", "fn main() {\n\tx := (1 +)\n\tprint x\n}\n", "a parse abort"),
-    ("abort-notimpl.zg", "#[derive(Hash)]\nstruct P {\n\tx: int\n}\n\nfn main() {\n\tprint 1\n}\n",
+    ("abort-notimpl.zg", "#[derive(Encode)]\nstruct P {\n\tx: int\n}\n\nfn main() {\n\tprint 1\n}\n",
      "a NotImplemented raise"),
     ("abort-cjk.zg", 'fn main() {\n\ts := "日本語"; x := (1 +)\n}\n', "an abort after CJK"),
     ("abort-astral.zg", 'fn main() {\n\tprint("😀😀" + str((1 +)))\n}\n', "an abort after a surrogate pair"),

@@ -1674,129 +1674,210 @@ fi
 # small cells per identifier the parser named, scattered across the allocator's pages, and each
 # scattered cell pins a page the next check cannot hand back.
 #
-# So this measures a SESSION: N checks of the compiler's own program in one process against a
-# session of one, and fails when the long one peaks above K times the short one. A RATIO and not
-# a number, because the number is the machine's — Linux and macOS count differently, and the
-# same program is a different size on each — while "the same band as one check" is a ratio on
-# either.
+# It used to compare the PEAK FOOTPRINT of a long session with the peak of a separate session of
+# one. That ratio is not the server. The kernel's footprint moves with whoever else is running,
+# and the two sessions are two processes measured at two moments, so the same compiler reads
+# anywhere from well under one to well over the allowance depending on the host's load. Widening
+# the allowance until that noise fits also hides the leak this section exists to see.
 #
-# THE COUNTER IS DISCOVERED, as section 6's is, and both sessions are measured by the one found,
-# so its unit cancels in the ratio. Where `time -l` reports a PEAK FOOTPRINT (macOS) that is the
-# one read, because the resident size cannot see this defect there: macOS compresses pages
-# nobody touches, and the pages a leak pins are exactly those — the climbing server's resident
-# size had all but stopped moving after twenty checks while its footprint kept rising. Elsewhere
-# it is the maximum resident size, BSD `time -l` in bytes or GNU `time -v` in kilobytes, as
-# mem-peak-check.sh reads it; Linux has no compressor in the way.
+# So this samples, inside the ONE process, the bytes malloc still has outstanding: after the
+# first check and after the last, once the publish is in hand and the server is back on its
+# read. scripts/lib/lsp-heap.c is loaded into that process and answers over a socket. Load does
+# not move the allocator's own count. A leak of a few hundred kilobytes a check — what the old
+# ratio could see on Linux, and could not separate from flat on macOS — clears the slack on the
+# next check, so the session no longer repeats thirty times for a climb to rise out of a
+# footprint's noise.
 #
-# THE ALLOCATOR IS TOLD NOT TO HOARD (`MallocSpaceEfficient=1`, macOS's own switch; nothing
-# else reads it). By default the footprint also counts the free pages macOS's allocator keeps
-# for reuse, and a server that leaks nothing grows that cache over its first checks and then
-# holds it — how far depends on the machine and on which threads the walk ran on, so the healthy
-# ratio was anywhere from 1.1 to 1.5 and crossed any K that also caught the climb. Told to give
-# pages back, the healthy server's footprint after N checks is its footprint after one, and
-# what a leak pins is all that is left to see.
+# THE SLACK IS THE WHOLE SESSION'S, not a ratio and not a per-check budget. A healthy re-check
+# of this program leaves the counter where the first check left it. A few kilobytes of residue
+# fit under the slack; the climb does not. A counter that reads near zero measured the probe
+# and not the server, which is what the floor is for.
 #
-# K IS THE COUNTER'S, because the two counters see a leak with different sharpness. The Linux
-# resident size is quiet — a healthy server reads 1.00 to 1.01 at N, every run — so its K sits
-# just above that noise and catches a leak a fraction the size of the one #23 was: the compiler
-# with ONE of its fixes reverted (a `match` that never gave its scrutinee back, a few hundred
-# kilobytes a check) read 1.09 to 1.10 against it, and the climbing server of #23 1.53. The macOS
-# footprint is noisier — a healthy session reads 1.00 to 1.12 alone and once 1.36 among three
-# sessions at once — so its K sits above that, and it sees the climb of #23 (1.30 to 1.57) but not
-# a leak of that one reverted fix, which the footprint does not separate from flat.
+# THIS IS THE AGGREGATE CHECK, AND IT IS NOT THE ONLY ONE. `make mem-check` holds each leaking
+# shape to zero, counted allocation by allocation, and red on its own the day its fix is
+# reverted, on either platform. `leaks(1)` would need a debuggable binary, a signing step this
+# gate will not add to CI.
 #
-# SO THIS IS THE AGGREGATE CHECK, AND IT IS NOT THE ONLY ONE. On Linux it catches a single
-# reverted fix; on macOS it catches a climb of the size #23 was. The per-shape guarantee is
-# `make mem-check`'s: each shape that leaked is a program there, counted allocation by allocation,
-# and red on its own the day its fix is reverted, on either platform. Reading leaked bytes here
-# instead would take `leaks(1)`, which needs a debuggable binary — a signing step this gate will
-# not add to CI.
-LSP_SESSION_N=30
-LSP_SESSION_K_FOOTPRINT=1.2
-LSP_SESSION_K_RSS=1.05
-if ! "$PY" - "$ZERG" src/compiler/zergc.zg "$LSP_SESSION_N" "$LSP_SESSION_K_FOOTPRINT" "$LSP_SESSION_K_RSS" <<'PYEOF'
-import json, os, re, subprocess, sys
+# The buffers further up keep their own floor (`MIN_SESSIONS`), which is what says the gate
+# still opened that list.
+LSP_SESSION_N=4
+LSP_SESSION_SLACK=65536
+LSP_SESSION_FLOOR=1000000
+compile_heap() {
+	if ! "${CC:-cc}" "$@" -o "$heap_lib" scripts/lib/lsp-heap.c 2>"$tmp/heap.cc"; then
+		echo "lsp-check: the heap probe did not build"
+		cat "$tmp/heap.cc"
+		exit 1
+	fi
+}
+case "$(uname -s)" in
+Darwin)
+	heap_lib="$tmp/lsp-heap.dylib"
+	compile_heap -dynamiclib -pthread
+	;;
+Linux)
+	heap_lib="$tmp/lsp-heap.so"
+	compile_heap -shared -fPIC -pthread
+	;;
+*)
+	echo "lsp-check: a long session's bytes are not readable on $(uname -s)"
+	exit 1
+	;;
+esac
+if ! "$PY" - "$ZERG" src/compiler/zergc.zg "$LSP_SESSION_N" "$LSP_SESSION_SLACK" "$LSP_SESSION_FLOOR" \
+	"$heap_lib" "$tmp/heap.sock" <<'PYEOF'
+import json, os, platform, re, select, socket, subprocess, sys
 
-zerg, path, n = sys.argv[1], sys.argv[2], int(sys.argv[3])
-k_footprint, k_rss = float(sys.argv[4]), float(sys.argv[5])
-
-TIMER, counter, label = None, None, None
-for flag, pattern, what, kk in (("-l", rb"(\d+)\s+peak memory footprint", "peak footprint", k_footprint),
-                                ("-l", rb"(\d+)\s+maximum resident set size", "maximum resident size", k_rss),
-                                ("-v", rb"Maximum resident set size[^:]*:\s*(\d+)", "maximum resident size", k_rss)):
-    try:
-        probe = subprocess.run(["/usr/bin/time", flag, "true"], stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
-    except OSError:
-        break
-    if probe.returncode == 0 and re.search(pattern, probe.stderr):
-        TIMER, counter, label, k = ["/usr/bin/time", flag], pattern, what, kk
-        break
-if TIMER is None:
-    print("SESSION   /usr/bin/time understands neither -l nor -v, so nothing here can measure a peak")
-    sys.exit(1)
+zerg, path = sys.argv[1], sys.argv[2]
+n, slack, floor = int(sys.argv[3]), int(sys.argv[4]), int(sys.argv[5])
+probe, sock = sys.argv[6], sys.argv[7]
 
 text = open(path, encoding="utf-8").read()
 uri = "file://" + os.path.abspath(path)
 
-def peak(checks):
-    msgs = [{"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {"capabilities": {}}},
-            {"jsonrpc": "2.0", "method": "textDocument/didOpen", "params": {
-                "textDocument": {"uri": uri, "languageId": "zerg", "version": 1, "text": text}}}]
-    for v in range(2, checks + 1):
-        msgs.append({"jsonrpc": "2.0", "method": "textDocument/didChange", "params": {
-            "textDocument": {"uri": uri, "version": v}, "contentChanges": [{"text": text}]}})
-    msgs += [{"jsonrpc": "2.0", "id": 2, "method": "shutdown"}, {"jsonrpc": "2.0", "method": "exit"}]
-    wire = b"".join(b"Content-Length: %d\r\n\r\n%s" % (len(b), b) for b in (json.dumps(m).encode() for m in msgs))
-    env = dict(os.environ, MallocSpaceEfficient="1")
-    p = subprocess.run(TIMER + [zerg, "lsp"], input=wire, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=1800, env=env)
 
-    # A session that checked fewer times than it was asked to did not measure N checks, and one
-    # that ABORTED part-way costs less for that reason alone. The program builds, so every
-    # complete check publishes no error.
-    published, out, i = [], p.stdout, 0
-    while i < len(out):
-        j = out.find(b"\r\n\r\n", i)
-        if j < 0:
+def frame(obj):
+    body = json.dumps(obj).encode()
+    return b"Content-Length: %d\r\n\r\n%s" % (len(body), body)
+
+
+messages = [frame({"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {"capabilities": {}}}),
+            frame({"jsonrpc": "2.0", "method": "textDocument/didOpen", "params": {
+                "textDocument": {"uri": uri, "languageId": "zerg", "version": 1, "text": text}}})]
+for version in range(2, n + 1):
+    messages.append(frame({"jsonrpc": "2.0", "method": "textDocument/didChange", "params": {
+        "textDocument": {"uri": uri, "version": version}, "contentChanges": [{"text": text}]}}))
+messages += [frame({"jsonrpc": "2.0", "id": 2, "method": "shutdown"}),
+             frame({"jsonrpc": "2.0", "method": "exit"})]
+
+# The constructor connects during startup, which is before the first check, so the listen has
+# to be up before the process is spawned. A path that does not fit in sockaddr_un fails here
+# rather than as a connect the probe can only report on stderr.
+if len(sock.encode()) >= 100:
+    print("SESSION   the socket path does not fit in sockaddr_un: %s" % sock)
+    sys.exit(1)
+if os.path.exists(sock):
+    os.unlink(sock)
+listener = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+listener.bind(sock)
+listener.listen(1)
+listener.settimeout(5)
+
+env = dict(os.environ)
+env["ZERG_HEAP_SOCK"] = sock
+if platform.system() == "Darwin":
+    env["DYLD_INSERT_LIBRARIES"] = probe
+elif platform.system() == "Linux":
+    env["LD_PRELOAD"] = probe
+else:
+    print("SESSION   a long session's bytes are not readable on %s" % platform.system())
+    sys.exit(1)
+
+proc = subprocess.Popen([zerg, "lsp"], stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+                        stderr=subprocess.PIPE, env=env)
+
+
+def stop(why):
+    proc.kill()
+    err = proc.stderr.read().decode("utf-8", "replace").strip()
+    print("SESSION   %s" % why)
+    if err:
+        print(err)
+    sys.exit(1)
+
+
+try:
+    conn, _ = listener.accept()
+except socket.timeout:
+    stop("the heap probe did not connect, so nothing was measured")
+conn.settimeout(5)
+
+
+def ask():
+    conn.sendall(b"?")
+    buf = b""
+    while b"\n" not in buf:
+        try:
+            got = conn.recv(64)
+        except socket.timeout:
+            stop("the heap probe did not answer")
+        if not got:
+            stop("the heap probe closed its socket before answering")
+        buf += got
+    return int(buf.split(b"\n", 1)[0])
+
+
+# The first two frames open the buffer. Each publish after that is one check. The sample is
+# taken with the frame in hand, so the server is back on its read and not inside the check —
+# a sample during the walk would be the walk's own temporaries, which a leak and a healthy
+# check share.
+proc.stdin.write(messages[0])
+proc.stdin.write(messages[1])
+proc.stdin.flush()
+next_msg = 2
+pending = b""
+published = []
+lives = []
+while len(published) < n:
+    ready, _, _ = select.select([proc.stdout], [], [], 180)
+    if not ready:
+        stop("a check published nothing for 180s, so the session was not measured")
+    chunk = os.read(proc.stdout.fileno(), 65536)
+    if not chunk:
+        stop("the server closed its output after %d of %d checks" % (len(published), n))
+    pending += chunk
+    while len(published) < n:
+        end = pending.find(b"\r\n\r\n")
+        if end < 0:
             break
-        m = int(re.search(rb"Content-Length:\s*(\d+)", out[i:j], re.I).group(1))
-        frame = json.loads(out[j + 4:j + 4 + m].decode("utf-8"))
-        if frame.get("method") == "textDocument/publishDiagnostics":
-            published.append(frame["params"]["diagnostics"])
-        i = j + 4 + m
-    if len(published) != checks:
-        print("SESSION   a session of %d checks published %d times" % (checks, len(published)))
-        sys.exit(1)
-    errors = [d["message"] for ds in published for d in ds if d.get("severity") == 1]
-    if errors:
-        print("SESSION   the server reports an error in %s, which builds: %s" % (path, errors[0]))
-        sys.exit(1)
-    m = re.search(counter, p.stderr)
-    if not m or int(m.group(1)) == 0:
-        print("SESSION   `%s` printed no peak for a session of %d checks" % (" ".join(TIMER), checks))
-        sys.exit(1)
-    return int(m.group(1))
+        header = re.search(rb"Content-Length:\s*(\d+)", pending[:end], re.I)
+        if not header:
+            stop("a frame arrived with no Content-Length")
+        need = int(header.group(1))
+        if len(pending) < end + 4 + need:
+            break
+        body = pending[end + 4:end + 4 + need]
+        pending = pending[end + 4 + need:]
+        got = json.loads(body.decode("utf-8"))
+        if got.get("method") != "textDocument/publishDiagnostics":
+            continue
+        published.append(got["params"]["diagnostics"])
+        lives.append(ask())
+        if len(published) < n:
+            proc.stdin.write(messages[next_msg])
+            next_msg += 1
+            proc.stdin.flush()
 
-# THE NOISE ONLY EVER ADDS. A machine under memory pressure moves pages in and out of the
-# footprint on the kernel's schedule, not the program's, and every stray reading measured here
-# was HIGH — a one-check session at a third over its usual peak, a healthy long one at a
-# quarter over flat. So each side is the lower of its readings: the baseline is the lower of two
-# one-check sessions, which costs one check, and a long session over K is run once more before
-# it fails the gate. A leak climbs every time it is run, so the confirmation keeps it red; a
-# passing run costs nothing extra.
-one = min(peak(1), peak(1))
-many = peak(n)
-ratio = many / one
-print("SESSION   %d checks in one session peak at %.2f times one check (%s: %d, then %d)" % (n, ratio, label, one, many))
-if ratio > k:
-    again = peak(n)
-    print("SESSION   confirming: a second session of %d checks peaks at %.2f times one check" % (n, again / one))
-    ratio = min(ratio, again / one)
-if ratio > k:
-    print("SESSION   a long session climbs past %.2f times one check" % k)
+# A check that ABORTED part-way holds less for that reason alone, and would pass the byte
+# comparison by not having finished. The program builds, so every complete check publishes
+# no error. The loop above already required one publish per check.
+errors = [d["message"] for ds in published for d in ds if d.get("severity") == 1]
+if errors:
+    proc.kill()
+    print("SESSION   the server reports an error in %s, which builds: %s" % (path, errors[0]))
+    sys.exit(1)
+if len(lives) != n or any(v < floor for v in lives):
+    proc.kill()
+    print("SESSION   a session of %d checks held %s, under the floor of %d" % (n, lives, floor))
+    sys.exit(1)
+
+proc.stdin.write(messages[-2])
+proc.stdin.write(messages[-1])
+proc.stdin.close()
+try:
+    proc.wait(timeout=30)
+except subprocess.TimeoutExpired:
+    stop("the server did not exit after shutdown")
+
+growth = lives[-1] - lives[0]
+print("SESSION   %d checks in one session hold %d more bytes than the first "
+      "(bytes still allocated: %d, then %d)" % (n, growth, lives[0], lives[-1]))
+if abs(growth) > slack:
+    print("SESSION   a long session leaves the band of one check by %d bytes, past %d" % (growth, slack))
     sys.exit(1)
 PYEOF
 then
-	echo "lsp-check: a long session climbs out of the band of one check"
+	echo "lsp-check: a long session leaves the band of one check"
 	exit 1
 fi
 

@@ -285,9 +285,9 @@ pub fn chk_visible(mut &em: emit.Emitter, name: str, decl_path: str, is_pub: boo
 # up moves: the scan still finds the declaration, and this refuses the spelling. That is what
 # lets the rule carry the fix in its own sentence, which a failed lookup could not.
 #
-# ANOTHER MODULE IS NOT THIS RULE'S BUSINESS. A bare name reaching one is a visibility
-# question (chk_visible) or a namespace question (c_ns_names_mod), each with its own sentence;
-# saying the same program is wrong twice helps nobody.
+# ANOTHER MODULE IS THE SAME RULE (#394). An import binds a namespace and nothing else, so a
+# public name of another module is spelled through it exactly as a sibling's is; a private one
+# is chk_visible's E3001, which the caller asks first.
 #
 # A file with no path is quiet, for chk_visible's reason: `<derive>` and `<builtin>` are trees
 # the compiler wrote, and a rule that guessed there would refuse a program for a reason nobody
@@ -295,7 +295,14 @@ pub fn chk_visible(mut &em: emit.Emitter, name: str, decl_path: str, is_pub: boo
 pub fn chk_name_is_this_file(mut &em: emit.Emitter, name: str, decl_path: str) {
 	return if decl_path == "" or em.at_path == ""
 	return if decl_path == em.at_path
-	return if c_mod_of(em, decl_path) != c_mod_of(em, em.at_path)
+
+	if c_mod_of(em, decl_path) != c_mod_of(em, em.at_path) {
+		return if c_synthetic_path(em, decl_path) or c_synthetic_path(em, em.at_path)
+
+		nm := chk_call_name(name)
+		chk_name_elsewhere(em, chk_other_module_says(em, f"`{nm}`", nm, decl_path))
+		return
+	}
 
 	# A `_test.zg` FILE NAMES ITS WHOLE MODULE, and that is the one carve-out. A test file is
 	# not shipped — `module_at` drops it from every ordinary build — and reaching inside is the
@@ -311,6 +318,36 @@ pub fn chk_name_is_this_file(mut &em: emit.Emitter, name: str, decl_path: str) {
 	ns := ast.mod_name(chk_drop_zg(decl_path))
 	nm := chk_call_name(name)
 	chk_name_elsewhere(em, f"`{nm}` is declared in `{decl_path}`, and a file names what it uses — write `import \"./{ns}\"` and spell it `{ns}.{nm}` (docs/runtime/package.md)")
+}
+
+# chk_other_module_says is the sentence for a bare name ANOTHER MODULE declares (#394), spelled
+# with the namespace chk_mod_ns finds. `what` introduces the name — "`f`" or "the constant
+# `LIMIT`".
+pub fn chk_other_module_says(mut &em: emit.Emitter, what: str, nm: str, decl_path: str) -> str {
+	ns := chk_mod_ns(em, c_mod_of(em, decl_path))
+	return f"{what} is declared in another module, and a file names what it uses — spell it `{ns}.{nm}` (docs/runtime/package.md)"
+}
+
+# chk_mod_ns is the qualifier this file bound for the module `decl_mod`. A direct import wins
+# over one that only re-exports it, and a file that bound nothing is told the module's own last
+# segment — the name an import with no `as` would bind.
+fn chk_mod_ns(mut &em: emit.Emitter, decl_mod: str) -> str {
+	here := em.at_path
+	mut via := ""
+	mut i := 0
+	for i < em.ns_names.len() {
+		if em.ns_at[i] == here {
+			return em.ns_names[i] if em.ns_mods[i] == decl_mod
+
+			if via == "" and emit.c_ns_names_mod(em, em.ns_names[i], decl_mod) {
+				via = em.ns_names[i]
+			}
+		}
+		i = i + 1
+	}
+	return via if via != ""
+
+	return ast.mod_name(decl_mod)
 }
 
 # chk_name_elsewhere reports a bare name this file cannot call as written (E3114).

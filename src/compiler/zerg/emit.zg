@@ -13525,11 +13525,14 @@ fn c_call(mut &em: Emitter, name: str, args: list[ast.Expr], l: int, c: int, sb:
 		c_nx_use(em, l, c, name, c_nx_sig(em, sr))
 	}
 	c_chk_visible_fn(em, name, sr)
+	c_chk_unsafe_fn(em, name, "calling it", sr)
+	return "0" if c_bare_ambiguous(em, name, c_fn_choices(em, name), false)
+
+	# AFTER THE AMBIGUITY, which names both modules: a name two imported modules declare is
+	# that one finding, not also the one-module sentence below (#394).
 	if bare {
 		c_chk_bare_fn(em, name, sr)
 	}
-	c_chk_unsafe_fn(em, name, "calling it", sr)
-	return "0" if c_bare_ambiguous(em, name, c_fn_choices(em, name), false)
 
 	rels := c_owned_args(em, name, 0, args)
 	return c_call_releasing(em, c_fn_cname_in(em, em.at_path, "", name), name, args, rels, sb) if c_any_owned(rels)
@@ -15049,18 +15052,21 @@ fn c_ident_val(mut &em: Emitter, n: str, l: int, c: int, sb: Subst) -> str {
 		# of them and for the name index. This used to emit the thunk without asking, so
 		# `f := helper` built where `helper()` is E3001 — a sibling's private fn — and when
 		# two files kept a private one the value reached the sorted-first declaring file. A
-		# `pub` sibling is E3114, which speaks only once the privacy rule has stayed quiet.
+		# `pub` sibling or another module's is E3114 (#394), which speaks only once the
+		# privacy rule has stayed quiet.
 		sr := c_sig_row_of(em, n)
 		if em.want_index {
 			c_nx_use(em, l, c, n, c_nx_sig(em, sr))
 		}
 		c_chk_visible_fn(em, n, sr)
-		c_chk_bare_fn(em, n, sr)
 
 		# TWO IMPORTED MODULES BOTH DECLARE IT (#393). A bare call asks this and is E3114.
 		# Taking the name as a value used to emit the thunk anyway, and cc reported
-		# `undeclared function zg_m0_<name>` against a file under .zerg-cache.
+		# `undeclared function zg_m0_<name>` against a file under .zerg-cache. It is asked
+		# before the one-module sentence, so the two spellings are the only finding.
 		return "0" if c_bare_ambiguous(em, n, c_fn_choices(em, n), false)
+
+		c_chk_bare_fn(em, n, sr)
 
 		# NAMING ONE IS SAFE NOW, AND CALLING IT IS STILL CHECKED. This used to be refused —
 		# "naming it here would hand safe code the same call" — and it was true while a
@@ -15124,6 +15130,7 @@ fn c_ident_val(mut &em: Emitter, n: str, l: int, c: int, sb: Subst) -> str {
 		return "0" if c_bare_ambiguous(em, n, c_k_choices(em, em.at_path, n), true)
 
 		c_chk_visible_const(em, n)
+		return "0" if c_chk_bare_const(em, n)
 	}
 	if em.want_index {
 		if idx >= 0 {
@@ -18107,15 +18114,33 @@ fn c_const_bind(mut &em: Emitter, c: ast.ConstDecl, ty: ast.Ty) {
 # any of them when the file being emitted is a `_test.zg` — the same carve-out E3114 keeps,
 # and for the same reason.
 #
-# A constant from ANOTHER MODULE is left alone: it is reached through a namespace and never by
-# a bare name, so it is not this rule's business and refusing it here would be a second
-# sentence about a program another rule already answers for.
+# A constant from ANOTHER MODULE stays bound, and a bare read of it is refused where it is read
+# (c_chk_bare_const, #394): a default another module wrote is lowered in its own file inside the
+# caller's function, and reads its own constants from the rows bound here.
 pub fn c_const_here(mut &em: Emitter, c: ast.ConstDecl) -> bool {
 	return true if c.path == "" or em.at_path == ""
 	return true if c.path == em.at_path
 	return true if check.c_mod_of(em, c.path) != check.c_mod_of(em, em.at_path)
 
 	return lint.is_test_file(ast.mod_name(em.at_path))
+}
+
+# c_chk_bare_const is c_chk_bare_fn for a module constant read bare: a `pub` one ANOTHER MODULE
+# declares is spelled through the namespace this file bound for it (#394). A private one is
+# c_chk_visible_const's E3001, and a sibling's is never bound (c_const_here). It says whether it
+# reported, so an array length (c_arr_len) can stop there too.
+fn c_chk_bare_const(mut &em: Emitter, n: str) -> bool {
+	k := c_k_idx(em, n)
+	return false if k < 0 or not em.k_decls[k].is_pub
+
+	dp := em.k_decls[k].path
+
+	return false if dp == "" or em.at_path == "" or dp == em.at_path
+	return false if check.c_mod_of(em, dp) == check.c_mod_of(em, em.at_path)
+	return false if check.c_synthetic_path(em, dp) or check.c_synthetic_path(em, em.at_path)
+
+	c_const_elsewhere(em, check.chk_other_module_says(em, f"the constant `{n}`", n, dp))
+	return true
 }
 
 # c_const_from_sibling is the sentence for a read of one that was not bound. It answers false
@@ -20215,6 +20240,9 @@ fn c_callee_free(mut &em: Emitter, mod: str, name: str, args: list[ast.Expr], wh
 	sr := c_sig_row(em, key)
 	c_chk_visible_fn(em, name, sr)
 	c_chk_unsafe_fn(em, name, f"calling it through a `{what}`", sr)
+	if mod == "" {
+		c_chk_bare_fn(em, name, sr)
+	}
 
 	mut at := mod
 	if at == "" {
@@ -22051,7 +22079,7 @@ pub fn c_arr_len(mut &em: Emitter, t: ast.Ty) -> int {
 	# its own file (gen_resolve_lens): E3116 for a `pub` one, E3001 for a private one. Its value
 	# stands in, so the one finding is the only one — and it is said ONCE per file: every use of
 	# the array (`xs.len()`, an index) asks its length again.
-	if n < 0 and (c_arr_len_said(em, key) or c_bare_ambiguous(em, key, c_k_choices(em, em.at_path, key), true) or c_const_from_sibling(em, key)) {
+	if n < 0 and (c_arr_len_said(em, key) or c_bare_ambiguous(em, key, c_k_choices(em, em.at_path, key), true) or c_const_from_sibling(em, key) or c_chk_bare_const(em, key)) {
 		v := check.chk_const_of(em, key)
 		return v.value if v.ok and v.value >= 0
 

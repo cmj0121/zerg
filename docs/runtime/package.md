@@ -339,6 +339,15 @@ A private type is under the same rule. Two files that each declare a struct, enu
 is refused is a file that declares its own `P` and also writes another module's `sink.P` in a type position:
 a type position drops its qualifier, so the two would be spelled alike, and that is _E3158_.
 
+A public type another module declares is spelled with the namespace this file bound for that module. `P(x: 1)` and
+`p: P`, where `aa` publishes `struct P`, are _E3115_, and the finding names `aa.P` — or the name an `as` clause bound,
+when the import renamed it. A directory module imported as `./shape` is `shape.Point`, the import's name rather than
+the file's. The qualified spellings build. A sibling file's public type stays the other sentence of the same code: it
+names that file and says to write `import "./two"`.
+
+An impl's spec stays a bare name. The grammar requires the spec to be a bare type-name, so `impl Tag for A` names a
+spec another module published, and that is the spelling the import is for.
+
 So is a private GENERIC function. A template is its file's: two files that each declare a private
 `fn least[T]` declare two templates, whether they are two modules or two files of one, a bare `least(…)` is
 its own file's, and each instance is a C symbol of its own (`examples/1g/generics`). Two modules' public

@@ -384,6 +384,13 @@ pub fn chk_drop_zg(path: str) -> str {
 #
 # A PRIVATE TYPE IS chk_ty_visible's, which every type leaf asks (#384): wherever this would
 # speak about one, that rule says E5008, and this sentence's fix would only meet it again.
+#
+# ANOTHER MODULE IS THIS RULE, READ ONE BOUNDARY OUT. A sibling's type is spelled with the
+# file an import of that file binds. A type another module declares is spelled with the
+# namespace THIS file bound for that module — `aa.P`, or the `as` name when the import
+# renamed it — and the flattened registry is what made the bare name resolve at all. A
+# module the compiler wrote (`<builtin>`, a derive) has no such namespace, and a rule that
+# guessed one would refuse `Eq` for a reason the page cannot act on.
 pub fn chk_ty_is_this_file(mut &em: emit.Emitter, nm: str) {
 	return if not emit.c_ty_pub(em, nm)
 
@@ -391,11 +398,46 @@ pub fn chk_ty_is_this_file(mut &em: emit.Emitter, nm: str) {
 
 	return if decl_path == "" or em.at_path == ""
 	return if decl_path == em.at_path
-	return if c_mod_of(em, decl_path) != c_mod_of(em, em.at_path)
-	return if lint.is_test_file(ast.mod_name(em.at_path))
 
-	ns := ast.mod_name(chk_drop_zg(decl_path))
-	chk_at(em, rule.Rule.TypeFromSibling, f"the type `{nm}` is declared in `{decl_path}`, and a file names what it uses — write `import \"./{ns}\"` and spell it `{ns}.{nm}` (docs/runtime/package.md)")
+	decl_mod := c_mod_of(em, decl_path)
+	here_mod := c_mod_of(em, em.at_path)
+	return if decl_mod == "" or here_mod == ""
+
+	# ONE SITE. A code reported from two places is two rules, and these two
+	# sentences are the two boundaries of this one.
+	mut msg := ""
+	if decl_mod != here_mod {
+		ns := chk_ty_mod_ns(em, decl_mod)
+		msg = f"the type `{nm}` is declared in another module, and a file names what it uses — spell it `{ns}.{nm}` (docs/runtime/package.md)"
+	} else {
+		return if lint.is_test_file(ast.mod_name(em.at_path))
+
+		ns := ast.mod_name(chk_drop_zg(decl_path))
+		msg = f"the type `{nm}` is declared in `{decl_path}`, and a file names what it uses — write `import \"./{ns}\"` and spell it `{ns}.{nm}` (docs/runtime/package.md)"
+	}
+	chk_at(em, rule.Rule.TypeFromSibling, msg)
+}
+
+# chk_ty_mod_ns is the qualifier a file already bound for the module a type comes from.
+# The direct import wins over one that only re-exports it, and a file that bound nothing
+# is told the module's own last segment — the name an import with no `as` would bind.
+fn chk_ty_mod_ns(mut &em: emit.Emitter, decl_mod: str) -> str {
+	here := em.at_path
+	mut via := ""
+	mut i := 0
+	for i < em.ns_names.len() {
+		if em.ns_at[i] == here {
+			return em.ns_names[i] if em.ns_mods[i] == decl_mod
+
+			if via == "" and emit.c_ns_names_mod(em, em.ns_names[i], decl_mod) {
+				via = em.ns_names[i]
+			}
+		}
+		i = i + 1
+	}
+	return via if via != ""
+
+	return ast.mod_name(decl_mod)
 }
 
 # chk_ty_visible is chk_visible FOR A TYPE NAME, and it is a second function rather than a

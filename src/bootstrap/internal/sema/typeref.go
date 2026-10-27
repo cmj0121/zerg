@@ -185,6 +185,10 @@ func (c *checker) resolveTypeRef(ref *ast.TypeRef) types.Type {
 		}
 		return c.namedTypeUse(sym, c.typeArgs(refArgExprs(ref)))
 	}
+	if msg := c.bareTypeElsewhere(ref.Name); msg != "" {
+		c.errorf(ref.Span(), "%s", msg)
+		return Invalid
+	}
 	c.errorf(ref.Span(), "unknown type %q", ref.Name)
 	return Invalid
 }

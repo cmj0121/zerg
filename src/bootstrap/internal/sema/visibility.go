@@ -1,6 +1,8 @@
 package sema
 
 import (
+	"fmt"
+	"sort"
 	"strings"
 
 	"github.com/cmj0121/zerg/src/bootstrap/internal/ast"
@@ -60,6 +62,46 @@ func (c *checker) recordMember(fld *ast.Field, key string) {
 	if c.info.NsMembers != nil {
 		c.info.NsMembers[fld] = key
 	}
+}
+
+// bareTypeElsewhere is the sentence for a public type an imported module declares
+// when the reader wrote the bare name. It answers "" when no imported module
+// publishes that type. More than one is not a choice: the sentence names each
+// qualified spelling, the same way a bare function two modules declare is refused.
+//
+// The shipping compiler flattens every type into one registry, so the bare name
+// resolves and has to be refused by name. This seed never flattens a type into the
+// importer's namespace, and the refusal used to be "undefined function" or
+// "unknown type" — a sentence about a missing declaration, for a declaration that
+// is there. The two compilers say this instead.
+func (c *checker) bareTypeElsewhere(name string) string {
+	if c.module == nil {
+		return ""
+	}
+	var nss []string
+	seen := map[string]bool{}
+	for _, sym := range c.module.order {
+		if sym.Kind != SymNamespace || seen[sym.Name] {
+			continue
+		}
+		seen[sym.Name] = true
+		res := c.resolveMember(sym, sym.Name, name)
+		if res.Found && res.Sym != nil && res.Sym.Kind == SymType {
+			nss = append(nss, sym.Name)
+		}
+	}
+	if len(nss) == 0 {
+		return ""
+	}
+	sort.Strings(nss)
+	if len(nss) == 1 {
+		return fmt.Sprintf("the type `%s` is declared in another module, and a file names what it uses — spell it `%s.%s` (docs/runtime/package.md)", name, nss[0], name)
+	}
+	parts := make([]string, len(nss))
+	for i, ns := range nss {
+		parts[i] = fmt.Sprintf("`%s.%s`", ns, name)
+	}
+	return fmt.Sprintf("the type `%s` is declared in more than one imported module, and a bare name cannot choose — spell %s (docs/runtime/package.md)", name, strings.Join(parts, " or "))
 }
 
 // memberError reports a rejected namespace member: a private one names the

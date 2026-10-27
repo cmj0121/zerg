@@ -7525,11 +7525,15 @@ reject bare-type-from-a-sibling-file E3115 'and a file names what it uses' seed-
 import "./pair"
 
 fn main() {
-	print pair.both().x
+	print pair.both()
 }
 --- pair/one.zg
-pub fn both() -> Box {
-	return Box(1)
+pub fn take(b: Box) -> int {
+	return b.x
+}
+
+pub fn both() -> int {
+	return 1
 }
 --- pair/two.zg
 pub struct Box {
@@ -7538,6 +7542,97 @@ pub struct Box {
 --- pair/mod.zg
 import pub "./one"
 import pub "./two"
+EOF
+
+# THE CONSTRUCTION IS THE OTHER POSITION. A type annotation's walk lists `b: Box`
+# and never the call, and `return Box(1)` used to lower while the annotation was
+# refused. It is its own case so the two positions cannot hide each other: a
+# function that wrote both would be two findings of one rule.
+reject bare-type-constructed-from-a-sibling-file E3115 'and a file names what it uses' seed-gap one-finding <<'EOF'
+import "./pair"
+
+fn main() {
+	print pair.both()
+}
+--- pair/one.zg
+pub fn both() -> int {
+	return Box(1).x
+}
+--- pair/two.zg
+pub struct Box {
+	pub x: int
+}
+--- pair/mod.zg
+import pub "./one"
+import pub "./two"
+EOF
+
+# THE SAME RULE, ONE BOUNDARY OUT. A public type another module declares is
+# spelled with the namespace THIS file bound — `aa.P`, the directory an import
+# of `./shape` bound, or the name an `as` clause bound — and the flattened
+# registry is what made the bare name resolve. The seed names that spelling
+# too, where it used to say the declaration was missing.
+reject bare-type-from-another-module E3115 'spell it `aa.P`' one-finding <<'EOF'
+import "./aa"
+
+fn main() {
+	print P(x: 1).x
+}
+--- aa/mod.zg
+pub struct P {
+	pub x: int
+}
+EOF
+
+reject bare-type-annotated-from-another-module E3115 'spell it `aa.P`' one-finding <<'EOF'
+import "./aa"
+
+fn main() {
+	p: P = aa.P(x: 1)
+	print p.x
+}
+--- aa/mod.zg
+pub struct P {
+	pub x: int
+}
+EOF
+
+# A directory module's qualifier is the import's name, not the file `mod.zg`.
+reject bare-type-from-a-directory-module E3115 'spell it `shape.Point`' one-finding <<'EOF'
+import "./shape"
+
+fn main() {
+	print Point(x: 1, y: 2).x
+}
+--- shape/mod.zg
+pub struct Point {
+	pub x: int
+	pub y: int
+}
+EOF
+
+reject bare-type-through-an-import-alias E3115 'spell it `box.P`' one-finding <<'EOF'
+import "./aa" as box
+
+fn main() {
+	print P(x: 1).x
+}
+--- aa/mod.zg
+pub struct P {
+	pub x: int
+}
+EOF
+
+reject bare-generic-type-from-another-module E3115 'spell it `aa.Box`' one-finding <<'EOF'
+import "./aa"
+
+fn main() {
+	print Box(1).v
+}
+--- aa/mod.zg
+pub struct Box[T] {
+	pub v: T
+}
 EOF
 
 # A SIBLING'S PRIVATE TYPE WRITTEN BARE IS E5008 ALONE (#384), the type twin of the call

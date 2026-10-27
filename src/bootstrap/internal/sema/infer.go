@@ -184,6 +184,16 @@ func (c *checker) builtinCall(n *ast.Call) (Type, bool) {
 			return c.procOpenIntrinsic(n), true
 		case "__zrt_proc_wait":
 			return c.unaryIntrinsic(n, Int, Int), true
+		case "__zrt_proc_start":
+			return c.procStartIntrinsic(n), true
+		case "__zrt_proc_wait_for":
+			return c.binaryIntrinsic(n, Int, Int, Int), true
+		case "__zrt_proc_kill":
+			return c.binaryIntrinsic(n, Int, Int, Bool), true
+		case "__zrt_mkdtemp":
+			return c.unaryIntrinsic(n, Str, Str), true
+		case "__zrt_remove_dir":
+			return c.unaryIntrinsic(n, Str, Bool), true
 		case "__zrt_remove":
 			return c.unaryIntrinsic(n, Str, Nil), true
 		case "__zrt_exec":
@@ -476,6 +486,21 @@ func (c *checker) procOpenIntrinsic(n *ast.Call) Type {
 	}
 	c.check(n.Args[0].Value, &types.List{Elem: types.Str})
 	return &types.List{Elem: types.Int}
+}
+
+// procStartIntrinsic checks `__zrt_proc_start(argv, out, err)` — a child whose input is empty
+// and whose output goes to the files named, leading a process group of its own; it answers the
+// pid. The tools reach for it to run a child under a limit (`zerg doc --check`, `zerg test`).
+func (c *checker) procStartIntrinsic(n *ast.Call) Type {
+	if len(n.Args) != 3 {
+		c.errorf(n.Span(), "proc-start intrinsic takes (argv, out, err), got %d argument(s)", len(n.Args))
+		c.synthArgs(n)
+		return Int
+	}
+	c.check(n.Args[0].Value, &types.List{Elem: types.Str})
+	c.check(n.Args[1].Value, Str)
+	c.check(n.Args[2].Value, Str)
+	return Int
 }
 
 // atomicIntrinsic checks a compiler atomic-cell intrinsic `__zrt_atomic_<op>(a,

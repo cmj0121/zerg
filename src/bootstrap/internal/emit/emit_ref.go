@@ -390,28 +390,33 @@ var ioIntrinsicNames = map[string]bool{
 // runtime — sys.c for most of them, and the zergrt.h inline over conv.c for `__zrt_trunc`
 // — so a program that lowers one needs the runtime, but not the io-specific NeedsIO flag.
 var sysFloorIntrinsics = map[string]bool{
-	"__zrt_time_unix":  true,
-	"__zrt_time_mono":  true,
-	"__zrt_trunc":      true,
-	"__zrt_platform":   true,
-	"__zrt_arch":       true,
-	"__zrt_exe_path":   true,
-	"__zrt_getenv":     true,
-	"__zrt_has_env":    true,
-	"__zrt_set_env":    true,
-	"__zrt_del_env":    true,
-	"__zrt_isatty":     true,
-	"__zrt_exit":       true,
-	"__zrt_exists":     true,
-	"__zrt_remove":     true,
-	"__zrt_exec":       true,
-	"__zrt_listdir":    true,
-	"__zrt_path_kind":  true,
-	"__zrt_real_path":  true,
-	"__zrt_mkdir":      true,
-	"__zrt_proc_spawn": true,
-	"__zrt_proc_open3": true,
-	"__zrt_proc_wait":  true,
+	"__zrt_time_unix":     true,
+	"__zrt_time_mono":     true,
+	"__zrt_trunc":         true,
+	"__zrt_platform":      true,
+	"__zrt_arch":          true,
+	"__zrt_exe_path":      true,
+	"__zrt_getenv":        true,
+	"__zrt_has_env":       true,
+	"__zrt_set_env":       true,
+	"__zrt_del_env":       true,
+	"__zrt_isatty":        true,
+	"__zrt_exit":          true,
+	"__zrt_exists":        true,
+	"__zrt_remove":        true,
+	"__zrt_exec":          true,
+	"__zrt_listdir":       true,
+	"__zrt_path_kind":     true,
+	"__zrt_real_path":     true,
+	"__zrt_mkdir":         true,
+	"__zrt_proc_spawn":    true,
+	"__zrt_proc_open3":    true,
+	"__zrt_proc_wait":     true,
+	"__zrt_proc_start":    true,
+	"__zrt_proc_wait_for": true,
+	"__zrt_proc_kill":     true,
+	"__zrt_mkdtemp":       true,
+	"__zrt_remove_dir":    true,
 }
 
 // schedFloorIntrinsics are the runtime floor leaves that ride in sched.c rather than in the
@@ -432,6 +437,7 @@ var strProducingIntrinsics = map[string]bool{
 	"__zrt_arch":      true,
 	"__zrt_exe_path":  true,
 	"__zrt_real_path": true,
+	"__zrt_mkdtemp":   true,
 }
 
 // programCallsIntrinsic reports whether the program lowers any intrinsic whose spelling
@@ -689,7 +695,16 @@ func (e *emitter) sysIntrinsicEmit(n *ast.Call) (string, bool) {
 			// void call used as a nil statement; both operands are borrowed str cells the
 			// runtime copies into `environ`, so the caller keeps ownership of each.
 			return fmt.Sprintf("zrt_set_env(%s, %s)", e.expr(n.Args[0].Value), e.expr(n.Args[1].Value)), true
+		case "__zrt_proc_wait_for":
+			return fmt.Sprintf("((int64_t)zrt_proc_wait_for(%s, %s))", e.expr(n.Args[0].Value), e.expr(n.Args[1].Value)), true
+		case "__zrt_proc_kill":
+			return fmt.Sprintf("zrt_proc_kill(%s, %s)", e.expr(n.Args[0].Value), e.expr(n.Args[1].Value)), true
 		}
+	}
+	if len(n.Args) == 3 && id.Name == "__zrt_proc_start" {
+		// the argv list and both paths are borrowed: the runtime reads them before it answers
+		return fmt.Sprintf("((int64_t)zrt_proc_start(%s, %s, %s))",
+			e.expr(n.Args[0].Value), e.expr(n.Args[1].Value), e.expr(n.Args[2].Value)), true
 	}
 	return "", false
 }
@@ -783,6 +798,10 @@ func (e *emitter) fileIntrinsicEmit(n *ast.Call) (string, bool) {
 		return fmt.Sprintf("zrt_real_path(%s)", arg), true
 	case "__zrt_mkdir":
 		return fmt.Sprintf("zrt_mkdir(%s)", arg), true
+	case "__zrt_mkdtemp":
+		return fmt.Sprintf("zrt_mkdtemp(%s)", arg), true
+	case "__zrt_remove_dir":
+		return fmt.Sprintf("zrt_remove_dir(%s)", arg), true
 	case "__zrt_proc_spawn":
 		return fmt.Sprintf("((int64_t)zrt_proc_spawn(%s))", arg), true
 	case "__zrt_proc_open3":

@@ -564,6 +564,16 @@ impl Counter {
 	pub mut fn bump() {
 		this.n = this.n + 1
 	}
+
+	## from_n is a Counter that starts at `n`.
+	pub fn from_n(n: int) -> Counter {
+		return Counter(n)
+	}
+
+	## zero is a Counter that starts at nothing.
+	pub fn zero() -> Counter {
+		return Counter(0)
+	}
 }
 
 unsafe {
@@ -597,6 +607,11 @@ form 'a spec requirement' '      fn label() -> str'
 form 'a mutable global' '  mut COUNTER := 0'
 form 'an unsafe fn' '  unsafe fn peek(p: ptr) -> int'
 form 'a mutating method' '      mut fn bump()'
+
+# an ASSOCIATED fn has no `this` for the signature to drop: its first parameter is its first
+# written one, and one with none has no receiver to ask whether it is `mut`
+form 'an associated fn' '      fn from_n(n: int) -> Counter'
+form 'an associated fn with no parameter' '      fn zero() -> Counter'
 
 # and each of them keeps its own comment, which is the §4 question asked of the forms §4's
 # fixture cannot declare

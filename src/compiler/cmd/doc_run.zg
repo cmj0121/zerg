@@ -26,22 +26,32 @@ import (
 	"/zerg"
 )
 
-# example_dir makes the directory one `--check` run writes into, and answers its path. It is
-# `mktemp -d`'s, because a unique name is the whole point and the runtime has no leaf that
-# creates one atomically; `drop_dir` takes it away at the end of the run.
+# example_dir makes the directory one `--check` run writes into, under `$TMPDIR` or `/tmp`, and
+# answers its path. A unique name is the whole point, so the name is picked by the same runtime
+# call that creates the directory (`__zrt_mkdtemp`); `drop_dir` takes it away at the end.
 pub fn example_dir() -> str {
-	mut out := ""
-	code := run_child(["sh", "-c", "mktemp -d \"${TMPDIR:-/tmp}/zerg-doc.XXXXXX\""], out)
-	lines := test.lines_of(out)
-	raise "`zerg doc --check` could not make a directory to build its examples in" if code != 0 or lines.len() != 1
+	mut root := layout.env_or("TMPDIR", "")
+	if root == "" {
+		root = "/tmp"
+	}
+	dir := __zrt_mkdtemp(layout.join_path(root, "zerg-doc."))
+	raise "`zerg doc --check` could not make a directory to build its examples in" if dir == ""
 
-	return lines[0]
+	return dir
 }
 
-# drop_dir removes what example_dir made.
+# drop_dir removes what example_dir made, and everything in it. A link is removed and never
+# followed, so nothing outside the directory is reached.
 pub fn drop_dir(dir: str) {
-	mut out := ""
-	run_child(["rm", "-rf", dir], out)
+	for name in __zrt_listdir(dir) {
+		path := layout.join_path(dir, name)
+		if __zrt_path_kind(path) == 2 {
+			drop_dir(path)
+		} else {
+			test.rm_file(path)
+		}
+	}
+	__zrt_remove_dir(dir)
 }
 
 # run_examples runs every example `m` carries and answers what went wrong, one finding per
@@ -84,8 +94,7 @@ pub fn run_examples(m: zerg.DocModule, tmp: str, secs: int, mut &ran: int) -> st
 	blog := test.read_or_empty(stem + ".out")
 	test.rm_file(src)
 
-	return f"{at}: the process tree cannot be stopped on this host: `ps` is missing, so the examples of `{m.name}` were not run\n" if no_ps(bcode, stem)
-	return f"{at}: the examples of `{m.name}` did not build within {secs}s — raise the limit with `zerg doc --check --timeout`\n" if timed_out(bcode, stem)
+	return f"{at}: the examples of `{m.name}` did not build within {secs}s — raise the limit with `zerg doc --check --timeout`\n" if bcode == test.PROC_LATE
 	return f"{at}: the examples of `{m.name}` do not compile\n" + indent_head(blog) if bcode != 0
 
 	for ex in m.examples {
@@ -95,7 +104,7 @@ pub fn run_examples(m: zerg.DocModule, tmp: str, secs: int, mut &ran: int) -> st
 	pcode := bounded([bin], secs, tmp, "", stem)
 	out := test.read_or_empty(stem + ".out")
 
-	return f"{at}: the examples of `{m.name}` did not finish within {secs}s — raise the limit with `zerg doc --check --timeout`\n" if timed_out(pcode, stem)
+	return f"{at}: the examples of `{m.name}` did not finish within {secs}s — raise the limit with `zerg doc --check --timeout`\n" if pcode == test.PROC_LATE
 	return f"{at}: the examples of `{m.name}` exited {pcode}\n" + indent(test.lines_of(out)) if pcode != 0
 
 	return output_mismatch(m, test.lines_of(out))
@@ -173,103 +182,35 @@ fn same_files(got: list[str], m: zerg.DocModule) -> bool {
 	return true
 }
 
-# BOUNDED is the shell `bounded` runs a child under, and it is a stand-in: #196 is the issue that
-# removes it, by giving the runtime a child process with redirected streams, a deadline and a
-# directory of its own — every job below, and `example_dir`'s `mktemp`, then being the runtime's.
+# bounded runs argv for at most `secs` seconds and answers its status, or `test.PROC_LATE` when
+# the limit ended it; everything it wrote is left in `stem.out`. `tmp` is the run's directory and
+# `src` the generated source, which an interrupt removes.
 #
-#   - IT NEEDS `ps` AND `awk`, and says so. Without them the tree below cannot be walked, so it
-#     leaves a `.nops` mark and exits `NO_PS` rather than kill only the direct child quietly.
-#   - THE CHILD WRITES TO A FILE, stdout and stderr joined, and its input is empty. No pipe is
-#     read while it runs, so nothing it starts — `cc` under `zerg build`, a process an example
-#     leaves running — can hold one open and keep this command waiting.
-#   - A WATCHDOG marks the run late and kills the child once `secs` have passed.
-#   - KILLING IS BY TREE (`k`): one `ps` snapshot of every process and its parent is taken
-#     first, then each process in the child's tree is stopped so it can start nothing more, and
-#     killed after its children. The snapshot comes before the first stop because stopping a
-#     member of an orphaned group makes the kernel hang up on the rest, and a middle process that
-#     dies of that before it is listed would hide its children. Not by process group — that needs
-#     job control, and dash refuses `set -m` without a terminal.
-#   - WHEN THE CHILD ENDS, the watchdog's tree is killed, `sleep` included, so nothing the
-#     watchdog started outlives the run. A process an example leaves running after a NORMAL exit
-#     is not killed: it has been handed to init, and no tree reaches it.
-#   - HANGUP, INTERRUPT OR TERM kill both trees and remove the run's directory and the generated
-#     source. The handler first ignores all three, so the hangup the kernel sends while `k` stops
-#     an orphaned group is absorbed. The command itself has no handler of its own, so a signal
-#     that lands between two children leaves the directory behind.
-#   - THE SHELL WRITES NOTHING. Its own streams go nowhere, because a shell that reports a killed
-#     job on stderr would do so into a pipe whose reader an interrupt has just killed.
+# A LIMIT, because an example is code and code can loop. `test.run_limited` is the runtime's
+# child with a deadline, and it gives this command all of what it needs:
 #
-# TWO WINDOWS ARE LEFT, both a signal to a process id the kernel reaped a moment earlier: a
-# watchdog already past its `sleep` in the instant the child ends, and a watchdog that killed the
-# child and was reaped by the shell during `wait` before `k` reaches it. The interrupt branch is
-# held by `make doc-check`; the hangup and no-`ps` branches were verified by hand, and stay so
-# until #196 replaces the wrapper.
-const BOUNDED := "exec >/dev/null 2>&1\nm=$1; o=$2; t=$3; d=$4; s=$5; shift 5\ncommand -v ps && command -v awk || { : >\"${m%.late}.nops\"; exit 97; }\nk() { z=$(ps -A -o pid= -o ppid=); kk \"$1\"; }\nkk() { kill -STOP \"$1\" 2>/dev/null; for c in $(printf '%s\\n' \"$z\" | awk -v p=\"$1\" '$2 == p { print $1 }'); do kk \"$c\"; done; kill -9 \"$1\" 2>/dev/null; }\np=; w=\ntrap 'trap : HUP INT TERM; k \"$p\"; k \"$w\"; rm -f \"$s\"; rm -rf \"$d\"; exit 130' HUP INT TERM\n\"$@\" >\"$o\" 2>&1 </dev/null &\np=$!\n( sleep \"$t\"; : >\"$m\"; k \"$p\" ) >/dev/null 2>&1 &\nw=$!\nwait \"$p\"\nr=$?\nk \"$w\"\nexit \"$r\"\n"
-
-# NO_PS is the status BOUNDED exits with when the host lacks what it needs to stop a process
-# tree. It is read together with the `.nops` mark, so a child that exits 97 is not mistaken for it.
-const NO_PS := 97
-
-# bounded runs argv for at most `secs` seconds and answers its status; everything it wrote is
-# left in `stem.out`. `tmp` is the run's directory and `src` the generated source, which an
-# interrupt removes; `stem` names the files a child leaves in `tmp` — its output, and the mark
-# that it ran late or could not be bounded at all.
-#
-# A LIMIT, because an example is code and code can loop. The runtime has no leaf that kills a
-# process, so the shell is asked to. `sh` is POSIX's, and a host this compiler can build on at
-# all is a POSIX host with a `cc`.
+#   - THE CHILD WRITES TO A FILE, stdout and stderr joined in the order written, and its input
+#     is empty. No pipe is read while it runs, so nothing it starts — `cc` under `zerg build`,
+#     a process an example leaves running — can hold one open and keep this command waiting.
+#   - THE CHILD LEADS A PROCESS GROUP, and what it starts joins it. When the limit passes the
+#     whole group is killed, before the child is reaped, so the signal cannot reach a process
+#     that only inherited a reaped child's id. A process an example leaves running after a
+#     NORMAL exit is not killed: nothing was late, and its group is no longer this run's.
+#   - A HANGUP, AN INTERRUPT OR A TERM while a child runs kills its group the same way, and
+#     this command then removes the run's directory and the generated source and exits 130.
+#     Ctrl-C reaches this process and not the child, whose group is not the terminal's. A
+#     signal that lands between two children ends this command where it stands, and leaves
+#     the directory behind.
 fn bounded(argv: list[str], secs: int, tmp: str, src: str, stem: str) -> int {
-	mut sh: list[str] = ["sh", "-c", BOUNDED, "zerg-doc", stem + ".late", stem + ".out", f"{secs}", tmp, src]
-	for a in argv {
-		sh.append(a)
+	out := stem + ".out"
+	code := test.run_limited(argv, out, out, secs)
+	if code == test.PROC_STOPPED {
+		drop_dir(tmp)
 	}
-	mut said := ""
-	return run_child(sh, said)
-}
+	mut gen: list[str] = [src]
+	test.stopped_exit(code, gen)
 
-# no_ps reports whether BOUNDED refused to start for want of `ps` or `awk`: the status it exits
-# with, AND the mark it leaves, so a build or an example that happens to exit with the same
-# status is not taken for it.
-fn no_ps(code: int, stem: str) -> bool {
-	return code == NO_PS and __zrt_exists(stem + ".nops")
-}
-
-# timed_out reports whether the watchdog, rather than the child, ended the run: it marked the
-# run late AND the child died of the kill. A child that finished in the instant between the two
-# finished.
-fn timed_out(code: int, stem: str) -> bool {
-	return code == 137 and __zrt_exists(stem + ".late")
-}
-
-# run_child runs argv to the end and answers its status, with what it wrote to its stdout
-# appended to `out`.
-#
-# IT IS `os.command` SPELLED ON THE RUNTIME'S LEAVES, because the seed that builds this compiler
-# cannot build `os`, so the module that already does this is out of reach from here. Its stderr
-# is read only after its stdout has ended, which is safe for what is run here only: the shell
-# under `bounded` sends its child's output to a file and writes a line at most itself, and
-# `mktemp` / `rm` write a line at most.
-fn run_child(argv: list[str], mut &out: str) -> int {
-	h := __zrt_proc_open3(argv)
-	raise f"`zerg doc --check` could not start `{argv[0]}`" if h.len() < 4
-
-	__zrt_close(h[1])
-	out = out + drain(h[2])
-	drain(h[3])
-	return __zrt_proc_wait(h[0])
-}
-
-fn drain(fd: int) -> str {
-	mut got: list[byte] = []
-	for {
-		chunk := __zrt_read(fd)
-		break if chunk.len() == 0
-		for b in chunk {
-			got.append(b)
-		}
-	}
-	__zrt_close(fd)
-	return str(got)
+	return code
 }
 
 # write_text is `io.write_file` answering a value, so a `guard` around it has a carrier the seed

@@ -2117,6 +2117,7 @@ fn chk_intrinsic_params(name: str) -> list[ast.Ty] {
 	return [ast.Ty.TStr] if name == "__zrt_getenv" or name == "__zrt_has_env" or name == "__zrt_del_env"
 	return [ast.Ty.TStr] if name == "__zrt_exists" or name == "__zrt_remove" or name == "__zrt_listdir" or name == "__zrt_mkdir"
 	return [ast.Ty.TStr] if name == "__zrt_path_kind" or name == "__zrt_real_path"
+	return [ast.Ty.TStr] if name == "__zrt_mkdtemp" or name == "__zrt_remove_dir"
 
 	return [ast.Ty.TInt] if name == "__zrt_read" or name == "__zrt_close" or name == "__zrt_isatty"
 	return [ast.Ty.TInt] if name == "__zrt_sleep_ns" or name == "__zrt_exit" or name == "__zrt_proc_wait"
@@ -2127,6 +2128,9 @@ fn chk_intrinsic_params(name: str) -> list[ast.Ty] {
 	return [ast.Ty.TStr] if name == "__zrt_hash_text"
 
 	return [ast.Ty.TList(ast.Ty.TStr)] if name == "__zrt_exec" or name == "__zrt_proc_spawn" or name == "__zrt_proc_open3"
+
+	return [ast.Ty.TList(ast.Ty.TStr), ast.Ty.TStr, ast.Ty.TStr] if name == "__zrt_proc_start"
+	return [ast.Ty.TInt, ast.Ty.TInt] if name == "__zrt_proc_wait_for" or name == "__zrt_proc_kill"
 
 	return [ast.Ty.TStr, ast.Ty.TStr] if name == "__zrt_set_env"
 

@@ -37,8 +37,10 @@ C 函式庫（libc / libSystem）之上，另有一小塊 per-architecture 組�
 - **`entry.c`**——program-entry shim（`zrt_run` 佈置並執行 `main`）。
 - **`unwind.c`**——abort / unwind 機制與 `defer` 的 cleanup stack。
 - **`sys.c`**——最小系統表面：自舉編譯器賴以建置的行程底層（`zrt_exec`、`zrt_proc_spawn` /
-  `zrt_proc_wait`、`zrt_mkdir`、`zrt_listdir`）、標準函式庫 `io` 下沉所到的 `write` / `read` / `open` /
-  `close` syscall floor、abort 回報、`Atomic[int]` 運算，以及命令列 `args`。
+  `zrt_proc_wait`、`zrt_mkdir`、`zrt_listdir`）、工具在時限下執行的子行程（串流寫進檔案、自己領一個行程群組的
+  `zrt_proc_start`，帶期限的 `zrt_proc_wait_for`，`zrt_proc_kill`，以及給不與其他任何一趟共用的目錄用的
+  `zrt_mkdtemp` / `zrt_remove_dir`）、標準函式庫 `io` 下沉所到的 `write` / `read` / `open` / `close` syscall
+  floor、abort 回報、`Atomic[int]` 運算，以及命令列 `args`。
 
 ### Header & tests
 

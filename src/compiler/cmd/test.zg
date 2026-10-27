@@ -397,7 +397,13 @@ fn run_pkg(root: str, p: test_pkg.Pkg, only: str, secs: int, mut &passed: int, m
 	rm_file(sel)
 	mut argv: list[str] = []
 	argv.append(bin)
-	__zrt_exec(argv)
+
+	# THE PROCESS IS BOUNDED TOO, by `process_limit`. The `select` in the driver is what reports
+	# a test STUCK; this is for a run the driver cannot get back from at all. A run cut short
+	# here is not reported as such: the tests it left without a record go to the fallback
+	# below, each under a limit of its own.
+	mut mine: list[str] = [rep, sel, bin]
+	stopped_exit(run_limited(argv, "", "", process_limit(secs, names.len())), mine)
 	take_records(rep, names, verdict, text, broke)
 
 	# THE FALLBACK. Every test with no record is one the in-process run never got back from,
@@ -412,7 +418,7 @@ fn run_pkg(root: str, p: test_pkg.Pkg, only: str, secs: int, mut &passed: int, m
 			if fell < 0 {
 				fell = i
 			}
-			run_one(bin, sel, rep, names, i, verdict, text, broke)
+			run_one(bin, sel, rep, names, i, secs, verdict, text, broke)
 		}
 		i = i + 1
 	}
@@ -434,16 +440,30 @@ fn run_pkg(root: str, p: test_pkg.Pkg, only: str, secs: int, mut &passed: int, m
 # THE NAME TRAVELS IN A FILE for the reason the driver's paths do: the driver cannot read a
 # command line (E9097), so the one thing that varies between these runs is written where the
 # driver looks for it.
-fn run_one(bin: str, sel: str, rep: str, names: list[str], i: int, mut &verdict: list[str], mut &text: list[str], mut &broke: list[str]) {
+#
+# ITS LIMIT IS `process_limit` FOR ONE TEST. A process that outlasts it is killed, with what it
+# started, and the test is reported STUCK — the driver's own deadline could not report it, so
+# nothing did.
+fn run_one(bin: str, sel: str, rep: str, names: list[str], i: int, secs: int, mut &verdict: list[str], mut &text: list[str], mut &broke: list[str]) {
 	rm_file(rep)
 	guard {
 		io.write_file(sel, bytearray(names[i]))
 	}
 	mut argv: list[str] = []
 	argv.append(bin)
-	code := __zrt_exec(argv)
+
+	limit := process_limit(secs, 1)
+	code := run_limited(argv, "", "", limit)
+	mut mine: list[str] = [rep, sel, bin]
+	stopped_exit(code, mine)
 	take_records(rep, names, verdict, text, broke)
 	return if verdict[i] != ""
+
+	if code == PROC_LATE {
+		verdict[i] = "timeout"
+		text[i] = f"the test process did not finish within {limit}s and was killed — nothing was decided, so this is not a failed assertion; raise the limit with `zerg test --timeout`\n"
+		return
+	}
 
 	# STILL NO RECORD, so this test is the one that ends processes. The status tells the two
 	# un-catchable ways apart, and `os.exit(0)` is the one that needs saying out loud: it
@@ -456,6 +476,48 @@ fn run_one(bin: str, sel: str, rep: str, names: list[str], i: int, mut &verdict:
 		verdict[i] = "crash"
 		text[i] = f"the test process died with status {code}\n"
 	}
+}
+
+# run_limited starts argv with its stdout sent to `out` and its stderr to `err`, as
+# `__zrt_proc_start` reads the two, and waits for it at most `secs` seconds. It answers the
+# child's status, or PROC_LATE or PROC_STOPPED, and in both of those the child has been killed
+# together with every process it started that is still in its process group.
+#
+# It is the one way the tools run a child under a limit — `zerg doc --check` runs its builds
+# and its examples through it — so `--timeout` means the same thing in both commands.
+pub fn run_limited(argv: list[str], out: str, err: str, secs: int) -> int {
+	pid := __zrt_proc_start(argv, out, err)
+	raise f"could not start `{argv[0]}`" if pid < 0
+
+	return __zrt_proc_wait_for(pid, secs * 1000)
+}
+
+# process_limit is how long a test process running `tests` tests may take: `secs` for each,
+# `secs` more for the fixtures around them, and PROC_GRACE for the process to start and end. It
+# is LOOSER than the driver's own deadline on purpose — a test the driver can still report
+# STUCK is reported by the driver, with what it was doing, and only a process the driver cannot
+# get back from at all is ended from outside.
+fn process_limit(secs: int, tests: int) -> int {
+	return secs * (tests + 1) + PROC_GRACE
+}
+
+const PROC_GRACE := 5
+
+# PROC_LATE is what `__zrt_proc_wait_for` answers when its limit passed, and PROC_STOPPED when
+# this process was sent a hangup, an interrupt or a TERM while it waited (ZRT_PROC_LATE and
+# ZRT_PROC_STOPPED in zergrt.h). Neither is a status a process can exit with.
+pub const PROC_LATE := 0 - 2
+pub const PROC_STOPPED := 0 - 3
+
+# stopped_exit ends this command the way an interrupted one ends, once `code` says the child it
+# was waiting on was stopped for that reason — removing `paths` first, which are this run's.
+pub fn stopped_exit(code: int, paths: list[str]) {
+	return if code != PROC_STOPPED
+
+	for p in paths {
+		rm_file(p)
+	}
+	__zrt_exit(130)
 }
 
 # TEST_JOBS is how many units a test build compiles at once. It is `build`'s own default rather

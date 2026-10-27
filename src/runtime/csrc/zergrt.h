@@ -931,6 +931,22 @@ int64_t zrt_proc_wait(int64_t pid);
  * the failure. */
 zrt_list zrt_proc_open3(zrt_list argv);
 
+/* A child a tool can bound (sys.c). zrt_proc_start starts one with an empty input and its
+ * output in files — `out` for stdout, `err` for stderr, "" for this process's own, the same
+ * path twice to join them, `/dev/null` to discard one — leading a process group of its own,
+ * and answers its pid or -1. zrt_proc_wait_for waits at most `ms` milliseconds (negative: no
+ * limit) and answers the status zrt_proc_wait does, or one of the two below, having killed the
+ * child's whole group. zrt_proc_kill signals the group. zrt_mkdtemp makes a directory unique
+ * to this run, named `prefix` and six more characters, answering "" when it cannot;
+ * zrt_remove_dir removes an empty one. */
+#define ZRT_PROC_LATE (-2)    /* the limit passed */
+#define ZRT_PROC_STOPPED (-3) /* this process was sent HUP, INT or TERM while it waited */
+int64_t     zrt_proc_start(zrt_list argv, const char *out, const char *err);
+int64_t     zrt_proc_wait_for(int64_t pid, int64_t ms);
+bool        zrt_proc_kill(int64_t pid, int64_t sig);
+const char *zrt_mkdtemp(const char *prefix);
+bool        zrt_remove_dir(const char *path);
+
 /* zrt_mkdir creates a directory and any missing parents (`mkdir -p`), reporting whether
  * it exists afterwards. Creating one that is already there is success. */
 bool zrt_mkdir(const char *path);

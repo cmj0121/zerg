@@ -602,6 +602,14 @@ failed assertion, because nothing was decided. Without it a hung test and a slow
 indistinguishable, and the hung one takes the whole run with it until CI's own timeout kills the job with
 nothing saying which test did it.
 
+**The test process is held to the same limit from outside**, for a test that takes the process with it
+rather than returning late. A test process may take `--timeout` once per test it runs, once more for the
+fixtures around them, and `PROC_GRACE` seconds (in `cmd/test.zg`) to start and end — looser than the
+per-test limit, so a test that limit can still report is reported by it. A process that outlasts its limit is killed together
+with every process it started, and a test it leaves with no result is reported `STUCK`. A test process
+starts with its input empty and leads a process group of its own, so an interrupt (Ctrl-C) reaches the
+runner, which kills that group and exits 130.
+
 **Two paths, and the report says which.** A test runs as a **coroutine**, inside a `guard`, in one process
 — which contains an assertion that does not hold and an uncaught abort alike. What no coroutine can
 contain is a test that ends the **process**: a stack overflow, or `os.exit`. So a test with no result when

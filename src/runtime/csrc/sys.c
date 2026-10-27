@@ -861,3 +861,259 @@ int64_t zrt_proc_wait(int64_t pid) {
 	}
 	return -1;
 }
+
+/* --- a child a tool can bound (#196) --------------------------------------------------
+ *
+ * What `zerg doc --check` and `zerg test` need from a child, and what a `sh` wrapper used to
+ * give them: its streams sent to files rather than pipes, a limit on how long it may run, a
+ * way to stop it together with everything it started, and a directory no other run shares. */
+
+/* proc_open_out opens the file a child's stream is sent to — created, or emptied — and answers
+ * the descriptor, or -1. It is CLOSE-ON-EXEC, so a child another thread forks in the same
+ * instant does not inherit it; dup2 onto 1 or 2 clears the flag in the one child meant to. */
+static int proc_open_out(const char *path) {
+	return open(path, O_WRONLY | O_CREAT | O_TRUNC | O_CLOEXEC, 0644);
+}
+
+/* THE STOP SIGNALS a wait passes on to its child: a hangup, an interrupt, a TERM. From the
+ * moment zrt_proc_start forks a child until zrt_proc_wait_for has collected it, each is caught
+ * into g_proc_stop rather than ending this process where it stands, so the caller is told and
+ * can clean up after the child; outside that span they do what they did before. The span
+ * opens BEFORE the fork, because a child that signals its parent at once must not find the
+ * old action still there. One that was IGNORED when it opened stays ignored — a job a shell
+ * started in the background without job control was meant not to see Ctrl-C. The child puts
+ * the old actions back before it execs, so it never runs with this process's handler.
+ *
+ * Spans may overlap, from two coroutines; the handlers go in with the first and come out with
+ * the last, under g_proc_sig_mu. */
+static const int             g_proc_sigs[3] = {SIGHUP, SIGINT, SIGTERM};
+static struct sigaction      g_proc_old[3];
+static volatile sig_atomic_t g_proc_stop = 0;
+static int                   g_proc_waiters = 0;
+static pthread_mutex_t       g_proc_sig_mu  = PTHREAD_MUTEX_INITIALIZER;
+
+static void proc_stop_handler(int sig) {
+	g_proc_stop = sig;
+}
+
+static void proc_watch_stops(bool on) {
+	pthread_mutex_lock(&g_proc_sig_mu);
+	if (on && g_proc_waiters++ == 0) {
+		g_proc_stop = 0;
+		for (int i = 0; i < 3; i++) {
+			struct sigaction sa;
+			memset(&sa, 0, sizeof(sa));
+			sigemptyset(&sa.sa_mask);
+			sa.sa_handler = proc_stop_handler;
+			(void)sigaction(g_proc_sigs[i], NULL, &g_proc_old[i]);
+			if (g_proc_old[i].sa_handler != SIG_IGN) {
+				(void)sigaction(g_proc_sigs[i], &sa, NULL);
+			}
+		}
+	} else if (!on && --g_proc_waiters == 0) {
+		for (int i = 0; i < 3; i++) {
+			(void)sigaction(g_proc_sigs[i], &g_proc_old[i], NULL);
+		}
+	}
+	pthread_mutex_unlock(&g_proc_sig_mu);
+}
+
+/* zrt_proc_start starts argv[0] (PATH-searched) and answers its pid, or -1, with no pipe to
+ * drain: its input is empty and its output goes to files.
+ *
+ * `out` is the file its stdout is written to, and "" leaves it this process's own. `err` is
+ * the same for stderr, and NAMING THE SAME PATH AS `out` JOINS THE TWO — one descriptor shared
+ * by both, so the lines land in the order they were written. A stream is discarded by naming
+ * `/dev/null`. No pipe means nothing the child starts can hold one open and keep the caller
+ * reading, which is the deadlock a pair of pipes read one after the other has.
+ *
+ * THE CHILD LEADS A PROCESS GROUP OF ITS OWN, and that is what makes it stoppable as a whole:
+ * what it starts joins that group, so one signal to the group reaches all of it — even a
+ * process whose parent has already ended. Both sides call setpgid, so the group exists before
+ * either the child execs or the parent can signal it. A terminal's Ctrl-C then reaches this
+ * process and not the child, which is why zrt_proc_wait_for passes it on — and why a child
+ * this starts is one zrt_proc_wait_for collects, which is what closes the span opened here. */
+int64_t zrt_proc_start(zrt_list argv, const char *out, const char *err) {
+	int in_fd = open("/dev/null", O_RDONLY | O_CLOEXEC);
+	if (in_fd < 0) {
+		return -1;
+	}
+	int out_fd = -1, err_fd = -1;
+	if (out[0] != '\0' && (out_fd = proc_open_out(out)) < 0) {
+		close(in_fd);
+		return -1;
+	}
+	bool joined = err[0] != '\0' && strcmp(err, out) == 0;
+	if (err[0] != '\0' && !joined && (err_fd = proc_open_out(err)) < 0) {
+		close(in_fd);
+		if (out_fd >= 0) {
+			close(out_fd);
+		}
+		return -1;
+	}
+
+	size_t n  = zrt_list_len(&argv);
+	char **av = (char **)malloc((n + 1) * sizeof(char *));
+	pid_t  pid = -1;
+	if (av != NULL) {
+		for (size_t i = 0; i < n; i++) {
+			av[i] = *(char **)zrt_list_at_ref(&argv, i);
+		}
+		av[n] = NULL;
+		/* the stop signals are HELD across the fork: the child puts the old actions back
+		 * before it can receive one, and the parent's handler is in place before then */
+		sigset_t stops, was;
+		sigemptyset(&stops);
+		for (int i = 0; i < 3; i++) {
+			sigaddset(&stops, g_proc_sigs[i]);
+		}
+		pthread_sigmask(SIG_BLOCK, &stops, &was);
+		proc_watch_stops(true);
+		pid = fork();
+		if (pid == 0) {
+			for (int i = 0; i < 3; i++) {
+				(void)sigaction(g_proc_sigs[i], &g_proc_old[i], NULL);
+			}
+		} else if (pid < 0) {
+			proc_watch_stops(false);
+		}
+		pthread_sigmask(SIG_SETMASK, &was, NULL);
+	}
+	if (pid == 0) {
+		(void)setpgid(0, 0);
+		dup2(in_fd, 0);
+		if (out_fd >= 0) {
+			dup2(out_fd, 1);
+		}
+		if (joined) {
+			dup2(out_fd, 2);
+		} else if (err_fd >= 0) {
+			dup2(err_fd, 2);
+		}
+		execvp(av[0], av);
+		_exit(127); /* exec failed */
+	}
+	if (pid > 0) {
+		(void)setpgid(pid, pid); /* EACCES once the child has exec'd: it set it itself */
+	}
+	free(av);
+	close(in_fd);
+	if (out_fd >= 0) {
+		close(out_fd);
+	}
+	if (err_fd >= 0) {
+		close(err_fd);
+	}
+	return (int64_t)pid;
+}
+
+/* zrt_proc_kill sends sig to the child's process group, and to the child itself when it leads
+ * none (one zrt_proc_spawn started), and answers whether either was delivered. */
+bool zrt_proc_kill(int64_t pid, int64_t sig) {
+	if (pid <= 0) {
+		return false;
+	}
+	bool group = kill(-(pid_t)pid, (int)sig) == 0;
+	bool self  = kill((pid_t)pid, (int)sig) == 0;
+	return group || self;
+}
+
+static int64_t proc_mono_ms(void) {
+	struct timespec ts;
+	clock_gettime(CLOCK_MONOTONIC, &ts);
+	return (int64_t)ts.tv_sec * 1000 + (int64_t)(ts.tv_nsec / 1000000);
+}
+
+/* proc_status reads a waitpid status the way a shell reports one. */
+static int64_t proc_status(int status) {
+	if (WIFEXITED(status)) {
+		return (int64_t)WEXITSTATUS(status);
+	}
+	if (WIFSIGNALED(status)) {
+		return (int64_t)(128 + WTERMSIG(status));
+	}
+	return -1;
+}
+
+/* proc_end_group kills a child's whole group, in PROC_KILL_ROUNDS rounds a couple of
+ * milliseconds apart, while the child is still unreaped (zrt_proc_wait_for says why). */
+#define PROC_KILL_ROUNDS 5
+static void proc_end_group(int64_t pid) {
+	for (int i = 0; i < PROC_KILL_ROUNDS; i++) {
+		(void)zrt_proc_kill(pid, SIGKILL);
+		struct timespec ts = {0, 2000000L};
+		(void)nanosleep(&ts, NULL);
+	}
+}
+
+/* zrt_proc_wait_for waits for a child for at most `ms` milliseconds (a negative `ms` is no
+ * limit) and answers its status as zrt_proc_wait does — or ZRT_PROC_LATE when the limit
+ * passed, or ZRT_PROC_STOPPED when this process was sent a hangup, an interrupt or a TERM
+ * meanwhile. In both of those the child's whole process group is KILLED and the child reaped
+ * before it answers, so nothing the child started is left running on the caller's behalf.
+ *
+ * THE GROUP IS KILLED BEFORE THE CHILD IS REAPED, never after: until it is reaped its pid
+ * cannot be handed to another process, so the signal cannot reach a stranger — the window a
+ * shell's `kill` of a pid it had already waited for left open.
+ *
+ * AND IT IS KILLED MORE THAN ONCE (proc_end_group). A member in the middle of fork when the
+ * group is signalled can hand the kernel a child that missed the signal — macOS was measured
+ * leaving a shell's `sleep` running one run in a few — and that child is in the group too, so
+ * a second signal a moment later reaches it.
+ *
+ * IT POLLS, starting at a millisecond and backing off to 25, because POSIX has no wait with a
+ * timeout on a child; a signal cuts the sleep short. */
+int64_t zrt_proc_wait_for(int64_t pid, int64_t ms) {
+	int64_t start = proc_mono_ms();
+	long    nap   = 1000000L;
+	int64_t res   = -1;
+	for (;;) {
+		int   status = 0;
+		pid_t r      = waitpid((pid_t)pid, &status, WNOHANG);
+		if (r == (pid_t)pid) {
+			res = proc_status(status);
+			break;
+		}
+		if (r < 0 && errno != EINTR) {
+			break;
+		}
+		bool stop = g_proc_stop != 0;
+		if (stop || (ms >= 0 && proc_mono_ms() - start >= ms)) {
+			proc_end_group(pid);
+			while (waitpid((pid_t)pid, &status, 0) < 0 && errno == EINTR) {
+			}
+			res = stop ? ZRT_PROC_STOPPED : ZRT_PROC_LATE;
+			break;
+		}
+		struct timespec ts = {0, nap};
+		(void)nanosleep(&ts, NULL);
+		if (nap < 25000000L) {
+			nap *= 2;
+		}
+	}
+	proc_watch_stops(false);
+	return res;
+}
+
+/* zrt_mkdtemp makes a directory no other run shares and answers its path, or "" when it cannot.
+ * The name is `prefix` and six characters mkdtemp(3) picks, and the directory is CREATED by
+ * the same call that picks them — mode 0700, failing on a name that exists — so two runs at
+ * once, or two hosts on one shared file system, cannot both be handed it. */
+const char *zrt_mkdtemp(const char *prefix) {
+	size_t n   = strlen(prefix);
+	char  *tpl = (char *)malloc(n + 7);
+	if (tpl == NULL) {
+		return sys_str_cell("");
+	}
+	memcpy(tpl, prefix, n);
+	memcpy(tpl + n, "XXXXXX", 7);
+	const char *out = sys_str_cell(mkdtemp(tpl) != NULL ? tpl : "");
+	free(tpl);
+	return out;
+}
+
+/* zrt_remove_dir removes an EMPTY directory and answers whether it did — rmdir(2), the half of
+ * a tree's removal zrt_remove cannot do; what is in it is the caller's to remove first. */
+bool zrt_remove_dir(const char *path) {
+	return rmdir(path) == 0;
+}

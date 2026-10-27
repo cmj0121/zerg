@@ -1046,6 +1046,25 @@ RIGHT_OK=', 4 example line(s) run, 0 module(s) whose examples are wrong'
 
 ran_check 'right examples, the statement and header ones included' right.zg 0 "$RIGHT_OK"
 
+# NO HOST TOOL BUT THE TOOLCHAIN (#196). The directory, the joined streams and the limit are the
+# runtime's, so every tool a `sh` wrapper once needed for them is shadowed on the command's `PATH`
+# by a stand-in that writes its name down and fails — and a right module still has to pass with
+# nothing written down. Only the command's `PATH` is shadowed: this script's own watchdog needs
+# the real `sleep`.
+mkdir -p "$tmp/shims"
+for t in sh mktemp ps awk kill sleep rm; do
+	printf '#!/bin/sh\necho %s >>"%s"\nexit 1\n' "$t" "$tmp/shims.log" >"$tmp/shims/$t"
+	chmod +x "$tmp/shims/$t"
+done
+printf '#!/bin/sh\nPATH="%s:$PATH" exec "%s" "$@"\n' "$tmp/shims" "$ZERG_ABS" >"$tmp/shimmed-zerg"
+chmod +x "$tmp/shimmed-zerg"
+ZERG_ABS="$tmp/shimmed-zerg" ran_check 'a run with no host tool but the toolchain' right.zg 0 "$RIGHT_OK"
+if [ -s "$tmp/shims.log" ]; then
+	note "\`zerg doc --check\` started host tools the runtime stands in for: $(sort -u "$tmp/shims.log" | tr '\n' ' ')"
+else
+	checks=$((checks + 1))
+fi
+
 # a limit of no seconds is a typo, and read as one it would fail every example for being late
 ran_check 'a `--timeout` below one second' right.zg 1 '`--timeout` is a whole number of seconds, one or more' --timeout 0
 
@@ -1204,13 +1223,9 @@ while [ "$i" -lt 30 ] && ! running "[z]erg-doc-interrupted-$$"; do
 done
 kill -INT -- -"$ipid" 2>/dev/null
 wait "$ipid"
-# the command dies at once and the shell under it is still cleaning up, so its cleanup is given
-# a few seconds to finish before what is left is judged
-j=0
-while [ "$j" -lt 10 ] && [ -n "$(ls -A "$tmp/int/run")" ]; do
-	sleep 1
-	j=$((j + 1))
-done
+irc=$?
+# the command cleans up BEFORE it exits, so what is left is judged the moment it has, and it
+# exits the way an interrupted command does
 left=""
 [ -z "$(ls -A "$tmp/int/run")" ] || left="$left the run directory,"
 ls -A "$tmp/int/mod" | grep -q zerg-doc && left="$left the generated source,"
@@ -1220,6 +1235,8 @@ if [ "$i" -ge 30 ]; then
 elif [ -n "$left" ]; then
 	note "an interrupted \`zerg doc --check\` left${left%,} behind"
 	pkill -9 -f "zerg-doc-interrupted-$$" 2>/dev/null
+elif [ "$irc" -ne 130 ]; then
+	note "an interrupted \`zerg doc --check\` exited $irc rather than 130"
 else
 	checks=$((checks + 1))
 fi

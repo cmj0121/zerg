@@ -10901,7 +10901,11 @@ fn c_in_container(mut &em: Emitter, x: ast.Expr, set: ast.Expr, st: ast.Ty, sb: 
 		early = ""
 	}
 
-	return f"({{ {head}{early}{bt} {rv} = zrt_map_has(&{sv}, &{kv});{give} {rv}; }})" if c_is_map(st) or c_is_set(st)
+	# A MAP OR A SET OF AN AGGREGATE KEY holds across its test too: zrt_map_has calls the key's
+	# own `hash()` and `eq`, which are program code. The hold ends after the test on this path
+	# as on the list's — left out, the registration outlived the block that declared the key,
+	# and the function's unwind dropped it a second time from a dead stack slot.
+	return f"({{ {head}{early}{bt} {rv} = zrt_map_has(&{sv}, &{kv});{late}{give} {rv}; }})" if c_is_map(st) or c_is_set(st)
 
 	# the LENGTH is read once: zrt_list_len is a call into another translation unit, so asking
 	# it in the condition is one call per element rather than one for the loop

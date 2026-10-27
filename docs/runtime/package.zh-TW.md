@@ -203,7 +203,8 @@ module，要抵達兄弟檔案就 import 那個檔案。環所帶的那句建議
 compile error。一個型別指名另一個型別**從來不是**這種循環——只有初始器會遞迴地依賴自身值的常數才是。
 
 與 entry 檔並列的檔案，抵達方式和其他每一個檔案一樣:`import "./beside"`,然後 `beside.helper()`。裸著指名
-它是 _E4016 undefined function `helper`_ ——那不是 entry 開的例外,而是規則本身,因為 #57 之後沒有任何檔案會
+它是 _E3114_，它會說要拼成 `beside.helper`（沒有 import 時則是 _E4016 undefined function `helper`_）——
+那不是 entry 開的例外,而是規則本身,因為 #57 之後沒有任何檔案會
 因為待在某個目錄裡就身處某個命名空間。
 
 **單一檔案就是一個 module**，凡是目錄能當 module 的位置它都能——`import "./sib"` 在旁邊有一個 `sib.zg` 時會
@@ -258,6 +259,13 @@ _E4077_，也就是上文的同目錄規則。
 兩個**被 import 的** module 都宣告的裸名字會被拒絕，而不是挑一個：_E3114 `helper` is declared in `x.zg` and
 `y.zg`, and a bare name cannot choose between them_ 說出兩種拼法，`x.helper` 與 `y.helper`；常數則由 _E3116_
 說同樣的話。`spawn helper()`、`defer helper()` 與 `g := helper` 是同一個裸名字，也是同一個錯誤。
+
+**一個**被 import 的 module 宣告的裸函式或常數也會被拒絕，因為 import 綁定的只是一個命名空間（#394）。寫了
+`import "./aa"` 之後，裸的 `f()` 是 _E3114 `f` is declared in another module, and a file names what it uses —
+spell it `aa.f`_，裸的 `LIMIT` 則是指名 `aa.LIMIT` 的 _E3116_。拼法是這個檔案綁定的那一個，所以
+`import "./aa" as bb` 得到的是 `bb.f`；re-export 它的 module 會借出自己的名字，兩者都沒綁定的檔案則得到該
+module 自己的最後一段名字。呼叫、讀取、當作值的函式、`spawn` 或 `defer` 的 callee、常數的初始器與陣列長度
+都受這條規則管。私有的仍是 _E3001_，如上。
 
 私有型別也受同一條規則管。兩個檔案各自不加 `pub` 宣告同名的 struct、enum 或 `type`，宣告的是兩個型別，每個檔案的
 建構、欄位讀取、pattern 與 method 都指向自己那一個。會被拒絕的是：一個檔案宣告了自己的 `P`，又在型別位置寫了

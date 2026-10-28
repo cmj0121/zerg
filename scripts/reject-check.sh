@@ -10984,6 +10984,19 @@ fn main() {
 }
 EOF
 
+# An Err's message is `message()`, not a field: `.msg` is refused like any field it does not
+# carry, as the seed refuses it.
+reject an-err-message-is-not-a-field E3135 <<'EOF'
+fn main() {
+	zero := 0
+	e := match guard { 7 / zero } {
+		Either.Left(_) => ValueError("did not raise")
+		Either.Right(x) => x
+	}
+	print e.msg
+}
+EOF
+
 # THE HALF OF THE LIST'S FALLBACK THAT IS NOT A FORM. `E9056` used to answer every name a
 # `list` does not have, so `xs.pop()` — which no chapter promises and no build will ever grow
 # — was refused with `NotImplemented:`, in the temporary corpus, one arm away from the map's

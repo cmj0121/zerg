@@ -333,7 +333,7 @@ shipping compiler rather than a part of it (the line
 | `E3132` | the pattern `…` on a Result[T] — it has Left and Right                                                |
 | `E3133` | `fn main() -> …` — the entry's shapes are `fn main()`, `-> int` and `-> Result[nil]`                  |
 | `E3134` | the method `…` on a keyed container — it answers `len` and `has`, and is read with `m[k]`             |
-| `E3135` | the field `…` on an Err — it has `msg` and `kind`                                                     |
+| `E3135` | the field `…` on an Err — it has `kind`, and its message is `message()`                               |
 | `E3136` | `..=` with no upper bound is not a range                                                              |
 | `E3137` | the list method `…` — a list answers `len` and `append`, and is read with `xs[i]`                     |
 | `E3138` | `….…` reads `this.…`, and a spec is field-blind                                                       |

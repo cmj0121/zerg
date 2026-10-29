@@ -1409,6 +1409,11 @@ fn walk_expr(e: ast.Expr, mut &ids: list[str], mut &calls: list[str], mut &ns: l
 		Expr.EGuard(body) => walk_body(body, ids, calls, ns)
 		Expr.EBlock(body) => walk_body(body, ids, calls, ns)
 
+		# AN `unsafe { … }` BLOCK IS A BLOCK, and what it reads is read. Without this arm the walk
+		# stopped at the keyword, so the only caller of a group's `fn` — which an `unsafe` block
+		# is, from a function body — counted as none, and L102 told the reader to delete it.
+		Expr.EUnsafe(body) => walk_body(body, ids, calls, ns)
+
 		# only the SUBJECT is a name the program bound — the right side of `is` is an error
 		# kind, so counting it as a use would keep an unused import alive.
 		Expr.EIs(x, name) => walk_expr(x, ids, calls, ns)

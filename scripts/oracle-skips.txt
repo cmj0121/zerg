@@ -30,3 +30,4 @@ examples/21_structs.zg	undefined name "Point"
 examples/23_collections.zg	a map has no method "has"
 examples/24_closures.zg	function "double" expects 1 argument(s), got 2
 examples/25_errors.zg	undefined name "Either"
+examples/27_ffi.zg	expected an expression, found 'unsafe'

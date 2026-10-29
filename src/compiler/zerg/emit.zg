@@ -2150,8 +2150,12 @@ pub fn c_is_unsafe_ty(t: ast.Ty) -> bool {
 # no parts to reach for instead. It is one predicate because every rule that has ever asked
 # about one of the two has meant both, and the two that asked wrote the pair out by hand while
 # a third wrote only the channel and let a `fn` through.
+#
+# A `handle` IS THE THIRD (docs/runtime/ffi.md): a token naming a foreign resource, which Zerg
+# may hold, copy and hand back to C but never inspect — and printing or comparing its bits is
+# inspecting them.
 pub fn c_is_identity(t: ast.Ty) -> bool {
-	return ast.ty_is_chan(t) or c_is_fn(t)
+	return ast.ty_is_chan(t) or c_is_fn(t) or c_is_handle_ty(t)
 }
 
 fn c_fn_ret(t: ast.Ty) -> ast.Ty {
@@ -3445,6 +3449,7 @@ fn c_fn_cname(recv: str, name: str) -> str {
 # a `void*` whatever it holds — the payload's own type appears only where the box is read.
 fn c_named_ctype(nm: str) -> str {
 	return "void*" if c_is_applied(nm) and c_app_base(nm) == "Ref"
+	return "void*" if c_is_handle_name(nm)
 
 	return c_ty_cname(nm)
 }
@@ -6483,6 +6488,10 @@ fn c_check_type_name(mut &em: Emitter, nm: str, s: Site) {
 		c_ref_written(em, nm, s)
 		return
 	}
+
+	# `handle` IS THE OTHER ONE: the opaque foreign token docs/runtime/ffi.md names, a prelude
+	# type no declaration introduces (a declaration may not take the name — E2061).
+	return if c_is_handle_name(nm)
 
 	# A `spec` NAMES A TYPE, the third of the three roles docs/core/specs.md gives it, and it
 	# resolves here like the other two kinds do. The chapter is explicit that there is no
@@ -11853,9 +11862,13 @@ fn c_display_check(mut &em: Emitter, t: ast.Ty, where: str) {
 	mut seen: list[str] = []
 	bad := c_identity_part(em, t, seen)
 	if not c_is_unknown(bad) {
-		mut why := "it is a place to send to or to jump to, and its address is not a rendering of anything the program wrote"
+		mut what := "a place to send to or to jump to"
+		if c_is_handle_ty(bad) {
+			what = "a token naming a foreign resource"
+		}
+		mut why := f"it is {what}, and its address is not a rendering of anything the program wrote"
 		if not ast.ty_eq(bad, t) {
-			why = f"a {ast.ty_name(t)} renders by its parts and this one is a place to send to or to jump to, whose address is not a rendering of anything the program wrote"
+			why = f"a {ast.ty_name(t)} renders by its parts and this one is {what}, whose address is not a rendering of anything the program wrote"
 		}
 		raise c_diag(em, rule.Rule.IdentityHasNoRendering, f"a {ast.ty_name(bad)} is an identity rather than a value, and the language gives it no rendering — {why}")
 	}
@@ -13094,6 +13107,11 @@ fn c_free_method(mut &em: Emitter, target: ast.Expr, meth: str, args: list[ast.E
 		}
 
 		c_chk_visible_fn(em, meth, callee)
+
+		# AND THE GROUP'S CALLER RULE, which the bare call asks one function over: naming the
+		# module out loud does not make a group's `fn` safe to call, and without this a safe
+		# function in another module reached any `pub fn` of an `unsafe { … }` group (E3083).
+		c_chk_unsafe_fn(em, f"{tn}.{meth}", "calling it", callee)
 
 		# and the ARGUMENTS are measured against that module's declaration too — its arity, its
 		# parameters, the defaults it fills — which the key carries to every rule that reads one
@@ -19709,7 +19727,7 @@ fn c_lambda(mut &em: Emitter, ps: list[ast.Param], has_ret: bool, ret: ast.Ty, b
 	# the substitution still in force.
 	saved_sub := em.sub
 	em.sub = c_nosub()
-	em.lam_defs.append(c_fn(em, ast.FnDecl(name, "", allps, has_ret, ret, body, false, em.at_path, em.at_line, em.at_col, [], [], em.in_unsafe_fn, false, false, true, false, "", 0, 0, 0, 0)))
+	em.lam_defs.append(c_fn(em, ast.FnDecl(name, "", allps, has_ret, ret, body, false, em.at_path, em.at_line, em.at_col, [], [], em.in_unsafe_fn, false, false, true, false, "", 0, 0, 0, 0, "")))
 	mut ci := 0
 	for ci < cap_nx.len() {
 		em.nx_rows[nx_from + ci] = cap_nx[ci]
@@ -20628,8 +20646,16 @@ fn c_needs_loop_unwind(mut &em: Emitter) -> bool {
 # WHAT DIFFERS IS THE WORD, because a program written with `set([1.5])` contains no map and a
 # reader told about a map key goes looking for one. The citation stays in the FIRST argument
 # of each raise: `refusal-cites` reads that literal and nothing after it.
+#
+# AN IDENTITY IS THE OTHER TYPE THAT NEVER WILL BE ONE: a channel, a function or a `handle` has
+# no equality at all (E4034), so there is nothing for a hash to agree with — the float's rule,
+# for a stronger reason, and refused permanently rather than as a hash not built yet.
 fn c_hashed_check(mut &em: Emitter, kt: ast.Ty, site: str) {
-	raise c_diag(em, rule.Rule.MapKeyHasNoHash, f"{site} of type {ast.ty_name(kt)} — it needs `Hash`, and a `float` has no equality a hash can agree with (docs/core/derive.md), so it can never be one") if c_is_float(kt)
+	mut why := "a `float` has no equality a hash can agree with"
+	if c_is_identity(kt) {
+		why = f"a {ast.ty_name(kt)} is an identity rather than a value, which the language gives no equality"
+	}
+	raise c_diag(em, rule.Rule.MapKeyHasNoHash, f"{site} of type {ast.ty_name(kt)} — it needs `Hash`, and {why} (docs/core/derive.md), so it can never be one") if c_is_float(kt) or c_is_identity(kt)
 
 	# A DECLARED TYPE IS A KEY BY ITS OWN SPECS — `Eq` to compare two keys and `Hash` to find
 	# one — and a struct or an enum missing either is a program the reader closes by deriving
@@ -22649,8 +22675,11 @@ fn c_fieldref(mut &em: Emitter, target: ast.Expr, fld: str, l: int, c: int, sb: 
 	# said so in prose while reporting them as two, one raised without a place and one
 	# collected with one — so they report through one channel, and the half that used to
 	# raise says WHERE as well.
+	#
+	# A `handle` HAS NO FIELDS EITHER, by the chapter's own rule rather than by accident: it is
+	# opaque, and a field read of it was spelled through C's `void*` for cc to refuse.
 	nm := c_named_of(tt)
-	if check.chk_is_scalar(tt) or (c_is_struct_name(em, nm) and c_is_unknown(c_field_ty(em, nm, fld))) {
+	if check.chk_is_scalar(tt) or c_is_handle_ty(tt) or (c_is_struct_name(em, nm) and c_is_unknown(c_field_ty(em, nm, fld))) {
 		check.chk_at(em, rule.Rule.NoSuchField, f"no field `{fld}` on {ast.ty_name(tt)}")
 	}
 
@@ -24332,6 +24361,8 @@ fn c_loop_jump_err(mut &em: Emitter, kw: str, in_loop: bool) {
 }
 
 fn c_fn(mut &em: Emitter, fn_d: ast.FnDecl) -> str {
+	return c_foreign_fn(em, fn_d) if fn_d.foreign != ""
+
 	# the whole declaration's place, not just its path: a finding about a PARAMETER — a
 	# `const`'s name taken by one, say — is made before any statement of the body is
 	# emitted, so the SAt markers have said nothing yet and `em.at_*` still holds the
@@ -24988,6 +25019,341 @@ fn c_export_layouts(mut &em: Emitter, t: ast.Ty, mut &out: list[str]) {
 	out.append(nm)
 }
 
+# --- the import edge (docs/runtime/ffi.md, "Importing C") ---------------------------------
+#
+# A FOREIGN BINDING is a binding in a module-level `unsafe { … }` group whose whole value is
+# `ffi.symbol("name")` and whose type is the `fn` signature it is called by:
+#
+#     unsafe {
+#         labs: fn (int) -> int = ffi.symbol("labs")
+#     }
+#
+# The chapter fixes WHERE a binding lives and leaves its API to the standard library; the
+# signature rides on the binding's annotation because a call cannot carry type arguments here
+# (E2035), so the annotation is the one place a `fn` type can be written without new syntax.
+#
+# IT BECOMES A FUNCTION OF THE GROUP, before any table is built (c_with_foreign), and that is
+# the whole design: a group's `fn` is already called directly, already held to the caller rule
+# that keeps what a group holds out of safe code (E3083), and already has a C prototype every
+# unit can declare. What is new is only its body, which c_foreign_fn writes as the call across.
+
+# c_is_handle_name is whether a type name is the opaque foreign token. It is a prelude name
+# (parser.zg's p_prelude_role), so no declaration can take it and the answer needs no table.
+fn c_is_handle_name(nm: str) -> bool {
+	return nm == "handle"
+}
+
+fn c_is_handle_ty(t: ast.Ty) -> bool {
+	return match t {
+		Ty.TNamed(nm) => c_is_handle_name(nm)
+		_             => false
+	}
+}
+
+# c_is_handle_opt is `handle?`, which the chapter crosses WITHOUT a tag: nil is the null
+# pointer and a present handle is the bare pointer.
+fn c_is_handle_opt(t: ast.Ty) -> bool {
+	return match t {
+		Ty.TOpt(e) => c_is_handle_ty(e)
+		_          => false
+	}
+}
+
+# c_with_foreign turns each foreign binding of `f` into the group function it stands for. A
+# file with none answers itself, which is every file but the ones that import `ffi`.
+#
+# EACH TAKES ITS PLACE IN SOURCE ORDER among its file's functions, ahead of the first one
+# written below it. A rule that reports a pair by which came first (E4073, a name declared
+# twice) reads that order, and a binding appended last said its own line was the second.
+fn c_with_foreign(f: ast.File) -> ast.File {
+	mut keep: list[ast.ConstDecl] = []
+	mut made: list[ast.FnDecl] = []
+	for c in f.consts {
+		sym := c_foreign_sym(f, c)
+		if sym == "" {
+			keep.append(c)
+		} else {
+			made.append(c_foreign_decl(c, sym))
+		}
+	}
+	return f if made.len() == 0
+
+	mut placed: list[bool] = []
+	for _ in made {
+		placed.append(false)
+	}
+	mut fns: list[ast.FnDecl] = []
+	for fn_i in f.fns {
+		mut i := 0
+		for i < made.len() {
+			if not placed[i] and made[i].path == fn_i.path and made[i].line < fn_i.line {
+				fns.append(made[i])
+				placed[i] = true
+			}
+			i = i + 1
+		}
+		fns.append(fn_i)
+	}
+	mut i := 0
+	for i < made.len() {
+		if not placed[i] {
+			fns.append(made[i])
+		}
+		i = i + 1
+	}
+
+	mut out := f
+	out.consts = keep
+	out.fns = fns
+	return out
+}
+
+# c_foreign_ns is the name the file `path` bound the standard library's `ffi` module to, or ""
+# when that file imports no `ffi`.
+fn c_foreign_ns(f: ast.File, path: str) -> str {
+	for im in f.imports {
+		return im.name if im.at == path and im.path == "ffi"
+	}
+	return ""
+}
+
+# c_ns_is_ffi is whether the namespace `ns`, as the file being emitted reads it, is the
+# standard library's `ffi`. A build names a module by its identity (`stdlib:ffi`); a walk handed
+# no module table keeps the import path itself, and a project's own `./ffi` is neither.
+pub fn c_ns_is_ffi(mut &em: Emitter, ns: str) -> bool {
+	m := c_ns_mod_of(em, ns)
+	return m == "stdlib:ffi" or m == "ffi"
+}
+
+# c_is_symbol_call is whether `e` is `<ns>.symbol(…)` for the file's own `ffi` namespace.
+fn c_is_symbol_call(e: ast.Expr, ns: str) -> bool {
+	return false if ns == ""
+
+	return match e {
+		Expr.EMethod(tgt, m, _, _, _) => m == "symbol" and c_ident_name(tgt) == ns
+		_ => false
+	}
+}
+
+# c_foreign_sym is the C symbol a constant binds, or "" when it is not a foreign binding. A
+# binding that IS one and is written in any other shape is refused here, by what is wrong
+# with it: this is the one place that sees the whole binding.
+fn c_foreign_sym(f: ast.File, c: ast.ConstDecl) -> str {
+	return "" if not c_is_symbol_call(c.value, c_foreign_ns(f, c.path))
+
+	args := match c.value {
+		Expr.EMethod(_, _, xs, _, _) => xs
+		_ => c_exprs_none()
+	}
+
+	raise c_foreign_misplaced(c, "binds a foreign symbol outside a module-level `unsafe { … }` group — the group is what keeps a foreign call out of safe code (docs/runtime/ffi.md)") if not c.in_unsafe
+	raise c_foreign_misplaced(c, "binds a foreign symbol and is `mut` — a foreign binding is a function of the group, and a function is not reassigned") if c.is_mut
+	raise c_foreign_misplaced(c, "binds a foreign symbol inside an `impl` — a foreign binding is a module-level function of its group") if c.recv != ""
+
+	# `pub` AND `main` ARE THE TWO NAMES A BUILD READS BEFORE THIS REWRITE DOES. The entry check
+	# and the `--emit lib` header walk the functions as written, so a binding would be the
+	# program's entry without being seen as one, or a `pub` the header leaves out in silence.
+	# A group's wrapper is the way across either edge, and it is one `fn` away.
+	raise c_foreign_misplaced(c, "binds a foreign symbol and is `pub` — a foreign call is the group's own business, so expose a `pub fn` of the group that wraps it") if c.is_pub
+	raise c_foreign_misplaced(c, "binds a foreign symbol as `main` — the entry point is a Zerg function the program writes") if c.name == "main"
+	raise c_foreign_misplaced(c, "binds a foreign symbol with no signature — write its `fn` type on the binding, as `labs: fn (int) -> int = ffi.symbol(\"labs\")`") if not c.has_ty or not c_is_fn(c.ty)
+	raise c_foreign_misplaced(c, "binds a foreign symbol and names no single symbol — `ffi.symbol` takes the C name as one string literal") if args.len() != 1
+
+	sym := match args[0] {
+		Expr.EStr(v) => v
+		_            => ""
+	}
+
+	raise c_foreign_misplaced(c, "binds a foreign symbol and names no single symbol — `ffi.symbol` takes the C name as one string literal") if sym == ""
+	raise c_foreign_misplaced(c, f"binds `{sym}`, which is not a C identifier — the linker name is taken verbatim, so it is spelled as C spells it") if not c_is_c_ident(sym)
+
+	return sym
+}
+
+fn c_foreign_misplaced(c: ast.ConstDecl, says: str) -> str {
+	return c_diag_at(c.path, c.name_line, c.name_col, rule.Rule.ForeignSymbolMisplaced, f"`{c.name}` {says}")
+}
+
+# c_is_c_ident is `[A-Za-z_][A-Za-z0-9_]*`, the spelling a linker name verbatim has to have.
+fn c_is_c_ident(s: str) -> bool {
+	b := bytearray(s)
+	return false if b.len() == 0
+
+	mut i := 0
+	for i < b.len() {
+		ch := b[i]
+		alpha := (ch >= b'a' and ch <= b'z') or (ch >= b'A' and ch <= b'Z') or ch == b'_'
+		return false if not alpha and not (i > 0 and ch >= b'0' and ch <= b'9')
+		i = i + 1
+	}
+	return true
+}
+
+# c_foreign_decl is the group function a foreign binding stands for: its parameters are the
+# `fn` type's, a `mut &T` one taking the caller's storage like any declared `mut &` parameter.
+fn c_foreign_decl(c: ast.ConstDecl, sym: str) -> ast.FnDecl {
+	ps := c_fn_params(c.ty)
+	ret := c_fn_ret(c.ty)
+	mut params: list[ast.Param] = []
+	mut i := 0
+	for i < ps.len() {
+		t := ps[i]
+		inner := match t {
+			Ty.TRef(e) => e
+			_          => t
+		}
+		params.append(ast.Param(f"p{i}", inner, c_is_ref_ty(t), false, ast.Expr.ENil, c.name_line, c.name_col))
+		i = i + 1
+	}
+	none: list[ast.Stmt] = []
+	nostr: list[str] = []
+	return ast.FnDecl(c.name, "", params, not c_is_nil_ty(ret), ret, none, c.is_pub, c.path, c.line, c.col, nostr, nostr, true, false, false, true, false, "", c.name_line, c.name_col, c.end_line, c.end_col, sym)
+}
+
+fn c_is_ref_ty(t: ast.Ty) -> bool {
+	return match t {
+		Ty.TRef(_) => true
+		_          => false
+	}
+}
+
+# c_foreign_class is how one type of a foreign signature stands. `handle` and `handle?` are
+# the import edge's own; a `str` crosses INTO C as the borrowed, NUL-terminated view a Zerg
+# str already is, and coming out it would be a copy whose validity C has to vouch for, which
+# is not built. Everything else is the export edge's table (c_export_class), because the
+# chapter has one definition of FFI-safe for both directions.
+fn c_foreign_class(mut &em: Emitter, t: ast.Ty, into_c: bool, mut &why: str) -> int {
+	return EX_CROSSES if c_is_handle_ty(t) or c_is_handle_opt(t)
+	return EX_CROSSES if c_is_str(t) and into_c
+
+	none: list[str] = []
+	return c_export_class(em, t, none, why)
+}
+
+# c_foreign_check refuses a foreign signature that does not cross, at the binding, under the
+# code its class names. A `mut &` parameter is written back, so it crosses both ways.
+fn c_foreign_check(mut &em: Emitter, fn_d: ast.FnDecl) {
+	mut worst := EX_CROSSES
+	mut why := ""
+	for pm in fn_d.params {
+		mut w := ""
+		k := c_foreign_class(em, pm.ty, not pm.is_ref, w)
+		if k > worst {
+			worst = k
+			why = w
+		}
+	}
+	if fn_d.has_ret {
+		mut w := ""
+		k := c_foreign_class(em, fn_d.ret, false, w)
+		if k > worst {
+			worst = k
+			why = w
+		}
+	}
+
+	return if worst == EX_CROSSES
+
+	raise c_diag(em, rule.Rule.ForeignNotFfiSafe, f"the foreign binding `{fn_d.name}` cannot cross the C boundary: {why} (docs/runtime/ffi.md)") if worst == EX_UNSAFE
+
+	raise c_diag(em, rule.Rule.NotYetForeignForm, f"NotImplemented: the foreign binding `{fn_d.name}` cannot cross yet: {why} (docs/runtime/ffi.md)")
+}
+
+# c_foreign_fn is a foreign binding's C: the symbol declared under a name of this unit's own,
+# and the group function whose body calls it.
+#
+# THE SYMBOL IS DECLARED BY AN ASM LABEL, not by its own name. A prototype `int64_t labs(int64_t)`
+# would collide with the one a system header the runtime includes already wrote (`long
+# labs(long)` in <stdlib.h>), and cc would report conflicting types against generated C. A
+# name of this unit's own bound to the linker name keeps the two apart, and the label carries
+# the platform's symbol prefix (`__USER_LABEL_PREFIX__`, `_` on Mach-O) so the name the
+# program wrote is the name the linker looks for.
+#
+# THE VALUES ARE CONVERTED AT THE EDGE, and only where the Zerg C type is not already the C
+# one: a `handle?` is a tagged carrier in Zerg and a nullable pointer in C, so it is unwrapped
+# on the way in and wrapped on the way back, and a `mut &handle?` is lent as a `void**` and
+# written back after the call. A by-value parameter that owns storage (a `str`) is the callee's
+# own, as every by-value parameter is, so it is given back once the call has returned.
+fn c_foreign_fn(mut &em: Emitter, fn_d: ast.FnDecl) -> str {
+	em.at_path = fn_d.path
+	c_mark(em, fn_d.name_line, fn_d.name_col)
+	c_foreign_check(em, fn_d)
+
+	cname := c_fn_cname_in(em, fn_d.path, fn_d.recv, fn_d.name)
+	ext := "zgx_" + cname
+	mut zps: list[str] = []
+	mut eps: list[str] = []
+	mut args: list[str] = []
+	mut pre := ""
+	mut post := ""
+	mut i := 0
+	for i < fn_d.params.len() {
+		pm := fn_d.params[i]
+		zn := f"zgf_{i}"
+		zps.append(f"{c_param_ctype(pm)} {zn}")
+		if c_is_handle_opt(pm.ty) {
+			cn := c_opt_name(em, ast.Ty.TNamed("handle"))
+			if pm.is_ref {
+				eps.append("void**")
+				pre = pre + f"    void* {zn}_c = {zn}->tag == 0 ? {zn}->ok : NULL;\n"
+				args.append(f"&{zn}_c")
+				post = post + f"    *{zn} = {zn}_c ? ({cn}){{ .tag = 0, .ok = {zn}_c }} : ({cn}){{ .tag = 1 }};\n"
+			} else {
+				eps.append("void*")
+				args.append(f"({zn}.tag == 0 ? {zn}.ok : NULL)")
+			}
+		} else {
+			eps.append(c_param_ctype(pm))
+			args.append(zn)
+			th := if pm.is_ref {
+				""
+			} else {
+				c_drop_thunk(em, pm.ty)
+			}
+			if th != "" {
+				post = post + f"    {th}(&{zn});\n"
+			}
+		}
+		i = i + 1
+	}
+
+	ret_opt := fn_d.has_ret and c_is_handle_opt(fn_d.ret)
+	eret := if ret_opt {
+		"void*"
+	} else {
+		c_ret_type(fn_d)
+	}
+	mut call := f"{ext}({c_comma_list(args, "")})"
+	mut tail := ""
+	if eret == "void" {
+		call = f"    {call};\n"
+	} else {
+		call = f"    {eret} zgf_r = {call};\n"
+		tail = "    return zgf_r;\n"
+		if ret_opt {
+			cn := c_opt_name(em, ast.Ty.TNamed("handle"))
+			tail = f"    return zgf_r ? ({cn}){{ .tag = 0, .ok = zgf_r }} : ({cn}){{ .tag = 1 }};\n"
+		}
+	}
+
+	mut out := "#ifndef ZG_FFI_SYM\n#define ZG_FFI_SYM2(p, s) #p s\n#define ZG_FFI_SYM1(p, s) ZG_FFI_SYM2(p, s)\n#define ZG_FFI_SYM(s) ZG_FFI_SYM1(__USER_LABEL_PREFIX__, s)\n#endif\n"
+	out = out + f"extern {eret} {ext}({c_comma_list(eps, "void")}) __asm__(ZG_FFI_SYM(\"{fn_d.foreign}\"));\n"
+	return out + f"{c_ret_type(fn_d)} {cname}({c_comma_list(zps, "void")}) {{\n" + pre + call + post + tail + "}\n\n"
+}
+
+# c_comma_list is a C list of `xs`, or `empty` when there is nothing in it.
+fn c_comma_list(xs: list[str], empty: str) -> str {
+	return empty if xs.len() == 0
+
+	mut out := xs[0]
+	mut i := 1
+	for i < xs.len() {
+		out = out + ", " + xs[i]
+		i = i + 1
+	}
+	return out
+}
+
 # lint_conversions_of is the L5xx family, and it is the one lint that cannot be answered from
 # the parsed tree: a conversion is a fact about TYPES. So the linter asks the lowering walk,
 # which has them — and what is kept is what the walk noticed on the way past. A program that
@@ -25292,7 +25658,7 @@ fn c_default_method(sp: ast.SpecDecl, ip: ast.ImplDecl, req: ast.FnDecl) -> ast.
 	for pm in req.params {
 		ps.append(ast.Param(pm.name, c_spec_subst(pm.ty, sp, ip), pm.is_ref, pm.has_def, pm.def, pm.line, pm.col))
 	}
-	return ast.FnDecl(req.name, ip.target, ps, req.has_ret, c_spec_subst(req.ret, sp, ip), req.body, req.is_pub, req.path, req.line, req.col, req.tparams, req.tbounds, req.in_unsafe, false, false, true, false, c_impl_spec_of(ip), req.name_line, req.name_col, req.end_line, req.end_col)
+	return ast.FnDecl(req.name, ip.target, ps, req.has_ret, c_spec_subst(req.ret, sp, ip), req.body, req.is_pub, req.path, req.line, req.col, req.tparams, req.tbounds, req.in_unsafe, false, false, true, false, c_impl_spec_of(ip), req.name_line, req.name_col, req.end_line, req.end_col, req.foreign)
 }
 
 # c_inherited_by is the IMPL a seated default is a member of — its index in `f.impls` — and -1
@@ -27412,7 +27778,7 @@ fn c_emit_unit_as(prog0: ast.File, own0: ast.File, ft: FileTypes, ms: Mods, whol
 	# first left `zg_ArgKind_eq` declared, called, and defined nowhere — a link error against
 	# a function the program never spells. Each expands from its own derive list, so the unit
 	# gets exactly the impls whose decorators are in it.
-	prog1 := c_with_builtin_specs(prog0)
+	prog1 := c_with_builtin_specs(c_with_foreign(prog0))
 	f0 := c_with_spec_defaults_self(c_with_derived(ft, prog1, prog1))
 
 	# THE FINDINGS SO FAR TRAVEL IN, in the `diags` slot. `chk_at_place` drops an exact repeat —
@@ -27442,7 +27808,7 @@ fn c_emit_unit_as(prog0: ast.File, own0: ast.File, ft: FileTypes, ms: Mods, whol
 	# in these passes and in any added later — `f.fns` holds functions only.
 	c_build_generics(em, f0)
 	f := c_with_type_insts(em, c_with_spec_keys(c_without_templates(f0)))
-	own := c_with_impl_insts(em, c_with_spec_keys(c_without_templates(c_with_spec_defaults(f0, c_with_derived(ft, prog0, own0)))), false)
+	own := c_with_impl_insts(em, c_with_spec_keys(c_without_templates(c_with_spec_defaults(f0, c_with_derived(ft, prog0, c_with_foreign(own0))))), false)
 
 	# OVER `f0`, THE PROGRAM WITH ITS TEMPLATES STILL IN IT. A template is not a function
 	# to lower, which is what the removal above says, but it IS a name at the top level:

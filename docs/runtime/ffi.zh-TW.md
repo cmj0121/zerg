@@ -10,11 +10,15 @@ Zerg package 如何與 **C ABI** 交界——這是唯一一處 Zerg 值變成 C
 `unsafe fn`,型別裡也沒有 `unsafe`——簽章說的是一個函式收什麼、答什麼,而 `unsafe` 說的是誰擔保。內聯組語也在
 這裡,raw pointer 的型別與它的操作亦然——本章其餘部分描述的是跑得起來的東西。
 
-> **[not yet]** **import 那條邊**還沒有。出貨的標準函式庫裡沒有 `ffi` 模組，所以 `import "ffi"` 就在 import 那一
-> 步失敗——_E5002 cannot resolve import `ffi` under any source root_——而標註 `handle` 的 binding 會在寫下它的地方
-> 被拒絕，回報為 _E4056 no type named `handle` (the binding `h`)_。一個既沒開分組、也沒標記 `fn` 的
-> 頂層 `unsafe` 是一個畸形的分組，而且會這樣說——_E2075 a top-level `unsafe` opens a GROUP or marks a `fn`_，那是
-> 一個 parse 的拒絕、指名的不是任何未建形式，因為 `unsafe struct P { … }` 在這個文法的任何位置都推不出來。
+**import 那條邊也建好了。** `import "ffi"` 綁定標準函式庫的 `ffi` 模組,外部符號綁在分組裡、從那裡呼叫,而
+`handle` 是一個型別(見下文「匯入 C」)。一個既沒開分組、也沒標記 `fn` 的頂層 `unsafe` 是一個畸形的分組,而且會
+這樣說——_E2075 a top-level `unsafe` opens a GROUP or marks a `fn`_,那是一個 parse 的拒絕、指名的不是任何未建
+形式,因為 `unsafe struct P { … }` 在這個文法的任何位置都推不出來。
+
+> **[not yet]** 在 **import** 那條邊,今天跨得過去的是基本型別、`handle` 與 `handle?`、**交給** C 的 `str`,以及由
+> 基本型別組成的 struct。一個 foreign binding 的簽章若寫到下表對應得到、而這個編譯器還沒有 C 形式的型別——`list`、
+> 從 C **出來**的 `str`、`handle` 以外的 optional、enum、函式值——就會在 binding 處被拒絕:_E9121 NotImplemented:
+> the foreign binding `sum` cannot cross yet: the C boundary has no form for `list[int]` yet_。
 >
 > **[not yet]** 在 **export** 那條邊，今天跨得過去的是基本型別，以及由它們組成的 struct。一個 `pub` 宣告的型別若是
 > 下表對應得到、而這個編譯器還沒有 C 形式的——`str`、`list`、optional 或 `Either`、enum、函式值、`type`——就會被
@@ -141,19 +145,34 @@ Zerg **沒有安全的 pointer surface** 且 **safe by default**，所以 FFI �
 
 stdlib 把每個外部符號綁**在一個分組裡**、其簽章由你提供——linker 名**原封不動**、不 mangle:
 
-```text
+```zerg
 import "ffi"
 
 unsafe {
-    sqlite3_open  := ffi.symbol[fn(path: str, mut &db: handle?) -> int]("sqlite3_open")
-    sqlite3_close := ffi.symbol[fn(db: handle) -> int]("sqlite3_close")
+    sqlite3_open: fn (str, mut &handle?) -> int = ffi.symbol("sqlite3_open")
+    sqlite3_close: fn (handle) -> int = ffi.symbol("sqlite3_close")
 }
 ```
 
-(確切的 stdlib API 是 stdlib 細節;**語言**所固定的是綁定**能住在哪裡**。簽章是一個普通的 `fn`——`unsafe` 不是
-型別的一部分——而讓這個符號從安全程式碼到不了的,是它被綁在哪個分組裡,也正是那些替它擔保的薄 wrapper 所在之處。)
-一個 handle **可以**存進 binding 或欄位、被複製、傳給其他外部呼叫、以及被 `del`。它**不能**被解參考、索引、
-做算術，或用 constructor 建構（它沒有欄位）——它只會以外部呼叫的回傳或 out-parameter 形式出現。
+**語言**所固定的是綁定**能住在哪裡**;API 是 stdlib 的。簽章就是這個 binding 自己的型別、一個普通的 `fn`——
+`unsafe` 不是型別的一部分——因為這裡的呼叫不帶型別引數(_E2035_),所以標註是唯一一處不加新語法就能寫出 `fn`
+型別的地方。讓這個符號從安全程式碼到不了的,是它被綁在哪個分組裡,也正是那些替它擔保的薄 wrapper 所在之處。任何
+其他形狀的綁定——在分組外、`mut`、`pub`、名為 `main`、沒有 `fn` 型別,或給的不是單一個以字串字面值寫出的 C 識別字
+——是 _E4122_;而寫在沒有 binding 之處的 `ffi.symbol(…)` 是 _E4123_。外部符號要到另一個 module,走的是分組裡包住
+這次呼叫的 `pub fn`,而它仍是分組的成員:另一個 module 在 `unsafe { … }` 裡呼叫它——`unsafe { m.wrap(x) }`——從安全
+程式碼寫 `m.wrap(x)` 則是 _E3083_。自己為這次呼叫擔保的 wrapper,是分組外一個普通的 `pub fn`,本體裡帶著 `unsafe`
+區塊。
+
+符號由 **linker** 解析,對象是程式本來就連結的 C 函式庫,因為那是一次建置唯一會指名的函式庫:`zerg build` 沒有指名
+其他函式庫的選項(`-l`),所以上面的 sqlite 綁定是形狀的草圖,而不是今天就能連結的程式。C 函式庫沒提供的符號由連結
+回報——`zerg: link failed`,帶著 linker 自己那行 undefined symbol——而不是由這個編譯器回報,它沒辦法在連結之前去問
+一個函式庫裡有什麼。不論程式有沒有呼叫,每個 binding 都會被連結,所以一個指向不存在符號的 binding,即使沒人呼叫也會
+讓連結失敗。
+
+一個 handle **可以**存進 binding 或欄位、被複製、傳給其他外部呼叫、以及被 `del`。它**不能**被解參考、索引、做
+算術,或用 constructor 建構(它沒有欄位,_E3072_)——它只會以外部呼叫的回傳或 out-parameter 形式出現。它也不會
+被檢視:它跟 channel 一樣是一個**身分**而不是值,所以沒有相等(_E4034_),也沒有 rendering(_E4076_)。`handle`
+是一個 prelude 名字,所以任何宣告都不能拿它當名字(_E2061_)。
 
 一個 handle 是一個**像任何 primitive 一樣 by-value 複製的 opaque token**——複製它就是複製那些 bit、在 Zerg
 的意義上不共享任何東西、也不釋放任何東西。所以裸 handle **不是**記憶體模型的新例外：它就是些 bit，而一個含它的
@@ -272,13 +291,27 @@ global 的。
 
 分組自己的規則**有**被強制:宣告在 module 層級 `unsafe { … }` 分組裡的 `fn` 是 unsafe 的,從安全程式碼指名
 它——呼叫它，或把裸名字綁成 function value——會以 `E3083` 拒絕、帶位置。它的呼叫者是分組裡其他的宣告，而那正是分
-組存在的理由。在上面那個 block-expression 建起來之前，那也是一個程式僅有的呼叫者：進入點是安全的，所以分組的
-`fn` 只能被同一個分組的成員叫到，除此之外無處可及。
+組存在的理由;還有 `unsafe { … }` 區塊,一個安全函式在那裡自己為這次呼叫擔保。
 
-> **[not yet]** `handle` 型別的 binding 會被具名拒絕。`mut h: handle? = nil` 是
-> _E4056 no type named `handle` (the binding `h`)_，而且帶著位置：程式裡沒有任何宣告帶著這個名字，而這個編譯器
-> 也不出貨任何能帶著它的 `ffi` 模組。它以前會漏到 `cc`，變成 `error: unknown type name 'zg_handle'`——那是本章
-> 唯一一處形式打破標準契約的地方。
+foreign binding 就是這樣的函式之一。它降低成所屬分組的一個函式、本體是跨過邊界的那次呼叫,所以從安全程式碼呼叫它
+是同一個 `E3083`,而從 `unsafe { … }` 區塊、或從同分組的另一個成員呼叫它,就是跑得起來的:
+
+```zerg
+import "ffi"
+
+unsafe {
+ labs: fn (int) -> int = ffi.symbol("labs")
+}
+
+fn main() {
+ print unsafe {
+  labs(-42)
+ }
+}
+```
+
+簽章在 binding 寫下的地方就對照 FFI-safe 表:不是 FFI-safe 的型別是 _E4121_,而且會讓建置停下——binding 是程式
+發出的一次呼叫,不像 export 那條邊上的 `pub` 宣告,這裡沒有東西可以排除。
 
 ```text
 unsafe {

@@ -52,6 +52,7 @@ make                            # ./bin/zerg
 | [`24_closures.zg`](24_closures.zg)       | 函式當值，以及按複本捕捉的 closure                       |
 | [`25_errors.zg`](25_errors.zg)           | `Result[T]`、`?` / `??`，以及把 abort 降回值的 `guard`   |
 | [`26_derive.zg`](26_derive.zg)           | `#[derive(Eq)]`——相等是選擇加入的，由編譯器寫            |
+| [`27_ffi.zg`](27_ffi.zg)                 | 在 `unsafe` group 裡綁定的 C 符號，以及它交回的 `handle` |
 
 ## 模組這一層
 

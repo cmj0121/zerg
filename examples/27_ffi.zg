@@ -1,0 +1,43 @@
+# 27 — A foreign C symbol, bound in an `unsafe` group and called from there.
+#
+# `import "ffi"` and `ffi.symbol("name")` bind a symbol the C library already
+# links. The binding's type is the signature it is called by, the linker name
+# is taken as written, and it lives in a module-level `unsafe { … }` group: a
+# foreign call is unsafe, so it is reached only from the group or from an
+# `unsafe { … }` block. A `handle` is the opaque token C hands back; Zerg holds
+# it and passes it on, and never looks inside.
+#
+# beyond-the-seed: a module-level `unsafe` group and `import "ffi"`. The
+# bootstrap seed has neither, so this example is built by `zerg`.
+import "ffi"
+
+unsafe {
+	labs: fn (int) -> int = ffi.symbol("labs")
+	strlen: fn (str) -> int = ffi.symbol("strlen")
+	strtol: fn (str, mut &handle?, int) -> int = ffi.symbol("strtol")
+	tail_len: fn (handle) -> int = ffi.symbol("strlen")
+
+	# A thin wrapper inside the group is where the author vouches: C reports
+	# where the number stopped through an out-parameter, and this maps it.
+	fn leading(s: str) -> int {
+		mut stop: handle? = nil
+		n := strtol(s, stop, 10)
+		if at := stop {
+			return n * 1000 + tail_len(at)
+		}
+		return n
+	}
+}
+
+fn main() {
+	print unsafe {
+		labs(-42)
+	}
+	word := "zerg"
+	print unsafe {
+		strlen(word)
+	}
+	print unsafe {
+		leading("17 apples")
+	}
+}

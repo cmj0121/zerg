@@ -11,10 +11,9 @@ each reusing an existing model:
 
 - a **stream** is a `Reader` or `Writer` — a byte source/sink, drained with `for`;
 - a **handle** is a `Ref[T]` — a file or socket, scope-owned and closed exactly once;
-  **[not yet]** — `Ref[T]` and its `drop` action are both built ([Values & Memory](../core/memory.md)); what
-  a handle waits on is the type itself, and `handle` is a name no declaration carries — _E4056 no type named
-  `handle`_, [FFI](ffi.md)'s own marker — so the whole-file leaves below are what reading and writing go
-  through;
+  **[not yet]** — `Ref[T]` and its `drop` action are both built ([Values & Memory](../core/memory.md)), and
+  so is the `handle` token ([FFI](ffi.md)); what a file waits on is `io` opening one — `io.open` is _E3084
+  module `io` has no `open`_ — so the whole-file leaves below are what reading and writing go through;
 - **failure is a value** — a fallible call returns `Result[T]`, `?`-propagated; EOF is not one.
 
 > **Status.** The compiler ships a **subset** of this surface, and the subset is the **whole-file and

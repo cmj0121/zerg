@@ -55,6 +55,7 @@ each adds one idea to the one before it.
 | [`24_closures.zg`](24_closures.zg)       | a function as a value, and a closure that captures by copy              |
 | [`25_errors.zg`](25_errors.zg)           | `Result[T]`, `?` / `??`, and `guard` turning an abort back into a value |
 | [`26_derive.zg`](26_derive.zg)           | `#[derive(Eq)]` — equality is opt-in, and the compiler writes it        |
+| [`27_ffi.zg`](27_ffi.zg)                 | a C symbol bound in an `unsafe` group, and a `handle` it hands back     |
 
 ## The module layer
 

@@ -426,7 +426,7 @@ shipping compiler rather than a part of it (the line
 | `E4076` | a … is an identity rather than a value, and the language gives it no rendering                        |
 | `E4077` | `…` and `…` both define `…` — one name a module, or a type, holds once                                |
 | `E4078` | … of anything but a function, a method, or a namespaced function                                      |
-| `E4079` | a map key of type float — a float has no equality a hash can agree with                               |
+| `E4079` | a map key of type float or an identity — it has no equality a hash can agree with                     |
 | `E4080` | the default on field `…` reads a field that is not an earlier one                                     |
 | `E4081` | `…` MUTATES its list, and a slice, a call result or a literal is a value                              |
 | `E4082` | a tuple pattern names … element(s) and a … has …                                                      |
@@ -468,6 +468,9 @@ shipping compiler rather than a part of it (the line
 | `E4118` | `#[derive(Hash)]` over a field whose type has no `Hash`                                               |
 | `E4119` | a map key or set element of type … — a declared type with no `Eq` or no `Hash`                        |
 | `E4120` | `…` is left out of the C header: it is not FFI-safe — a warning                                       |
+| `E4121` | the foreign binding `…` cannot cross the C boundary: … is not FFI-safe                                |
+| `E4122` | a foreign binding outside its one shape: in a group, not `mut` or `pub`, typed `fn`, one C name       |
+| `E4123` | `ffi.symbol(…)` written where no foreign binding is                                                   |
 | `E5001` | this entry file declares no `fn main`                                                                 |
 | `E5002` | cannot resolve import `…`, and where it was looked for                                                |
 | `E5007` | `…` is a module this build compiles and this module did not import                                    |
@@ -529,6 +532,7 @@ shipping compiler rather than a part of it (the line
 | `E9118` | a spec value called or rendered, or an application named, while nothing implements it                 |
 | `E9119` | `#[derive(Hash)]` over a field whose `Hash` is not built                                              |
 | `E9120` | `…` is left out of the C header: the boundary has no C form for it yet — a warning                    |
+| `E9121` | the foreign binding `…` cannot cross yet: the boundary has no C form for …                            |
 
 They are reported the moment a file is **read**, before its imports are scanned — scanning
 them parses, and a parser handed unreadable text can only say something untrue about it.

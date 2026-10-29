@@ -1,0 +1,24 @@
+## ffi — binding a foreign C symbol (docs/runtime/ffi.md, "Importing C").
+##
+## Bundled into a program that writes `import "ffi"`. A foreign symbol is bound inside a
+## module-level `unsafe { … }` group, under the signature the binding's type spells, and the
+## linker name is taken VERBATIM — no prefix, no mangling:
+##
+##     import "ffi"
+##
+##     unsafe {
+##         labs: fn (int) -> int = ffi.symbol("labs")
+##     }
+##
+## The binding is a function of the group: it is called directly, and what the group holds is
+## reachable only from unsafe code — a call from safe code is E3083. Its signature is held to
+## the FFI-safe types, and a type the boundary has no form for is refused where it is written.
+#
+# `symbol` IS NOT DECLARED HERE, and cannot be: what it answers is the binding's own type,
+# which no Zerg signature can spell. The compiler reads the binding whole (emit.zg's
+# c_with_foreign) and lowers it to a call across the boundary; a `ffi.symbol(…)` written
+# anywhere else is refused by name (E4123).
+#
+# THE STANDARD LIBRARY DOES NOT IMPORT THIS MODULE. Zerg is zero-dependency, like Go: `io`,
+# `math` and the rest reach the operating system through the runtime's own primitives and
+# never bind libc. This module is how a PROGRAM reaches a C library beyond that floor.

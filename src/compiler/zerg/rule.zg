@@ -484,6 +484,21 @@ pub enum Rule {
 	# still part of the Zerg API, and the library still builds without it.
 	ExportNotFfiSafe = 4120
 
+	# a foreign binding (docs/runtime/ffi.md, "Importing C") whose signature names a type that
+	# is not FFI-safe. Unlike E4120 it STOPS the build: a binding is a call the program makes,
+	# and a call whose arguments C cannot read has no lowering to leave out.
+	ForeignNotFfiSafe = 4121
+
+	# a foreign binding written in any shape but its one: a binding in a module-level
+	# `unsafe { … }` group, not `mut`, whose type is the `fn` signature and whose value is
+	# `ffi.symbol` given the C name as one string literal spelled as a C identifier.
+	ForeignSymbolMisplaced = 4122
+
+	# `ffi.symbol(…)` written where no binding is — inside a function, as an argument. It is not
+	# a function the module declares (its answer is the binding's own type), so the reader is
+	# told what it is rather than that the module lacks it.
+	ForeignSymbolOutsideBinding = 4123
+
 	# building — the program as a set of files, which no single file's text answers: imports resolved
 	# before anything is lexed, and `fn main` looked for after everything is emitted
 	EntryHasNoMain = 5001
@@ -626,6 +641,10 @@ pub enum Rule {
 	# for it YET: a type with no C form built, module state only a Zerg `main` sets up, a
 	# symbol that carries a module tag. Reported without stopping the build, like E4120.
 	NotYetExportForm = 9120
+
+	# a foreign binding whose signature names a type the chapter maps and this compiler has no
+	# C form for yet — the import edge's half of E9120, and a refusal rather than a warning.
+	NotYetForeignForm = 9121
 }
 
 # rule_code is the text a rule is reported under — the `E2004` a gate pins and a reader looks

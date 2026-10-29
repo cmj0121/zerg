@@ -1530,7 +1530,15 @@ for m in $modules atomic; do
 	sed -nE 's/.*<section class="decl[^"]*" id="[^"]*" data-name="([^"]*)".*/\1/p' "$page" |
 		LC_ALL=C sort >"$tmp/html.names"
 	"$ZERG" doc -s "$m." "$m" 2>/dev/null | sed -nE 's/^  ([^ ]+).*/\1/p' | LC_ALL=C sort >"$tmp/page.names"
-	if [ -s "$tmp/page.names" ] && diff -u "$tmp/page.names" "$tmp/html.names" >"$tmp/diff"; then
+	# A MODULE THAT EXPOSES NOTHING is the one whose empty search is the answer rather than an
+	# extraction that stopped matching: `ffi` declares no function (its `symbol` is read by the
+	# compiler, never called), and the source says so by carrying no `pub` line. Anywhere else
+	# an empty search is still the failure it was.
+	empty_ok=false
+	if ! grep -q '^pub ' "src/stdlib/$m.zg" 2>/dev/null && [ ! -s "$tmp/html.names" ]; then
+		empty_ok=true
+	fi
+	if { [ -s "$tmp/page.names" ] || [ "$empty_ok" = true ]; } && diff -u "$tmp/page.names" "$tmp/html.names" >"$tmp/diff"; then
 		checks=$((checks + 1))
 	else
 		note "the page of \`$m\` is not one element per name \`zerg doc -s $m.\` finds (- search, + page)"

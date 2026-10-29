@@ -73,6 +73,14 @@ stdlib-test:                    # the standard library's own suites, and a floor
 	@# source. It rides here rather than on the board of its own because it is the same question
 	@# this target already asks: does the standard library do what it says.
 	./scripts/log-check.sh
+	@# ZERO DEPENDENCY, LIKE GO (docs/runtime/ffi.md): the standard library reaches the operating
+	@# system through the runtime and never binds a foreign symbol, so no module of it but `ffi`
+	@# itself names `"ffi"`. The floor is the modules searched, since an empty glob names nothing.
+	@mods="$(filter-out src/stdlib/ffi.zg,$(wildcard src/stdlib/*.zg))"; \
+	n=$$(printf '%s\n' $$mods | grep -c '\.zg$$'); \
+	[ $$n -ge 10 ] || { echo "stdlib-test: searched $$n stdlib modules for \"ffi\", below the floor of 10"; exit 1; }; \
+	bad=$$(grep -l '"ffi"' $$mods); \
+	[ -z "$$bad" ] || { echo "stdlib-test: the standard library binds foreign symbols — $$bad imports \"ffi\""; exit 1; }
 	@out=$$(./bin/zerg test src/stdlib); status=$$?; \
 	printf '%s\n' "$$out"; \
 	[ $$status -eq 0 ] || exit 1; \

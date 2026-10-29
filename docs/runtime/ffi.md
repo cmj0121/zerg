@@ -12,13 +12,18 @@ type — a signature says what a function takes and answers, and `unsafe` says w
 is here beside them, and so are the raw-pointer type and its operations — the rest of this chapter
 describes what runs.
 
-> **[not yet]** The **import edge** is not. There is no `ffi` module in the shipped standard library, so
-> `import "ffi"` fails at the import itself — _E5002 cannot resolve import `ffi` under any source root_ —
-> and a binding annotated `handle` is refused where it is written, as _E4056 no type named `handle` (the
-> binding `h`)_. A top-level `unsafe` that opens neither
-> a group nor a `fn` is a malformed group and says so — _E2075 a top-level `unsafe` opens a GROUP or marks a
-> `fn`_ — which is a parse refusal naming no unbuilt form, because `unsafe struct P { … }` is not a shape
-> this grammar derives anywhere.
+**The import edge is built too.** `import "ffi"` binds the standard library's `ffi` module, a foreign
+symbol is bound inside a group and called from there, and `handle` is a type (Importing C, below). A
+top-level `unsafe` that opens neither a group nor a `fn` is a malformed group and says so — _E2075 a
+top-level `unsafe` opens a GROUP or marks a `fn`_ — a parse refusal naming no unbuilt form, because
+`unsafe struct P { … }` is not a shape this grammar derives anywhere.
+
+> **[not yet]** On the **import edge**, what crosses today is the primitives, `handle` and `handle?`, a
+> `str` handed **into** C, and the structs built from primitives. A foreign binding whose signature names a
+> type the table below maps and this compiler has no C form for — a `list`, a `str` coming **out** of C, an
+> optional over anything but a `handle`, an enum, a function value — is refused at the binding:
+> _E9121 NotImplemented: the foreign binding `sum` cannot cross yet: the C boundary has no form for
+> `list[int]` yet_.
 >
 > **[not yet]** On the **export edge**, what crosses today is the primitives and the structs built from them. A
 > `pub` declaration whose types the table below maps and this compiler has no C form for — a `str`, a `list`, an
@@ -162,21 +167,39 @@ in a newtype you own (the same **foreign-handle pattern** as `File = Ref[handle]
 The stdlib binds each foreign symbol **inside a group**, with the signature you supply — the linker name
 taken **verbatim**, no mangling:
 
-```text
+```zerg
 import "ffi"
 
 unsafe {
-    sqlite3_open  := ffi.symbol[fn(path: str, mut &db: handle?) -> int]("sqlite3_open")
-    sqlite3_close := ffi.symbol[fn(db: handle) -> int]("sqlite3_close")
+    sqlite3_open: fn (str, mut &handle?) -> int = ffi.symbol("sqlite3_open")
+    sqlite3_close: fn (handle) -> int = ffi.symbol("sqlite3_close")
 }
 ```
 
-(The exact stdlib API is a stdlib detail; what the **language** fixes is **where** the binding may live.
-The signature is a plain `fn` — `unsafe` is not part of a type — and what makes the symbol unreachable
-from safe code is the group it is bound in, which is also where the thin wrappers that vouch for it go.) A
-handle **can** be stored in a binding or field, copied, passed to
-other foreign calls, and `del`-ed. It **cannot** be dereferenced, indexed, arithmetic'd, or built from a
-constructor (it has no fields) — it arrives only as a foreign call's return or out-parameter.
+What the **language** fixes is **where** the binding may live; the API is the stdlib's. The signature is
+the binding's own type, a plain `fn` — `unsafe` is not part of a type — because a call carries no type
+arguments here (_E2035_), so the annotation is the one place a `fn` type is written without new syntax.
+What makes the symbol unreachable from safe code is the group it is bound in, which is also where the
+thin wrappers that vouch for it go. A binding in any other shape — outside a group, `mut`, `pub`, named
+`main`, with no `fn` type, or naming anything but one C identifier as a string literal — is _E4122_, and
+`ffi.symbol(…)` written where no binding is, _E4123_. A `pub fn` of the group that wraps the call is how
+a foreign symbol reaches another module, and it is still a member of the group: another module calls it
+inside `unsafe { … }` — `unsafe { m.wrap(x) }` — and from safe code `m.wrap(x)` is _E3083_. A wrapper that
+vouches for the call itself is an ordinary `pub fn` outside the group, with the `unsafe` block in its body.
+
+The symbol is resolved by the **linker**, against the C library a program already links, because that is
+the only library a build names: `zerg build` takes no option naming another (`-l`), so the sqlite binding
+above is a sketch of the shape rather than a program that links today. A symbol the C library does not
+provide is reported by the link — `zerg: link failed`, with the linker's own undefined-symbol line — and
+not by this compiler, which has no way to ask a library what it holds before the link does. Every
+binding is linked whether the program calls it or not, so one naming a missing symbol fails the link even
+when nothing calls it.
+
+A handle **can** be stored in a binding or field, copied, passed to other foreign calls, and `del`-ed. It
+**cannot** be dereferenced, indexed, arithmetic'd, or built from a constructor (it has no fields, _E3072_)
+— it arrives only as a foreign call's return or out-parameter. Nor is it inspected: like a channel it is
+an **identity** rather than a value, so it has no equality (_E4034_) and no rendering (_E4076_). `handle`
+is a prelude name, so no declaration may take it (_E2061_).
 
 A handle is an **opaque token copied by value like any primitive** — duplicating it copies the bits,
 shares nothing in Zerg's terms, and frees nothing. So a bare handle is **not** a new exception to the
@@ -321,13 +344,29 @@ discharge them belongs in the group with the things it touches.
 The group's own rule **is** enforced: a `fn` declared inside a module-level `unsafe { … }` group is
 unsafe, and naming it from safe code — calling it, or binding the bare name as a function value — is
 rejected as `E3083`, with a place. Its callers are the other declarations in the group, which is what the
-group is for. Until the block-expression above is built, that is also the ONLY caller a program has: an
-entry point is safe, so a group's `fn` is reachable from another group member and from nowhere else.
+group is for, and an `unsafe { … }` block, where a safe function vouches for the call itself.
 
-> **[not yet]** A `handle`-typed binding is refused by name. `mut h: handle? = nil` is _E4056 no type named
-> `handle` (the binding `h`)_, with a place: no declaration in the program carries the name, and this
-> compiler ships no `ffi` module that could. It used to escape to `cc` as `error: unknown type name
-'zg_handle'` — the one place in this chapter where a form broke the standing contract.
+A foreign binding is one of those functions. It lowers to a function of its group whose body is the call
+across the boundary, so calling it from safe code is the same `E3083`, and calling it from an
+`unsafe { … }` block or from another member of its group is what runs:
+
+```zerg
+import "ffi"
+
+unsafe {
+ labs: fn (int) -> int = ffi.symbol("labs")
+}
+
+fn main() {
+ print unsafe {
+  labs(-42)
+ }
+}
+```
+
+A signature is held to the FFI-safe table where the binding is written: a type that is not FFI-safe is
+_E4121_, and stops the build — a binding is a call the program makes, and unlike a `pub` declaration on
+the export edge there is nothing to leave out.
 
 ```text
 unsafe {

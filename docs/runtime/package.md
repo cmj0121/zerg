@@ -262,8 +262,8 @@ function `helper`_ with no import) — not an exception the entry makes, but the
 namespace it is in merely by sitting in a directory.
 
 A **single file is a module** wherever a directory would be one — `import "./sib"` beside a `sib.zg`
-resolves to that file and its `pub` names, and the standard library is fifteen of them in one flat
-directory. It used to be an undocumented second shape of the import path, reachable by a bare name and
+resolves to that file and its `pub` names, and the standard library is a flat directory
+of them. It used to be an undocumented second shape of the import path, reachable by a bare name and
 therefore able to shadow; asking for it by name is what makes it ordinary.
 
 ### Visibility — exposing a declaration
@@ -362,8 +362,8 @@ gap rather than the language's rule, and `zerg lint` judges such a method by the
 
 What the rule compares is the **import path a module was reached by** — the loader's answer, recorded
 where the module was resolved and read back by name. It is not computed from where a file sits: `./a`
-and `./b` beside each other are two modules, and the standard library is fifteen of them in one flat
-directory.
+and `./b` beside each other are two modules, and the standard library is a flat directory
+of them.
 
 > The boundary compared is the **module** one, because the package layer above does not
 > exist to be the other. So **package-internal** and **package-public** are one tier as far as the
@@ -528,7 +528,7 @@ privacy. That decides where a test lives:
 White-box placement works in **either** shape a directory can have, because a test build resolves a test
 file's package the way an import is resolved: **most specific first**. `module_at` answers a single
 `<name>.zg` file before it answers a directory, so a `.zg` file beside its neighbours is a module in its
-own right — which is what `src/stdlib` is, fifteen independent modules in one flat directory. A
+own right — which is what `src/stdlib` is, a flat directory of independent modules. A
 `strings_test.zg` there is therefore the test of `strings.zg` alone, and its package is that pair; a test
 file that names no such sibling belongs to the **directory**, as before.
 

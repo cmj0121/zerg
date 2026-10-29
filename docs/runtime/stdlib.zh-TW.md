@@ -60,6 +60,7 @@ syscall／硬體 leaf 在 C runtime（見 [`src/runtime`](../../src/runtime/READ
 | [`sha256`](#sha256)   | `import "sha256"`  | FIPS 180-4 摘要,用來命名與驗完整性     |
 | [`cli`](#cli)         | `import "cli"`     | 宣告式的命令列，以及它算繪的 help      |
 | [`atomic`](#atomic)   | `import "atomic"`  | 安全的共享可變原語                     |
+| [`ffi`](#ffi)         | `import "ffi"`     | 在 `unsafe` 分組裡綁定 C 函式庫的符號  |
 | [`testing`](#testing) | `import "testing"` | `#[test]` 要而語言不給的東西           |
 
 ## `io`
@@ -523,7 +524,7 @@ d := rand.below(g, 6)    # g 推進；d 落在 [0, 6)
 跨 coroutine 安全共享可變狀態的方式（GRAMMAR group 10）：以 immutable 的 `:=` 綁定持有一個 `Atomic[int]` cell，
 其內容透過 sequentially-consistent 運算變動。MVP：僅 `int`。
 
-十五個模組都能 import,這一個也是。它先後等過三種形式——generic struct、對它的應用做的 `impl`,以及 `Ref[T]`
+每個模組都能 import,這一個也是。它先後等過三種形式——generic struct、對它的應用做的 `impl`,以及 `Ref[T]`
 ——而三者都建好了。
 
 > 它留在表中、而不是被移出出貨集合，是因為本編譯器解析標準函式庫的方式是**列出它的目錄**：一個被移出
@@ -538,6 +539,13 @@ d := rand.below(g, 6)    # g 推進；d 落在 [0, 6)
 | `swap(a: Ref[int], v: int) -> int`                             | 寫入 `v`，回傳先前值                |
 | `fetch_add(a: Ref[int], n: int) -> int`                        | 加 `n`，回傳先前值                  |
 | `compare_swap(a: Ref[int], expect: int, desired: int) -> bool` | CAS：等於 `expect` 才設為 `desired` |
+
+## `ffi`
+
+一個**程式**如何綁定它所連結的 C 函式庫中的符號——[外部函式介面](ffi.zh-TW.md)的 import 那條邊。它不宣告任何函式:
+`ffi.symbol("name")` 只能寫成 module 層級 `unsafe { … }` 分組裡某個 binding 的整個值,而那個 binding 的 `fn` 型別
+就是呼叫這個符號用的簽章;寫在其他任何地方都是 _E4123_。這個函式庫裡沒有任何模組 import 它——它們經由 runtime
+抵達作業系統,也就是上面的零相依原則。
 
 ## `testing`
 

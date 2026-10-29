@@ -65,6 +65,7 @@ stays `#`. `zerg doc` prints the `##` lines; `zerg doc --all` prints both
 | [`sha256`](#sha256)   | `import "sha256"`  | the FIPS 180-4 digest, for naming and integrity    |
 | [`cli`](#cli)         | `import "cli"`     | a declared command line, and the help it renders   |
 | [`atomic`](#atomic)   | `import "atomic"`  | the safe shared-mutable primitive                  |
+| [`ffi`](#ffi)         | `import "ffi"`     | binding a C library's symbol in an `unsafe` group  |
 | [`testing`](#testing) | `import "testing"` | what a `#[test]` needs that the language does not  |
 
 ## `io`
@@ -573,7 +574,7 @@ constraints, and `.exclusive(xs, true)` says neither of them at a call site.
 The safe way to share mutable state across coroutines (GRAMMAR group 10): an immutable `:=` binding holds
 an `Atomic[int]` cell whose contents mutate through sequentially-consistent operations. MVP: `int`-typed.
 
-All fifteen modules import, this one included. It waited on three forms in turn — a generic struct, an
+Every module imports, this one included. It waited on three forms in turn — a generic struct, an
 `impl` on its application, and `Ref[T]` — and each of them is built.
 
 > It stays in the table rather than being taken out of the shipped set, because this compiler resolves
@@ -590,6 +591,14 @@ All fifteen modules import, this one included. It waited on three forms in turn 
 | `swap(a: Ref[int], v: int) -> int`                             | write `v`, return the previous value      |
 | `fetch_add(a: Ref[int], n: int) -> int`                        | add `n`, return the previous value        |
 | `compare_swap(a: Ref[int], expect: int, desired: int) -> bool` | CAS: set to `desired` iff it was `expect` |
+
+## `ffi`
+
+How a **program** binds a symbol of a C library it links — the import edge of the
+[Foreign Function Interface](ffi.md). It declares no function: `ffi.symbol("name")` is written only as the
+whole value of a binding in a module-level `unsafe { … }` group, whose `fn` type is the signature the
+symbol is called by, and anywhere else it is _E4123_. No module in this library imports it — they reach
+the operating system through the runtime, which is the zero-dependency principle above.
 
 ## `testing`
 

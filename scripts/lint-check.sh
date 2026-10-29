@@ -270,6 +270,35 @@ fn main() {
 }
 EOF
 
+# AN `unsafe { … }` BLOCK, the block form a function body reaches a group's `fn` through — the
+# only caller such a function can have from safe code. Both rules once more, in one block: the
+# walk stopped at the keyword, so the call and the binding it read were both counted as unseen.
+quiet L102 'l102-from-an-unsafe-block' 'a group function called only from inside an `unsafe` block' <<'EOF'
+unsafe {
+	fn twice(n: int) -> int {
+		return n * 2
+	}
+}
+
+fn main() {
+	s := 3
+	print unsafe { twice(s) }
+}
+EOF
+
+quiet L103 'l103-from-an-unsafe-block' 'a binding read only from inside an `unsafe` block' <<'EOF'
+unsafe {
+	fn twice(n: int) -> int {
+		return n * 2
+	}
+}
+
+fn main() {
+	s := 3
+	print unsafe { twice(s) }
+}
+EOF
+
 # --- the three programs L1xx used to report and had no business reporting -------------
 #
 # Each of these was found by pointing `make lint` at `examples/`, which nothing had ever done.

@@ -513,6 +513,7 @@ fn p_name(mut &p: Parser, what: str) -> str {
 #   `Either` `Result` `Err`                 the carrier's spellings, likewise
 #   `Left` `Right`                          the emitter's constructor and exhaustiveness rules
 #   `Eq` `Into`                             the two specs the emitter injects as source
+#   `handle`                                the emitter's opaque foreign token (docs/runtime/ffi.md)
 #
 # `Ord`, `Hash`, `Error`, `Iterator`, `Iterable` and `Ref` are named by the same page and are
 # declared by NOTHING here, so a program's own `spec Ord` is the only `Ord` there is. Refusing
@@ -531,6 +532,7 @@ pub fn p_prelude_role(lx: str) -> str {
 	return "an error-carrier type" if lx == "Either" or lx == "Result" or lx == "Err"
 	return "an error-carrier constructor" if lx == "Left" or lx == "Right"
 	return "a built-in spec" if lx == "Eq" or lx == "Into"
+	return "the opaque foreign handle type" if lx == "handle"
 
 	return ""
 }
@@ -596,6 +598,10 @@ fn p_reserved_name(mut &p: Parser, role: str, what: str) -> str {
 # declaration is what makes that question unaskable.
 fn p_prelude_callee_role(lx: str) -> str {
 	return "" if lx == "map"
+
+	# `handle` IS A TYPE AND NEVER A CALL: it has no constructor (docs/runtime/ffi.md — a handle
+	# arrives only from a foreign call), so a `fn handle` knocks nothing out from under a call.
+	return "" if lx == "handle"
 
 	return p_prelude_role(lx)
 }
@@ -2280,7 +2286,7 @@ fn parse_spec(mut &p: Parser, start: token.Token, is_pub: bool) -> ast.SpecDecl 
 			if p_at(p, token.Kind.LBrace) {
 				b := parse_block(p)
 				e := p_ended(p)
-				reqs.append(ast.FnDecl(sig.name, sig.recv, sig.params, sig.has_ret, sig.ret, b, sig.is_pub, sig.path, sig.line, sig.col, sig.tparams, sig.tbounds, sig.in_unsafe, false, false, true, false, "", sig.name_line, sig.name_col, e.line, e.col))
+				reqs.append(ast.FnDecl(sig.name, sig.recv, sig.params, sig.has_ret, sig.ret, b, sig.is_pub, sig.path, sig.line, sig.col, sig.tparams, sig.tbounds, sig.in_unsafe, false, false, true, false, "", sig.name_line, sig.name_col, e.line, e.col, ""))
 			} else {
 				reqs.append(sig)
 			}
@@ -2359,7 +2365,7 @@ fn parse_init(mut &p: Parser, at: int) -> ast.FnDecl {
 	mut params: list[ast.Param] = []
 	body := parse_block(p)
 	e := p_ended(p)
-	return ast.FnDecl(init_name(at), "", params, false, ast.Ty.TVoid, body, false, p.path, kw.line, kw.col, [], [], false, false, false, true, false, "", 0, 0, e.line, e.col)
+	return ast.FnDecl(init_name(at), "", params, false, ast.Ty.TVoid, body, false, p.path, kw.line, kw.col, [], [], false, false, false, true, false, "", 0, 0, e.line, e.col, "")
 }
 
 # with_name is the binding a NAMELESS `with` gets, and is_with_name is how a rule that reads
@@ -3117,7 +3123,7 @@ fn parse_fn_at(mut &p: Parser, start: token.Token, is_pub: bool, recv: str, recv
 	if assoc_ok and not is_assoc {
 		params = p_with_receiver(recv, recv_mut, head.params)
 	}
-	return ast.FnDecl(head.name, head.recv, params, head.has_ret, head.ret, body, head.is_pub, head.path, head.line, head.col, head.tparams, head.tbounds, head.in_unsafe, is_test, is_fixture, true, is_assoc, spec_of, head.name_line, head.name_col, e.line, e.col)
+	return ast.FnDecl(head.name, head.recv, params, head.has_ret, head.ret, body, head.is_pub, head.path, head.line, head.col, head.tparams, head.tbounds, head.in_unsafe, is_test, is_fixture, true, is_assoc, spec_of, head.name_line, head.name_col, e.line, e.col, "")
 }
 
 # p_is_rendering names the two methods the LANGUAGE declares rather than the author:
@@ -3276,7 +3282,7 @@ fn parse_fn_head_at(mut &p: Parser, start: token.Token, is_pub: bool, recv: str,
 	}
 	mut none: list[ast.Stmt] = []
 	e := p_ended(p)
-	return ast.FnDecl(name, recv, params, has_ret, ret, none, is_pub, p.path, start.line, start.col, tparams, tbounds, in_unsafe, false, false, false, false, "", nt.line, nt.col, e.line, e.col)
+	return ast.FnDecl(name, recv, params, has_ret, ret, none, is_pub, p.path, start.line, start.col, tparams, tbounds, in_unsafe, false, false, false, false, "", nt.line, nt.col, e.line, e.col, "")
 }
 
 # parse_block counts a nesting level per block, since statements nest through blocks and

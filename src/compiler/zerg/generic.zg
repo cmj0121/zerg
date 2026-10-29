@@ -477,7 +477,7 @@ fn gen_len_fns(su: TySubst, fs: list[ast.FnDecl]) -> list[ast.FnDecl] {
 # gen_len_fn is subst_fn without the mangling: the same walk over a declaration, for a
 # substitution that renames nothing.
 fn gen_len_fn(su: TySubst, fd: ast.FnDecl) -> ast.FnDecl {
-	return ast.FnDecl(fd.name, fd.recv, subst_params(su, fd.params), fd.has_ret, subst_ty(su, fd.ret), subst_block(su, fd.body), fd.is_pub, fd.path, fd.line, fd.col, fd.tparams, fd.tbounds, fd.in_unsafe, fd.is_test, fd.is_fixture, fd.has_body, fd.is_assoc, fd.spec_of, fd.name_line, fd.name_col, fd.end_line, fd.end_col)
+	return ast.FnDecl(fd.name, fd.recv, subst_params(su, fd.params), fd.has_ret, subst_ty(su, fd.ret), subst_block(su, fd.body), fd.is_pub, fd.path, fd.line, fd.col, fd.tparams, fd.tbounds, fd.in_unsafe, fd.is_test, fd.is_fixture, fd.has_body, fd.is_assoc, fd.spec_of, fd.name_line, fd.name_col, fd.end_line, fd.end_col, fd.foreign)
 }
 
 # subst_method is subst_fn for a method of a template `impl`: the same walk, plus the RECEIVER
@@ -489,14 +489,14 @@ fn gen_len_fn(su: TySubst, fd: ast.FnDecl) -> ast.FnDecl {
 # signature and its `U` was reported to the caller as a type: _argument 1 of `Box[int].tag` is
 # U, and this gives str_.
 pub fn subst_method(su: TySubst, m: ast.FnDecl, recv: str) -> ast.FnDecl {
-	return ast.FnDecl(m.name, recv, subst_params(su, m.params), m.has_ret, subst_ty(su, m.ret), subst_block(su, m.body), m.is_pub, m.path, m.line, m.col, m.tparams, m.tbounds, m.in_unsafe, m.is_test, m.is_fixture, m.has_body, m.is_assoc, m.spec_of, m.name_line, m.name_col, m.end_line, m.end_col)
+	return ast.FnDecl(m.name, recv, subst_params(su, m.params), m.has_ret, subst_ty(su, m.ret), subst_block(su, m.body), m.is_pub, m.path, m.line, m.col, m.tparams, m.tbounds, m.in_unsafe, m.is_test, m.is_fixture, m.has_body, m.is_assoc, m.spec_of, m.name_line, m.name_col, m.end_line, m.end_col, m.foreign)
 }
 
 # subst_fn keeps `is_assoc`: a specialization of `impl P { fn make[U](…) }` is still an
 # associated fn, and the signature row it becomes is what tells `P.make(…)` from `p.make(…)`.
 pub fn subst_fn(tpl: ast.FnDecl, args: list[ast.Ty], at: str, apps: list[ast.TyApp]) -> ast.FnDecl {
 	su := TySubst(tpl.tparams, args, [], [], apps, at)
-	return ast.FnDecl(gen_mangle(tpl.name, args), tpl.recv, subst_params(su, tpl.params), tpl.has_ret, subst_ty(su, tpl.ret), subst_block(su, tpl.body), tpl.is_pub, tpl.path, tpl.line, tpl.col, [], [], tpl.in_unsafe, tpl.is_test, tpl.is_fixture, tpl.has_body, tpl.is_assoc, tpl.spec_of, tpl.name_line, tpl.name_col, tpl.end_line, tpl.end_col)
+	return ast.FnDecl(gen_mangle(tpl.name, args), tpl.recv, subst_params(su, tpl.params), tpl.has_ret, subst_ty(su, tpl.ret), subst_block(su, tpl.body), tpl.is_pub, tpl.path, tpl.line, tpl.col, [], [], tpl.in_unsafe, tpl.is_test, tpl.is_fixture, tpl.has_body, tpl.is_assoc, tpl.spec_of, tpl.name_line, tpl.name_col, tpl.end_line, tpl.end_col, tpl.foreign)
 }
 
 # subst_ty replaces a type parameter wherever a type is written, at any depth.

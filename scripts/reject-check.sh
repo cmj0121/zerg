@@ -6851,14 +6851,188 @@ fn main() {
 }
 EOF
 
-# `handle` IS THE FFI CHAPTER'S, and docs/runtime/ffi.md is a design rather than a description
-# — nothing in this compiler declares the type. It earned its own line here because it is the
-# spelling that found the wrapper hole above, and because a reader who follows that chapter
-# should be told the name resolves to nothing rather than be handed a cc diagnostic.
-reject an-ffi-handle-annotation E4056 '(the binding `h`)' <<'EOF'
+# --- the import edge (docs/runtime/ffi.md, "Importing C") -------------------------------
+#
+# A foreign binding is a function of its `unsafe { … }` group, so what keeps it out of safe code
+# is the group's own caller rule — and the binding has exactly one shape, refused by what is
+# wrong with it when it is written any other way. Each case imports `ffi`, which the seed does
+# not ship, so the seed's refusal is the import's and not a rule it would have to share.
+reject a-foreign-call-from-safe-code E3083 '`labs` is declared inside a module-level' <<'EOF'
+import "ffi"
+
+unsafe {
+	labs: fn(int) -> int = ffi.symbol("labs")
+}
+
 fn main() {
-	mut h: handle? = nil
+	print labs(-5)
+}
+EOF
+
+reject a-foreign-binding-outside-a-group E4122 'outside a module-level `unsafe' <<'EOF'
+import "ffi"
+
+labs: fn(int) -> int = ffi.symbol("labs")
+
+fn main() {
 	print 1
+}
+EOF
+
+reject a-foreign-binding-with-no-signature E4122 'with no signature' <<'EOF'
+import "ffi"
+
+unsafe {
+	labs := ffi.symbol("labs")
+}
+
+fn main() {
+	print 1
+}
+EOF
+
+reject a-foreign-binding-that-is-mut E4122 'and is `mut`' <<'EOF'
+import "ffi"
+
+unsafe {
+	mut labs: fn(int) -> int = ffi.symbol("labs")
+}
+
+fn main() {
+	print 1
+}
+EOF
+
+reject a-foreign-binding-that-is-pub E4122 'and is `pub`' <<'EOF'
+import "ffi"
+
+unsafe {
+	pub labs: fn (int) -> int = ffi.symbol("labs")
+}
+
+fn main() {
+	print 1
+}
+EOF
+
+reject a-foreign-binding-named-main E4122 'as `main`' <<'EOF'
+import "ffi"
+
+unsafe {
+	main: fn () = ffi.symbol("abort")
+}
+EOF
+
+reject a-foreign-symbol-not-a-literal E4122 'names no single symbol' <<'EOF'
+import "ffi"
+
+unsafe {
+	labs: fn(int) -> int = ffi.symbol("la" + "bs")
+}
+
+fn main() {
+	print 1
+}
+EOF
+
+reject a-foreign-symbol-not-a-c-name E4122 'which is not a C identifier' <<'EOF'
+import "ffi"
+
+unsafe {
+	labs: fn(int) -> int = ffi.symbol("labs()")
+}
+
+fn main() {
+	print 1
+}
+EOF
+
+reject ffi-symbol-in-a-function-body E4123 'is written only as the whole value of a binding' <<'EOF'
+import "ffi"
+
+fn main() {
+	f := ffi.symbol("labs")
+	print 1
+}
+EOF
+
+# NOT FFI-SAFE is the language's answer, and unlike the export edge's E4120 it stops the build:
+# a binding is a call the program makes, and there is nothing to leave out.
+reject a-foreign-binding-takes-a-channel E4121 '`chan[int]` is not FFI-safe' <<'EOF'
+import "ffi"
+
+unsafe {
+	feed: fn(chan[int]) -> int = ffi.symbol("feed")
+}
+
+fn main() {
+	print 1
+}
+EOF
+
+reject a-foreign-binding-answers-a-result E4121 '`Result[int]` is not FFI-safe' <<'EOF'
+import "ffi"
+
+unsafe {
+	parse: fn(str) -> Result[int] = ffi.symbol("atol")
+}
+
+fn main() {
+	print 1
+}
+EOF
+
+# `handle` IS A PRELUDE TYPE, opaque by the chapter's rule: held, copied and handed back to C,
+# and never inspected. A declaration may not take the name, and a field read, a rendering and a
+# comparison are each refused by name rather than spelled through C's `void*` for cc to answer.
+reject a-struct-named-handle E2061 'the opaque foreign handle type' <<'EOF'
+import "ffi"
+
+struct handle {
+	x: int = 0
+}
+
+fn main() {
+	print 1
+}
+EOF
+
+reject a-handle-has-no-field E3072 'no field `x` on handle' <<'EOF'
+import "ffi"
+
+unsafe {
+	getenv: fn(str) -> handle = ffi.symbol("getenv")
+}
+
+fn main() {
+	h := unsafe { getenv("HOME") }
+	print h.x
+}
+EOF
+
+reject a-handle-has-no-rendering E4076 'a token naming a foreign resource' <<'EOF'
+import "ffi"
+
+unsafe {
+	getenv: fn(str) -> handle = ffi.symbol("getenv")
+}
+
+fn main() {
+	h := unsafe { getenv("HOME") }
+	print h
+}
+EOF
+
+reject a-handle-has-no-equality E4034 '`==` on a handle' <<'EOF'
+import "ffi"
+
+unsafe {
+	getenv: fn(str) -> handle = ffi.symbol("getenv")
+}
+
+fn main() {
+	h := unsafe { getenv("HOME") }
+	print h == h
 }
 EOF
 

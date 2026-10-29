@@ -4010,7 +4010,16 @@ pub fn chk_top_muts(mut &em: emit.Emitter, own: ast.File) {
 #
 # A CHECKED rule and not a raise: the question is well formed and the program is wrong, so it
 # owes a place like every other rule here, and the C written after it is discarded.
+#
+# `ffi.symbol` IS THE ONE MEMBER NO MODULE DECLARES AND THE LANGUAGE STILL HAS. Its answer is
+# the binding's own type, which no signature can spell, so it exists only as the whole value of
+# a foreign binding (emit.zg's c_with_foreign) — and anywhere else it is told so by name rather
+# than told the module lacks it.
 pub fn chk_no_member(mut &em: emit.Emitter, ns: str, member: str) {
+	if member == "symbol" and emit.c_ns_is_ffi(em, ns) {
+		chk_at(em, rule.Rule.ForeignSymbolOutsideBinding, f"`{ns}.symbol(…)` binds a foreign symbol, and it is written only as the whole value of a binding in a module-level `unsafe {{ … }}` group whose type is the `fn` signature — `labs: fn (int) -> int = {ns}.symbol(\"labs\")` (docs/runtime/ffi.md)")
+		return
+	}
 	chk_at(em, rule.Rule.ModuleNoSuchName, f"module `{ns}` has no `{member}`")
 }
 

@@ -697,6 +697,14 @@ pub struct FnDecl {
 	# declaration carries one.
 	pub end_line: int
 	pub end_col: int
+
+	# foreign is the C symbol a FOREIGN BINDING names, and "" for every function somebody wrote a
+	# body for. docs/runtime/ffi.md binds a foreign symbol inside a module-level `unsafe { … }`
+	# group — `labs: fn (int) -> int = ffi.symbol("labs")` — and the emitter turns that binding
+	# into a function of the group (c_with_foreign) whose body is the call across the boundary.
+	# It is a FUNCTION rather than a constant so it is everything a group's `fn` is for free:
+	# called directly, held to the group's caller rule (E3083), and named by its own signature.
+	pub foreign: str
 }
 
 # --- decl-extent --------------------------------------------------------------------------

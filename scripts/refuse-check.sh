@@ -4079,6 +4079,33 @@ fn main() {
 }
 EOF
 
+# A FOREIGN SIGNATURE THE BOUNDARY HAS NO FORM FOR YET (docs/runtime/ffi.md). A `list` crosses
+# by the chapter's table as a pointer and a length, and a `str` coming OUT of C is a copy whose
+# validity C has to vouch for; neither is built, and each is refused where the binding is.
+expect "$ZERG" a-foreign-binding-takes-a-list E9121 'no form for `list[int]`' <<'EOF'
+import "ffi"
+
+unsafe {
+	sum: fn(list[int]) -> int = ffi.symbol("sum")
+}
+
+fn main() {
+	print 1
+}
+EOF
+
+expect "$ZERG" a-foreign-binding-answers-a-str E9121 'no form for `str`' <<'EOF'
+import "ffi"
+
+unsafe {
+	getenv: fn(str) -> str = ffi.symbol("getenv")
+}
+
+fn main() {
+	print 1
+}
+EOF
+
 # A MODULE THAT SHIPS AND CANNOT BE IMPORTED. `atomic` writes `impl Atomic[int]`, and an
 # `impl` on a type ARGUMENT is a form this compiler has not built, so the import used to fail
 # with that refusal pointing INTO src/stdlib/atomic.zg — a real error against

@@ -7036,6 +7036,53 @@ fn main() {
 }
 EOF
 
+# AND NO KEY, for the reason it has no `==`: a key is compared and hashed, and an identity has
+# nothing to compare. Refused for good, as a float key is, rather than as a hash not built yet.
+reject a-handle-as-a-map-key E4079 'a handle is an identity rather than a value' <<'EOF'
+import "ffi"
+
+fn main() {
+	m: map[handle, int] = {:}
+	print m.len()
+}
+EOF
+
+# A BINDING TAKES ITS PLACE IN THE FILE. It becomes a function before any table is built, and a
+# name declared twice is reported at the SECOND declaration — which is the `fn` below it, not
+# the binding written first.
+reject a-foreign-binding-and-a-fn-of-one-name E4073 'the first is at line 4' at=7:1 <<'EOF'
+import "ffi"
+
+unsafe {
+	labs: fn (int) -> int = ffi.symbol("labs")
+}
+
+fn labs(x: int) -> int {
+	return x
+}
+
+fn main() {
+	print 1
+}
+EOF
+
+# A QUALIFIED CALL INTO A GROUP IS STILL A CALL INTO A GROUP. Naming the module out loud does
+# not make a group's `pub fn` safe to call, and the bare call's caller rule was asked of that
+# spelling alone — so a safe `main` reached another module's group by writing its prefix.
+reject a-group-fn-called-across-modules-from-safe-code E3083 '`m.wrap` is declared inside a module-level' <<'EOF'
+import "./m"
+
+fn main() {
+	print m.wrap(-5)
+}
+--- m/mod.zg
+unsafe {
+	pub fn wrap(x: int) -> int {
+		return x * 2
+	}
+}
+EOF
+
 # --- one step past each edge ------------------------------------------------------------
 #
 # The refusals above use comfortable numbers — 300 for a byte, 1000 for a narrowing — and a

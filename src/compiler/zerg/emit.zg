@@ -13095,6 +13095,11 @@ fn c_free_method(mut &em: Emitter, target: ast.Expr, meth: str, args: list[ast.E
 
 		c_chk_visible_fn(em, meth, callee)
 
+		# AND THE GROUP'S CALLER RULE, which the bare call asks one function over: naming the
+		# module out loud does not make a group's `fn` safe to call, and without this a safe
+		# function in another module reached any `pub fn` of an `unsafe { … }` group (E3083).
+		c_chk_unsafe_fn(em, f"{tn}.{meth}", "calling it", callee)
+
 		# and the ARGUMENTS are measured against that module's declaration too — its arity, its
 		# parameters, the defaults it fills — which the key carries to every rule that reads one
 		return f"{c_fn_cname_in(em, callee_mod, "", meth)}({c_call_args(em, c_key_in(callee_mod, meth), args, sb)})"

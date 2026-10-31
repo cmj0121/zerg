@@ -257,18 +257,24 @@ fn thread_unit() -> str {
 # -fno-omit-frame-pointer IS WHAT A RUNTIME STOP WALKS to find the statement it is in
 # (zrt_site_here, sys.c): -O0 keeps the frames on the compilers tried, and this says so rather
 # than leaning on it.
-fn cc_dialect(mut &argv: list[str]) {
+#
+# `-g` is there when asked for. `#line` already gave every statement its `.zg` place, so debug
+# information is all a debugger was missing.
+fn cc_dialect(mut &argv: list[str], debug: bool) {
 	argv.append("-fno-dollars-in-identifiers")
 	argv.append("-fno-omit-frame-pointer")
+	if debug {
+		argv.append("-g")
+	}
 }
 
 # cc_object_argv compiles the emitted C to an object without linking: a module is not a
 # program, so it has no entry to link against and no runtime to pull in yet.
-pub fn cc_object_argv(cpath: str, output: str) -> list[str] {
+pub fn cc_object_argv(cpath: str, output: str, debug: bool) -> list[str] {
 	mut argv: list[str] = []
 	argv.append(cc_bin())
 	argv.append(cc_std())
-	cc_dialect(argv)
+	cc_dialect(argv, debug)
 	argv.append("-I")
 	argv.append(rt_dir())
 	argv.append("-c")
@@ -278,12 +284,12 @@ pub fn cc_object_argv(cpath: str, output: str) -> list[str] {
 	return argv
 }
 
-pub fn cc_argv(cpath: str, output: str) -> list[str] {
+pub fn cc_argv(cpath: str, output: str, debug: bool) -> list[str] {
 	rt := rt_dir()
 	mut argv: list[str] = []
 	argv.append(cc_bin())
 	argv.append(cc_std())
-	cc_dialect(argv)
+	cc_dialect(argv, debug)
 	argv.append("-I")
 	argv.append(rt)
 	argv.append("-o")

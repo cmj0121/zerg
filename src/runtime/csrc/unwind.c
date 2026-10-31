@@ -156,7 +156,7 @@ static const char *zrt_err_kindname(int kind) {
  * innermost handler and longjmp (or exit when none). Both the string zrt_abort and
  * the Err-carrying zrt_raise_err funnel through it; the only difference is whether
  * an Err value was stashed in g_tls.taken first (Decision D). */
-static _Noreturn void zrt_unwind_abort(zrt_err e) {
+static _Noreturn void zrt_unwind_abort(zrt_err e, bool place) {
 	zrt_frame *h = g_tls.handler;
 	/* A `guard` handler demotes this abort to a Result value, so it is not an error
 	 * the program failed to handle: land on it WITHOUT reporting the message (the Err
@@ -165,7 +165,7 @@ static _Noreturn void zrt_unwind_abort(zrt_err e) {
 		zrt_unwind_to(h->mark);
 		longjmp(h->buf, 1);
 	}
-	zrt_report(zrt_err_kindname(e.kind), e.msg);
+	zrt_report_at(zrt_err_kindname(e.kind), e.msg, place ? zrt_site_here() : NULL);
 	if (h != NULL) {
 		/* An unhandled coroutine crash unwinds to the coroutine's outermost handler
 		 * (the trampoline's, whose prev is NULL); mark it so the sender releases run
@@ -188,7 +188,7 @@ _Noreturn void zrt_abort_cell(int kind, const char *msg) {
 	 * is the immortal cell zrt_abort/zrt_abort_kind built around their literal, so the Err
 	 * owns it like any other str and a reader may keep it (#405). */
 	g_tls.taken = zrt_err_own(kind, msg);
-	zrt_unwind_abort(g_tls.taken);
+	zrt_unwind_abort(g_tls.taken, true);
 }
 
 zrt_err zrt_err_new(const char *msg) {
@@ -294,7 +294,12 @@ zrt_err zrt_err_chain(zrt_err e, zrt_err cause) {
 
 _Noreturn void zrt_raise_err(zrt_err e) {
 	g_tls.taken = e;
-	zrt_unwind_abort(e);
+	zrt_unwind_abort(e, e.kind != ZRT_ERR_NONE);
+}
+
+_Noreturn void zrt_raise_fault(zrt_err e) {
+	g_tls.taken = e;
+	zrt_unwind_abort(e, true);
 }
 
 zrt_err zrt_taken_err(void) {

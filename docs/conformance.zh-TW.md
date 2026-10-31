@@ -225,7 +225,7 @@ module 的用途。
 一個**未捕捉的錯誤**會確定性地結束程式：一個 `raise` 未被捕捉而抵達 `main`、對缺席 optional 的 force `!` 失敗，或
 一個沒有 `guard`/`?` 復原的內建 runtime fault（見 [Errors](code/errors.zh-TW.md)）。abort 時 runtime：
 
-1. 把描述該錯誤的**一行**寫到**標準錯誤**，後接一個換行；
+1. 把描述該錯誤的**一行**寫到**標準錯誤**，後接一個換行；若有[位置](#the-place-of-a-stop)，再寫出抵達該處的 statement 位置；
 2. 執行被展開路徑上待決的 `defer`（與正常 return 路徑用的是同一個 cleanup stack）；並
 3. 以 exit 狀態 **1** 終止行程。
 
@@ -235,8 +235,25 @@ module 的用途。
 `raise ValueError("bad input")` 與 runtime 自己引發的 fault 報出同一種形狀。**不帶**種類的錯誤（一個裸的
 `raise "…"` 建出來的那種）則只寫它的訊息。內建錯誤種類與哪些操作會引發它們見 [Errors](code/errors.zh-TW.md)。
 
+### The place of a stop
+
+錯誤底下那一行的形式，與編譯診斷結尾相同：`--> file:line:col`：
+
+```text
+IndexError: index out of range
+  --> ab.zg:2:5
+```
+
+它指出 **statement** 的起始處，而不是其中的子運算式，並取最內層屬於程式本身的 frame：標準函式庫內引發的 fault，指出的是呼叫它的 statement。runtime 的 fault、
+被 raise 的 taxonomy 錯誤，以及失敗的強制 `!` 都有位置。**`raise` 一個純訊息則沒有**：那則訊息是程式寫給執行者
+看的句子。被 `guard` 攔下的錯誤不會回報，也就沒有這一行；位置也不屬於 `message()`，所以沒有程式讀得到它。
+
+**[implementation-defined]** 位置是用 stop 的 return address 對照一張表查出來的，所以從未停下的程式不付時間成本，
+只付一些大小。這張表需要 frame pointer 與 linker section，本實作在 Linux 與 macOS 的 x86-64 和 arm64 上具備。
+其他平台以及 AddressSanitizer 之下沒有第二行，絕不猜測。
+
 **stack 溢位是一次 fault、不是一次 abort**,而它是這份契約唯一沒有涵蓋的結束方式。runtime 會給它名字——
-`StackOverflowError: stack overflow` 寫到標準錯誤、exit 狀態 **1**,即第 1 與第 3 步——但第 2 步不可能成立:那條會
+`StackOverflowError: stack overflow` 與其位置寫到標準錯誤、exit 狀態 **1**,即第 1 與第 3 步——但第 2 步不可能成立:那條會
 去跑待決 `defer` 的 stack,正是已經耗盡的那一條,而站在它上面的 signal handler 展不開自己腳下的東西。所以 `defer`
 被**跳過**、沒有 `guard` 攔得住;而且與一般 abort(coroutine 會把它包住)不同,溢位無論發生在哪裡都結束**整個行程**。
 handler 不認得的 fault 會交還給 runtime 之前持有該 signal 的那個 action(sanitizer 的 handler,或預設處置),因此它

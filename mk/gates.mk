@@ -20,7 +20,7 @@
 # to each other.
 
 .PHONY: suites test-runner stdlib-test compiler-test install-check examples corpus fixpoint sanitize-conc sanitize-corpus \
-	mem-check refuse reject ffi-export oracle lsp editor-align treesitter desugar gates reject-fuzz \
+	mem-check refuse reject ffi-export stop-place oracle lsp editor-align treesitter desugar gates reject-fuzz \
 	check-equal fmt-corpus fmt-self fmt-tokens fmt-roundtrip docs-links docs-mirror docs-zerg docs-refused \
 	grammar-cites grammar-cited grammar-keywords grammar-mirror refusal-cites docs-repeat generic-walks sha256 layering conformance productions \
 	counterexamples behaviour version-check cache-key-check error-codes-check seed-gaps lint-check \
@@ -377,6 +377,13 @@ ffi-export:                     # a C file includes a --emit lib header, links, 
 	$(MAKE) build
 	./scripts/ffi-export-check.sh
 
+# The place a stop names is the one runtime answer no golden can hold: a golden records text and
+# a build chooses the path, so `run_stderr` (scripts/lib/runcmp.sh) reads past it everywhere else.
+# This is where it is read. Each case holds a second statement the answer could wrongly be.
+stop-place:                     # a stop names the .zg statement, and -g resolves a Zerg line
+	$(MAKE) build
+	./scripts/stop-place-check.sh
+
 # `reject` makes the seed the oracle for programs that must be turned away. This asks the
 # same question about programs that must be ACCEPTED: two compilers of one language may not
 # disagree about what a valid program prints.
@@ -471,7 +478,7 @@ gates:                          # every gate is on the board, and the board is r
 	./scripts/gates-check.sh
 
 # `version-check` sits straight after `build` because it reads bin/ rather than filling it.
-LINUX_GATES ?= build version-check suites test-runner stdlib-test compiler-test examples corpus desugar lsp editor-align treesitter install-check refuse reject ffi-export oracle reject-fuzz check-equal fmt-corpus fmt-tokens fmt-roundtrip fmt-self lint lint-check doc-check fixpoint docs-links docs-mirror docs-repeat docs-zerg docs-refused generic-walks grammar-cites grammar-cited grammar-keywords grammar-mirror refusal-cites layering stmt-walk dead-code entry-path examples-index conformance productions counterexamples behaviour error-codes-check seed-gaps deviation-check marker-codes chapter-codes method-gaps build-deps-check cache-key-check sha256 gates mem-check mem-peak release-notes release-sums formula sanitize-conc sanitize-corpus
+LINUX_GATES ?= build version-check suites test-runner stdlib-test compiler-test examples corpus desugar lsp editor-align treesitter install-check refuse reject ffi-export stop-place oracle reject-fuzz check-equal fmt-corpus fmt-tokens fmt-roundtrip fmt-self lint lint-check doc-check fixpoint docs-links docs-mirror docs-repeat docs-zerg docs-refused generic-walks grammar-cites grammar-cited grammar-keywords grammar-mirror refusal-cites layering stmt-walk dead-code entry-path examples-index conformance productions counterexamples behaviour error-codes-check seed-gaps deviation-check marker-codes chapter-codes method-gaps build-deps-check cache-key-check sha256 gates mem-check mem-peak release-notes release-sums formula sanitize-conc sanitize-corpus
 
 # The dead-code questions `zerg lint` cannot be asked, because neither is a question about one
 # program: a `pub` function of the COMPILER that nothing in the compiler calls, and a script

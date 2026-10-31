@@ -28,6 +28,14 @@ run_capture() {
 	"$@" >"$prefix.out" 2>"$prefix.err"
 }
 
+# run_stderr <prefix> — what a run wrote to stderr, less the place a stop names (`  --> file:line:col`,
+# docs/conformance.md). A golden cannot hold a path a build chose, and the seed writes no place
+# at all. scripts/stop-place-check.sh is the gate that reads the place itself.
+run_stderr() {
+	grep -v '^  --> ' "$1.err" >"$1.err.text"
+	printf '%s\n' "$1.err.text"
+}
+
 # run_compare <prefix> <rc> <want-out> <want-err> <want-rc> — the three comparisons, over what
 # `run_capture` left behind. It prints `<verdict>TAB<detail>` and returns 1 on the first
 # disagreement, and prints nothing and returns 0 when all three agree.
@@ -54,7 +62,7 @@ run_compare() {
 		return 1
 	fi
 	if [ "$want_err" != "-" ] && [ -f "$want_err" ]; then
-		if ! cmp -s "$want_err" "$prefix.err"; then
+		if ! cmp -s "$want_err" "$(run_stderr "$prefix")"; then
 			printf 'STDERR\t%s\n' "$(head -1 "$prefix.err")"
 			return 1
 		fi
@@ -81,7 +89,7 @@ run_same() {
 		printf 'OUTPUT\t%s | %s\n' "$(head -1 "$a.out")" "$(head -1 "$b.out")"
 		return 1
 	fi
-	if ! cmp -s "$a.err" "$b.err"; then
+	if ! cmp -s "$(run_stderr "$a")" "$(run_stderr "$b")"; then
 		printf 'STDERR\t%s | %s\n' "$(head -1 "$a.err")" "$(head -1 "$b.err")"
 		return 1
 	fi

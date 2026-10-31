@@ -30,13 +30,14 @@ pub fn build_cmd() -> cli.Command {
 		.opt("e", "emit", "stop after a stage: tokens, ast, check, c, lib, bin — bin when the entry declares `main`, else lib", "")
 		.opt("o", "output", "where to write the result (default: stdout for tokens/ast/c, the source name for lib/bin)")
 		.opt("j", "jobs", "how many units to compile at once", "4")
+		.flag("g", "debug", "add debug information, so a debugger can stop on a line of the source")
 		.add(cli.positional("file.zg", "the source to compile").required().repeated())
 		.run(do_build)
 	)
 }
 
 fn do_build(c: cli.Ctx) -> int {
-	build_stage(c.args(), default_stage(c.get("emit"), c.args()), c.get("output"), job_count(c.get("jobs")))
+	build_stage(c.args(), default_stage(c.get("emit"), c.args()), c.get("output"), job_count(c.get("jobs")), c.has("debug"))
 	return 0
 }
 
@@ -113,7 +114,7 @@ fn declares_main(files: list[str]) -> bool {
 # `--emit bin` explicitly, so nothing here ever met the default. A first-time reader did:
 # `zerg build main.zg -o app` wrote `app.o`, said nothing, and exited 0 — a program that
 # silently is not one.
-fn build_stage(files: list[str], emit: str, out: str, jobs: int) {
+fn build_stage(files: list[str], emit: str, out: str, jobs: int, debug: bool) {
 	one_entry_only(files, emit)
 
 	# NO `guard` ON THE TWO STAGES BELOW. One used to wrap each of them whole, so a file that
@@ -164,7 +165,7 @@ fn build_stage(files: list[str], emit: str, out: str, jobs: int) {
 		obj_code := zerg.emit_lib_at(prog, trees[last], ms, conc, diags, ex)
 		diag.report_diags(diags, unit.unit_srcs(units), unit.unit_paths(units))
 		diag.report_left(ex.left, unit.unit_srcs(units), unit.unit_paths(units))
-		compile_to(obj_code, obj, true)
+		compile_to(obj_code, obj, true, debug)
 		guard {
 			io.write_file(hpath, bytearray(ex.header))
 		}
@@ -181,7 +182,7 @@ fn build_stage(files: list[str], emit: str, out: str, jobs: int) {
 	# c_emit_unit runs, and it runs it with the same whole-program view (merge_asts) over
 	# every unit rather than once over the merge.
 	if emit == "bin" {
-		unit.link_program(files[0], out_or(out, drop_ext(files[0])), jobs)
+		unit.link_program(files[0], out_or(out, drop_ext(files[0])), jobs, debug)
 		return
 	}
 	if emit == "c" {
@@ -242,16 +243,16 @@ fn one_entry_only(files: list[str], emit: str) {
 
 # compile_to writes the emitted C beside its product and hands it to cc — compiled only
 # (`-c`, an object) or compiled and linked against the runtime (an executable).
-fn compile_to(code: str, output: str, object_only: bool) {
+fn compile_to(code: str, output: str, object_only: bool, debug: bool) {
 	cpath := output + ".c"
 	guard {
 		io.write_file(cpath, bytearray(code))
 	}
 	mut argv: list[str] = []
 	if object_only {
-		argv = layout.cc_object_argv(cpath, output)
+		argv = layout.cc_object_argv(cpath, output, debug)
 	} else {
-		argv = layout.cc_argv(cpath, output)
+		argv = layout.cc_argv(cpath, output, debug)
 	}
 	if __zrt_exec(argv) != 0 {
 		io.ewrite("zerg: cc failed\n")

@@ -1896,9 +1896,9 @@ fn c_carrier_decl(mut &em: Emitter, c: ast.Ty) -> str {
 	#
 	# The message is a str CELL (c_str_cell), never a bare literal through zrt_err_new: the
 	# Err reaches a guard, and binding its `.msg` retains what it holds (#405).
-	mut fail := f"zrt_raise_err(zrt_err_own(0, {c_str_cell(em, "force-unwrap of a Right")}));"
+	mut fail := f"zrt_raise_fault(zrt_err_own(0, {c_str_cell(em, "force-unwrap of a Right")}));"
 	if ast.ty_is_opt(c) {
-		fail = f"zrt_raise_err(zrt_err_own(0, {c_str_cell(em, "force-unwrap of nil")}));"
+		fail = f"zrt_raise_fault(zrt_err_own(0, {c_str_cell(em, "force-unwrap of nil")}));"
 	} else if c_is_err_ty(c_either_right(c)) {
 		# a COPY: `r` is the caller's carrier, which its holder gives back as the unwind
 		# passes it, so the Err in flight holds counts of its own (#377). A carrier the
@@ -1999,7 +1999,7 @@ fn c_carrier_boxed_body(mut &em: Emitter, c: ast.Ty, name: str, left: ast.Ty, ct
 	# cell is shared, so what is handed back is a copy of what is in it
 	d = d + f"static {ct} zg_force_{name}({name} r) {{\n"
 	nil_err := f"zrt_err_own(0, {c_str_cell(em, "force-unwrap of nil")})"
-	d = d + "    if (" + c_res_is_right("r") + ") { zrt_raise_err(" + nil_err + "); }\n"
+	d = d + "    if (" + c_res_is_right("r") + ") { zrt_raise_fault(" + nil_err + "); }\n"
 	d = d + f"    return {c_copy_of(em, left, f"(*({ct}*)zrt_ref_payload(r.ok))")};\n}}\n"
 
 	d = d + f"static void zg_drop_{name}({name} *r) {{\n"
@@ -9476,6 +9476,8 @@ fn c_coalesce(mut &em: Emitter, a: ast.Expr, b: ast.Expr, jump: list[ast.Stmt], 
 # second name for storage that is about to go.
 fn c_block_expr(mut &em: Emitter, body: list[ast.Stmt], sb: Subst) -> str {
 	vt := c_block_val_ty(em, body)
+	at_l := em.at_line
+	at_c := em.at_col
 
 	n := body.len()
 	mut upto := n
@@ -9521,12 +9523,18 @@ fn c_block_expr(mut &em: Emitter, body: list[ast.Stmt], sb: Subst) -> str {
 	c_scope_forget(em, keep)
 	em.sub = saved_sub
 
+	# THE TEXT AFTER A BLOCK IS THE OUTER STATEMENT'S AGAIN. A place is read off an address, and
+	# whatever the expression does next sits behind the last statement of this block, which
+	# would otherwise name it.
 	mut out := "({ "
 	if needs {
 		em.used_rt = true
 		out = out + f"size_t {mark} = zrt_scope_mark(); "
 	}
 	out = out + inner
+	if not c_body_diverges(body) {
+		out = out + c_at_site(em, at_l, at_c)
+	}
 	if needs {
 		out = out + f"zrt_unwind_to({mark}); "
 	}
@@ -9743,7 +9751,7 @@ fn c_guard(mut &em: Emitter, body: list[ast.Stmt], sb: Subst) -> str {
 	out = out + " if (setjmp(" + fr + ".buf) == 0) { " + inner
 	out = out + " zrt_unwind_to(" + fr + ".mark); zrt_handler_pop(&" + fr + "); }"
 	out = out + " else { zrt_handler_pop(&" + fr + "); " + c_res_mark_right(res) + " " + c_res_err(res) + " = zrt_taken_err(); }"
-	return out + " " + res + "; })"
+	return out + " " + c_at_site(em, guard_line, guard_col) + res + "; })"
 }
 
 # c_guard_ok writes the Left: the block ran to its end, so its value is the answer.
@@ -17431,7 +17439,26 @@ fn c_at(mut &em: Emitter, l: int, c: int, el: int, ec: int) -> str {
 	c_mark_to(em, l, c, el, ec)
 	return "" if em.at_path == ""
 	ls := strconv.to_string(l, 10)
-	return f"\n#line {ls} \"{em.at_path}\"\n"
+	site := c_at_site(em, l, c)
+	return f"\n#line {ls} \"{em.at_path}\"\n" if site == ""
+
+	# THE RECORD IS ON LINE 0, which a line table reads as "no source line", so the jump a label
+	# costs is not a second place a breakpoint on this line can stop.
+	return f"\n#line 0 \"{em.at_path}\"\n{site}\n#line {ls}\n"
+}
+
+# c_at_site records a statement's place for a runtime stop to find. The file is the enclosing
+# directive's: the macro reads `__FILE__`, so the path is not spelled out again per statement.
+#
+# THE STANDARD LIBRARY RECORDS NOTHING. `io.read_file` failing is about the statement that called
+# it, and a line inside `io` is no answer to a person who has never opened it. With no record the
+# text falls under the last function's ZRT_AT_END, so the walk carries on out to the caller.
+fn c_at_site(mut &em: Emitter, l: int, c: int) -> str {
+	return "" if em.at_path == ""
+	return "" if parser.strings_has_prefix(check.c_mod_of(em, em.at_path), "stdlib:")
+
+	em.used_rt = true
+	return f"ZRT_AT({strconv.to_string(l, 10)}, {strconv.to_string(c, 10)}) "
 }
 
 fn c_expr_stmt(mut &em: Emitter, e: ast.Expr, ind: str) -> str {
@@ -24214,11 +24241,21 @@ fn c_block(mut &em: Emitter, body: list[ast.Stmt], ind: str) -> str {
 	forced := em.force_mark
 	em.force_mark = ""
 
+	at_l := em.at_line
+	at_c := em.at_col
+
 	mut out := ""
 	mut i := 0
 	for i < body.len() {
 		out = out + c_stmt(em, body[i], ind)
 		i = i + 1
+	}
+
+	# THE TEXT AFTER A BLOCK IS THE ENCLOSING STATEMENT'S AGAIN. A place is read off an address,
+	# and an `elif`'s condition or a match's next arm sits behind the last statement of this
+	# block, which would otherwise name it.
+	if body.len() > 0 and not c_body_diverges(body) {
+		out = out + ind + c_at_site(em, at_l, at_c) + "\n"
 	}
 
 	c_scope_close(em, outer_scope)
@@ -24506,7 +24543,19 @@ fn c_fn(mut &em: Emitter, fn_d: ast.FnDecl) -> str {
 	em.loop_keep = outer_loop_keep
 	em.loop_mark_used = outer_loop_used
 	em.loop_defer = outer_loop_defer
-	out := sig + head + pdefer + rendered + tail + "}\n\n"
+
+	# The body never falls through when it has a value to return, and nothing tells cc that once
+	# the end of it is reachable.
+	mut at_fn := ""
+	mut at_end := ""
+	if em.at_path != "" {
+		at_fn = "    ZRT_AT_FN\n"
+		at_end = "ZRT_AT_END\n"
+		if c_ret_type(fn_d) != "void" {
+			at_end = at_end + "__builtin_unreachable();\n"
+		}
+	}
+	out := sig + at_fn + head + pdefer + rendered + tail + at_end + "}\n\n"
 	em.fn_ret = saved_ret
 	em.in_unsafe_fn = saved_unsafe
 	em.cur_fn = outer_fn

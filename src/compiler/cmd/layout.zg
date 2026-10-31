@@ -253,8 +253,13 @@ fn thread_unit() -> str {
 # error here rather than a bug report from somewhere else.
 #
 # It goes on the two invocations that COMPILE. The link-only one reads no source.
+#
+# -fno-omit-frame-pointer IS WHAT A RUNTIME STOP WALKS to find the statement it is in
+# (zrt_site_here, sys.c): -O0 keeps the frames on the compilers tried, and this says so rather
+# than leaning on it.
 fn cc_dialect(mut &argv: list[str]) {
 	argv.append("-fno-dollars-in-identifiers")
+	argv.append("-fno-omit-frame-pointer")
 }
 
 # cc_object_argv compiles the emitted C to an object without linking: a module is not a

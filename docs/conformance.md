@@ -280,7 +280,8 @@ An **uncaught error** ends the program deterministically: a `raise` that reaches
 force `!` on an absent optional, or a built-in runtime fault (see [Errors](code/errors.md)) that no `guard`/`?`
 recovers. On abort the runtime:
 
-1. writes **one line** describing the error to **standard error**, followed by a newline;
+1. writes **one line** describing the error to **standard error**, followed by a newline, and then the
+   [place](#the-place-of-a-stop) of the statement that reached it, when it has one;
 2. runs the pending `defer`s on the unwound path (the same cleanup stack the normal return path uses); and
 3. terminates the process with exit status **1**.
 
@@ -291,8 +292,28 @@ raised taxonomy `Err` — a `raise ValueError("bad input")` a program wrote and 
 report the same shape. An error carrying **no** kind (what a bare `raise "…"` builds) writes its message alone.
 See [Errors](code/errors.md) for the built-in error kinds and which operations raise them.
 
+### The place of a stop
+
+The line under the error has the shape a compile diagnostic ends with, `--> file:line:col`:
+
+```text
+IndexError: index out of range
+  --> ab.zg:2:5
+```
+
+It names where the **statement** begins, not a sub-expression inside it, in the innermost frame that is the
+program's: a fault raised inside the standard library names the statement that called it. A fault in the runtime,
+a raised taxonomy error, and a failed force `!` all have one. A **`raise` of a bare message has none**: that
+message is a sentence the program wrote for whoever runs it. An error a `guard` catches is not reported, and the
+place is not part of `message()`, so no program can read it.
+
+**[implementation-defined]** The place is read off the stop's return addresses against a table, so it costs a
+program that never stops no time and some size. The table needs frame pointers and a linker section, which this
+implementation has on x86-64 and arm64, on Linux and macOS. Elsewhere, and under AddressSanitizer, the second
+line is absent, never a guess.
+
 **A stack overflow is a fault and not an abort**, and it is the one end this contract does not cover. The
-runtime names it — `StackOverflowError: stack overflow` on standard error, exit status **1**, steps 1 and 3
+runtime names it — `StackOverflowError: stack overflow` and its place on standard error, exit **1**, steps 1 and 3
 — but step 2 cannot hold: the stack that would run the pending `defer`s is the one that is exhausted, and
 nothing can unwind it from a signal handler. So the `defer`s are **skipped**, no `guard` can catch it, and
 unlike an ordinary abort — which a coroutine contains to itself — an overflow ends the **whole process**

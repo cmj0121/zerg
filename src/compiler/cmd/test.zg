@@ -379,7 +379,7 @@ fn run_pkg(root: str, p: test_pkg.Pkg, only: str, secs: int, mut &passed: int, m
 		Either.Left(u)  => u
 		Either.Right(_) => units_none()
 	}
-	unit.link_units(units, drv, bin, TEST_JOBS)
+	unit.link_units(units, drv, bin, TEST_JOBS, false)
 
 	mut verdict: list[str] = []
 	mut text: list[str] = []

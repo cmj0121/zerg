@@ -72,8 +72,8 @@ pub fn unit_paths(units: list[Unit]) -> list[str] {
 # own object, then one link. A unit whose object is already in the cache is not compiled
 # again — which is the whole point of splitting the build up, since most rebuilds change
 # one module and leave the rest exactly as they were.
-pub fn link_program(entry: str, output: str, jobs: int) {
-	link_units(load_units(entry), entry, output, jobs)
+pub fn link_program(entry: str, output: str, jobs: int, debug: bool) {
+	link_units(load_units(entry), entry, output, jobs, debug)
 }
 
 # link_units is link_program with the units already in hand, and it is split out for the ONE
@@ -84,7 +84,7 @@ pub fn link_program(entry: str, output: str, jobs: int) {
 #
 # `entry` is still passed, because the no-`fn main` finding below is about a FILE and has to
 # name one.
-pub fn link_units(units: list[Unit], entry: str, output: str, jobs: int) {
+pub fn link_units(units: list[Unit], entry: str, output: str, jobs: int, debug: bool) {
 	# BEFORE anything is parsed: a token the lexer could not read is an error about text,
 	# and a parser handed the wreckage can only say something untrue about it
 	mut lex: list[zerg.Diag] = []
@@ -113,7 +113,7 @@ pub fn link_units(units: list[Unit], entry: str, output: str, jobs: int) {
 	hdr := rt_header()
 	for ui < units.len() {
 		code := zerg.emit_unit_at(prog, trees[ui], ms, conc, diags)
-		obj := cache_path(unit_key(code + hdr))
+		obj := cache_path(unit_key(code + hdr, debug))
 		objs.append(obj)
 		if not __zrt_exists(obj) {
 			cpath := obj + ".c"
@@ -152,14 +152,14 @@ pub fn link_units(units: list[Unit], entry: str, output: str, jobs: int) {
 	# often than the program does, so recompiling its ten translation units on every link
 	# was the largest thing a rebuild was paying for.
 	for rc in layout.rt_sources() {
-		obj := cache_path(file_key(rc, hdr))
+		obj := cache_path(file_key(rc, hdr, debug))
 		objs.append(obj)
 		if not __zrt_exists(obj) {
 			todo_c.append(rc)
 			todo_o.append(obj)
 		}
 	}
-	compile_batch(todo_c, todo_o, jobs)
+	compile_batch(todo_c, todo_o, jobs, debug)
 	if __zrt_exec(link_objs_argv(objs, output)) != 0 {
 		io.ewrite("zerg: link failed\n")
 		__zrt_exit(1)
@@ -169,12 +169,12 @@ pub fn link_units(units: list[Unit], entry: str, output: str, jobs: int) {
 # file_key hashes a file the cache is keyed on. The runtime header goes into the key
 # beside the source, because every runtime unit includes it and a change there changes
 # what the object means.
-fn file_key(path: str, hdr: str) -> str {
+fn file_key(path: str, hdr: str, debug: bool) -> str {
 	mut body := ""
 	guard {
 		body = str(io.read_file(path))
 	}
-	return unit_key(body + hdr)
+	return unit_key(body + hdr, debug)
 }
 
 # rt_header is the runtime header's text, which a PROGRAM unit's key needs as much as a
@@ -213,11 +213,11 @@ fn link_objs_argv(objs: list[str], output: str) -> list[str] {
 # It fills a batch, waits for the batch, then starts the next. A sliding window would keep
 # every core busy at the edges; batching keeps the bookkeeping to two lists, and with a
 # handful of units per build the difference is not what anyone is waiting on.
-fn compile_batch(cpaths: list[str], opaths: list[str], jobs: int) {
+fn compile_batch(cpaths: list[str], opaths: list[str], jobs: int, debug: bool) {
 	mut running: list[int] = []
 	mut i := 0
 	for i < cpaths.len() {
-		pid := __zrt_proc_spawn(layout.cc_object_argv(cpaths[i], opaths[i]))
+		pid := __zrt_proc_spawn(layout.cc_object_argv(cpaths[i], opaths[i], debug))
 		if pid < 0 {
 			io.ewrite("zerg: cannot start cc\n")
 			__zrt_exit(1)
@@ -286,8 +286,12 @@ fn cache_path(key: str) -> str {
 # is not the program: the failure a cache key exists to make impossible, answered with
 # "far less likely". A digest is the answer, and the standard library has one now
 # (`sha256`, pure Zerg, checked against FIPS 180-4's vectors and against the system tool).
-fn unit_key(code: str) -> str {
-	return sha256.hex(bytearray(f"{layout.cc_bin()}\n{layout.cc_std()}\n{code}"))
+#
+# `-g` is in it because the C is the same with and without: a build that asked for debug
+# information and read back an object without any would leave a breakpoint pending, and say
+# nothing about why.
+fn unit_key(code: str, debug: bool) -> str {
+	return sha256.hex(bytearray(f"{layout.cc_bin()}\n{layout.cc_std()}\n{debug}\n{code}"))
 }
 
 # --- compilation units --------------------------------------------------------------------

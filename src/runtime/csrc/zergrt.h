@@ -340,6 +340,68 @@ typedef struct {
 	void *env;
 } zrt_cleanup;
 
+/* zrt_site is the place of one statement, as an uncaught abort names it. ZRT_AT is what the
+ * emitter writes at the head of every statement, and it writes no instruction: a label, and a
+ * record of the label's address in a section of its own. An abort walks its return addresses
+ * and looks each one up (zrt_site_at), so a program that never aborts pays rodata and nothing
+ * at run time. A thread-local written per statement was measured first and doubled a
+ * call-heavy program, the compiler included.
+ *
+ * Reading the place off the address also leaves nothing to restore: a call, a coroutine
+ * switch and a guard's landing cannot make it stale. What it does ask is that the text stays
+ * in source order, which holds because cc is run with no -O. ZRT_AT_END closes a function
+ * with a record of no place, so the text after it — a helper, a thunk, the next function's
+ * prologue — does not read as the function's last statement. */
+typedef struct zrt_site {
+	const void *pc;
+	const char *path;
+	int         line;
+	int         col;
+	int         seq; /* orders two records at one address: the later is the one in force */
+} zrt_site;
+
+/* AddressSanitizer pads every global, so the section stops being an array to walk. A sanitized
+ * build gathers no records and names no place: what it is run for is its own report. */
+#if defined(__SANITIZE_ADDRESS__)
+#define ZRT_SITES_PADDED 1
+#elif defined(__has_feature)
+#if __has_feature(address_sanitizer)
+#define ZRT_SITES_PADDED 1
+#endif
+#endif
+
+#if defined(ZRT_SITES_PADDED)
+#define ZRT_SITE_SECTION /* no section: see above */
+#elif defined(__APPLE__)
+#define ZRT_HAS_SITES 1
+#define ZRT_SITE_SECTION __attribute__((section("__DATA,__zrt_sites"), used))
+#elif defined(__ELF__)
+#define ZRT_HAS_SITES 1
+#define ZRT_SITE_SECTION __attribute__((section("zrt_sites"), used))
+#else
+#define ZRT_SITE_SECTION /* no section to gather them from: an abort names no place */
+#endif
+
+#define ZRT_AT(l, c)                                                                          \
+	{                                                                                     \
+		__label__ zrt_here_;                                                          \
+	zrt_here_:;                                                                           \
+		static const zrt_site zrt_site_ ZRT_SITE_SECTION = {                          \
+			&&zrt_here_, __FILE__, (l), (c), __COUNTER__};                        \
+	}
+/* A label behind a `return` is dead text, and gcc keeps its address by moving it up to the
+ * statement before it, where it would outrank that statement's record. The end of a function
+ * is the one record that has to stand behind a `return`, so ZRT_AT_FN declares it reachable
+ * with a jump that is no instruction. The emitter writes no other record where it knows the
+ * text is dead. */
+#define ZRT_AT_FN __asm__ goto("" : : : : zrt_fn_end_);
+#define ZRT_AT_END                                                                            \
+zrt_fn_end_:;                                                                                 \
+	{                                                                                     \
+		static const zrt_site zrt_site_ ZRT_SITE_SECTION = {                          \
+			&&zrt_fn_end_, NULL, 0, 0, __COUNTER__};                              \
+	}
+
 /* zrt_frame is an abort handler: a setjmp landing pad plus the cleanup-stack
  * height to unwind to on abort. Frames form a stack via `prev`. The setjmp
  * itself must be evaluated in the frame owner's own activation (see zrt_run),
@@ -556,6 +618,12 @@ zrt_err zrt_err_with_cause(const char *msg, zrt_err cause);
  * it back with zrt_taken_err), reports e.msg, then unwinds and longjmps exactly as
  * zrt_abort. `raise e`, `x!`, and the propagate paths funnel through here. */
 _Noreturn void zrt_raise_err(zrt_err e);
+
+/* zrt_raise_err names the statement for a fault of the taxonomy. An error with no kind is a
+ * sentence the program wrote for whoever runs it, and a place inside the program is no part of
+ * that: the compiler's own refusals are this, and they end in the USER's file already.
+ * zrt_raise_fault is for what carries no kind and is no such sentence: a force-unwrap. */
+_Noreturn void zrt_raise_fault(zrt_err e);
 
 /* zrt_taken_err MOVES OUT the Err the current abort/raise carried, read on a `guard`
  * setjmp!=0 landing: the caller owns what it is handed and the stash is left empty. It is
@@ -995,6 +1063,16 @@ const char *zrt_real_path(const char *path);
  * caller, because this is the abort path: joining them costs an allocation that can fail
  * and that nobody is left to free. */
 void zrt_report(const char *kind, const char *msg);
+
+/* zrt_report_at is zrt_report followed by the place the error came from, on a line of its
+ * own in the shape a compile diagnostic ends with: `  --> file:line:col`. A NULL site writes
+ * the first line alone. */
+void zrt_report_at(const char *kind, const char *msg, const zrt_site *site);
+
+/* zrt_site_here walks the caller's frames to the nearest one in Zerg code and answers the
+ * statement it is in, or NULL when no frame is (the runtime aborted on its own account, or
+ * this platform has no section of sites). It reads memory and calls nothing. */
+const zrt_site *zrt_site_here(void);
 
 /* --- stack-overflow naming (sys.c) -----------------------------------------------
  *

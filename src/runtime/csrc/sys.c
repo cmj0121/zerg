@@ -45,9 +45,90 @@
 #include <sys/stat.h>
 #include <sys/wait.h>
 #include <time.h>
+#if defined(__APPLE__)
+#include <sys/ucontext.h> /* the type alone: <ucontext.h> is the deprecated routines */
+#else
+#include <ucontext.h>
+#endif
 #include <unistd.h>
 
+/* --- the place of a stop (zrt_site_*) -------------------------------------------
+ *
+ * Every statement left a record of its address in one section (ZRT_AT). The floor below is
+ * here so the section exists in a program whose compiler wrote none, which is what a build by
+ * the seed is: its bounds would otherwise be undefined symbols at link.
+ *
+ * The scan is linear and unsorted: the linker joins each object's records in an order nothing
+ * promises, and this runs once, on the way out of a stop. It calls nothing and writes nothing,
+ * so the fault handler may use it. */
+#if defined(ZRT_HAS_SITES) && defined(__APPLE__)
+extern const zrt_site zrt_sites_lo __asm("section$start$__DATA$__zrt_sites");
+extern const zrt_site zrt_sites_hi __asm("section$end$__DATA$__zrt_sites");
+#elif defined(ZRT_HAS_SITES)
+extern const zrt_site zrt_sites_lo __asm("__start_zrt_sites");
+extern const zrt_site zrt_sites_hi __asm("__stop_zrt_sites");
+#endif
+
+#if defined(ZRT_HAS_SITES)
+static const zrt_site zrt_site_floor ZRT_SITE_SECTION = {NULL, NULL, 0, 0, 0};
+
+/* site_of answers the last record at or before pc when that record names a place: past a
+ * ZRT_AT_END, or below every record, the address is not in a Zerg statement. */
+static const zrt_site *site_of(uintptr_t pc) {
+	const zrt_site *best = &zrt_site_floor;
+	for (const zrt_site *s = &zrt_sites_lo; s < &zrt_sites_hi; s++) {
+		uintptr_t at = (uintptr_t)s->pc;
+		if (at > pc) {
+			continue;
+		}
+		if (at > (uintptr_t)best->pc || (at == (uintptr_t)best->pc && s->seq > best->seq)) {
+			best = s;
+		}
+	}
+	return best->path != NULL ? best : NULL;
+}
+
+/* A frame holds the caller's frame pointer and then the return address, on both of the
+ * targets this is written for; the build asks for -fno-omit-frame-pointer so a frame is
+ * always there to read. Anywhere else the answer is no place, never a guess. */
+#if defined(__x86_64__) || defined(__aarch64__)
+#define ZRT_WALKS_FRAMES 1
+#define ZRT_WALK_DEPTH   256
+
+/* walk_sites follows the chain from fp. A stack only grows one way, so a link that does not
+ * move up, or is misaligned, is the end of what this code laid out. A return address is the
+ * instruction AFTER the call, which is the next statement's when the call ended this one, so
+ * the address looked up is one back. */
+static const zrt_site *walk_sites(uintptr_t fp) {
+	for (int depth = 0; depth < ZRT_WALK_DEPTH && fp != 0 && fp % sizeof(void *) == 0; depth++) {
+		const uintptr_t *frame = (const uintptr_t *)fp;
+		const zrt_site *site = site_of(frame[1] - 1);
+		if (site != NULL) {
+			return site;
+		}
+		if (frame[0] <= fp) {
+			break;
+		}
+		fp = frame[0];
+	}
+	return NULL;
+}
+#endif
+#endif
+
+const zrt_site *zrt_site_here(void) {
+#if defined(ZRT_HAS_SITES) && defined(ZRT_WALKS_FRAMES)
+	return walk_sites((uintptr_t)__builtin_frame_address(0));
+#else
+	return NULL;
+#endif
+}
+
 void zrt_report(const char *kind, const char *msg) {
+	zrt_report_at(kind, msg, NULL);
+}
+
+void zrt_report_at(const char *kind, const char *msg, const zrt_site *site) {
 	if (msg == NULL) {
 		return;
 	}
@@ -74,6 +155,9 @@ void zrt_report(const char *kind, const char *msg) {
 	}
 	fputs(msg, stderr);
 	fputc('\n', stderr);
+	if (site != NULL) {
+		fprintf(stderr, "  --> %s:%d:%d\n", site->path, site->line, site->col);
+	}
 	funlockfile(stderr);
 }
 
@@ -147,17 +231,94 @@ static struct sigaction g_old_segv;
 static struct sigaction g_old_bus;
 static bool g_fault_installed;
 
-static void fault_handler(int sig, siginfo_t *si, void *ctx) {
+/* fault_write writes all of s, or as much as the descriptor will take. */
+static void fault_write(const char *s) {
+	size_t len = strlen(s);
+	size_t off = 0;
+	while (off < len) {
+		ssize_t w = write(2, s + off, len - off);
+		if (w <= 0) {
+			return;
+		}
+		off += (size_t)w;
+	}
+}
+
+/* fault_write_int is the decimal printf would have written, and is not allowed to call. */
+static void fault_write_int(int n) {
+	char buf[16];
+	size_t i = sizeof(buf) - 1;
+	buf[i] = '\0';
+	do {
+		buf[--i] = (char)('0' + n % 10);
+		n /= 10;
+	} while (n > 0 && i > 0);
+	fault_write(buf + i);
+}
+
+/* fault_site reads the place from the registers the fault stopped with, since the handler is
+ * on another stack and its own frames lead nowhere.
+ *
+ * The pc comes first and is exact: the faulting instruction, not a return address. An
+ * overflow most often lands in a callee's prologue, where the frame pointer is still the
+ * caller's: a walk from it would start one call too far out, and in mutual recursion that
+ * names the wrong function. So the return address comes second, from where the call left it,
+ * and is read only when it does not itself lie in the guard page. A target this does not know
+ * answers no place. */
+static const zrt_site *fault_site(void *ctx) {
+#if defined(ZRT_HAS_SITES) && defined(ZRT_WALKS_FRAMES)
+	ucontext_t *uc = ctx;
+	uintptr_t pc, fp, ret = 0;
+#if defined(__APPLE__) && defined(__aarch64__)
+	pc = (uintptr_t)uc->uc_mcontext->__ss.__pc;
+	fp = (uintptr_t)uc->uc_mcontext->__ss.__fp;
+	ret = (uintptr_t)uc->uc_mcontext->__ss.__lr;
+#elif defined(__APPLE__) && defined(__x86_64__)
+	pc = (uintptr_t)uc->uc_mcontext->__ss.__rip;
+	fp = (uintptr_t)uc->uc_mcontext->__ss.__rbp;
+	if (!fault_is_overflow((uintptr_t)uc->uc_mcontext->__ss.__rsp)) {
+		ret = *(const uintptr_t *)uc->uc_mcontext->__ss.__rsp;
+	}
+#elif defined(__linux__) && defined(__aarch64__)
+	pc = (uintptr_t)uc->uc_mcontext.pc;
+	fp = (uintptr_t)uc->uc_mcontext.regs[29];
+	ret = (uintptr_t)uc->uc_mcontext.regs[30];
+#elif defined(__linux__) && defined(__x86_64__)
+	pc = (uintptr_t)uc->uc_mcontext.gregs[REG_RIP];
+	fp = (uintptr_t)uc->uc_mcontext.gregs[REG_RBP];
+	if (!fault_is_overflow((uintptr_t)uc->uc_mcontext.gregs[REG_RSP])) {
+		ret = *(const uintptr_t *)uc->uc_mcontext.gregs[REG_RSP];
+	}
+#else
+	(void)uc;
+	return NULL;
+#endif
+	const zrt_site *site = site_of(pc);
+	if (site == NULL && ret != 0) {
+		site = site_of(ret - 1);
+	}
+	if (site == NULL && !fault_is_overflow(fp)) {
+		site = walk_sites(fp);
+	}
+	return site;
+#else
 	(void)ctx;
+	return NULL;
+#endif
+}
+
+static void fault_handler(int sig, siginfo_t *si, void *ctx) {
 	if (si != NULL && fault_is_overflow((uintptr_t)si->si_addr)) {
-		static const char msg[] = "StackOverflowError: stack overflow\n";
-		size_t off = 0;
-		while (off < sizeof(msg) - 1) {
-			ssize_t w = write(2, msg + off, sizeof(msg) - 1 - off);
-			if (w <= 0) {
-				break;
-			}
-			off += (size_t)w;
+		const zrt_site *site = fault_site(ctx);
+		fault_write("StackOverflowError: stack overflow\n");
+		if (site != NULL) {
+			fault_write("  --> ");
+			fault_write(site->path);
+			fault_write(":");
+			fault_write_int(site->line);
+			fault_write(":");
+			fault_write_int(site->col);
+			fault_write("\n");
 		}
 		_exit(1);
 	}

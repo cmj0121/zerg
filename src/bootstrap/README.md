@@ -202,6 +202,9 @@ src/bootstrap/
     diag/          # diagnostics
 ```
 
+A stop names no place here: the seed's emitted C records no statement, so an abort writes its first line alone.
+`zerg` adds `--> file:line:col` under it (`docs/conformance.md`), and `oracle` compares past that line.
+
 ## Known gaps
 
 The seed is deliberately the narrower compiler, and it refuses most of what it has not

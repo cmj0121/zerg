@@ -55,6 +55,8 @@ object), `bin` (an executable). A program builds module by module — `-j` compi
 once, and results are cached by content in `.zerg-cache/`, so a rebuild that changes one module
 recompiles one module.
 
+`-g` adds debug information, so `lldb` or `gdb` can stop on a line of the `.zg` source and show the stack in it.
+
 **`-o` names the file written**, at every stage — `--emit c f.zg -o f.c` writes `f.c`, and
 `--emit lib f.zg -o out.o` writes exactly `out.o`. It is worth stating because it used to mean
 something different at each: `--emit c` discarded the flag and wrote stdout regardless, so a build

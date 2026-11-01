@@ -1119,7 +1119,18 @@ fn entry_reaches(entry: str, path: str, buf: Buffer, mut &srcs: list[str], mut &
 # that can abort. (That `IOError` says `cannot open file` and does not yet name the path it
 # failed on, which is a gap in `io` rather than one here.)
 pub fn read_source(path: str) -> str {
-	b := io.read_file(path)
+	# A BARE RAISE, in the words the `IOError` would have written: this is a sentence for the person
+	# running the compiler, and the kind's place would be a line of the compiler they did not write.
+	opened := guard {
+		io.read_file(path)
+	}
+	why := match opened {
+		Either.Left(_)  => ""
+		Either.Right(e) => e.message()
+	}
+	raise f"IOError: {why}" if why != ""
+
+	b := opened!
 
 	mut src := ""
 	mut ok := false

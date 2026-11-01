@@ -290,6 +290,11 @@ jobs:
       - name: A C file includes a library's header, links, and runs
         run: make ffi-export
 
+      # --- 7b-stop. the place a stop names ---------------------------------------
+      # What the goldens read past, and `zerg build -g`: lldb on macOS, objdump on Linux.
+      - name: A stop names its statement, and -g resolves a Zerg line
+        run: make stop-place
+
       # --- 7b''. the values that outlive their scope -----------------------------
       # The leak gate that needs neither LeakSanitizer nor the private corpus, which is
       # why it is HERE — on both platforms, on every fork — rather than beside

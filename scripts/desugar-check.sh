@@ -160,7 +160,7 @@ for src in "$@"; do
 	#
 	# Unchanged means there was no sugar to undo and nothing to compare. Changed by D101
 	# alone means the emitter must have taken the same route through both, so the C is
-	# compared as text — with the `#line` directives dropped, since the two sources say the
+	# compared as text — with `#line` and `ZRT_AT` dropped, since the two sources say the
 	# same thing on different lines and out of different files, which is the one difference
 	# that is not a finding.
 	cmp -s "$src" "$core" && continue
@@ -169,8 +169,8 @@ for src in "$@"; do
 	"$ZERG" desugar $others "$tmp/$name.probe.zg" >/dev/null 2>&1
 	cmp -s "$core" "$tmp/$name.probe.zg" || continue
 
-	"$ZERG" build --emit c "$src" 2>/dev/null | grep -v -e '^#line' -e '^$' >"$tmp/$name.sugar.c"
-	"$ZERG" build --emit c "$core" 2>/dev/null | grep -v -e '^#line' -e '^$' >"$tmp/$name.core.c"
+	"$ZERG" build --emit c "$src" 2>/dev/null | sed -E 's/ZRT_AT\([0-9]+, [0-9]+\) ?//g' | grep -v -e '^#line' -e '^[[:space:]]*$' >"$tmp/$name.sugar.c"
+	"$ZERG" build --emit c "$core" 2>/dev/null | sed -E 's/ZRT_AT\([0-9]+, [0-9]+\) ?//g' | grep -v -e '^#line' -e '^[[:space:]]*$' >"$tmp/$name.core.c"
 	if ! cmp -s "$tmp/$name.sugar.c" "$tmp/$name.core.c"; then
 		echo "EMIT      $src — only D101 fired, so the emitted C must be identical, and it is not"
 		diff "$tmp/$name.sugar.c" "$tmp/$name.core.c" | head -6

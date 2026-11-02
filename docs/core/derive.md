@@ -166,7 +166,7 @@ there is no discriminant to subtract.
 
 | Spec     | Structural rule                               | Requires (each field) | Excludes                 |
 | -------- | --------------------------------------------- | --------------------- | ------------------------ |
-| `Eq`     | `eq`/`ne` (`==` / `!=`) per field             | `Eq`                  | `chan`/`fn`              |
+| `Eq`     | `eq`/`ne` (`==` / `!=`) per field             | `Eq`                  | `chan`/`Ref`/`fn`        |
 | `Ord`    | lexicographic by field, then by variant order | `Eq` and `Ord`        | any `float` field        |
 | `Hash`   | mix field / tag hashes (`equal ⇒ same hash`)  | `Hash`                | any `float` field        |
 | `Encode` | product per field; sum: tag then payload      | `Encode`              | `chan`/`Ref`/`fn`/handle |
@@ -176,8 +176,8 @@ there is no discriminant to subtract.
 `<` `<=` `>` `>=`: a type with neither the derive nor a hand-written impl **cannot** be compared — that is
 a compile error, not a silent structural default. `Ord` requires `Eq` (the super-spec `spec Ord: Eq`), so
 `#[derive(Ord)]` obliges you to derive — or hand-write — `Eq` as well, and a derive without it is refused
-where the decorator is written (`E4099`). A `float` field is refused the same way (`E4098`): `NaN` is
-neither less than, equal to nor greater than anything, so no order over one is total.
+where the decorator is written (`E4099`). A `float` field or payload is refused the same way (`E4098`), through
+a `type` name too: `NaN` is neither less than, equal to nor greater than anything, so no order over one is total.
 
 `Hash` requires a single method, `fn hash() -> uint` ([Specs & Generics](specs.md)), and the derive
 writes it as a fold: a product mixes each field's own hash in declaration order, and a sum mixes its
@@ -194,7 +194,8 @@ refused at the decorator (`E4117`), and so is a field whose type has no `Hash` t
 
 `Ord` requires a single method, `less`. The other three orderings are written out of it at the operator
 rather than required of an implementer — and each operand appears once, `a <= b` lowering to
-`not (b < a)` rather than to `a < b or a == b`, so a call on either side runs once.
+`not (b < a)` rather than to `a < b or a == b`, so a call on either side runs once. The operands still run left
+to right, whichever way the lowering asks `less`.
 
 A field that fails the requirement makes the derive a **compile error naming that field**, never a
 silent skip — `#[derive(Ord)]` on a `T` with a `float` field is rejected exactly as the hand-written rule in
@@ -207,10 +208,9 @@ Cross-cutting cases fall out of the existing memory model, no new rule:
   the transparent box like any other field.
 - **A `Ref` value** (`chan`, `Ref[T]`) copies by refcount-bump (the memory model's rule, not a spec). It
   is **not** compared by identity under a derived `Eq`, and it is not `Encode`/`Decode` either, so a type
-  holding one cannot derive any of the three. A `chan` field is the live spelling — `Ref[T]` is itself
-  **[not yet]** — and the derive is refused at the field, by the code the operator uses: _E4034 a
-  `chan[int]` is an identity rather than a value, and the language gives it no equality_. A `fn` field is
-  the same class and the same answer, which is why the `Eq` row excludes both by name.
+  holding one cannot derive any of the three. The derive is refused by the code the operator uses: _E4034
+  a `chan[int]` is an identity rather than a value, and the language gives it no equality_. A `Ref[T]` and a
+  `fn` field are the same class and the same answer, which is why the `Eq` row excludes them by name.
 - **Adding an `enum` variant** re-derives automatically — there is no `match` for the author to update,
   because the compiler, not user code, walks the structure.
 

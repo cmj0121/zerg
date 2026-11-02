@@ -151,7 +151,7 @@ variant 一個 arm,arm 裡面再對另一個運算元做第二層 `match`。tag 
 
 | Spec     | 結構規則                                      | 要求（每欄位） | 排除                           |
 | -------- | --------------------------------------------- | -------------- | ------------------------------ |
-| `Eq`     | 逐欄位 `eq`/`ne`（`==` / `!=`）               | `Eq`           | `chan` / `fn`                  |
+| `Eq`     | 逐欄位 `eq`/`ne`（`==` / `!=`）               | `Eq`           | `chan` / `Ref` / `fn`          |
 | `Ord`    | 逐欄位 lexicographic、再依 variant 順序       | `Eq` 與 `Ord`  | 任何 `float` 欄位              |
 | `Hash`   | 合併各欄位 / tag 的 hash（`equal ⇒ 同 hash`） | `Hash`         | 任何 `float` 欄位              |
 | `Encode` | product 逐欄位、sum 先 tag 再 payload         | `Encode`       | `chan` / `Ref` / `fn` / handle |
@@ -159,7 +159,8 @@ variant 一個 arm,arm 裡面再對另一個運算元做第二層 `match`。tag 
 
 `Eq` 是 `struct` / `enum` 上 `==` / `!=` 的唯一來源:一個既無 `#[derive(Eq)]`、也無手寫 `impl Eq` 的型別**不能**
 用 `==` 比較——那是編譯錯誤、不是靜默的結構化 default。`Ord` 要求 `Eq`(super-spec `spec Ord: Eq`),所以
-`#[derive(Ord)]` 也逼你一併 derive——或手寫——`Eq`。
+`#[derive(Ord)]` 也逼你一併 derive——或手寫——`Eq`。`float` 欄位或 payload 同樣被拒(`E4098`),透過 `type` 名稱也一樣:
+`NaN` 既不小於、不等於也不大於任何值,所以建立在它之上的順序都不是 total。
 
 `Hash` 只要求一個 method,`fn hash() -> uint`(見 [Spec 與 Generics](specs.zh-TW.md)),而 derive 把它寫成一次
 fold:product 依宣告順序混入每個欄位自己的 hash,sum 則把 payload 混進一個以 variant 位置為起點的值,所以帶著相等
@@ -171,6 +172,9 @@ payload 的兩個 variant 仍然不同。整數、`bool` 與 `str` 欄位的 has
 > **[not yet]** 章節承諾有 `Hash`、而本 compiler 尚未建置的欄位——`list`、tuple、optional、typedef 或型別參數——是
 > _E9119 NotImplemented: `#[derive(Hash)]` on `P`: the field `xs` is a `list[int]`_。
 
+`Ord` 只要求一個 method,`less`。另外三種比較在運算子處由它寫出,而不要求實作者提供;每個運算元只出現一次,`a <= b` 降階為
+`not (b < a)` 而不是 `a < b or a == b`,所以任一邊的呼叫都只跑一次。不論降階怎麼呼叫 `less`,運算元仍由左到右求值。
+
 不符要求的欄位會讓 derive 變成**點名該欄位的編譯錯誤**，絕不靜默略過——`#[derive(Ord)]` 若含 `float`
 欄位會被拒，正如 [Spec 與 Generics](specs.zh-TW.md) 裡手寫規則所要求（`float` 無 total order；請手寫並以
 canonical `±0.0`、把 `NaN` 放在一端來處理）。
@@ -180,10 +184,9 @@ canonical `±0.0`、把 `NaN` 放在一端來處理）。
 - **遞迴 / 自我指涉**（auto-boxed）型別可正常 derive——生成的 impl 會像對待任何欄位一樣，遞迴穿過那層
   透明的 box。
 - **`Ref` 值**（`chan`、`Ref[T]`）以 refcount-bump 複製（記憶體模型的規則、不是 spec）。它在 derive 出的 `Eq`
-  下**並不**以 identity 比較，也不是 `Encode`/`Decode`，所以持有它的型別這三者都無法 derive。`chan` 欄位是活著
-  的那個拼法——`Ref[T]` 自己還是 **[not yet]**——而 derive 會在該欄位上被拒，用的就是運算子用的那個代碼：
-  _E4034 a `chan[int]` is an identity rather than a value, and the language gives it no equality_。`fn` 欄位
-  是同一類、同一個答案,這也是 `Eq` 那一列把兩者都點名排除的原因。
+  下**並不**以 identity 比較，也不是 `Encode`/`Decode`，所以持有它的型別這三者都無法 derive。derive 被拒時用的
+  就是運算子用的那個代碼：_E4034 a `chan[int]` is an identity rather than a value, and the language gives it no
+  equality_。`Ref[T]` 與 `fn` 欄位是同一類、同一個答案,這也是 `Eq` 那一列把它們點名排除的原因。
 - **新增一個 `enum` variant** 會自動重新 derive——作者沒有 `match` 要更新，因為走訪結構的是 compiler，
   不是使用者程式。
 

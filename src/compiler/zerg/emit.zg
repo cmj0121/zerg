@@ -2158,6 +2158,12 @@ pub fn c_is_identity(t: ast.Ty) -> bool {
 	return ast.ty_is_chan(t) or c_is_fn(t) or c_is_handle_ty(t)
 }
 
+# c_has_no_equality is the identities `==` refuses. A `Ref[T]` is one too, though it renders as
+# what it holds, which is why it is asked here and not in c_is_identity.
+fn c_has_no_equality(t: ast.Ty) -> bool {
+	return c_is_identity(t) or c_is_ref_box(t)
+}
+
 fn c_fn_ret(t: ast.Ty) -> ast.Ty {
 	return match c_unmark(t) {
 		Ty.TFn(_, r) => r
@@ -10176,7 +10182,7 @@ fn c_binexpr(mut &em: Emitter, oper: str, a: ast.Expr, b: ast.Expr, sb: Subst) -
 		# AND ORDERING COMES FROM `Ord`, the same way. `less` is the one method the spec
 		# requires (docs/core/specs.md) and the other three orderings are written out of it
 		# here rather than required of an implementer.
-		return c_ord_call(em, oper, a, b, sb) if c_is_order_op(oper) and c_has_ord(em, ta)
+		return c_ord_call(em, oper, a, b, ta, sb) if c_is_order_op(oper) and c_has_ord(em, ta)
 
 		# and a TUPLE or an ARRAY has it from its parts as it has `==`, compared in order with the
 		# first part that differs deciding (docs/core/types.md)
@@ -10263,7 +10269,7 @@ fn c_operand(mut &em: Emitter, pair_is_float: bool, e: ast.Expr, sb: Subst) -> s
 # AN UNNAMED FORM has it exactly when every part has it — the parts-inheritance rule of
 # docs/core/types.md, which is the one way a type with no declaration can have anything.
 fn c_eq_legal(mut &em: Emitter, t: ast.Ty) -> bool {
-	return false if c_is_carrier(t) or c_is_identity(t)
+	return false if c_is_carrier(t) or c_has_no_equality(t)
 	return c_is_unknown(c_eq_bad_part(em, t)) if c_is_unnamed(t)
 	return c_has_eq(em, t) if c_is_aggregate(em, t)
 
@@ -10307,7 +10313,8 @@ fn c_eq_bad_part(mut &em: Emitter, t: ast.Ty) -> ast.Ty {
 # c_eq_parts lowers `a == b` / `a != b` over two values of one unnamed form. A `list` and an
 # array compare in order, a tuple part by part, and a `map` or a `set` without regard to the
 # order things were put in (docs/code/collections.md). It lowers the four ORDERINGS over a
-# tuple or an array too, which bind their operands the same way and differ only in the test.
+# tuple or an array too, which bind their operands the same way and differ only in the test, and the two that
+# swap a declared type's operands (c_ord_call), for the same binding.
 #
 # `!=` IS THE NEGATION, and the parts are always asked `==`. A declared type's `ne` is
 # dispatched rather than derived, but that is a statement about the type that wrote one: an
@@ -10406,8 +10413,11 @@ fn c_ord_scalar(mut &em: Emitter, t: ast.Ty) -> bool {
 
 # c_ord_less is `ca < cb` over two C names holding a tuple or an array: LEXICOGRAPHIC, the
 # first part that differs deciding and every part after it unread. A part is asked `<` both
-# ways, which is how a total order says "differs" without asking `==` of it as well.
+# ways, which is how a total order says "differs" without asking `==` of it as well. A declared
+# type has no parts to walk here, and its own `less` is the whole answer.
 fn c_ord_less(mut &em: Emitter, t: ast.Ty, ca: str, cb: str) -> str {
+	return c_ord_pair(em, t, ca, cb) if not c_is_ordered_form(t)
+
 	n := c_tmp(em, "zgt_ord")
 	rv := n + "r"
 	dv := n + "d"
@@ -10540,7 +10550,12 @@ fn c_is_order_op(oper: str) -> bool {
 # does anything. `Ord` is specified as a TOTAL order consistent with `Eq`
 # (docs/core/specs.md), and under totality `a <= b` is exactly `not (b < a)`, which spends
 # each operand once.
-fn c_ord_call(mut &em: Emitter, oper: str, a: ast.Expr, b: ast.Expr, sb: Subst) -> str {
+#
+# AND THE TWO THAT SWAP THEM BIND THEM FIRST. `a > b` asks `b.less(a)`, and a method call
+# evaluates its receiver first, so an operand that does anything would run right to left and
+# change the answer. Two trivial operands have no order to show, and render as they always did.
+fn c_ord_call(mut &em: Emitter, oper: str, a: ast.Expr, b: ast.Expr, ta: ast.Ty, sb: Subst) -> str {
+	return c_eq_parts(em, oper, a, b, ta, sb) if (oper == ">" or oper == "<=") and c_needs_order([a, b], 0) and ast.ty_eq(ta, c_infer(em, b))
 	return c_expr(em, ast.Expr.EMethod(a, "less", [b], 0, 0), sb) if oper == "<"
 	return c_expr(em, ast.Expr.EMethod(b, "less", [a], 0, 0), sb) if oper == ">"
 	return c_expr(em, ast.Expr.EUnary("not", ast.Expr.EMethod(b, "less", [a], 0, 0)), sb) if oper == "<="
@@ -10595,7 +10610,7 @@ fn c_eq_refuse(mut &em: Emitter, oper: str, t: ast.Ty) {
 # reader wrote — `t` itself, or the unnamed form `t` is a part of.
 fn c_eq_refuse_part(mut &em: Emitter, oper: str, subject: str, t: ast.Ty) {
 	nm := ast.ty_name(t)
-	if c_is_identity(t) {
+	if c_has_no_equality(t) {
 		check.chk_at(em, rule.Rule.IdentityHasNoEquality, c_eq_says(oper, subject, f"a {nm} is an identity rather than a value, which the language gives no equality", "compare something it carries", "look for something it carries instead"))
 		return
 	}
@@ -25799,7 +25814,7 @@ fn c_derive_src(all: ast.File, prog: ast.File, target: str, nm: str) -> str {
 
 	raise c_derive_diag(prog, target, rule.Rule.NotYetDerive, f"NotImplemented: `#[derive({nm})]` — this compiler derives `Eq`, `Ord`, `Hash` and `From`; `Encode` and `Decode` are specified and unbuilt (docs/core/derive.md)") if nm == "Encode" or nm == "Decode"
 	return c_derive_eq(prog, target) if nm == "Eq"
-	return c_derive_ord(prog, target) if nm == "Ord"
+	return c_derive_ord(all, prog, target) if nm == "Ord"
 	return c_derive_hash(all, prog, target) if nm == "Hash"
 	return c_derive_from(prog, target) if nm == "From"
 
@@ -26472,10 +26487,10 @@ fn c_derive_applied(prog: ast.File, target: str) -> str {
 # must satisfy, and generating one silently would be this compiler deciding a second derive the
 # author did not write — the chapter says `#[derive(Ord)]` obliges you to derive or hand-write
 # `Eq` as well, and the missing-super rule is what says so.
-fn c_derive_ord(prog: ast.File, target: str) -> str {
+fn c_derive_ord(all: ast.File, prog: ast.File, target: str) -> str {
 	c_derive_ord_needs_eq(prog, target)
 
-	body := c_derive_ord_body(prog, target)
+	body := c_derive_ord_body(all, prog, target)
 	head := c_derive_head(prog, target)
 	ty := c_derive_applied(prog, target)
 	return f"{head}Ord for {ty} {{\n\tfn less(o: {ty}) -> bool {{\n\t\treturn {body}\n\t}}\n}}\n"
@@ -26500,15 +26515,18 @@ fn c_derive_ord_needs_eq(prog: ast.File, target: str) {
 	raise c_derive_diag(prog, target, rule.Rule.DeriveOrdWithoutEq, f"cannot derive `Ord` for `{target}` without `Eq`: `spec Ord: Eq` makes equality a precondition of the order, and an order that disagrees with it is not the total one `Ord` means. Write `#[derive(Eq, Ord)]`, or `impl Eq for {target}` beside the derive (docs/core/derive.md)")
 }
 
-fn c_derive_ord_body(prog: ast.File, target: str) -> str {
+fn c_derive_ord_body(all: ast.File, prog: ast.File, target: str) -> str {
 	for sd in prog.structs {
 		if sd.name == target {
-			c_derive_ord_fields_ok(prog, sd)
+			c_derive_ord_fields_ok(all, prog, sd)
 			return c_derive_ord_fields(sd.fields, 0)
 		}
 	}
 	for ed in prog.enums {
-		return c_derive_ord_variants(ed, target) if ed.name == target
+		if ed.name == target {
+			c_derive_ord_payloads_ok(all, prog, ed)
+			return c_derive_ord_variants(ed, target)
+		}
 	}
 
 	return c_derive_structureless(prog, target, "Ord")
@@ -26522,17 +26540,47 @@ fn c_derive_ord_body(prog: ast.File, target: str) -> str {
 # `float` is excluded from `Ord` because `NaN` is neither less than, equal to, nor greater than
 # anything, so a lexicographic order over one is not a total order and `Ord` is specified as
 # total.
-fn c_derive_ord_fields_ok(prog: ast.File, sd: ast.StructDecl) {
+fn c_derive_ord_fields_ok(all: ast.File, prog: ast.File, sd: ast.StructDecl) {
 	for fl in sd.fields {
-		raise c_diag_at(sd.path, sd.line, sd.col, rule.Rule.DeriveOrdFloat, f"cannot derive `Ord` for `{sd.name}`: the field `{fl.name}` is a `float`, and `float` opts out of `Ord` — `NaN` is neither less than, equal to nor greater than anything, so no order over it is total (docs/core/derive.md). Write `impl Ord for {sd.name}` and say what the comparison means") if c_derive_ty_is_float(fl.ty)
+		if c_derive_ty_is_float(all, fl.ty) {
+			c_derive_ord_float(prog, sd.name, f"the field `{fl.name}`")
+		}
 	}
 }
 
-fn c_derive_ty_is_float(t: ast.Ty) -> bool {
-	return match t {
-		Ty.TFloat => true
-		_         => false
+# c_derive_ord_payloads_ok is the same exclusion over a sum: a payload is a field by another name.
+fn c_derive_ord_payloads_ok(all: ast.File, prog: ast.File, ed: ast.EnumDecl) {
+	for v in ed.variants {
+		for ft in v.fields {
+			if c_derive_ty_is_float(all, ft) {
+				c_derive_ord_float(prog, ed.name, f"the payload of `{v.name}`")
+			}
+		}
 	}
+}
+
+fn c_derive_ord_float(prog: ast.File, target: str, what: str) {
+	raise c_derive_diag(prog, target, rule.Rule.DeriveOrdFloat, f"cannot derive `Ord` for `{target}`: {what} is a `float`, and `float` opts out of `Ord` — `NaN` is neither less than, equal to nor greater than anything, so no order over it is total (docs/core/derive.md). Write `impl Ord for {target}` and say what the comparison means")
+}
+
+# c_derive_ty_is_float sees through a `type` declaration, since the exclusion is about the value
+# and a typedef only renames it. `left` is what ends a cycle, which is another rule's to refuse.
+fn c_derive_ty_is_float(all: ast.File, t: ast.Ty) -> bool {
+	mut cur := t
+	mut left := all.types.len()
+	for left >= 0 {
+		return true if c_is_float(cur)
+		n := c_named_of(cur)
+		return false if n == "" or not c_derive_is_typedef(all, n)
+		for td in all.types {
+			if td.name == n {
+				cur = td.under
+				break
+			}
+		}
+		left = left - 1
+	}
+	return false
 }
 
 # c_derive_ord_fields is the lexicographic body, written from the field at `i` rightwards. A

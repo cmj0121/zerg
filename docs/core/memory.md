@@ -236,7 +236,7 @@ captures back would mean unwinding a stack the language says is abandoned where 
 `Ref[T]` is built. `Ref(x)` allocates the cell, `deref(r)` reads the payload back as a value, a copy retains
 and the last holder releases — the same counted cell a `chan`, a `str` and a recursive type are already
 held in. What a release runs is the PAYLOAD's own give-back: a `Ref[str]` releases its string, a `Ref[int]`
-owes nothing.
+owes nothing. A `Ref` is an identity and has no `==` (`E4034`): compare what `deref` reads.
 
 A **user-written `drop`** is the second argument: `Ref(raw, close)`, the form [FFI](../runtime/ffi.md) writes
 for a foreign handle. It is what the cell runs when the last holder lets go, and it runs INSTEAD of the

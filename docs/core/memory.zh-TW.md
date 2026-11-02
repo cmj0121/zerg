@@ -193,7 +193,7 @@ teardown 一起交給 runtime,而 scheduler 在每個 worker 都停下之後跑�
 
 `Ref[T]` 建好了。`Ref(x)` 配置那個 cell,`deref(r)` 把 payload 當成值讀回來,複製時 retain、最後一個持有者釋放——
 與 `chan`、`str` 和遞迴型別被裝進去的是同一個計數 cell。釋放時跑的是 **payload 自己的**歸還:`Ref[str]` 會釋放它的
-字串,`Ref[int]` 什麼都不欠。
+字串,`Ref[int]` 什麼都不欠。`Ref` 是 identity,沒有 `==`(`E4034`):請比較 `deref` 讀出的值。
 
 **使用者所寫的 `drop`** 是第二個引數:`Ref(raw, close)`,也就是 [FFI](../runtime/ffi.zh-TW.md) 為 foreign
 handle 寫的形式。它是 cell 在最後一個持有者放手時跑的東西,而且它**取代** payload 自己的歸還——盒子帶的是**一個**

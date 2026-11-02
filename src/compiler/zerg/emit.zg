@@ -2158,6 +2158,12 @@ pub fn c_is_identity(t: ast.Ty) -> bool {
 	return ast.ty_is_chan(t) or c_is_fn(t) or c_is_handle_ty(t)
 }
 
+# c_has_no_equality is the identities `==` refuses. A `Ref[T]` is one too, though it renders as
+# what it holds, which is why it is asked here and not in c_is_identity.
+fn c_has_no_equality(t: ast.Ty) -> bool {
+	return c_is_identity(t) or c_is_ref_box(t)
+}
+
 fn c_fn_ret(t: ast.Ty) -> ast.Ty {
 	return match c_unmark(t) {
 		Ty.TFn(_, r) => r
@@ -10263,7 +10269,7 @@ fn c_operand(mut &em: Emitter, pair_is_float: bool, e: ast.Expr, sb: Subst) -> s
 # AN UNNAMED FORM has it exactly when every part has it — the parts-inheritance rule of
 # docs/core/types.md, which is the one way a type with no declaration can have anything.
 fn c_eq_legal(mut &em: Emitter, t: ast.Ty) -> bool {
-	return false if c_is_carrier(t) or c_is_identity(t)
+	return false if c_is_carrier(t) or c_has_no_equality(t)
 	return c_is_unknown(c_eq_bad_part(em, t)) if c_is_unnamed(t)
 	return c_has_eq(em, t) if c_is_aggregate(em, t)
 
@@ -10604,7 +10610,7 @@ fn c_eq_refuse(mut &em: Emitter, oper: str, t: ast.Ty) {
 # reader wrote — `t` itself, or the unnamed form `t` is a part of.
 fn c_eq_refuse_part(mut &em: Emitter, oper: str, subject: str, t: ast.Ty) {
 	nm := ast.ty_name(t)
-	if c_is_identity(t) {
+	if c_has_no_equality(t) {
 		check.chk_at(em, rule.Rule.IdentityHasNoEquality, c_eq_says(oper, subject, f"a {nm} is an identity rather than a value, which the language gives no equality", "compare something it carries", "look for something it carries instead"))
 		return
 	}

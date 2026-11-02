@@ -10176,7 +10176,7 @@ fn c_binexpr(mut &em: Emitter, oper: str, a: ast.Expr, b: ast.Expr, sb: Subst) -
 		# AND ORDERING COMES FROM `Ord`, the same way. `less` is the one method the spec
 		# requires (docs/core/specs.md) and the other three orderings are written out of it
 		# here rather than required of an implementer.
-		return c_ord_call(em, oper, a, b, sb) if c_is_order_op(oper) and c_has_ord(em, ta)
+		return c_ord_call(em, oper, a, b, ta, sb) if c_is_order_op(oper) and c_has_ord(em, ta)
 
 		# and a TUPLE or an ARRAY has it from its parts as it has `==`, compared in order with the
 		# first part that differs deciding (docs/core/types.md)
@@ -10307,7 +10307,8 @@ fn c_eq_bad_part(mut &em: Emitter, t: ast.Ty) -> ast.Ty {
 # c_eq_parts lowers `a == b` / `a != b` over two values of one unnamed form. A `list` and an
 # array compare in order, a tuple part by part, and a `map` or a `set` without regard to the
 # order things were put in (docs/code/collections.md). It lowers the four ORDERINGS over a
-# tuple or an array too, which bind their operands the same way and differ only in the test.
+# tuple or an array too, which bind their operands the same way and differ only in the test, and the two that
+# swap a declared type's operands (c_ord_call), for the same binding.
 #
 # `!=` IS THE NEGATION, and the parts are always asked `==`. A declared type's `ne` is
 # dispatched rather than derived, but that is a statement about the type that wrote one: an
@@ -10406,8 +10407,11 @@ fn c_ord_scalar(mut &em: Emitter, t: ast.Ty) -> bool {
 
 # c_ord_less is `ca < cb` over two C names holding a tuple or an array: LEXICOGRAPHIC, the
 # first part that differs deciding and every part after it unread. A part is asked `<` both
-# ways, which is how a total order says "differs" without asking `==` of it as well.
+# ways, which is how a total order says "differs" without asking `==` of it as well. A declared
+# type has no parts to walk here, and its own `less` is the whole answer.
 fn c_ord_less(mut &em: Emitter, t: ast.Ty, ca: str, cb: str) -> str {
+	return c_ord_pair(em, t, ca, cb) if not c_is_ordered_form(t)
+
 	n := c_tmp(em, "zgt_ord")
 	rv := n + "r"
 	dv := n + "d"
@@ -10540,7 +10544,12 @@ fn c_is_order_op(oper: str) -> bool {
 # does anything. `Ord` is specified as a TOTAL order consistent with `Eq`
 # (docs/core/specs.md), and under totality `a <= b` is exactly `not (b < a)`, which spends
 # each operand once.
-fn c_ord_call(mut &em: Emitter, oper: str, a: ast.Expr, b: ast.Expr, sb: Subst) -> str {
+#
+# AND THE TWO THAT SWAP THEM BIND THEM FIRST. `a > b` asks `b.less(a)`, and a method call
+# evaluates its receiver first, so an operand that does anything would run right to left and
+# change the answer. Two trivial operands have no order to show, and render as they always did.
+fn c_ord_call(mut &em: Emitter, oper: str, a: ast.Expr, b: ast.Expr, ta: ast.Ty, sb: Subst) -> str {
+	return c_eq_parts(em, oper, a, b, ta, sb) if (oper == ">" or oper == "<=") and c_needs_order([a, b], 0) and ast.ty_eq(ta, c_infer(em, b))
 	return c_expr(em, ast.Expr.EMethod(a, "less", [b], 0, 0), sb) if oper == "<"
 	return c_expr(em, ast.Expr.EMethod(b, "less", [a], 0, 0), sb) if oper == ">"
 	return c_expr(em, ast.Expr.EUnary("not", ast.Expr.EMethod(b, "less", [a], 0, 0)), sb) if oper == "<="

@@ -25808,7 +25808,7 @@ fn c_derive_src(all: ast.File, prog: ast.File, target: str, nm: str) -> str {
 
 	raise c_derive_diag(prog, target, rule.Rule.NotYetDerive, f"NotImplemented: `#[derive({nm})]` — this compiler derives `Eq`, `Ord`, `Hash` and `From`; `Encode` and `Decode` are specified and unbuilt (docs/core/derive.md)") if nm == "Encode" or nm == "Decode"
 	return c_derive_eq(prog, target) if nm == "Eq"
-	return c_derive_ord(prog, target) if nm == "Ord"
+	return c_derive_ord(all, prog, target) if nm == "Ord"
 	return c_derive_hash(all, prog, target) if nm == "Hash"
 	return c_derive_from(prog, target) if nm == "From"
 
@@ -26481,10 +26481,10 @@ fn c_derive_applied(prog: ast.File, target: str) -> str {
 # must satisfy, and generating one silently would be this compiler deciding a second derive the
 # author did not write — the chapter says `#[derive(Ord)]` obliges you to derive or hand-write
 # `Eq` as well, and the missing-super rule is what says so.
-fn c_derive_ord(prog: ast.File, target: str) -> str {
+fn c_derive_ord(all: ast.File, prog: ast.File, target: str) -> str {
 	c_derive_ord_needs_eq(prog, target)
 
-	body := c_derive_ord_body(prog, target)
+	body := c_derive_ord_body(all, prog, target)
 	head := c_derive_head(prog, target)
 	ty := c_derive_applied(prog, target)
 	return f"{head}Ord for {ty} {{\n\tfn less(o: {ty}) -> bool {{\n\t\treturn {body}\n\t}}\n}}\n"
@@ -26509,15 +26509,18 @@ fn c_derive_ord_needs_eq(prog: ast.File, target: str) {
 	raise c_derive_diag(prog, target, rule.Rule.DeriveOrdWithoutEq, f"cannot derive `Ord` for `{target}` without `Eq`: `spec Ord: Eq` makes equality a precondition of the order, and an order that disagrees with it is not the total one `Ord` means. Write `#[derive(Eq, Ord)]`, or `impl Eq for {target}` beside the derive (docs/core/derive.md)")
 }
 
-fn c_derive_ord_body(prog: ast.File, target: str) -> str {
+fn c_derive_ord_body(all: ast.File, prog: ast.File, target: str) -> str {
 	for sd in prog.structs {
 		if sd.name == target {
-			c_derive_ord_fields_ok(prog, sd)
+			c_derive_ord_fields_ok(all, prog, sd)
 			return c_derive_ord_fields(sd.fields, 0)
 		}
 	}
 	for ed in prog.enums {
-		return c_derive_ord_variants(ed, target) if ed.name == target
+		if ed.name == target {
+			c_derive_ord_payloads_ok(all, prog, ed)
+			return c_derive_ord_variants(ed, target)
+		}
 	}
 
 	return c_derive_structureless(prog, target, "Ord")
@@ -26531,17 +26534,47 @@ fn c_derive_ord_body(prog: ast.File, target: str) -> str {
 # `float` is excluded from `Ord` because `NaN` is neither less than, equal to, nor greater than
 # anything, so a lexicographic order over one is not a total order and `Ord` is specified as
 # total.
-fn c_derive_ord_fields_ok(prog: ast.File, sd: ast.StructDecl) {
+fn c_derive_ord_fields_ok(all: ast.File, prog: ast.File, sd: ast.StructDecl) {
 	for fl in sd.fields {
-		raise c_diag_at(sd.path, sd.line, sd.col, rule.Rule.DeriveOrdFloat, f"cannot derive `Ord` for `{sd.name}`: the field `{fl.name}` is a `float`, and `float` opts out of `Ord` — `NaN` is neither less than, equal to nor greater than anything, so no order over it is total (docs/core/derive.md). Write `impl Ord for {sd.name}` and say what the comparison means") if c_derive_ty_is_float(fl.ty)
+		if c_derive_ty_is_float(all, fl.ty) {
+			c_derive_ord_float(prog, sd.name, f"the field `{fl.name}`")
+		}
 	}
 }
 
-fn c_derive_ty_is_float(t: ast.Ty) -> bool {
-	return match t {
-		Ty.TFloat => true
-		_         => false
+# c_derive_ord_payloads_ok is the same exclusion over a sum: a payload is a field by another name.
+fn c_derive_ord_payloads_ok(all: ast.File, prog: ast.File, ed: ast.EnumDecl) {
+	for v in ed.variants {
+		for ft in v.fields {
+			if c_derive_ty_is_float(all, ft) {
+				c_derive_ord_float(prog, ed.name, f"the payload of `{v.name}`")
+			}
+		}
 	}
+}
+
+fn c_derive_ord_float(prog: ast.File, target: str, what: str) {
+	raise c_derive_diag(prog, target, rule.Rule.DeriveOrdFloat, f"cannot derive `Ord` for `{target}`: {what} is a `float`, and `float` opts out of `Ord` — `NaN` is neither less than, equal to nor greater than anything, so no order over it is total (docs/core/derive.md). Write `impl Ord for {target}` and say what the comparison means")
+}
+
+# c_derive_ty_is_float sees through a `type` declaration, since the exclusion is about the value
+# and a typedef only renames it. `left` is what ends a cycle, which is another rule's to refuse.
+fn c_derive_ty_is_float(all: ast.File, t: ast.Ty) -> bool {
+	mut cur := t
+	mut left := all.types.len()
+	for left >= 0 {
+		return true if c_is_float(cur)
+		n := c_named_of(cur)
+		return false if n == "" or not c_derive_is_typedef(all, n)
+		for td in all.types {
+			if td.name == n {
+				cur = td.under
+				break
+			}
+		}
+		left = left - 1
+	}
+	return false
 }
 
 # c_derive_ord_fields is the lexicographic body, written from the field at `i` rightwards. A

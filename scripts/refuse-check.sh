@@ -802,6 +802,78 @@ fn main() {
 }
 EOF
 
+# THE EXCLUSION IS ABOUT THE VALUE, so neither a payload nor a typedef's name gets past it. A
+# typedef of `int` is the case that says the walk through `type` did not just refuse them all.
+
+expect "$ZERG" derive-ord-over-a-float-payload E4098 'the payload of `A` is a `float`' <<'EOF'
+#[derive(Eq, Ord)]
+enum E {
+	A(float)
+}
+
+fn main() {
+	print E.A(1.0) < E.A(2.0)
+}
+EOF
+
+expect "$ZERG" derive-ord-over-a-typedef-of-a-float E4098 'the field `t` is a `float`' <<'EOF'
+type C = float
+type D = C
+
+#[derive(Eq, Ord)]
+struct P {
+	pub t: D
+}
+
+fn main() {
+	print P(D(C(1.0))) < P(D(C(2.0)))
+}
+EOF
+
+expect "$ZERG" derive-ord-over-another-modules-typedef E4098 'the field `t` is a `float`' <<'EOF'
+import "./geo"
+
+#[derive(Eq, Ord)]
+struct P {
+	pub t: geo.C
+}
+
+fn main() {
+	print P(geo.C(1.0)) < P(geo.C(2.0))
+}
+--- geo/mod.zg
+pub type C = float
+EOF
+
+# A `Ref[T]` is an identity as a channel is, and it used to reach cc's `==` as two pointers.
+expect "$ZERG" equality-on-a-ref E4034 '`==` on a Ref[int]' <<'EOF'
+fn main() {
+	print Ref(1) == Ref(1)
+}
+EOF
+
+expect "$ZERG" derive-eq-over-a-ref E4034 '`==` on a Ref[int]' <<'EOF'
+#[derive(Eq)]
+struct P {
+	pub r: Ref[int]
+}
+
+fn main() {
+	print P(Ref(1)) == P(Ref(1))
+}
+EOF
+
+expect "$ZERG" derive-eq-over-a-ref-payload E4034 '`==` on a Ref[int]' <<'EOF'
+#[derive(Eq)]
+enum E {
+	A(Ref[int])
+}
+
+fn main() {
+	print E.A(Ref(1)) == E.A(Ref(1))
+}
+EOF
+
 expect "$ZERG" derive-ord-without-eq E4099 <<'EOF'
 #[derive(Ord)]
 struct Q {

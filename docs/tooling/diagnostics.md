@@ -477,6 +477,8 @@ shipping compiler rather than a part of it (the line
 | `E4121` | the foreign binding `…` cannot cross the C boundary: … is not FFI-safe                                |
 | `E4122` | a foreign binding outside its one shape: in a group, not `mut` or `pub`, typed `fn`, one C name       |
 | `E4123` | `ffi.symbol(…)` written where no foreign binding is                                                   |
+| `E4124` | `#[derive(Encode)]` / `#[derive(Decode)]` over a field with no row or nothing to delegate to          |
+| `E4125` | `#[derive(Encode)]` / `#[derive(Decode)]` in a file that does not import `codec`                      |
 | `E5001` | this entry file declares no `fn main`                                                                 |
 | `E5002` | cannot resolve import `…`, and where it was looked for                                                |
 | `E5007` | `…` is a module this build compiles and this module did not import                                    |
@@ -509,7 +511,6 @@ shipping compiler rather than a part of it (the line
 | `E9049` | `…` MUTATES its list, and `…` is a value rather than a place                                          |
 | `E9050` | an open-ended range has no upper bound here                                                           |
 | `E9052` | a map key of type …                                                                                   |
-| `E9054` | `#[derive(…)]`                                                                                        |
 | `E9056` | the list method `…`                                                                                   |
 | `E9062` | `in` over … — a range's members are found by comparing its bounds                                     |
 | `E9063` | `…` is part of the fixed-width ladder                                                                 |
@@ -778,6 +779,7 @@ name now is the prelude rule (`E2061`), which is about the name rather than abou
 | `E9048` | —       | the form was built: a spec names a type, and a box dispatches          |
 | `E9055` | —       | the form was built: `Eq` derives over a payload enum's tag and payload |
 | `E9064` | —       | the form was built: `set[T]`, its constructor and its members          |
+| `E9054` | —       | the form was built: `Encode` and `Decode` derive through `codec`       |
 | `E9010` | —       | the form was built: a named argument, in a call and a construction     |
 | `E9068` | —       | the form was built: `nil` names an optional's absent side              |
 | `E9057` | —       | the form was built: an unnamed form compares by its parts              |

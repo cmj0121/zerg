@@ -25852,7 +25852,8 @@ pub fn c_with_derived(ft: FileTypes, all: ast.File, prog: ast.File) -> ast.File 
 fn c_derive_src(all: ast.File, prog: ast.File, target: str, nm: str) -> str {
 	return c_obj_src(prog, target) if nm == "#obj"
 
-	raise c_derive_diag(prog, target, rule.Rule.NotYetDerive, f"NotImplemented: `#[derive({nm})]` — this compiler derives `Eq`, `Ord`, `Hash` and `From`; `Encode` and `Decode` are specified and unbuilt (docs/core/derive.md)") if nm == "Encode" or nm == "Decode"
+	return c_derive_encode(all, prog, target) if nm == "Encode"
+	return c_derive_decode(all, prog, target) if nm == "Decode"
 	return c_derive_eq(prog, target) if nm == "Eq"
 	return c_derive_ord(all, prog, target) if nm == "Ord"
 	return c_derive_hash(all, prog, target) if nm == "Hash"
@@ -26903,6 +26904,273 @@ fn c_derive_has_hash(prog: ast.File, n: str) -> bool {
 		return true if ip.target == n and ip.on == "Hash"
 	}
 	return false
+}
+
+# --- `#[derive(Encode, Decode)]` (docs/core/derive.md) ---------------------------------------
+#
+# THE SPECS AND THE CURSORS ARE `codec`'s, so a file that derives either imports it, and the
+# impl written here spells the cursor through the name that import bound. The spec position is
+# a bare name, as every impl's is.
+#
+# EVERY ROW IS WRITTEN AT THE FIELD. A built-in type has no impl to delegate to (E9047), so an
+# `int`, a `str`, a `list` and an optional are the codec calls their rows name, recursing into
+# the element; a declared type delegates to its own `encode` / `decode`.
+#
+# A DECODE FAILURE IS A VALUE: each read answers a `Result` and `?` passes a failure on, so a
+# derived `decode` never aborts on its input.
+
+# CodecGen is the state one derive threads through its fields: the namespace `codec` was bound
+# to, and the counter that keeps each generated local's name its own.
+struct CodecGen {
+	pub ns: str
+	pub seq: int
+}
+
+fn c_codec_fresh(mut &g: CodecGen) -> str {
+	n := f"zgd_c{strconv.to_string(g.seq, 10)}"
+	g.seq = g.seq + 1
+	return n
+}
+
+# c_codec_ns is the name the target's file bound `codec` to, and the one place a derive is
+# refused for want of it: the impl names `codec`'s cursor, and a file that never imported the
+# module has no such name.
+fn c_codec_ns(all: ast.File, prog: ast.File, target: str, nm: str) -> str {
+	origin := c_derive_origin(prog, target)
+	for im in all.imports {
+		return im.name if im.at == origin and im.path == "codec"
+	}
+	raise c_derive_diag(prog, target, rule.Rule.DeriveCodecMissing, f"cannot derive `{nm}` for `{target}`: `{nm}` is a spec of the module `codec`, and this file does not import it — write `import \"codec\"` (docs/core/derive.md)")
+}
+
+# c_codec_field_refused is the one refusal a field gets: it has no row on the wire, or nothing
+# to delegate to. One rule, whichever it is, so one code.
+fn c_codec_field_refused(prog: ast.File, target: str, nm: str, why: str) -> str {
+	raise c_derive_diag(prog, target, rule.Rule.DeriveCodecField, f"cannot derive `{nm}` for `{target}`: {why} (docs/core/derive.md)")
+}
+
+# c_derive_has_spec is whether a declared type has the spec BEFORE any derive is expanded: a
+# decorator naming it, or a hand-written impl.
+fn c_derive_has_spec(prog: ast.File, n: str, sp: str) -> bool {
+	mut i := 0
+	for i < prog.derive_on.len() {
+		return true if prog.derive_on[i] == n and prog.derive_spec[i] == sp
+		i = i + 1
+	}
+	for ip in prog.impls {
+		return true if ip.target == n and ip.on == sp
+	}
+	return false
+}
+
+# c_codec_named is what a declared field type delegates to: its own name, which `encode` is
+# called on and `decode` through. An applied generic type encodes like any other, but its
+# `decode` would leave the argument for the call to solve, and `decode` takes no argument that
+# mentions it — so that half is refused rather than left to E4009 at a line nobody wrote.
+fn c_codec_named(all: ast.File, prog: ast.File, target: str, tps: list[str], nm: str, what: str, n: str) -> str {
+	return n if c_name_in(tps, n)
+
+	base := c_derive_hash_base(n)
+
+	return c_codec_field_refused(prog, target, nm, f"{what} is a `{n}`, which is an identity rather than a value and has no wire form") if base == "Ref" or base == "handle"
+	return c_codec_field_refused(prog, target, nm, f"{what} is a `{n}`, an applied generic type, and `{base}.decode` has no argument to solve its parameter from") if base != n and nm == "Decode"
+	return n if base == target or c_derive_has_spec(all, base, nm)
+
+	return c_codec_field_refused(prog, target, nm, f"{what} is a `{n}`, and `{base}` has no `{nm}` to delegate to. Write `#[derive({nm})]` on `{base}`, or `impl {nm} for {base}`")
+}
+
+fn c_codec_no_row(prog: ast.File, target: str, nm: str, what: str, t: ast.Ty) -> str {
+	return c_codec_field_refused(prog, target, nm, f"{what} is a `{ast.ty_name(t)}`, which has no row on the wire — an `int`, a `uint`, a `str`, a `bool`, a `byte`, a `list`, an optional and a declared type with `{nm}` do")
+}
+
+# c_codec_enc writes one value's encoding, as statements at `ind`.
+fn c_codec_enc(all: ast.File, prog: ast.File, target: str, tps: list[str], mut &g: CodecGen, what: str, t: ast.Ty, x: str, ind: str) -> str {
+	return match t {
+		Ty.TInt      => f"{ind}out.put_int({x})\n"
+		Ty.TUint     => f"{ind}out.put_uint({x})\n"
+		Ty.TStr      => f"{ind}out.put_str({x})\n"
+		Ty.TBool     => f"{ind}out.put_bool({x})\n"
+		Ty.TByte     => f"{ind}out.put_byte({x})\n"
+		Ty.TList(e)  => c_codec_enc_list(all, prog, target, tps, g, what, e, x, ind)
+		Ty.TOpt(e)   => c_codec_enc_opt(all, prog, target, tps, g, what, e, x, ind)
+		Ty.TNamed(n) => c_codec_enc_named(all, prog, target, tps, what, n, x, ind)
+		_            => c_codec_no_row(prog, target, "Encode", what, t)
+	}
+}
+
+fn c_codec_enc_named(all: ast.File, prog: ast.File, target: str, tps: list[str], what: str, n: str, x: str, ind: str) -> str {
+	c_codec_named(all, prog, target, tps, "Encode", what, n)
+	return f"{ind}{x}.encode(out)\n"
+}
+
+fn c_codec_enc_list(all: ast.File, prog: ast.File, target: str, tps: list[str], mut &g: CodecGen, what: str, e: ast.Ty, x: str, ind: str) -> str {
+	v := c_codec_fresh(g)
+	mut out := f"{ind}out.put_uint(uint({x}.len()))\n{ind}for {v} in {x} {{\n"
+	out = out + c_codec_enc(all, prog, target, tps, g, f"an element of {what}", e, v, ind + "\t")
+	return out + f"{ind}}}\n"
+}
+
+fn c_codec_enc_opt(all: ast.File, prog: ast.File, target: str, tps: list[str], mut &g: CodecGen, what: str, e: ast.Ty, x: str, ind: str) -> str {
+	v := c_codec_fresh(g)
+	mut out := f"{ind}match {x} {{\n{ind}\tnil => {{\n{ind}\t\tout.put_byte(byte(0))\n{ind}\t}}\n{ind}\t{v} => {{\n{ind}\t\tout.put_byte(byte(1))\n"
+	out = out + c_codec_enc(all, prog, target, tps, g, f"the value of {what}", e, v, ind + "\t\t")
+	return out + f"{ind}\t}}\n{ind}}}\n"
+}
+
+# c_codec_dec writes the statements that read one value and bind it to `dst`, at `ind`.
+fn c_codec_dec(all: ast.File, prog: ast.File, target: str, tps: list[str], mut &g: CodecGen, what: str, t: ast.Ty, dst: str, ind: str) -> str {
+	return match t {
+		Ty.TInt      => f"{ind}{dst} := src.take_int()?\n"
+		Ty.TUint     => f"{ind}{dst} := src.take_uint()?\n"
+		Ty.TStr      => f"{ind}{dst} := src.take_str()?\n"
+		Ty.TBool     => f"{ind}{dst} := src.take_flag(\"a `bool`\")?\n"
+		Ty.TByte     => f"{ind}{dst} := src.take_byte()?\n"
+		Ty.TList(e)  => c_codec_dec_list(all, prog, target, tps, g, what, t, e, dst, ind)
+		Ty.TOpt(e)   => c_codec_dec_opt(all, prog, target, tps, g, what, t, e, dst, ind)
+		Ty.TNamed(n) => f"{ind}{dst} := {c_codec_named(all, prog, target, tps, "Decode", what, n)}.decode(src)?\n"
+		_            => c_codec_no_row(prog, target, "Decode", what, t)
+	}
+}
+
+fn c_codec_dec_list(all: ast.File, prog: ast.File, target: str, tps: list[str], mut &g: CodecGen, what: str, t: ast.Ty, e: ast.Ty, dst: str, ind: str) -> str {
+	n := c_codec_fresh(g)
+	i := c_codec_fresh(g)
+	w := c_codec_fresh(g)
+	mut out := f"{ind}{n} := src.take_count()?\n{ind}mut {dst}: {ast.ty_name(t)} = []\n{ind}mut {i} := 0\n{ind}for {i} < {n} {{\n"
+	out = out + c_codec_dec(all, prog, target, tps, g, f"an element of {what}", e, w, ind + "\t")
+	return out + f"{ind}\t{dst}.append({w})\n{ind}\t{i} = {i} + 1\n{ind}}}\n"
+}
+
+fn c_codec_dec_opt(all: ast.File, prog: ast.File, target: str, tps: list[str], mut &g: CodecGen, what: str, t: ast.Ty, e: ast.Ty, dst: str, ind: str) -> str {
+	w := c_codec_fresh(g)
+	mut out := f"{ind}mut {dst}: {ast.ty_name(t)} = nil\n{ind}if src.take_flag(\"an optional's presence\")? {{\n"
+	out = out + c_codec_dec(all, prog, target, tps, g, f"the value of {what}", e, w, ind + "\t")
+	return out + f"{ind}\t{dst} = {w}\n{ind}}}\n"
+}
+
+# c_codec_head is `impl[T: S] S for Box[T]` — each parameter bounded by the spec, since the
+# body calls the spec's member on a value of it — or `impl S for P`.
+fn c_codec_head(prog: ast.File, target: str, nm: str) -> str {
+	tps := c_derive_params(prog, target)
+	return f"impl {nm} for {target}" if tps.len() == 0
+
+	mut bs: list[str] = []
+	for tp in tps {
+		bs.append(f"{tp}: {nm}")
+	}
+	return f"impl[{parser.join_commas(bs)}] {nm} for {c_derive_applied(prog, target)}"
+}
+
+fn c_derive_encode(all: ast.File, prog: ast.File, target: str) -> str {
+	mut g := CodecGen(c_codec_ns(all, prog, target, "Encode"), 0)
+	body := c_derive_encode_body(all, prog, target, g)
+	return f"{c_codec_head(prog, target, "Encode")} {{\n\tfn encode(mut &out: {g.ns}.Encoder) {{\n{body}\t}}\n}}\n"
+}
+
+fn c_derive_encode_body(all: ast.File, prog: ast.File, target: str, mut &g: CodecGen) -> str {
+	for sd in prog.structs {
+		if sd.name == target {
+			mut out := ""
+			for fl in sd.fields {
+				out = out + c_codec_enc(all, prog, target, sd.tparams, g, f"the field `{fl.name}`", fl.ty, f"this.{fl.name}", "\t\t")
+			}
+			return out
+		}
+	}
+	for ed in prog.enums {
+		return c_derive_encode_variants(all, prog, ed, target, g) if ed.name == target
+	}
+
+	return c_derive_structureless(prog, target, "Encode")
+}
+
+# c_derive_encode_variants is the sum's row: the tag as an `int`, then each payload value. A
+# fieldless enum's tag is its discriminant; a payload enum's is the declaration index, since its
+# tag is opaque (E4006).
+fn c_derive_encode_variants(all: ast.File, prog: ast.File, ed: ast.EnumDecl, target: str, mut &g: CodecGen) -> str {
+	return "\t\tout.put_int(int(this))\n" if not c_derive_has_payload(ed)
+
+	mut arms := ""
+	mut vi := 0
+	for vi < ed.variants.len() {
+		v := ed.variants[vi]
+		mut binds := ""
+		mut body := f"\t\t\t\tout.put_int({strconv.to_string(vi, 10)})\n"
+		mut i := 0
+		for i < v.fields.len() {
+			n := c_codec_fresh(g)
+			if i > 0 {
+				binds = binds + ", "
+			}
+			binds = binds + n
+			body = body + c_codec_enc(all, prog, target, ed.tparams, g, f"the payload of `{v.name}`", v.fields[i], n, "\t\t\t\t")
+			i = i + 1
+		}
+		mut pat := f"{target}.{v.name}"
+		if v.fields.len() > 0 {
+			pat = f"{target}.{v.name}({binds})"
+		}
+		arms = arms + f"\t\t\t{pat} => {{\n{body}\t\t\t}}\n"
+		vi = vi + 1
+	}
+	return f"\t\tmatch this {{\n{arms}\t\t}}\n"
+}
+
+fn c_derive_decode(all: ast.File, prog: ast.File, target: str) -> str {
+	mut g := CodecGen(c_codec_ns(all, prog, target, "Decode"), 0)
+	ty := c_derive_applied(prog, target)
+	body := c_derive_decode_body(all, prog, target, g)
+	return f"{c_codec_head(prog, target, "Decode")} {{\n\tfn This.decode(mut &src: {g.ns}.Decoder) -> Result[{ty}] {{\n{body}\t}}\n}}\n"
+}
+
+fn c_derive_decode_body(all: ast.File, prog: ast.File, target: str, mut &g: CodecGen) -> str {
+	for sd in prog.structs {
+		if sd.name == target {
+			mut out := ""
+			mut args: list[str] = []
+			for fl in sd.fields {
+				d := c_codec_fresh(g)
+				out = out + c_codec_dec(all, prog, target, sd.tparams, g, f"the field `{fl.name}`", fl.ty, d, "\t\t")
+				args.append(d)
+			}
+			return out + f"\t\treturn {target}({parser.join_commas(args)})\n"
+		}
+	}
+	for ed in prog.enums {
+		return c_derive_decode_variants(all, prog, ed, target, g) if ed.name == target
+	}
+
+	return c_derive_structureless(prog, target, "Decode")
+}
+
+# c_derive_decode_variants reads the tag and answers the variant it names, and a tag no variant
+# has is the `Result`'s failure.
+fn c_derive_decode_variants(all: ast.File, prog: ast.File, ed: ast.EnumDecl, target: str, mut &g: CodecGen) -> str {
+	tag := c_codec_fresh(g)
+	mut out := f"\t\t{tag} := src.take_int()?\n"
+	payload := c_derive_has_payload(ed)
+	mut vi := 0
+	for vi < ed.variants.len() {
+		v := ed.variants[vi]
+		mut key := strconv.to_string(vi, 10)
+		if not payload {
+			key = f"int({target}.{v.name})"
+		}
+		out = out + f"\t\tif {tag} == {key} {{\n"
+		mut args: list[str] = []
+		for ft in v.fields {
+			d := c_codec_fresh(g)
+			out = out + c_codec_dec(all, prog, target, ed.tparams, g, f"the payload of `{v.name}`", ft, d, "\t\t\t")
+			args.append(d)
+		}
+		mut val := f"{target}.{v.name}"
+		if args.len() > 0 {
+			val = f"{target}.{v.name}({parser.join_commas(args)})"
+		}
+		out = out + f"\t\t\treturn {val}\n\t\t}}\n"
+		vi = vi + 1
+	}
+	return out + f"\t\treturn Either.Right(ValueError(f\"codec: the tag {{{tag}}} names no variant of `{target}`\"))\n"
 }
 
 fn c_derive_eq(prog: ast.File, target: str) -> str {

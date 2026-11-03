@@ -27,7 +27,8 @@
 # the standard library declares no `pub const`, no `pub type` and no `spec` at all, so the
 # document's rendering of three of the six exposed forms is measured by nothing that reads
 # the stdlib. The fixture carries them, along with the three spellings a signature must not
-# silently drop — a `mut` binding, an `unsafe fn` and a `mut fn`.
+# silently drop — a `mut` binding, an `unsafe fn` and a `mut fn`. A spec's associated fn is
+# written `fn This.name`, and its name is what follows the mark.
 #
 # §6 is `log`'s rule on this command's device: colour follows the terminal and the SHAPE does
 # not. It drives a pty the way scripts/log-check.sh does, because `os.isatty(1)` answers about
@@ -158,9 +159,9 @@ exposed_in_source() {
 		# A pub SPEC MEMBER is part of that surface. They carry no `pub` of their own — a spec
 		# is exposed or it is not — so the line below would miss every one of them, and the
 		# document that prints them looked like it had invented names.
-		inspec && match($0, /^[ \t]+(unsafe[ \t]+)?(mut[ \t]+)?fn[ \t]+[A-Za-z_][A-Za-z0-9_]*/) {
+		inspec && match($0, /^[ \t]+(unsafe[ \t]+)?(mut[ \t]+)?fn[ \t]+(This\.)?[A-Za-z_][A-Za-z0-9_]*/) {
 			line = $0
-			sub(/^[ \t]+(unsafe[ \t]+)?(mut[ \t]+)?fn[ \t]+/, "", line)
+			sub(/^[ \t]+(unsafe[ \t]+)?(mut[ \t]+)?fn[ \t]+(This\.)?/, "", line)
 			sub(/[^A-Za-z0-9_].*$/, "", line)
 			print line
 			next
@@ -182,7 +183,7 @@ exposed_in_source() {
 named_in_document() {
 	sed -nE '
 		s/^  (unsafe )?(mut )?fn ([A-Za-z_][A-Za-z0-9_]*)[[(].*/\3/p
-		s/^      (unsafe )?(mut )?fn ([A-Za-z_][A-Za-z0-9_]*)[[(].*/\3/p
+		s/^      (unsafe )?(mut )?fn (This\.)?([A-Za-z_][A-Za-z0-9_]*)[[(].*/\4/p
 		s/^  (struct|enum|spec) ([A-Za-z_][A-Za-z0-9_]*)$/\2/p
 		s/^  (const|mut) ([A-Za-z_][A-Za-z0-9_]*)[ :].*/\2/p
 		s/^  type ([A-Za-z_][A-Za-z0-9_]*) =.*/\1/p

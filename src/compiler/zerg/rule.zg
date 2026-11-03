@@ -120,6 +120,12 @@ pub enum Rule {
 	AsmOperandHead = 2087
 	TargetRestNotLast = 2088
 
+	# `fn This.f(…)` marks a spec's associated fn and its supply: an inherent `impl` lets the body
+	# decide, a `mut fn` has no receiver to mutate, and an associated fn has no `this` to read.
+	AssocMarkInInherent = 2089
+	AssocFnIsMut = 2090
+	AssocFnReadsThis = 2091
+
 	# checking — a form whose meaning does not hold together — reported against the tree, all at once
 	NotPublicMember = 3001
 	AssignTargetNotAPlace = 3002
@@ -324,6 +330,12 @@ pub enum Rule {
 
 	# a `type` chain that comes back on itself (#382) has no root to be a typedef over
 	TypedefCycle = 3159
+
+	# a spec's associated fn needs a named concrete type, which a box, an object and an enum's
+	# delegation each have none of.
+	AssocFnOnExistential = 3160
+	DeriveSpecEnumAssocFn = 3161
+	ObjWithAssocFn = 3162
 
 	# emitting — a form this compiler will not lower
 	LoopKeywordOutsideLoop = 4001

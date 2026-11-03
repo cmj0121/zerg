@@ -488,6 +488,12 @@ fn gen_len_fn(su: TySubst, fd: ast.FnDecl) -> ast.FnDecl {
 # specialized per call. Cleared to `[]` here, `Box[int].tag` was registered as an ordinary
 # signature and its `U` was reported to the caller as a type: _argument 1 of `Box[int].tag` is
 # U, and this gives str_.
+# subst_this is a provided member's BODY for one implementer: every `This` written in it, whether a
+# type or the left of a dot, is the target there.
+pub fn subst_this(target: ast.Ty, b: list[ast.Stmt]) -> list[ast.Stmt] {
+	return subst_block(TySubst(["This"], [target], [], [], [], ""), b)
+}
+
 pub fn subst_method(su: TySubst, m: ast.FnDecl, recv: str) -> ast.FnDecl {
 	return ast.FnDecl(m.name, recv, subst_params(su, m.params), m.has_ret, subst_ty(su, m.ret), subst_block(su, m.body), m.is_pub, m.path, m.line, m.col, m.tparams, m.tbounds, m.in_unsafe, m.is_test, m.is_fixture, m.has_body, m.is_assoc, m.spec_of, m.name_line, m.name_col, m.end_line, m.end_col, m.foreign)
 }
@@ -651,6 +657,21 @@ fn subst_sel_arms(su: TySubst, arms: list[ast.SelArm]) -> list[ast.SelArm] {
 	return out
 }
 
+# subst_type_left is what stands left of a dot. `T.zero()` names a TYPE there, and a type parameter
+# is the one type written as an expression: a bare `T` anywhere else is no value at all.
+fn subst_type_left(su: TySubst, e: ast.Expr) -> ast.Expr {
+	return match e {
+		Expr.EIdent(n, l, c) => gen_left_ident(su, n, l, c)
+		_ => subst_expr(su, e)
+	}
+}
+
+# THROUGH subst_ty, because the name may be an application as well as a parameter: a `This` in an
+# `impl[T] Show for Box[T]` was spelled `Box[T]`, and `T` is decided by the specialization.
+fn gen_left_ident(su: TySubst, n: str, l: int, c: int) -> ast.Expr {
+	return ast.Expr.EIdent(ast.ty_name(subst_ty(su, ast.Ty.TNamed(n))), l, c)
+}
+
 fn subst_expr(su: TySubst, e: ast.Expr) -> ast.Expr {
 	return match e {
 		Expr.EUnary(o, x) => ast.Expr.EUnary(o, subst_expr(su, x))
@@ -658,11 +679,11 @@ fn subst_expr(su: TySubst, e: ast.Expr) -> ast.Expr {
 		Expr.ECall(nm, xs, ts, l, c) => ast.Expr.ECall(nm, subst_exprs(su, xs), subst_tys(su, ts), l, c)
 		Expr.ECallVal(c, xs) => ast.Expr.ECallVal(subst_expr(su, c), subst_exprs(su, xs))
 		Expr.ENamedArg(nm, x, l, c) => ast.Expr.ENamedArg(nm, subst_expr(su, x), l, c)
-		Expr.EField(x, f, l, c) => ast.Expr.EField(subst_expr(su, x), f, l, c)
+		Expr.EField(x, f, l, c) => ast.Expr.EField(subst_type_left(su, x), f, l, c)
 		Expr.EOptChain(x, f, l, c) => ast.Expr.EOptChain(subst_expr(su, x), f, l, c)
 		Expr.ETry(x) => ast.Expr.ETry(subst_expr(su, x))
 		Expr.EIndex(x, i) => ast.Expr.EIndex(subst_expr(su, x), subst_expr(su, i))
-		Expr.EMethod(x, m, xs, l, c) => ast.Expr.EMethod(subst_expr(su, x), m, subst_exprs(su, xs), l, c)
+		Expr.EMethod(x, m, xs, l, c) => ast.Expr.EMethod(subst_type_left(su, x), m, subst_exprs(su, xs), l, c)
 		Expr.EListLit(xs) => ast.Expr.EListLit(subst_exprs(su, xs))
 		Expr.EConv(ty, x, as_) => ast.Expr.EConv(subst_ty(su, ty), subst_expr(su, x), as_)
 		Expr.EFmt(x, cv, sp) => ast.Expr.EFmt(subst_expr(su, x), cv, sp)

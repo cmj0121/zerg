@@ -327,6 +327,9 @@ byte)` compiles to a truncation and cc warns about the generated C. `zerg` refus
   `derive` — each arm handing the call to its payload — is a rewrite that exists for any
   spec, so `zerg` derives it. The seed keeps one blessed set for both halves and turns the
   program away; it is the narrower compiler here rather than the wrong one.
+- **A spec's associated fn is refused.** `fn This.f` in a `spec` or its `impl` stops the seed's
+  parser at the `.`, and `T.f()` in a generic body is an undefined name. The compiler's own source
+  uses neither.
 - **An associated type or value in a `spec` is accepted.** GRAMMAR#spec-member derives a
   required signature and a provided method, and nothing else — a spec carries behaviour. The
   seed reads `type Item` and `BITS: int` inside one and carries on; `zerg` refuses both by

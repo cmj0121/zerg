@@ -12404,7 +12404,7 @@ fn c_method(mut &em: Emitter, target: ast.Expr, meth: str, args: list[ast.Expr],
 	# inference is asked anything, because an enum name is not a binding and infers to
 	# nothing — which is why this used to come out as "the method `of` on a ?".
 	en := c_ident_name(target)
-	if en != "" and c_is_enum_name(em, en) {
+	if en != "" and c_is_enum_name(em, en) and not c_enum_declares_fn(em, en, meth) {
 		if em.want_index {
 			c_nx_type_name(em, target, en)
 			c_nx_use(em, l, c, meth, c_nx_var_in(em, en, meth))
@@ -12836,7 +12836,10 @@ fn c_assoc_call(mut &em: Emitter, tn: str, meth: str, args: list[ast.Expr], l: i
 # argument with it.
 fn c_assoc_key(mut &em: Emitter, tn: str, meth: str, args: list[ast.Expr]) -> str {
 	key := c_sig_key(tn, meth)
-	return key if not c_is_generic(em, key)
+
+	# a member of a PARAMETERIZED spec is keyed with its arguments, as a method's is. A generic fn
+	# is asked first: its `$…` keys are its own specializations, never a spec's.
+	return c_sig_key(tn, c_meth_resolved(em, tn, meth)) if not c_is_generic(em, key)
 
 	if not c_gen_is_assoc(em, key) {
 		c_refuse_method_through_type(em, tn, meth)
@@ -12923,6 +12926,13 @@ fn c_assoc_type(mut &em: Emitter, target: ast.Expr, meth: str, args: list[ast.Ex
 	return tn if c_is_struct_name(em, tn)
 	return c_gen_assoc_recv(em, tn, meth, args) if c_gen_struct_row(em, tn) >= 0
 
+	# AN ENUM AND A TYPEDEF ARE TYPES TOO, and each may declare one, which is what lets a spec ask
+	# for it of any implementer (c_enum_declares_fn says what an enum's own name keeps).
+	return tn if c_is_typedef(em, tn) and c_declares_fn(em, tn, meth)
+	return tn if c_is_enum_name(em, tn) and c_enum_declares_fn(em, tn, meth)
+
+	raise c_assoc_on_spec(em, tn, meth, "the spec's own name") if c_is_spec_name(em, tn) and c_spec_declares_assoc(em, tn, meth)
+
 	return ""
 }
 
@@ -13006,6 +13016,28 @@ fn c_impl_tpl_fn_row(mut &em: Emitter, base: str, meth: str) -> int {
 	return -1
 }
 
+# c_enum_declares_fn is whether `E.meth` is a declared fn rather than what an enum's name answers on
+# its own. A variant keeps its name. A declared `of` takes the built-in reverse's: `T.of(…)` has to
+# reach the impl that a spec requires, and the built-in answering it instead would be a wrong value.
+fn c_enum_declares_fn(mut &em: Emitter, en: str, meth: str) -> bool {
+	return not c_is_variant_in(em, en, meth) and c_declares_fn(em, en, meth)
+}
+
+# c_declares_fn is whether the type declares a fn or method by this name, spec-keyed or not.
+fn c_declares_fn(mut &em: Emitter, tn: str, meth: str) -> bool {
+	return c_has_method(em, tn, c_meth_resolved(em, tn, meth)) or c_has_gen_method(em, tn, meth)
+}
+
+# c_spec_declares_assoc is whether the box row of `sp` seats `meth` as an associated fn.
+fn c_spec_declares_assoc(mut &em: Emitter, sp: str, meth: str) -> bool {
+	r := c_sig_row(em, c_sig_key(sp, meth))
+	return r >= 0 and em.sig_assoc[r]
+}
+
+pub fn c_gen_method_is_assoc(mut &em: Emitter, recv: str, meth: str) -> bool {
+	return c_gen_is_assoc(em, c_sig_key(recv, meth))
+}
+
 # c_gen_is_assoc is `is_assoc` for a TEMPLATE, which has no signature row to carry `sig_assoc`.
 fn c_gen_is_assoc(mut &em: Emitter, key: str) -> bool {
 	return em.gen_tpls[c_generic_row(em, key)].is_assoc
@@ -13023,7 +13055,7 @@ fn c_refuse_method_through_type(mut &em: Emitter, tn: str, meth: str) {
 	sp := c_spec_member_of(em, tn, meth)
 	mut why := f"its body uses `this`, so it is reached through an instance (`x.{meth}(…)`) and not through the type (GRAMMAR#impl-decl)"
 	if sp != "" {
-		why = f"it is a member of the spec `{sp}`, and every spec member carries an implicit receiver, so it is reached through an instance (`x.{meth}(…)`) and not through the type (docs/core/specs.md)"
+		why = f"it is a member of the spec `{sp}`, and only `fn This.{meth}` declares an associated fn, so it is reached through an instance (`x.{meth}(…)`) and not through the type (docs/core/specs.md)"
 	} else if parser.p_is_rendering(meth) {
 		why = f"it is a rendering override, which receives the value it renders whatever its body reads, so it is reached through an instance (`x.{meth}()`) and not through the type (docs/runtime/format.md)"
 	}
@@ -13042,10 +13074,17 @@ fn c_spec_member_of(mut &em: Emitter, tn: str, meth: str) -> str {
 	return ""
 }
 
+# c_assoc_on_spec is E3160's one wording; `via` is what the call went through.
+fn c_assoc_on_spec(mut &em: Emitter, sp: str, meth: str, via: str) -> str {
+	return c_diag(em, rule.Rule.AssocFnOnExistential, f"`{meth}` is an associated fn of the spec `{sp}`, and an associated fn needs a named concrete type, which {via} does not give — keep the type, and call it through that (docs/core/specs.md)")
+}
+
 # c_refuse_assoc_through_instance is the other side. The spelling it hands back names the type BARE: a generic receiver's `[…]` would be an index
 # (GRAMMAR#postfix), and `Box.make(…)` solves its arguments from the call (c_assoc_type).
 fn c_refuse_assoc_through_instance(mut &em: Emitter, recv: str, meth: str) {
-	raise c_diag(em, rule.Rule.AssocFnThroughAnInstance, f"`{meth}` is an ASSOCIATED FN of `{recv}` — its body does not use `this`, so it takes no receiver and is reached through the type (`{c_app_base(recv)}.{meth}(…)`) (GRAMMAR#impl-decl)")
+	raise c_assoc_on_spec(em, recv, meth, "a box of it") if c_is_spec_name(em, recv)
+
+	raise c_diag(em, rule.Rule.AssocFnThroughAnInstance, f"`{meth}` is an ASSOCIATED FN of `{recv}` — it takes no receiver, so it is reached through the type (`{c_app_base(recv)}.{meth}(…)`) (GRAMMAR#impl-decl)")
 }
 
 #
@@ -15696,11 +15735,8 @@ fn c_spec_call(mut &em: Emitter, recv: str, meth: str, target: ast.Expr, args: l
 # `Eq`'s `eq`, `Ord`'s comparison, and so `Hash` keying — wants exactly the concrete type
 # erasure removed. Two boxed values are never comparable by value.
 #
-# THE OTHER TWO CANNOT REACH THIS FUNCTION, and both were measured rather than assumed. A
-# spec's member always carries an implicit receiver — `parse_fn_sig` asks for one — so an
-# ASSOCIATED fn is not a thing a spec can declare in this compiler; and a GENERIC method is
-# refused at the impl that would have to exist before anything could be boxed (_E9044_).
-# Neither gets a code, because a code with no raise site is a code that says nothing.
+# THE OTHER TWO ARE REFUSED BY NAME. An ASSOCIATED fn (`fn This.f`) has no receiver to dispatch
+# from, which is E3160 here; a GENERIC method is E3157, before this function is reached.
 #
 # It is not an object-safety gate: the chapter is explicit that a spec is ALWAYS usable as a
 # type, and this is a refusal of the CALL, where the reader asked for the thing that cannot be
@@ -15709,6 +15745,10 @@ fn c_spec_call(mut &em: Emitter, recv: str, meth: str, target: ast.Expr, args: l
 fn c_spec_call_check(mut &em: Emitter, sp: str, meth: str, key: str) {
 	row := c_sig_row(em, key)
 	return if row < 0
+
+	if em.sig_assoc[row] {
+		c_refuse_assoc_through_instance(em, sp, meth)
+	}
 
 	# `This` IS THE SPEC HERE. c_build_sigs seats a spec's members on an `impl S for S`, so a
 	# `This` operand arrives already spelled as the spec — the same name the receiver has, and
@@ -16941,7 +16981,7 @@ fn c_infer_coalesce(mut &em: Emitter, a: ast.Expr, b: ast.Expr) -> ast.Ty {
 fn c_infer_methcall(mut &em: Emitter, target: ast.Expr, meth: str, args: list[ast.Expr]) -> ast.Ty {
 	# `E.of(n)` is partial, so it answers `E?` — see c_enum_of
 	en := c_ident_name(target)
-	if en != "" and c_is_enum_name(em, en) {
+	if en != "" and c_is_enum_name(em, en) and not c_enum_declares_fn(em, en, meth) {
 		return ast.Ty.TOpt(ast.Ty.TNamed(en)) if meth == "of"
 
 		# `Shape.Line(5)` is a value of `Shape`. It is total where `of` is partial: the
@@ -25722,7 +25762,7 @@ fn c_default_method(sp: ast.SpecDecl, ip: ast.ImplDecl, req: ast.FnDecl) -> ast.
 	for pm in req.params {
 		ps.append(ast.Param(pm.name, c_spec_subst(pm.ty, sp, ip), pm.is_ref, pm.has_def, pm.def, pm.line, pm.col))
 	}
-	return ast.FnDecl(req.name, ip.target, ps, req.has_ret, c_spec_subst(req.ret, sp, ip), req.body, req.is_pub, req.path, req.line, req.col, req.tparams, req.tbounds, req.in_unsafe, false, false, true, false, c_impl_spec_of(ip), req.name_line, req.name_col, req.end_line, req.end_col, req.foreign)
+	return ast.FnDecl(req.name, ip.target, ps, req.has_ret, c_spec_subst(req.ret, sp, ip), generic.subst_this(ast.Ty.TNamed(ip.target), req.body), req.is_pub, req.path, req.line, req.col, req.tparams, req.tbounds, req.in_unsafe, false, false, true, req.is_assoc, c_impl_spec_of(ip), req.name_line, req.name_col, req.end_line, req.end_col, req.foreign)
 }
 
 # c_inherited_by is the IMPL a seated default is a member of — its index in `f.impls` — and -1
@@ -25860,6 +25900,8 @@ fn c_obj_src(prog: ast.File, target: str) -> str {
 	mut fields := ""
 	mut inits := ""
 	for req in sp.reqs {
+		raise c_derive_diag(prog, target, rule.Rule.ObjWithAssocFn, f"cannot make an object of `{target}`: `{req.name}` is an associated fn, and an object holds a value's methods — with no receiver there is nothing to capture") if req.is_assoc
+
 		# a `mut fn` is the receiver taken by reference, which the parser records as the
 		# `this` parameter's own marker
 		raise c_derive_diag(prog, target, rule.Rule.ObjWithMutFn, f"cannot make an object of `{target}`: `{req.name}` is a `mut fn`, and a wrapped value is a COPY — writing through it would change something nobody can reach. An object is immutable here") if c_obj_recv_mut(req)
@@ -26041,6 +26083,7 @@ fn c_derive_enum_at(prog: ast.File, target: str) -> int {
 # type; what these three are is a compile error ON THE CALL, which is where the reader is
 # asking for the thing that cannot be done.
 fn c_spec_boxable(req: ast.FnDecl) -> bool {
+	return false if req.is_assoc
 	return false if req.tparams.len() != 0
 	return false if req.params.len() == 0
 	return false if not c_is_this_ty(req.params[0].ty)
@@ -26409,6 +26452,8 @@ fn c_derive_delegate(prog: ast.File, target: str, nm: str) -> str {
 }
 
 fn c_derive_method(ed: ast.EnumDecl, target: str, nm: str, req: ast.FnDecl) -> str {
+	raise c_diag_at(ed.path, ed.line, ed.col, rule.Rule.DeriveSpecEnumAssocFn, f"cannot derive `{nm}` for `{target}`: `{req.name}` is an associated fn, and delegation hands a call to the payload of the variant it matched — with no receiver there is no variant. Write the impl") if req.is_assoc
+
 	mut ps := ""
 	mut args := ""
 	for pm in req.params {

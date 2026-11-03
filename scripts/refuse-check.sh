@@ -3952,6 +3952,230 @@ fn main() {
 EOF
 
 # `is` names one of the built-in error kinds here, where GRAMMAR#cmp-expr takes any type-name.
+# A SPEC'S ASSOCIATED FN. `fn This.f` is the mark, so a case per thing the mark rules out, and one per
+# place a receiver-less member has nothing to work from. The two sides of E3016 differ by which of
+# the spec and the impl carries the mark; the third is an enum whose variant would answer instead.
+expect "$ZERG" assoc-mark-in-an-inherent-impl E2089 <<'EOF'
+struct P {
+	pub n: int
+}
+
+impl P {
+	fn This.make() -> P {
+		return P(1)
+	}
+}
+
+fn main() {
+	print P.make().n
+}
+EOF
+
+expect "$ZERG" assoc-fn-marked-mut E2090 <<'EOF'
+spec S {
+	mut fn This.make() -> This
+}
+
+fn main() {
+	print 1
+}
+EOF
+
+expect "$ZERG" assoc-fn-provided-reads-this E2091 <<'EOF'
+spec S {
+	fn v() -> int
+	fn This.make() -> int {
+		return this.v()
+	}
+}
+
+fn main() {
+	print 1
+}
+EOF
+
+expect "$ZERG" assoc-fn-supplied-reads-this E2091 <<'EOF'
+spec S {
+	fn This.make() -> This
+}
+
+struct P {
+	pub n: int
+}
+
+impl S for P {
+	fn This.make() -> P {
+		return this
+	}
+}
+
+fn main() {
+	print 1
+}
+EOF
+
+expect "$ZERG" assoc-fn-supplied-as-a-method E3016 'write `fn This.make`' <<'EOF'
+spec S {
+	fn This.make() -> This
+}
+
+struct P {
+	pub n: int
+}
+
+impl S for P {
+	fn make() -> P {
+		return P(1)
+	}
+}
+
+fn main() {
+	print 1
+}
+EOF
+
+expect "$ZERG" method-supplied-as-an-assoc-fn E3016 'drop the `This.`' <<'EOF'
+spec S {
+	fn make() -> This
+}
+
+struct P {
+	pub n: int
+}
+
+impl S for P {
+	fn This.make() -> P {
+		return P(1)
+	}
+}
+
+fn main() {
+	print 1
+}
+EOF
+
+expect "$ZERG" assoc-fn-beside-a-variant E3016 'is a variant of `E`' <<'EOF'
+spec S {
+	fn This.zero() -> This
+}
+
+enum E {
+	zero
+	B
+}
+
+impl S for E {
+	fn This.zero() -> E {
+		return E.B
+	}
+}
+
+fn main() {
+	print 1
+}
+EOF
+
+expect "$ZERG" assoc-fn-through-a-box E3160 'a box of it' <<'EOF'
+spec S {
+	fn This.make() -> This
+	fn v() -> int
+}
+
+struct P {
+	pub n: int
+}
+
+impl S for P {
+	fn This.make() -> P {
+		return P(1)
+	}
+
+	fn v() -> int {
+		return this.n
+	}
+}
+
+fn go(s: S) -> int {
+	return s.make().v()
+}
+
+fn main() {
+	print go(P(1))
+}
+EOF
+
+expect "$ZERG" assoc-fn-through-the-spec E3160 'the spec'"'"'s own name' <<'EOF'
+spec S {
+	fn This.make() -> This
+	fn v() -> int
+}
+
+fn main() {
+	print S.make().v()
+}
+EOF
+
+expect "$ZERG" assoc-fn-delegated E3161 <<'EOF'
+spec S {
+	fn This.make() -> This
+}
+
+struct P {
+	pub n: int
+}
+
+impl S for P {
+	fn This.make() -> P {
+		return P(1)
+	}
+}
+
+#[derive(S)]
+enum E {
+	A(P)
+}
+
+fn main() {
+	print 1
+}
+EOF
+
+expect "$ZERG" assoc-fn-in-an-object E3162 <<'EOF'
+#[obj]
+spec S {
+	fn This.make() -> This
+}
+
+fn main() {
+	print 1
+}
+EOF
+
+expect "$ZERG" assoc-fn-type-not-decided E4009 <<'EOF'
+spec S {
+	fn This.make() -> This
+}
+
+fn mk[T: S]() -> T {
+	return T.make()
+}
+
+struct P {
+	pub n: int
+}
+
+impl S for P {
+	fn This.make() -> P {
+		return P(1)
+	}
+}
+
+fn main() {
+	x: P = mk()
+	print x.n
+}
+EOF
+
 # ONE CODE, SEVERAL FORMS. `E9054` names each derive this compiler has not built, and a case
 # per derive pins each: one case standing for the family would let a regression in the other
 # go unseen. The same shape is why `E9056` has a case per list method rather than one for the

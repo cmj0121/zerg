@@ -61,8 +61,8 @@ removes, and `is` tests only identity, never supplying it. Two boxed values are 
 comparable by value**. Box a value to dynamically dispatch its spec's methods; to compare, sort, or key
 it, keep the concrete type (a monomorphized `[T: S]` bound).
 
-The same bar falls on two further member kinds: a spec's **associated functions** (`default() -> This`,
-`zero()` — receiver-less, so a box gives nothing to dispatch _from_) and its **generic methods** (a vtable
+The same bar falls on two further member kinds: a spec's **associated functions** (`fn This.zero() -> This`
+— receiver-less, so a box gives nothing to dispatch _from_) and its **generic methods** (a vtable
 holds one entry per type, not one per type-argument). Each needs a **named concrete type**, so each is a
 compile error **on an existential** — never a ban on using the spec as a type, only on that call, exactly as
 for the binary ops. So there is **no object-safety gate**: a spec is **always usable as a type**, and the box
@@ -90,10 +90,9 @@ box, `list[Conv[int]]` holds two implementers, and one type may implement a spec
 `ast.spec_key`'s throughout: the witness tables were already keyed by name **and** arguments, and the
 members are seated under the same key.
 
-> **[not yet]** Of the three member kinds a box cannot serve, two are reachable and each is refused at the call: a
-> **binary same-type** member is _E3155_, and a **generic method** is _E3157_ — a table holds one slot per
-> required member and a generic one would need one per type argument. An **associated fn** is not something
-> a spec can declare here, because every member carries an implicit receiver.
+Each of the three member kinds a box cannot serve is refused at the call: a **binary same-type** member is
+_E3155_, a **generic method** is _E3157_ — a table holds one slot per required member and a generic one would
+need one per type argument — and an **associated fn** is _E3160_, through a box or through the spec's own name.
 
 Concrete-bound generics are **monomorphized** in the emitted C — the compiler emits a separate
 specialized version for each concrete type — while a spec used as a type is the one place codegen uses
@@ -363,8 +362,8 @@ for a value that IS a list.
 
 A **method** is a function with a **receiver** — the instance it is called on, named **`this`**; the
 receiver's own type is **`This`**. `This` names "the implementing type" wherever the concrete type is not
-yet known — a same-type operand (`less(this, other: This) -> bool`) or the result of an **associated
-function** (`default() -> This`, a constructor — which, having no receiver, has no `this`) — and resolves
+yet known — a same-type operand (`fn less(other: This) -> bool`) or the result of an **associated
+function** (`fn This.zero() -> This`, a constructor — which, having no receiver, has no `this`) — and resolves
 to the concrete type in each implementation. A **parameterized** spec's parameter (`Indexable[K, V]`) is a
 **separate**, freely-chosen type — fixed per impl and folded into the (type, spec) identity. `This` alone
 is the forced self-type, never a choice; there is no third, implementer-chosen kind (Associated types and
@@ -377,6 +376,45 @@ A spec's methods come in two kinds:
   methods on `this`, never fields. An implementer **inherits** it or **overrides** it with a specialized
   version (a faster `contains`, say); an override must still mean the conventional thing, and the
   `(type, spec)` implementation stays canonical either way.
+
+**An associated fn is written `fn This.name`**, in the spec and in the impl that supplies it. A bare
+`fn zero() -> This` stays a method — a spec may require one that ignores its receiver — and a signature has
+no body to tell the two apart, so the mark does. It is reached through a type: `Cents.zero()`, or `T.zero()`
+in code bounded by the spec, which is what a monomorphized `T` is for. A `This.other()` in a member's body is
+the implementer's own, and that body is either kind's: an associated fn can be required or provided.
+
+```zerg
+spec Zero {
+ fn This.zero() -> This
+}
+
+struct Cents {
+ pub v: int
+}
+
+impl Zero for Cents {
+ fn This.zero() -> Cents {
+  return Cents(0)
+ }
+}
+
+fn zero_like[T: Zero](x: T) -> T {
+ return T.zero()
+}
+
+fn main() {
+ print zero_like(Cents(7)).v
+}
+```
+
+The refusals are what the mark implies. An impl must agree with its spec on which kind a member is (_E3016_),
+and so must an enum's variant, whose name would be reached by the same `E.zero`. `mut fn This.f` has no
+receiver to mutate (_E2090_), and a body reading `this` has no instance to read (_E2091_). An inherent `impl`
+takes no mark, since the body decides there (_E2089_). `#[obj]` holds a value's methods and delegating derive
+hands a call to a variant's payload, and with no receiver neither has anything to work from (_E3162_, _E3161_).
+
+> **[not yet]** A type parameter is solved from a call's arguments, so `fn mk[T: Zero]() -> T`, with no argument
+> mentioning `T`, is _E4009_ at the call: nothing yet says which type, and a position's expected type does not.
 
 A provided body is held to field-blindness at the **spec**, where it is written: reading `this.n` there is
 _E3138 `Greet.hello` reads `this.n`, and a spec is field-blind_. The mistake is in the spec and not in any one

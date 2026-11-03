@@ -239,7 +239,7 @@ spec Encode {
     fn encode(mut &out: Sink)
 }
 spec Decode {
-    fn decode(mut &src: Source) -> Result[This]     # This = the reconstructed value
+    fn This.decode(mut &src: Source) -> Result[This]     # This = the reconstructed value
 }
 
 #[derive(Encode, Decode)]             # the compiler reads User's structure, writes both canonical impls

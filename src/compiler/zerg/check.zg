@@ -1522,6 +1522,13 @@ fn chk_impl_not_unsafe(mut &em: emit.Emitter, ip: ast.ImplDecl, sp: ast.SpecDecl
 }
 
 fn chk_impl_member(mut &em: emit.Emitter, f: ast.File, ip: ast.ImplDecl, sp: ast.SpecDecl, req: ast.FnDecl) {
+	# `E.zero` CAN NAME ONE THING. A variant keeps its name, so a spec's `T.zero()` would build the
+	# variant and never run the impl: a wrong value with nothing said.
+	if req.is_assoc and chk_is_variant(f, ip.target, req.name) {
+		chk_member_mismatch(em, ip.path, ip.line, ip.col, ip, sp, req, f"`{req.name}` is a variant of `{ip.target}`, and the associated fn would be reached by the same `{ip.target}.{req.name}`")
+		return
+	}
+
 	for sup in f.fns {
 		# BY THE KEY, NOT THE NAME. A parameterized spec's arguments are folded into its
 		# method's name (emit.c_spec_key), so `into` supplied by `impl Into[Meters]` arrives
@@ -1535,7 +1542,7 @@ fn chk_impl_member(mut &em: emit.Emitter, f: ast.File, ip: ast.ImplDecl, sp: ast
 
 			why := chk_sig_differs(sp, ip, req, sup)
 			if why != "" {
-				chk_at_place(em, sup.path, sup.line, sup.col, rule.Rule.SpecMethodMismatch, f"`{ip.target}.{req.name}` does not match what `{sp.name}` requires: {why}")
+				chk_member_mismatch(em, sup.path, sup.line, sup.col, ip, sp, req, why)
 			}
 			return
 		}
@@ -1549,9 +1556,31 @@ fn chk_impl_member(mut &em: emit.Emitter, f: ast.File, ip: ast.ImplDecl, sp: ast
 	# The signatures are not compared: two type parameters are the same parameter only under a
 	# renaming, and that comparison is `chk_sig_differs` asked of a shape it does not have. What
 	# it costs is a mis-shaped generic member reported at the CALL rather than at the impl.
-	return if emit.c_has_gen_method(em, ip.target, req.name)
+	if emit.c_has_gen_method(em, ip.target, req.name) {
+		if emit.c_gen_method_is_assoc(em, ip.target, req.name) != req.is_assoc {
+			chk_member_mismatch(em, ip.path, ip.line, ip.col, ip, sp, req, f"one is an associated fn (`fn This.{req.name}`) and the other a method")
+		}
+		return
+	}
 
 	chk_at_place(em, ip.path, ip.line, ip.col, rule.Rule.SpecRequirementUnmet, f"`{ip.target}` does not implement `{req.name}`, which `{sp.name}` requires")
+}
+
+# chk_member_mismatch is E3016's one wording: what the impl supplies is not what the spec asks for,
+# and `why` says how.
+fn chk_member_mismatch(mut &em: emit.Emitter, path: str, line: int, col: int, ip: ast.ImplDecl, sp: ast.SpecDecl, req: ast.FnDecl, why: str) {
+	chk_at_place(em, path, line, col, rule.Rule.SpecMethodMismatch, f"`{ip.target}.{req.name}` does not match what `{sp.name}` requires: {why}")
+}
+
+fn chk_is_variant(f: ast.File, target: str, name: str) -> bool {
+	for ed in f.enums {
+		continue if ed.name != target
+
+		for v in ed.variants {
+			return true if v.name == name
+		}
+	}
+	return false
 }
 
 # chk_sig_differs answers WHY two signatures differ, or "" when they do not.
@@ -1561,7 +1590,15 @@ fn chk_impl_member(mut &em: emit.Emitter, f: ast.File, ip: ast.ImplDecl, sp: ast
 # compared position for position with nothing to offset. That is also what makes `mut fn`
 # comparable: it rides as the receiver's `mut &`, exactly like any other parameter's.
 fn chk_sig_differs(sp: ast.SpecDecl, ip: ast.ImplDecl, req: ast.FnDecl, sup: ast.FnDecl) -> str {
-	return f"it takes {chk_args(sup.params.len() - 1)}, and the spec declares {chk_args(req.params.len() - 1)}" if sup.params.len() != req.params.len()
+	return f"the spec's is an associated fn, so write `fn This.{req.name}` — it takes no receiver and is reached through the type" if req.is_assoc and not sup.is_assoc
+	return f"it is an associated fn and the spec's is a method — drop the `This.`, which is what takes the receiver away" if sup.is_assoc and not req.is_assoc
+
+	# an associated fn has no receiver in the list, so nothing is skipped in front of the count
+	mut recv_n := 1
+	if req.is_assoc {
+		recv_n = 0
+	}
+	return f"it takes {chk_args(sup.params.len() - recv_n)}, and the spec declares {chk_args(req.params.len() - recv_n)}" if sup.params.len() != req.params.len()
 
 	mut i := 0
 	for i < req.params.len() {
@@ -1569,7 +1606,7 @@ fn chk_sig_differs(sp: ast.SpecDecl, ip: ast.ImplDecl, req: ast.FnDecl, sup: ast
 		g := sup.params[i]
 		at := strconv.to_string(i, 10)
 
-		if i == 0 {
+		if i == 0 and not req.is_assoc {
 			return "it is a `mut fn` and the spec's is not — a `mut fn` mutates its receiver, so calling it needs a `mut` binding" if g.is_ref and not w.is_ref
 			return "it is not a `mut fn` and the spec's is" if w.is_ref and not g.is_ref
 

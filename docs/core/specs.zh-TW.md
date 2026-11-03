@@ -44,7 +44,7 @@ box——內含 `Ref` 值 refcount-bump）與 `debug`，以及結構性記憶體
 運算元正是抹除掉的具體型別，而 `is` 只測身分、絕不把它交回。兩個 boxed 值因此**永遠不能以值比較**。box 一個值是為了
 動態 dispatch 它的 spec method；要比較、排序或當 key，就留著具體型別（monomorphized 的 `[T: S]` bound）。
 
-同一道關卡也落在另外兩類成員上：spec 的 **associated function**（`default() -> This`、`zero()`——無 receiver，box
+同一道關卡也落在另外兩類成員上：spec 的 **associated function**（`fn This.zero() -> This`——無 receiver，box
 沒有可供分派的 _起點_）與它的**泛型 method**（vtable 每個型別一格、而非每個型別實參一格）。兩者都需要一個**具名的
 具體型別**，所以在 **existential 上**各自是 compile error——這不是禁止該 spec 當型別，只是禁止那一個呼叫，和 binary
 op 完全一樣。因此**沒有 object-safety gate**：一個 spec **永遠可以當型別**，box 就只提供「單憑 `this` 就能分派」的
@@ -68,9 +68,8 @@ box 會 **render**。見證表在 copy 與 drop 旁邊帶著一個 rendering,填
 並列,兩個箱子各自分派到自己那一支。從頭到尾用的都是 `ast.spec_key` 這把鍵:見證表本來就以名字**加上引數**為
 鍵,而成員現在安置在同一把鍵底下。
 
-> **[not yet]** box 服務不了的三種成員裡,兩種到得了、而且各自在呼叫處被拒:**二元同型別**成員是 _E3155_,**泛型方法**是
-> _E3157_——一張表每個必要成員一個槽位,而泛型方法會需要每個型別引數一個。**associated fn** 在這裡不是 spec
-> 宣告得出來的東西,因為每個成員都帶著隱含的接收者。
+box 服務不了的三種成員,各自都在呼叫處被拒:**二元同型別**成員是 _E3155_,**泛型方法**是 _E3157_——一張表每個必要成員
+一個槽位,而泛型方法會需要每個型別引數一個——**associated fn** 則是 _E3160_,不論透過 box 還是 spec 本身的名字。
 
 concrete bound 的 generic 會在產出的 C 裡 **monomorphize**——編譯器為每個具體型別各生成一份特化版本——而把 `spec`
 當型別用是唯一改用 dynamic dispatch 之處。concrete type 之間**沒有 subtyping**，所以泛型是**不變（invariant）**
@@ -291,8 +290,8 @@ test than the grammar writes_。這道拒收,正是讓 `xs is list` 不會對一
 ## Method、`this` / `This` 與 default body
 
 一個 **method** 是帶 **receiver** 的函式——被呼叫的那個實例，名為 **`this`**；receiver 自身的型別是 **`This`**。
-`This` 在「具體型別尚未知」處指「**實作它的那個型別**」——同型別的運算元（`less(this, other: This) -> bool`）、或
-**associated function** 的結果（`default() -> This`，也就是 constructor——它沒有 receiver，所以也沒有 `this`）——並在每個實作裡
+`This` 在「具體型別尚未知」處指「**實作它的那個型別**」——同型別的運算元（`fn less(other: This) -> bool`）、或
+**associated function** 的結果（`fn This.zero() -> This`，也就是 constructor——它沒有 receiver，所以也沒有 `this`）——並在每個實作裡
 解析成具體型別。**帶參數**的 spec 的參數（`Indexable[K, V]`）是**另一件事**：一個自由選的型別——每個 impl 固定
 一次、摺進 (型別, spec) 身分裡；沒有第三種由 implementer 選的型別（見下節）；
 唯有 `This` 是被逼定的 self-type，永非選擇。
@@ -303,6 +302,43 @@ spec 的 method 分兩種：
 - **provided**——簽名**帶 default body**，用 required（及其他 spec）method 作用在 `this` 上定義、碰不到 field。
   implementer **沿用**它、或以特化版**覆寫**（例如更快的 `contains`）；覆寫仍須維持慣常語意，且 `(型別, spec)` 的
   實作無論如何都保持 canonical。
+
+**associated fn 寫成 `fn This.name`**,spec 與供給它的 impl 都這樣寫。單寫 `fn zero() -> This` 仍是方法——spec
+可以要求一個不理會 receiver 的方法——而簽名沒有 body 可供分辨,所以由這個標記決定。它經由型別取用:`Cents.zero()`,
+或在受該 spec 約束的程式碼裡寫 `T.zero()`,這正是單態化的 `T` 的用處。成員 body 裡的 `This.other()` 指實作者自己的
+那一個;associated fn 可以是 required,也可以是 provided。
+
+```zerg
+spec Zero {
+ fn This.zero() -> This
+}
+
+struct Cents {
+ pub v: int
+}
+
+impl Zero for Cents {
+ fn This.zero() -> Cents {
+  return Cents(0)
+ }
+}
+
+fn zero_like[T: Zero](x: T) -> T {
+ return T.zero()
+}
+
+fn main() {
+ print zero_like(Cents(7)).v
+}
+```
+
+這些拒絕都由標記推得。impl 與 spec 必須對成員種類意見一致(_E3016_);enum 的 variant 也一樣,因為它的名字會被同一個
+`E.zero` 取用。`mut fn This.f` 沒有 receiver 可改(_E2090_),讀 `this` 的 body 沒有實例可讀(_E2091_)。inherent
+`impl` 不寫標記,因為那裡由 body 決定(_E2089_)。`#[obj]` 持有值的方法,delegating derive 把呼叫交給 variant 的
+payload,沒有 receiver 時兩者都無從運作(_E3162_、_E3161_)。
+
+> **[not yet]** 型別參數由呼叫的引數解出,所以 `fn mk[T: Zero]() -> T` 沒有引數提到 `T`,在呼叫處是 _E4009_:目前
+> 沒有東西能指定是哪個型別,所在位置的預期型別也不行。
 
 provided body 的 field-blind 是在**寫下它的 spec 上**被檢查的：在那裡讀 `this.n` 會拿到
 _E3138 `Greet.hello` reads `this.n`, and a spec is field-blind_。錯在 spec 而不在任何一個 implementer——這個 body

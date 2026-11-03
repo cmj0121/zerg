@@ -403,6 +403,8 @@ module.exports = grammar({
 				optional("pub"),
 				optional("mut"),
 				"fn",
+				// GRAMMAR#fn-sig: `fn This.f` is a spec's associated fn
+				optional(seq("This", ".")),
 				field("name", $.identifier),
 				optional($.type_parameters),
 				"(",

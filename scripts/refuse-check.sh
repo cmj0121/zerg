@@ -4104,7 +4104,7 @@ fn main() {
 }
 EOF
 
-expect "$ZERG" assoc-fn-through-the-spec E3160 'is a spec' <<'EOF'
+expect "$ZERG" assoc-fn-through-the-spec E3160 'the spec'"'"'s own name' <<'EOF'
 spec S {
 	fn This.make() -> This
 	fn v() -> int

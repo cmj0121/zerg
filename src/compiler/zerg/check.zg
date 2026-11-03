@@ -1525,7 +1525,7 @@ fn chk_impl_member(mut &em: emit.Emitter, f: ast.File, ip: ast.ImplDecl, sp: ast
 	# `E.zero` CAN NAME ONE THING. A variant keeps its name, so a spec's `T.zero()` would build the
 	# variant and never run the impl: a wrong value with nothing said.
 	if req.is_assoc and chk_is_variant(f, ip.target, req.name) {
-		chk_at_place(em, ip.path, ip.line, ip.col, rule.Rule.SpecMethodMismatch, f"`{ip.target}.{req.name}` does not match what `{sp.name}` requires: `{req.name}` is a variant of `{ip.target}`, and the associated fn would be reached by the same `{ip.target}.{req.name}`")
+		chk_member_mismatch(em, ip.path, ip.line, ip.col, ip, sp, req, f"`{req.name}` is a variant of `{ip.target}`, and the associated fn would be reached by the same `{ip.target}.{req.name}`")
 		return
 	}
 
@@ -1542,7 +1542,7 @@ fn chk_impl_member(mut &em: emit.Emitter, f: ast.File, ip: ast.ImplDecl, sp: ast
 
 			why := chk_sig_differs(sp, ip, req, sup)
 			if why != "" {
-				chk_at_place(em, sup.path, sup.line, sup.col, rule.Rule.SpecMethodMismatch, f"`{ip.target}.{req.name}` does not match what `{sp.name}` requires: {why}")
+				chk_member_mismatch(em, sup.path, sup.line, sup.col, ip, sp, req, why)
 			}
 			return
 		}
@@ -1558,12 +1558,18 @@ fn chk_impl_member(mut &em: emit.Emitter, f: ast.File, ip: ast.ImplDecl, sp: ast
 	# it costs is a mis-shaped generic member reported at the CALL rather than at the impl.
 	if emit.c_has_gen_method(em, ip.target, req.name) {
 		if emit.c_gen_method_is_assoc(em, ip.target, req.name) != req.is_assoc {
-			chk_at_place(em, ip.path, ip.line, ip.col, rule.Rule.SpecMethodMismatch, f"`{ip.target}.{req.name}` does not match what `{sp.name}` requires: one is an associated fn (`fn This.{req.name}`) and the other a method")
+			chk_member_mismatch(em, ip.path, ip.line, ip.col, ip, sp, req, f"one is an associated fn (`fn This.{req.name}`) and the other a method")
 		}
 		return
 	}
 
 	chk_at_place(em, ip.path, ip.line, ip.col, rule.Rule.SpecRequirementUnmet, f"`{ip.target}` does not implement `{req.name}`, which `{sp.name}` requires")
+}
+
+# chk_member_mismatch is E3016's one wording: what the impl supplies is not what the spec asks for,
+# and `why` says how.
+fn chk_member_mismatch(mut &em: emit.Emitter, path: str, line: int, col: int, ip: ast.ImplDecl, sp: ast.SpecDecl, req: ast.FnDecl, why: str) {
+	chk_at_place(em, path, line, col, rule.Rule.SpecMethodMismatch, f"`{ip.target}.{req.name}` does not match what `{sp.name}` requires: {why}")
 }
 
 fn chk_is_variant(f: ast.File, target: str, name: str) -> bool {

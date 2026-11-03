@@ -12931,7 +12931,7 @@ fn c_assoc_type(mut &em: Emitter, target: ast.Expr, meth: str, args: list[ast.Ex
 	return tn if c_is_typedef(em, tn) and c_declares_fn(em, tn, meth)
 	return tn if c_is_enum_name(em, tn) and c_enum_declares_fn(em, tn, meth)
 
-	raise c_diag(em, rule.Rule.AssocFnOnExistential, f"`{tn}.{meth}` — `{tn}` is a spec, and an associated fn needs a named concrete type: a box gives nothing to dispatch from, and neither does the spec's own name (docs/core/specs.md)") if c_is_spec_name(em, tn) and c_spec_declares_assoc(em, tn, meth)
+	raise c_assoc_on_spec(em, tn, meth, "the spec's own name") if c_is_spec_name(em, tn) and c_spec_declares_assoc(em, tn, meth)
 
 	return ""
 }
@@ -13074,10 +13074,15 @@ fn c_spec_member_of(mut &em: Emitter, tn: str, meth: str) -> str {
 	return ""
 }
 
+# c_assoc_on_spec is E3160's one wording; `via` is what the call went through.
+fn c_assoc_on_spec(mut &em: Emitter, sp: str, meth: str, via: str) -> str {
+	return c_diag(em, rule.Rule.AssocFnOnExistential, f"`{meth}` is an associated fn of the spec `{sp}`, and an associated fn needs a named concrete type, which {via} does not give — keep the type, and call it through that (docs/core/specs.md)")
+}
+
 # c_refuse_assoc_through_instance is the other side. The spelling it hands back names the type BARE: a generic receiver's `[…]` would be an index
 # (GRAMMAR#postfix), and `Box.make(…)` solves its arguments from the call (c_assoc_type).
 fn c_refuse_assoc_through_instance(mut &em: Emitter, recv: str, meth: str) {
-	raise c_diag(em, rule.Rule.AssocFnOnExistential, f"`{meth}` is an associated fn of the spec `{recv}`, and a box of it has forgotten the concrete type an associated fn needs — keep the type, and call it through that (docs/core/specs.md)") if c_is_spec_name(em, recv)
+	raise c_assoc_on_spec(em, recv, meth, "a box of it") if c_is_spec_name(em, recv)
 
 	raise c_diag(em, rule.Rule.AssocFnThroughAnInstance, f"`{meth}` is an ASSOCIATED FN of `{recv}` — it takes no receiver, so it is reached through the type (`{c_app_base(recv)}.{meth}(…)`) (GRAMMAR#impl-decl)")
 }

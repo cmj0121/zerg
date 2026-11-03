@@ -2288,7 +2288,7 @@ fn parse_spec(mut &p: Parser, start: token.Token, is_pub: bool) -> ast.SpecDecl 
 				p.saw_this = false
 				b := parse_block(p)
 				e := p_ended(p)
-				raise p_diag_at(p, mt.line, mt.col, rule.Rule.AssocFnReadsThis, f"`fn This.{sig.name}` is an associated fn and reads `this` — it takes no receiver, so there is no instance to read (GRAMMAR#fn-sig)") if sig.is_assoc and p.saw_this
+				raise p_assoc_reads_this(p, mt, sig.name) if sig.is_assoc and p.saw_this
 
 				p.saw_this = outer_this or p.saw_this
 				reqs.append(ast.FnDecl(sig.name, sig.recv, sig.params, sig.has_ret, sig.ret, b, sig.is_pub, sig.path, sig.line, sig.col, sig.tparams, sig.tbounds, sig.in_unsafe, false, false, true, sig.is_assoc, "", sig.name_line, sig.name_col, e.line, e.col, ""))
@@ -3125,7 +3125,7 @@ fn parse_fn_at(mut &p: Parser, start: token.Token, is_pub: bool, recv: str, recv
 	body := parse_block(p)
 	e := p_ended(p)
 	p_tp_scope(p, start, head.tparams.len())
-	raise p_diag_at(p, start.line, start.col, rule.Rule.AssocFnReadsThis, f"`fn This.{head.name}` is an associated fn and reads `this` — it takes no receiver, so there is no instance to read (GRAMMAR#fn-sig)") if head.is_assoc and p.saw_this
+	raise p_assoc_reads_this(p, start, head.name) if head.is_assoc and p.saw_this
 
 	is_assoc := head.is_assoc or (assoc_ok and not p.saw_this and not p_is_rendering(head.name))
 	p.saw_this = outer_this or p.saw_this
@@ -3152,6 +3152,11 @@ pub fn p_is_rendering(name: str) -> bool {
 # p_with_receiver puts `this` back at the FRONT of the parameter list, where the head would have
 # put it. A method is an ordinary function whose first argument happens to be called `this`, and
 # everything below the parser depends on that being the first one.
+# p_assoc_reads_this is E2091's one wording, for a spec's member and an impl's alike.
+fn p_assoc_reads_this(mut &p: Parser, at: token.Token, name: str) -> str {
+	return p_diag_at(p, at.line, at.col, rule.Rule.AssocFnReadsThis, f"`fn This.{name}` is an associated fn and reads `this` — it takes no receiver, so there is no instance to read (GRAMMAR#fn-sig)")
+}
+
 fn p_with_receiver(recv: str, recv_mut: bool, ps: list[ast.Param]) -> list[ast.Param] {
 	mut out: list[ast.Param] = [ast.Param("this", p_ty_of_name(recv), recv_mut, false, ast.Expr.ENil, 0, 0)]
 	for pm in ps {

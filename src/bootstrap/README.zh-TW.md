@@ -261,6 +261,8 @@ chan[int]() }`——或任何不是字面值、模組常數，或它們之間算
 - **enum 上的 `#[derive(S)]`，若 `S` 是你自己寫的 spec，會被拒絕。** `derive` 中負責轉交的那一半——每個 arm
   把呼叫交給自己的 payload——是一套對任何 spec 都成立的改寫，所以 `zerg` 會把它 derive 出來。種子則兩半都
   只認一組欽定的名單，直接把程式擋下；在這一項上它是較窄的那個編譯器，而不是錯的那個。
+- **spec 的 associated fn 會被拒絕。** `spec` 或其 `impl` 裡的 `fn This.f`,種子的 parser 讀到 `.` 就停下;泛型 body 裡的
+  `T.f()` 是 undefined name。編譯器自己的原始碼兩者都沒用到。
 - **`spec` 裡的關聯型別或關聯值會被接受。** GRAMMAR#spec-member 推導得出的只有必要簽章與 provided
   method，別無其他——spec 承載的是行為。種子讀到其中的 `type Item` 與 `BITS: int` 會照樣走下去；`zerg`
   兩者都指名拒絕。（兩者皆非的成員，像 `SIZE := 4096`，種子倒是會擋。）

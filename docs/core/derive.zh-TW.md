@@ -125,8 +125,8 @@ impl Show for Shape {
 ## 可 derive 的 spec 清單
 
 這組受祝福的 spec——每個都有一份 compiler 擁有的 canonical 結構解讀。每一個都經由 `derive` **opt-in**;
-**沒有**自動導出的相等,也沒有隱含的 `Object` spec。**`Eq`**、**`From`**、**`Ord`** 與 **`Hash`** 已建;
-**`Encode`** 與 **`Decode`** 在此規範、但 **[not yet]**——指名其一是 `E9054`。
+**沒有**自動導出的相等,也沒有隱含的 `Object` spec。**`Eq`**、**`From`**、**`Ord`**、**`Hash`**、
+**`Encode`** 與 **`Decode`** 都已建;後兩者是 `codec` 模組的 spec,所以 derive 其中之一的檔案要 import 它。
 
 標在**泛型**目標上的 derive,會為它的每一次實例化各推導一份:`#[derive(Eq)] struct Box[T]` 是一個用該型別自己的
 參數寫出來的實作,並如同任何 `impl[T]` 那樣依每次實例化被具現(見 [Spec 與 Generics](specs.zh-TW.md))。它讀一次
@@ -149,13 +149,13 @@ variant 一個 arm,arm 裡面再對另一個運算元做第二層 `match`。tag 
 回答,而那是逐對寫成字面值的——帶值 variant 的 enum,它的 tag 是不透明、只能 match 的(`E4006`),沒有 discriminant
 可以相減。
 
-| Spec     | 結構規則                                      | 要求（每欄位） | 排除                           |
-| -------- | --------------------------------------------- | -------------- | ------------------------------ |
-| `Eq`     | 逐欄位 `eq`/`ne`（`==` / `!=`）               | `Eq`           | `chan` / `Ref` / `fn`          |
-| `Ord`    | 逐欄位 lexicographic、再依 variant 順序       | `Eq` 與 `Ord`  | 任何 `float` 欄位              |
-| `Hash`   | 合併各欄位 / tag 的 hash（`equal ⇒ 同 hash`） | `Hash`         | 任何 `float` 欄位              |
-| `Encode` | product 逐欄位、sum 先 tag 再 payload         | `Encode`       | `chan` / `Ref` / `fn` / handle |
-| `Decode` | 逐欄位 / 由 tag + payload 重建                | `Decode`       | `chan` / `Ref` / `fn` / handle |
+| Spec     | 結構規則                                      | 要求（每欄位） | 排除                  |
+| -------- | --------------------------------------------- | -------------- | --------------------- |
+| `Eq`     | 逐欄位 `eq`/`ne`（`==` / `!=`）               | `Eq`           | `chan` / `Ref` / `fn` |
+| `Ord`    | 逐欄位 lexicographic、再依 variant 順序       | `Eq` 與 `Ord`  | 任何 `float` 欄位     |
+| `Hash`   | 合併各欄位 / tag 的 hash（`equal ⇒ 同 hash`） | `Hash`         | 任何 `float` 欄位     |
+| `Encode` | product 逐欄位、sum 先 tag 再 payload         | `Encode`       | 沒有列的形式          |
+| `Decode` | 逐欄位 / 由 tag + payload 重建                | `Decode`       | 沒有列的形式          |
 
 `Eq` 是 `struct` / `enum` 上 `==` / `!=` 的唯一來源:一個既無 `#[derive(Eq)]`、也無手寫 `impl Eq` 的型別**不能**
 用 `==` 比較——那是編譯錯誤、不是靜默的結構化 default。`Ord` 要求 `Eq`(super-spec `spec Ord: Eq`),所以
@@ -201,61 +201,49 @@ canonical `±0.0`、把 `NaN` 放在一端來處理）。
 
 ## Serialization——完整範例
 
-> **[not yet]** `Encode` / `Decode`——以及下方用到的 `Sink` / `Source` spec——都已規範、但尚未實作;
-> 今天 `#[derive(Encode, Decode)]` 是 _E9054_。以下範例展示的是
-> 結構化 derive **意圖中**的樣貌。
-
 serialization 正是 structural derive 存在的目的：一種機械式、逐欄位的對映，沒人該為每個型別手寫，但它
-既不需要 reflection、也不需要 macro。
+既不需要 reflection、也不需要 macro。這兩個 spec,以及它們寫入時經過的兩個游標,都屬於 `codec` 模組,所以
+derive 其中任一個的檔案要 import 它;沒有 import 的檔案裡的 derive 是 _E4125_。
 
-```text
-# stdlib spec——behavioral 介面，與每個 spec 一樣 field-blind
-spec Encode {
-    fn encode(mut &out: Sink)
-}
-spec Decode {
-    fn This.decode(mut &src: Source) -> Result[This]     # This = 重建出的值
-}
+```zerg
+import "codec"
 
-#[derive(Encode, Decode)]             # compiler 讀 User 的結構，寫出兩份 canonical impl
+#[derive(Encode, Decode)]
 struct User {
-    id:    int
-    name:  str
-    tags:  list[str]
-    email: str?
+ pub id: int
+ pub name: str
+ pub tags: list[str]
+ pub email: str?
+}
+
+fn main() {
+ mut out := codec.Encoder()
+ User(1, "ann", ["a"], nil).encode(out)
+ mut src := codec.Decoder(out.bytes)
+ back := User.decode(src)!
+ print back.name
 }
 ```
 
-compiler 生成的內容——概念示意，你永遠不會寫、也看不到——就是顯而易見的逐欄位走訪，每個欄位委派給
-**它自己的** `Encode`：
+`codec` 把 `Encode` 宣告成 `fn encode(mut &out: Encoder)`,把 `Decode` 宣告成 associated fn
+`fn This.decode(mut &src: Decoder) -> Result[This]`,因為此時還沒有值可以呼叫它。
 
-```text
-impl Encode for User {                            # 生成，非手寫
-    fn encode(mut &out: Sink) {
-        out.begin(4)
-        out.field("id")
-        this.id.encode(out)
-        out.field("name")
-        this.name.encode(out)
-        out.field("tags")
-        this.tags.encode(out)     # list[str]：長度，再逐個 str
-        out.field("email")
-        this.email.encode(out)    # str?：是否存在，再值
-        out.end()
-    }
-}
-```
+`Encoder` 把位元組收進 `bytes`,`Decoder(bytes)` 則從前面讀回來。兩者都是具體型別而不是 spec:spec 參數是一個
+box,而 `mut &` 後面的 box 會讓每個位元組都經過一次分派。derive 出的 `encode` 依宣告順序寫出每個欄位的列;型別是
+宣告型別的欄位,呼叫該型別自己的 `encode`,`decode` 同樣經由 `T.decode(src)`。內建型別沒有 impl 可委派
+(_E9047_),所以它的列直接寫在欄位處。
 
 sum 型別依 variant derive 也是同一套——**先 tag、再 payload**。
 
-**位元組。** 全部是小端，也不補齊。`begin`、`field` 與 `end` 不寫任何位元組：交給 `field` 的名字是走訪，
-不是線上的位元組。`Sink` 寫出一個值的位元組，`Source` 把同一串讀回來。嵌在別的值裡的值——欄位、list 元素、
-payload、有值的 `T?` 裡的 `T`——走同一列，而自動 box 的遞迴槽寫的是那個值，不是那個 box。
+**位元組。** 全部是小端，也不補齊。`Encoder` 寫出一個值的位元組,`Decoder` 把同一串讀回來。嵌在別的值裡的
+值——欄位、list 元素、payload、有值的 `T?` 裡的 `T`——走同一列，而自動 box 的遞迴槽寫的是那個值，不是那個 box。
 
 | 形式      | 位元組                                             |
 | --------- | -------------------------------------------------- |
 | `int`     | 8 個位元組、小端、二補數                           |
 | `uint`    | 8 個位元組、小端、無號                             |
+| `bool`    | 一個位元組:`00` 是 false、`01` 是 true             |
+| `byte`    | 那個位元組                                         |
 | `str`     | 一個 `uint` 的位元組數，再接那些 UTF-8 位元組      |
 | `list[T]` | 一個 `uint` 的元素數，再接每個元素                 |
 | `T?`      | 一個位元組：`0` 是 nil、`1` 是有值，有值才接上 `T` |
@@ -279,7 +267,26 @@ enum 先把 tag 寫成一個 `int`，再把括號裡的每個 payload 型別依�
 `enum E { A; B = 4 }` 把 `B` 寫成 `04 00 00 00 00 00 00 00`。`enum Shape { Dot; Line(int) }` 把 `Line(3)`
 寫成 `int` `1` 的八個位元組再接 `int` `3` 的八個位元組，把 `Dot` 寫成 `int` `0` 的八個位元組。
 
-`bool`、`byte`、`rune` 與 `float` 沒有列。`chan`、`Ref`、`fn` 與 handle 則是上面那張表已經排除的。
+**沒有列的形式在欄位處被拒絕**(_E4124_):`rune`、`float`、tuple、固定長度陣列、`map` 與 `set` 沒有列,
+`chan`、`Ref`、`fn` 與 handle 是 identity 而不是值,而宣告型別只有自己具備該 spec 時才能委派。型別是套用後泛型
+型別的欄位,例如 `Box[int]`,經由它自己的 `encode` 編碼,它的 `decode` 則被拒絕:`Box.decode(src)` 沒有任何
+引數提到 `T`,所以無從決定。
+
+**`decode` 在哪些輸入上失敗。** 以下每一種都是 `Result` 的失敗,絕不是 abort:
+
+- 輸入在值結束前就用完;
+- 沒有任何 variant 的 tag,無欄位 enum 與帶 payload 的 enum 皆然;
+- optional 的存在位元組或 `bool` 既不是 `00` 也不是 `01`;
+- 一個放不進 `int` 的個數,或大於其後剩餘位元組數的個數——在為它建立任何東西之前就檢查,所以由空 struct
+  組成的 list 也受同一個上限約束;
+- 位元組不是合法 UTF-8 或含有 NUL 的 `str`,經由 `guard { str(bytes) }` 讀取。
+
+值之後剩下的位元組**不是** `decode` 的失敗:巢狀的值後面一定還有位元組,所以輸入是否該在那裡結束,是呼叫端的
+問題,由 `src.remaining()` 回答。
+
+> **[not yet]** 在**泛型**型別上,每個參數都以該 spec 為 bound——`impl[T: Encode] Encode for Box[T]`——而內建
+> 型別沒有它的 impl,所以 `Box[int]` 在使用處是 _E4010_。對它呼叫 derive 出的 `decode` 是 _E4009_:型別參數由
+> 呼叫的引數解出,而 `Box.decode(src)` 沒有任何引數提到它。
 
 當線上格式必須不同——換一個 key、或刻意不把某個欄位放上線——就**手寫 impl 而非 derive**；它取代生成的那一份，
 所以仍是唯一 canonical 實作，仍然沒有 macro。

@@ -322,7 +322,7 @@ would work, and the reader is the one who knows which.
 
 A specific width is the opt-in layout decorator `#[repr]` (**[not yet]** —
 reserved and rejected loudly today as _E9005_, see [Decorators](decorators.md)); the serialized/wire form is
-the `Encode` / `Decode` impl (**[not yet]** — _E9054_), never a decorator.
+the `Encode` / `Decode` impl ([Derive](derive.md)), never a decorator.
 
 A **payload** `enum` (any variant carries fields) keeps its **tag opaque and match-only** — no `= 5` is
 allowed, and you `match` on the variant, never on a tag. To bind such a variant to a specific integer,

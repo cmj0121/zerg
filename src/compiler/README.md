@@ -159,7 +159,7 @@ passing is a regression and fails the target, and deleting a name from that file
 gate for the feature that name waits on.
 
 What is held back is refused **by name** rather than mis-emitted, and the name's line says
-with which **code** — `derive_ord` waits on _E9054_, `derive_enum` on _E9055_.
+with which **code** — `derive_enum` waits on _E9055_.
 
 Deleting a name is the gate in one direction only, and for a while that was the whole
 mechanism: `gen_struct` stayed on the list after generic structs were built, and this

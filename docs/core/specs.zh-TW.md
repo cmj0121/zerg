@@ -22,8 +22,8 @@ Zerg 如何抽象行為——`spec` 介面、泛型 bound、spec 當型別用的
   **`#[derive(Eq)]`** 或手寫 `impl Eq` 才取得結構化相等（`==` / `!=`）,透過 `derive(Ord)` 取得全序,透過
   `derive(Hash)` 取得雜湊;比較兩個沒有 `Eq` impl 的型別的值是編譯錯誤。上面那些結構性
   記憶體操作是例外,因為那些是表徵的性質、不是 spec 抽象的行為。撐起 `derive` 的那套 compiler 擁有的
-  **結構化衍生**（**`Eq`**、**`Ord`** 與 **`Hash`** 在 `struct` 與 `enum`（不論有無 payload）上已建置;
-  `Encode`、`Decode` 為 **[not yet]**——_E9054_）
+  **結構化衍生**（**`Eq`**、**`Ord`**、**`Hash`**、**`Encode`** 與 **`Decode`** 在 `struct` 與 `enum`
+  （不論有無 payload）上已建置）
   見 [Derive 與預設行為](derive.zh-TW.md) 參考。
 
 `spec` 也可**當型別用**，不只是 bound：spec-typed 的值可持有任何實作它的型別——heap-boxed、single-owner、

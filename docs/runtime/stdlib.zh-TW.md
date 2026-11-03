@@ -58,6 +58,7 @@ syscall／硬體 leaf 在 C runtime（見 [`src/runtime`](../../src/runtime/READ
 | [`math`](#math)       | `import "math"`    | 數值輔助與純 Zerg transcendentals      |
 | [`rand`](#rand)       | `import "rand"`    | 確定性、非密碼學的產生器               |
 | [`sha256`](#sha256)   | `import "sha256"`  | FIPS 180-4 摘要,用來命名與驗完整性     |
+| [`codec`](#codec)     | `import "codec"`   | `#[derive(Encode, Decode)]` 的線上格式 |
 | [`cli`](#cli)         | `import "cli"`     | 宣告式的命令列，以及它算繪的 help      |
 | [`atomic`](#atomic)   | `import "atomic"`  | 安全的共享可變原語                     |
 | [`ffi`](#ffi)         | `import "ffi"`     | 在 `unsafe` 分組裡綁定 C 函式庫的符號  |
@@ -255,6 +256,22 @@ FIPS 180-4 規範的 SHA-256,以純 Zerg 寫成、只用 `uint` 與位元運算�
 它**不是 constant-time**,也不宣稱是。用它來「以內容為某個東西命名」、察覺檔案變了、或當 cache key;不要用它
 檢查密碼。`make sha256` 拿標準的 known-answer vectors 與系統工具(隨機輸入)來釘它——oracle 對它無效,因為兩個
 編譯器跑的是同一份原始碼。
+
+## `codec`
+
+derive 出的 `Encode` 寫出、derive 出的 `Decode` 讀回的線上格式——位元組列見 [Derive 與預設行為](../core/derive.zh-TW.md)。
+derive 其中任一個 spec 的檔案要 import 這個模組。`Encode` 是 `fn encode(mut &out: Encoder)`,`Decode` 是
+`fn This.decode(mut &src: Decoder) -> Result[This]`。
+
+| 成員                                          | 說明                                      |
+| --------------------------------------------- | ----------------------------------------- |
+| `Encoder()`、`.bytes`                         | 目前已寫出的位元組                        |
+| `put_int` `put_uint` `put_str` `put_bool`     | 各寫一列;`put_byte` 寫一個位元組          |
+| `Decoder(bytes)`、`.at`、`remaining()`        | 位元組上的游標,以及還剩多少               |
+| `take_int` `take_uint` `take_str` `take_byte` | 各讀一列,回傳 `Result`                    |
+| `take_count()`、`take_flag(what)`             | 經檢查的個數;`00`/`01` 位元組,讀成 `bool` |
+
+每個 `take_*` 都回傳 `Result`,所以過短或格式錯誤的輸入是一個值,絕不是 abort。
 
 ## `log`
 

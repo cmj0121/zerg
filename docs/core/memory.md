@@ -22,7 +22,7 @@ the live-allocation counts to be equal, so a value kept per round shows as a dif
   invalidated. Move is only a silent optimization when the source is dead afterward.
 
 A **spec-typed position allocates**, and it is the first wrap that does. Every other one is free: `x: int? =
-5` sets a tag beside the value, and `Ok(v)` and `Left(v)` pick a side of a union — each a compound literal
+5` sets a tag beside the value, and `Left(v)` and `Right(e)` pick a side of an `Either` — each a compound literal
 with a tag in it, and no allocation anywhere. A spec-typed position has nowhere to put a value whose size it
 does not know, so `sk: Sink = Stderr()` builds
 a **counted cell** — `[ header | witness table | payload ]` — and the position hands on a pointer to it.

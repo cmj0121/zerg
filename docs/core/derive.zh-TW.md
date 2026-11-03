@@ -214,7 +214,7 @@ spec Encode {
     fn encode(mut &out: Sink)
 }
 spec Decode {
-    fn decode(mut &src: Source) -> Result[This]     # This = 重建出的值
+    fn This.decode(mut &src: Source) -> Result[This]     # This = 重建出的值
 }
 
 #[derive(Encode, Decode)]             # compiler 讀 User 的結構，寫出兩份 canonical impl

@@ -681,8 +681,13 @@ variant      ::= identifier ( '(' type ( ',' type )* ')' )? ( '=' const-expr )? 
 # A single-output protocol is written by parameterizing the spec instead ('spec Iterable[T]',
 # pinned by coherence), and a per-impl constant is an ordinary TYPE CONSTANT (a 'val-bind' in
 # the impl, group 7) — which no spec demands and none can require.
-spec-member  ::= fn-sig | fn-decl               # a required method, or a provided one
-fn-sig       ::= 'mut'? 'fn' identifier generics? '(' param-list? ')' ret-type?
+#
+# 'fn This.f' IS AN ASSOCIATED FN of the spec: no receiver, no 'this', reached through a type
+# ('Cents.zero()', 'T.zero()' under a bound). A signature has no body to decide by and a bare
+# 'fn zero() -> This' is a method, so the mark is what says which. An impl supplies one with the
+# same mark; an inherent impl has no mark, since there the body decides (impl-decl).
+spec-member  ::= fn-sig | fn-decl               # a required member, or a provided one
+fn-sig       ::= 'mut'? 'fn' ( 'This' '.' )? identifier generics? '(' param-list? ')' ret-type?
 
 # ==================================================================================
 # 8. Null-safety & Errors

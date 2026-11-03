@@ -200,6 +200,9 @@ shipping compiler rather than a part of it (the line
 | `E2086` | an `asm` operand's CONSTRAINT is a string literal                                                     |
 | `E2087` | an `asm` operand opens with `in`, `out`, `inout` or `clobber`                                         |
 | `E2088` | a `..` in a destructuring target comes last                                                           |
+| `E2089` | `fn This.…` in an inherent `impl`, where the body decides                                             |
+| `E2090` | `mut fn This.…` — an associated fn has no receiver to mutate                                          |
+| `E2091` | `fn This.…` whose body reads `this`                                                                   |
 | `E3001` | `…` is not a public member of module `…`                                                              |
 | `E3002` | `…` is not a place, and an assignment needs one                                                       |
 | `E3003` | cannot assign to `…`: it is a module `const`, and a constant is never written                         |
@@ -358,6 +361,9 @@ shipping compiler rather than a part of it (the line
 | `E3157` | a generic method called on a boxed value                                                              |
 | `E3158` | a type position qualifies a type this file also declares as its own private one                       |
 | `E3159` | a `type` declaration whose chain of `type` declarations goes round a cycle                            |
+| `E3160` | an associated fn of a spec, reached through a box or the spec                                         |
+| `E3161` | `#[derive(S)]` on an enum, and `S` declares an associated fn                                          |
+| `E3162` | `#[obj]` on a spec that declares an associated fn                                                     |
 | `E4001` | `…` outside of a loop: it belongs to a `for`, and a `select` arm is not one                           |
 | `E4002` | a `from` cause is an `Err`, and … is not one                                                          |
 | `E4004` | `…(…)` names one side of an `Either`, which holds exactly one value                                   |

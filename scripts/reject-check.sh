@@ -1101,8 +1101,8 @@ fn main() {
 }
 EOF
 
-# A SPEC impl's member is a method whatever its body reads (docs/core/specs.md: every member
-# carries an implicit receiver), so its reason is the spec's and never a `this` it did not write.
+# A SPEC impl's member is a method whatever its body reads (docs/core/specs.md: only `fn This.f`
+# declares an associated fn), so its reason is the spec's and never a `this` it did not write.
 
 reject a-spec-member-reached-through-its-type E3151 'member of the spec `Shape`' <<'EOF'
 spec Shape {

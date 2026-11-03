@@ -176,6 +176,9 @@ seed 全程維持句子比對:代碼是語言的契約,而 seed 是建置正式�
 | `E2086` | `asm` 運算元的 CONSTRAINT 是一個字串字面量                                                            |
 | `E2087` | `asm` 運算元以 `in`、`out`、`inout` 或 `clobber` 開頭                                                 |
 | `E2088` | 解構 target 裡的 `..` 要放在最後                                                                      |
+| `E2089` | inherent `impl` 裡的 `fn This.…`,那裡由 body 決定                                                     |
+| `E2090` | `mut fn This.…`——associated fn 沒有 receiver 可改                                                     |
+| `E2091` | `fn This.…` 的 body 讀了 `this`                                                                       |
 | `E3001` | `…` 不是 module `…` 的公開成員                                                                        |
 | `E3002` | `…` 不是一個位置,而賦值需要一個                                                                       |
 | `E3003` | 不能對 `…` 賦值:它是 module `const`,而常數永遠不被寫入                                                |
@@ -334,6 +337,9 @@ seed 全程維持句子比對:代碼是語言的契約,而 seed 是建置正式�
 | `E3157` | 在裝箱的值上呼叫泛型方法                                                                              |
 | `E3158` | 型別位置加了限定詞的型別，本檔案也以私有型別宣告了同名的一個                                          |
 | `E3159` | `type` 宣告沿著 `type` 宣告鏈繞回自己，沒有底層型別                                                   |
+| `E3160` | 透過箱子或 spec 本身去叫 spec 的 associated fn                                                        |
+| `E3161` | enum 上的 `#[derive(S)]`,而 `S` 宣告了 associated fn                                                  |
+| `E3162` | 宣告了 associated fn 的 spec 上的 `#[obj]`                                                            |
 | `E4001` | `break` / `continue` 在它所屬的迴圈之外                                                               |
 | `E4002` | `raise … from` 的 cause 不是 `Err`                                                                    |
 | `E4004` | `…(…)` names one side of an `Either`, which holds exactly one value                                   |

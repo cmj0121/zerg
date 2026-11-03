@@ -2284,9 +2284,14 @@ fn parse_spec(mut &p: Parser, start: token.Token, is_pub: bool) -> ast.SpecDecl 
 			# method that does nothing and a signature is a requirement — two different things
 			# with the same body.
 			if p_at(p, token.Kind.LBrace) {
+				outer_this := p.saw_this
+				p.saw_this = false
 				b := parse_block(p)
 				e := p_ended(p)
-				reqs.append(ast.FnDecl(sig.name, sig.recv, sig.params, sig.has_ret, sig.ret, b, sig.is_pub, sig.path, sig.line, sig.col, sig.tparams, sig.tbounds, sig.in_unsafe, false, false, true, false, "", sig.name_line, sig.name_col, e.line, e.col, ""))
+				raise p_diag_at(p, mt.line, mt.col, rule.Rule.AssocFnReadsThis, f"`fn This.{sig.name}` is an associated fn and reads `this` — it takes no receiver, so there is no instance to read (GRAMMAR#fn-sig)") if sig.is_assoc and p.saw_this
+
+				p.saw_this = outer_this or p.saw_this
+				reqs.append(ast.FnDecl(sig.name, sig.recv, sig.params, sig.has_ret, sig.ret, b, sig.is_pub, sig.path, sig.line, sig.col, sig.tparams, sig.tbounds, sig.in_unsafe, false, false, true, sig.is_assoc, "", sig.name_line, sig.name_col, e.line, e.col, ""))
 			} else {
 				reqs.append(sig)
 			}
@@ -3108,6 +3113,10 @@ fn p_impl_spec_of(sp: str, args: list[ast.Ty]) -> str {
 fn parse_fn_at(mut &p: Parser, start: token.Token, is_pub: bool, recv: str, recv_mut: bool, in_unsafe: bool, is_test: bool, is_fixture: bool, assoc_ok: bool, spec_of: str) -> ast.FnDecl {
 	head := parse_fn_head_at(p, start, is_pub, recv, recv_mut, in_unsafe, not assoc_ok)
 
+	# THE MARK IS A SPEC'S. An inherent `impl` already has its one spelling — the body decides
+	# (GRAMMAR#impl-decl) — and a second one could only come to disagree with it.
+	raise p_diag_at(p, start.line, start.col, rule.Rule.AssocMarkInInherent, f"`fn This.{head.name}` belongs to a `spec` and its `impl` — in an inherent `impl` the body decides, so write `fn {head.name}` and leave `this` unused (GRAMMAR#impl-decl)") if assoc_ok and head.is_assoc
+
 	# SAVED AND RESTORED around the body, the discipline every parser flag here follows: a `fn`
 	# is read inside another declaration often enough — a closure in a default, a nested block —
 	# that leaving it set would make the next member a method for a `this` it never wrote.
@@ -3116,7 +3125,9 @@ fn parse_fn_at(mut &p: Parser, start: token.Token, is_pub: bool, recv: str, recv
 	body := parse_block(p)
 	e := p_ended(p)
 	p_tp_scope(p, start, head.tparams.len())
-	is_assoc := assoc_ok and not p.saw_this and not p_is_rendering(head.name)
+	raise p_diag_at(p, start.line, start.col, rule.Rule.AssocFnReadsThis, f"`fn This.{head.name}` is an associated fn and reads `this` — it takes no receiver, so there is no instance to read (GRAMMAR#fn-sig)") if head.is_assoc and p.saw_this
+
+	is_assoc := head.is_assoc or (assoc_ok and not p.saw_this and not p_is_rendering(head.name))
 	p.saw_this = outer_this or p.saw_this
 
 	mut params := head.params
@@ -3217,6 +3228,18 @@ fn parse_fn_head_at(mut &p: Parser, start: token.Token, is_pub: bool, recv: str,
 	# statement is emitted, so no SAt marker has spoken yet and this is the place it reports at.
 	p_advance(p) # 'fn'
 
+	# `fn This.zero()` — a spec's ASSOCIATED FN, and an impl's supply of one (GRAMMAR#fn-sig). A
+	# required signature has no body to decide by, and the bare `fn zero() -> This` is already a
+	# method (a spec may well require one that ignores its receiver), so the mark is what says
+	# which. It is read here because it is the one thing that takes the receiver away.
+	is_assoc := recv != "" and cur(p).kind == token.Kind.Ident and cur(p).lexeme == "This" and peek_kind(p, 1) == token.Kind.Dot
+	if is_assoc {
+		raise p_diag_at(p, start.line, start.col, rule.Rule.AssocFnIsMut, "an associated fn is never a `mut fn` — `fn This.f` takes no receiver, so there is nothing for it to mutate (GRAMMAR#fn-sig)") if recv_mut
+
+		p_advance(p) # 'This'
+		p_advance(p) # '.'
+	}
+
 	nt := cur(p)
 	name := p_fn_name(p, recv)
 
@@ -3229,7 +3252,7 @@ fn parse_fn_head_at(mut &p: Parser, start: token.Token, is_pub: bool, recv: str,
 	p_type_params(p, tparams, tbounds)
 	expect(p, token.Kind.LParen)
 	mut params: list[ast.Param] = []
-	if recv != "" and want_recv {
+	if recv != "" and want_recv and not is_assoc {
 		# The receiver is not written in the parameter list — `this` is implicit — so it is
 		# added here.
 		#
@@ -3282,7 +3305,7 @@ fn parse_fn_head_at(mut &p: Parser, start: token.Token, is_pub: bool, recv: str,
 	}
 	mut none: list[ast.Stmt] = []
 	e := p_ended(p)
-	return ast.FnDecl(name, recv, params, has_ret, ret, none, is_pub, p.path, start.line, start.col, tparams, tbounds, in_unsafe, false, false, false, false, "", nt.line, nt.col, e.line, e.col, "")
+	return ast.FnDecl(name, recv, params, has_ret, ret, none, is_pub, p.path, start.line, start.col, tparams, tbounds, in_unsafe, false, false, false, is_assoc, "", nt.line, nt.col, e.line, e.col, "")
 }
 
 # parse_block counts a nesting level per block, since statements nest through blocks and
@@ -4819,6 +4842,13 @@ fn parse_primary(mut &p: Parser) -> ast.Expr {
 		c := cur(p)
 		p_advance(p)
 		return cmd_call(p, c, cmd_argv(p, c, c.value))
+	}
+
+	# `This.f(…)` in an `impl` body is the target. A spec's provided body has no target yet, so the
+	# name is left for c_default_method to substitute, per impl.
+	if k == token.Kind.Ident and t.lexeme == "This" and p.impl_ty != "" and peek_kind(p, 1) == token.Kind.Dot {
+		p_advance(p)
+		return ast.Expr.EIdent(p.impl_ty, t.line, t.col)
 	}
 
 	if k == token.Kind.Ident {

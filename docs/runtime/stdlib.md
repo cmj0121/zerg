@@ -63,6 +63,7 @@ stays `#`. `zerg doc` prints the `##` lines; `zerg doc --all` prints both
 | [`math`](#math)       | `import "math"`    | numeric helpers and pure-Zerg transcendentals      |
 | [`rand`](#rand)       | `import "rand"`    | a deterministic, non-cryptographic generator       |
 | [`sha256`](#sha256)   | `import "sha256"`  | the FIPS 180-4 digest, for naming and integrity    |
+| [`codec`](#codec)     | `import "codec"`   | the wire form `#[derive(Encode, Decode)]` writes   |
 | [`cli`](#cli)         | `import "cli"`     | a declared command line, and the help it renders   |
 | [`atomic`](#atomic)   | `import "atomic"`  | the safe shared-mutable primitive                  |
 | [`ffi`](#ffi)         | `import "ffi"`     | binding a C library's symbol in an `unsafe` group  |
@@ -275,6 +276,22 @@ It is **not constant-time** and makes no claim to be. Use it to name a thing by 
 a file changed, or to key a cache; do not use it to check a password. `make sha256` holds it to the
 standard's known-answer vectors and to the system tool over random inputs — the oracle cannot check it,
 since both compilers would be running this same source.
+
+## `codec`
+
+The wire form a derived `Encode` writes and a derived `Decode` reads — the byte rows are
+[Derive & Default Behavior](../core/derive.md)'s. A file that derives either spec imports this module.
+`Encode` is `fn encode(mut &out: Encoder)`, and `Decode` is `fn This.decode(mut &src: Decoder) -> Result[This]`.
+
+| Member                                        | Summary                                        |
+| --------------------------------------------- | ---------------------------------------------- |
+| `Encoder()`, `.bytes`                         | the bytes written so far                       |
+| `put_int` `put_uint` `put_str` `put_bool`     | one row each; `put_byte` writes one byte       |
+| `Decoder(bytes)`, `.at`, `remaining()`        | a cursor over the bytes, and how many are left |
+| `take_int` `take_uint` `take_str` `take_byte` | one row each, as a `Result`                    |
+| `take_count()`, `take_flag(what)`             | a checked count; a `00`/`01` byte, as a `bool` |
+
+Every `take_*` answers a `Result`, so a short or malformed input is a value and never an abort.
 
 ## `log`
 

@@ -821,7 +821,13 @@ fn doc_tparams(tps: list[str]) -> str {
 }
 
 fn doc_fn_sig(fd: ast.FnDecl) -> str {
-	mut out := doc_fn_word(fd) + fd.name
+	# a spec's associated fn is spelled with its mark (GRAMMAR#fn-sig): without it the line reads
+	# as a method, which is the other member kind
+	mut mark := ""
+	if fd.recv == "This" and fd.is_assoc {
+		mark = "This."
+	}
+	mut out := doc_fn_word(fd) + mark + fd.name
 	if fd.tparams.len() > 0 {
 		out = out + "["
 		mut i := 0

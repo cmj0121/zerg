@@ -1753,17 +1753,6 @@ fn main() {
 }
 EOF
 
-expect "$ZERG" derive-of-an-unbuilt-spec E9054 <<'EOF'
-#[derive(Encode)]
-struct P {
-	pub x: int
-}
-
-fn main() {
-	print P(1).x
-}
-EOF
-
 expect "$ZERG" list-slice E9056 'the list method `slice`' <<'EOF'
 fn main() {
 	xs := [1, 2, 3]
@@ -4176,12 +4165,7 @@ fn main() {
 }
 EOF
 
-# ONE CODE, SEVERAL FORMS. `E9054` names each derive this compiler has not built, and a case
-# per derive pins each: one case standing for the family would let a regression in the other
-# go unseen. The same shape is why `E9056` has a case per list method rather than one for the
-# family.
-#
-# `Hash` LEFT THIS LIST when it was built. What is still refused about it is a FIELD: one the
+# A DERIVE'S REFUSALS ARE ABOUT A FIELD. What is refused about `Hash` is a FIELD: one the
 # chapter excludes (a `float`), one with no `Hash` to mix (a declared type without one, or an
 # identity), and one whose `Hash` the chapter promises and this compiler has not built.
 expect "$ZERG" derive-hash-over-a-float E4117 'the field `r` is a `float`' <<'EOF'
@@ -4257,7 +4241,11 @@ fn main() {
 }
 EOF
 
-expect "$ZERG" derive-encode E9054 '`#[derive(Encode)]`' <<'EOF'
+# `Encode` and `Decode` are `codec`'s, so a derive of either is refused in a file that does not
+# import it, and a field is refused for each way it can have no row: a form with none, an
+# identity, a declared type with no spec to delegate to, and the decode of an applied generic
+# type, whose encode is a delegation like any other.
+expect "$ZERG" derive-encode-without-codec E4125 'does not import it' <<'EOF'
 #[derive(Encode)]
 struct P {
 	pub x: int
@@ -4268,10 +4256,75 @@ fn main() {
 }
 EOF
 
-expect "$ZERG" derive-decode E9054 '`#[derive(Decode)]`' <<'EOF'
+expect "$ZERG" derive-encode-over-a-float E4124 'the field `r` is a `float`' <<'EOF'
+import "codec"
+
+#[derive(Encode)]
+struct P {
+	pub r: float
+}
+
+fn main() {
+	print 1
+}
+EOF
+
+expect "$ZERG" derive-decode-over-a-map-payload E4124 'the payload of `B` is a `map[str, int]`' <<'EOF'
+import "codec"
+
+#[derive(Decode)]
+enum E {
+	A
+	B(map[str, int])
+}
+
+fn main() {
+	print 1
+}
+EOF
+
+expect "$ZERG" derive-encode-over-a-channel E4124 'the field `c` is a `chan[int]`' <<'EOF'
+import "codec"
+
+#[derive(Encode)]
+struct P {
+	pub c: chan[int]
+}
+
+fn main() {
+	print 1
+}
+EOF
+
+expect "$ZERG" derive-decode-over-a-field-with-none E4124 '`Q` has no `Decode`' <<'EOF'
+import "codec"
+
+#[derive(Encode)]
+struct Q {
+	pub a: int
+}
+
 #[derive(Decode)]
 struct P {
-	pub x: int
+	pub q: Q
+}
+
+fn main() {
+	print 1
+}
+EOF
+
+expect "$ZERG" derive-decode-over-an-applied-generic E4124 'an applied generic type' <<'EOF'
+import "codec"
+
+#[derive(Encode, Decode)]
+struct B[T] {
+	pub x: T
+}
+
+#[derive(Encode, Decode)]
+struct P {
+	pub b: B[int]
 }
 
 fn main() {

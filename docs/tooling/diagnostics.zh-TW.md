@@ -453,6 +453,8 @@ seed 全程維持句子比對:代碼是語言的契約,而 seed 是建置正式�
 | `E4121` | foreign binding `…` 無法跨過 C 邊界:… 不是 FFI-safe                                                   |
 | `E4122` | foreign binding 不是它唯一的形狀:在 group 裡、不是 `mut` 或 `pub`、型別是 `fn`、一個 C 名稱           |
 | `E4123` | `ffi.symbol(…)` 寫在沒有 foreign binding 的地方                                                       |
+| `E4124` | `#[derive(Encode)]` / `#[derive(Decode)]` 遇到沒有列、或無從委派的欄位                                |
+| `E4125` | 沒有 import `codec` 的檔案裡的 `#[derive(Encode)]` / `#[derive(Decode)]`                              |
 | `E5001` | 這個進入點檔案沒有宣告 `fn main`                                                                      |
 | `E5002` | 無法解析 import `…`,以及它到哪裡找過                                                                  |
 | `E5007` | `…` 是這次建置編進來、而本 module 沒有 import 的 module                                               |
@@ -485,7 +487,6 @@ seed 全程維持句子比對:代碼是語言的契約,而 seed 是建置正式�
 | `E9049` | `…` 會 MUTATE 它的 list，而 `…` 是一個值、不是一個位置                                                |
 | `E9050` | 開放式 range 在這裡沒有上界                                                                           |
 | `E9052` | 型別為 … 的 map key                                                                                   |
-| `E9054` | `#[derive(…)]`                                                                                        |
 | `E9056` | list 方法 `…`                                                                                         |
 | `E9062` | 對 … 做 `in` — range 的成員是靠比較它的上下界找到的                                                   |
 | `E9063` | `…` 屬於固定寬度階梯                                                                                  |
@@ -725,6 +726,7 @@ composite 都有了，`print xs` 與 `xs.display()` 也都在用；只剩走 `st
 | `E9048` | —       | 形式建好了:spec 命名一個型別,盒子做分派                  |
 | `E9055` | —       | 形式建好了:`Eq` 對帶 payload 的 enum 比對 tag 與 payload |
 | `E9064` | —       | 形式建好了:`set[T]`、它的建構子與它的成員                |
+| `E9054` | —       | 形式建好了:`Encode` 與 `Decode` 經由 `codec` derive      |
 | `E9010` | —       | 形式建好了:具名引數,呼叫與建構都是                       |
 | `E9068` | —       | 形式建好了:`nil` 指名 optional 的缺席那一側              |
 | `E9057` | —       | 形式建好了:無名形式靠它的組成部分比較                    |

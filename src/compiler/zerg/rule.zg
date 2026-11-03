@@ -511,6 +511,11 @@ pub enum Rule {
 	# told what it is rather than that the module lacks it.
 	ForeignSymbolOutsideBinding = 4123
 
+	# `#[derive(Encode)]` / `#[derive(Decode)]` over a field with no row on the wire or nothing to
+	# delegate to, and a derive of either in a file that does not import `codec`, whose specs they are
+	DeriveCodecField = 4124
+	DeriveCodecMissing = 4125
+
 	# building — the program as a set of files, which no single file's text answers: imports resolved
 	# before anything is lexed, and `fn main` looked for after everything is emitted
 	EntryHasNoMain = 5001
@@ -576,7 +581,6 @@ pub enum Rule {
 	NotYetMutateListRvalue = 9049
 	NotYetOpenRangeHere = 9050
 	NotYetMapKeyType = 9052
-	NotYetDerive = 9054
 	NotYetListMethod = 9056
 	NotYetInOverType = 9062
 	NotYetFixedWidthLadder = 9063

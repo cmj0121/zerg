@@ -135,8 +135,8 @@ Two shapes are **refused**, and both for the same reason — the rewrite does no
 
 The blessed set — each with a canonical structural reading the compiler owns. Every one is **opt-in**
 via `derive`; there is **no auto-derived equality** and no implicit `Object` spec. **`Eq`**, **`From`**,
-**`Ord`** and **`Hash`** are built; **`Encode`** and **`Decode`** are specified here and **[not yet]** —
-naming one is `E9054`.
+**`Ord`**, **`Hash`**, **`Encode`** and **`Decode`** are built; the last two are the `codec` module's
+specs, so a file that derives one imports it.
 
 A derive on a **generic** target derives for every instantiation of it: `#[derive(Eq)] struct Box[T]` is
 one implementation written with the type's own parameters, materialized per instantiation the way any
@@ -164,13 +164,13 @@ sides at once: an arm per variant, and inside it a second `match` on the other o
 literal per pair — the tag of an enum whose variants carry values is opaque and match-only (`E4006`), so
 there is no discriminant to subtract.
 
-| Spec     | Structural rule                               | Requires (each field) | Excludes                 |
-| -------- | --------------------------------------------- | --------------------- | ------------------------ |
-| `Eq`     | `eq`/`ne` (`==` / `!=`) per field             | `Eq`                  | `chan`/`Ref`/`fn`        |
-| `Ord`    | lexicographic by field, then by variant order | `Eq` and `Ord`        | any `float` field        |
-| `Hash`   | mix field / tag hashes (`equal ⇒ same hash`)  | `Hash`                | any `float` field        |
-| `Encode` | product per field; sum: tag then payload      | `Encode`              | `chan`/`Ref`/`fn`/handle |
-| `Decode` | rebuild per field / from tag + payload        | `Decode`              | `chan`/`Ref`/`fn`/handle |
+| Spec     | Structural rule                               | Requires (each field) | Excludes           |
+| -------- | --------------------------------------------- | --------------------- | ------------------ |
+| `Eq`     | `eq`/`ne` (`==` / `!=`) per field             | `Eq`                  | `chan`/`Ref`/`fn`  |
+| `Ord`    | lexicographic by field, then by variant order | `Eq` and `Ord`        | any `float` field  |
+| `Hash`   | mix field / tag hashes (`equal ⇒ same hash`)  | `Hash`                | any `float` field  |
+| `Encode` | product per field; sum: tag then payload      | `Encode`              | a form with no row |
+| `Decode` | rebuild per field / from tag + payload        | `Decode`              | a form with no row |
 
 `Eq` is the sole source of `==` / `!=` on a `struct` or `enum`, and `Ord` is the sole source of
 `<` `<=` `>` `>=`: a type with neither the derive nor a hand-written impl **cannot** be compared — that is
@@ -226,63 +226,52 @@ Cross-cutting cases fall out of the existing memory model, no new rule:
 
 ## Serialization — the worked example
 
-> **[not yet]** `Encode` / `Decode` — and the `Sink` / `Source` specs used below — are specified
-> but not implemented; `#[derive(Encode, Decode)]` is _E9054_ today.
-> The example below illustrates the **intended** shape of structural derivation for when they land.
-
 Serialization is the case structural derive exists to serve: a mechanical, field-by-field mapping no
-one should hand-write per type, yet one that needs neither reflection nor a macro.
+one should hand-write per type, yet one that needs neither reflection nor a macro. The specs and the two
+cursors they write through are the `codec` module's, so a file that derives either one imports it; a
+derive in a file that does not is _E4125_.
 
-```text
-# stdlib specs — behavioral interfaces, field-blind like every spec
-spec Encode {
-    fn encode(mut &out: Sink)
-}
-spec Decode {
-    fn This.decode(mut &src: Source) -> Result[This]     # This = the reconstructed value
-}
+```zerg
+import "codec"
 
-#[derive(Encode, Decode)]             # the compiler reads User's structure, writes both canonical impls
+#[derive(Encode, Decode)]
 struct User {
-    id:    int
-    name:  str
-    tags:  list[str]
-    email: str?
+ pub id: int
+ pub name: str
+ pub tags: list[str]
+ pub email: str?
+}
+
+fn main() {
+ mut out := codec.Encoder()
+ User(1, "ann", ["a"], nil).encode(out)
+ mut src := codec.Decoder(out.bytes)
+ back := User.decode(src)!
+ print back.name
 }
 ```
 
-What the compiler generates — conceptually; you never write or see this — is the obvious field-by-field
-walk, each field delegating to **its own** `Encode`:
+`codec` declares `Encode` as `fn encode(mut &out: Encoder)` and `Decode` as the associated fn
+`fn This.decode(mut &src: Decoder) -> Result[This]`, since there is no value yet to call it on.
 
-```text
-impl Encode for User {                            # generated, not written
-    fn encode(mut &out: Sink) {
-        out.begin(4)
-        out.field("id")
-        this.id.encode(out)
-        out.field("name")
-        this.name.encode(out)
-        out.field("tags")
-        this.tags.encode(out)     # list[str]: length, then each str
-        out.field("email")
-        this.email.encode(out)    # str?: presence, then value
-        out.end()
-    }
-}
-```
+`Encoder` collects the bytes in `bytes`, and `Decoder(bytes)` reads them back from the front. Both are
+concrete types rather than specs: a spec parameter is a box, and a box behind `mut &` would dispatch every
+byte. The derived `encode` writes each field's row in declaration order; a field whose type is declared
+calls that type's own `encode`, and `decode` the same through `T.decode(src)`. A built-in type has no impl
+to delegate to (_E9047_), so its row is written at the field.
 
 A sum type derives over its variants the same way — **tag, then payload**.
 
-**The bytes.** Everything is little-endian, and nothing is padded. `begin`, `field` and `end` write
-nothing: the name given to `field` is the walk, not a byte on the wire. A `Sink` writes a value's bytes
-and a `Source` reads those same bytes back. A value nested in another — a field, a list element, a
-payload, the `T` of a present `T?` — uses the same row, and an auto-boxed recursive slot is the value,
-not the box.
+**The bytes.** Everything is little-endian, and nothing is padded. An `Encoder` writes a value's bytes and
+a `Decoder` reads those same bytes back. A value nested in another — a field, a list element, a payload,
+the `T` of a present `T?` — uses the same row, and an auto-boxed recursive slot is the value, not the box.
 
 | Form      | Bytes                                                  |
 | --------- | ------------------------------------------------------ |
 | `int`     | 8 bytes, little-endian, two's complement               |
 | `uint`    | 8 bytes, little-endian, unsigned                       |
+| `bool`    | one byte: `00` is false, `01` is true                  |
+| `byte`    | the byte                                               |
 | `str`     | a `uint` byte count, then those UTF-8 bytes            |
 | `list[T]` | a `uint` element count, then each element              |
 | `T?`      | one byte: `0` is nil, `1` is present, then the `T`     |
@@ -309,8 +298,28 @@ number `int(v)` reads, including one written `= n`. When any variant carries a p
 `04 00 00 00 00 00 00 00`. `enum Shape { Dot; Line(int) }` writes `Line(3)` as the eight bytes of `int`
 `1` and then the eight bytes of `int` `3`, and writes `Dot` as the eight bytes of `int` `0`.
 
-A `bool`, a `byte`, a `rune` and a `float` have no row. A `chan`, a `Ref`, a `fn` and a handle are
-already excluded by the table above.
+**What has no row is refused at the field** (_E4124_): a `rune`, a `float`, a tuple, a fixed array, a
+`map` and a `set` have no row, a `chan`, a `Ref`, a `fn` and a handle are identities rather than values,
+and a declared type delegates only when it has the spec itself. A field whose type is an applied generic
+type, `Box[int]`, encodes through its own `encode`, and its `decode` is refused: `Box.decode(src)` has no
+argument that mentions `T`, so nothing could decide it.
+
+**What `decode` fails on.** Each of these is the `Result`'s failure, never an abort:
+
+- the input ends before the value does;
+- a tag no variant has, on a fieldless enum and on a payload enum alike;
+- an optional's presence byte, or a `bool`, that is neither `00` nor `01`;
+- a count that does not fit an `int`, or that is larger than the bytes remaining after it — checked
+  before anything is built for it, so a list of empty structs is held to the same bound;
+- a `str` whose bytes are not valid UTF-8 or hold a NUL, read through `guard { str(bytes) }`.
+
+Bytes left over after the value are **not** a failure of `decode`: a nested value always has bytes after
+it, so whether the input should end there is the caller's question, answered by `src.remaining()`.
+
+> **[not yet]** On a **generic** type each parameter is bounded by the spec — `impl[T: Encode] Encode for
+Box[T]` — and a built-in type has no impl of it, so `Box[int]` is _E4010_ at the use. Calling a derived
+> `decode` on one is _E4009_: a type parameter is solved from a call's arguments, and `Box.decode(src)` has
+> none that mentions it.
 
 When the wire format must differ — a different key, a field deliberately left off the wire —
 **hand-write the impl instead of deriving**; it replaces the generated one, so there is still one

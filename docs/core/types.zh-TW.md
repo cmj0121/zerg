@@ -272,7 +272,7 @@ import 走得到那個 module,或那個 enum 是私有的時候,則改為說出�
 
 要指定寬度就用 opt-in layout 裝飾器
 `#[repr]`（**[not yet]**——今天保留且會大聲拒絕,見 [Decorator](decorators.zh-TW.md)）;序列化/wire 形式則是
-`Encode` / `Decode` impl（**[not yet]**）、絕不是裝飾器。
+`Encode` / `Decode` impl（[Derive](derive.zh-TW.md)）、絕不是裝飾器。
 
 一個 **payload** `enum`（任一 variant 帶欄位）則保持其 **tag opaque、只可 match**——不允許 `= 5`，你 `match` 的是
 variant、絕不是 tag。要把這種 variant 綁定某個特定整數，就寫**顯式轉換**：一個從 variant 到數字的 `match`，再一個

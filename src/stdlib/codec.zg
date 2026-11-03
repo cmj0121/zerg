@@ -1,0 +1,185 @@
+## codec — the wire form `#[derive(Encode, Decode)]` writes and reads (pure-Zerg stdlib).
+##
+## Bundled into a program that writes `import "codec"`. A file that derives `Encode` or `Decode`
+## imports this module, because the specs and the two cursors are its names. The bytes are the
+## rows in docs/core/derive.md: little-endian, unpadded, a count before a `str` or a `list`, a
+## presence byte before an optional, a struct as its fields, an enum as its tag and its payload.
+#
+# AN `Encoder` AND A `Decoder` ARE CONCRETE, NOT SPECS. A spec parameter is a box, and a box
+# behind `mut &` would dispatch every byte; a derived body writes straight into the one buffer.
+#
+# A DECODE FAILURE IS A VALUE. Every `take_*` answers a `Result`, and a derived `decode` passes
+# a failure on with `?`, so a short or malformed input reaches the caller as the `Result`'s
+# failure and never as an abort (docs/core/derive.md).
+
+## Encode writes a value into an `Encoder`. A derived impl writes a struct field by field and an
+## enum as its tag and then its payload.
+pub spec Encode {
+	fn encode(mut &out: Encoder)
+}
+
+## Decode rebuilds a value from a `Decoder`. It is an associated fn, since there is no value yet
+## to call it on: `User.decode(src)`, or `T.decode(src)` under a bound.
+pub spec Decode {
+	fn This.decode(mut &src: Decoder) -> Result[This]
+}
+
+## Encoder collects the bytes a value writes. `bytes` is the wire form so far.
+pub struct Encoder {
+	pub bytes: list[byte] = []
+}
+
+impl Encoder {
+	## put_byte writes one byte, and is the row of a `byte` field.
+	pub mut fn put_byte(b: byte) {
+		this.bytes.append(b)
+	}
+
+	## put_bool writes `01` for true and `00` for false.
+	pub mut fn put_bool(b: bool) {
+		if b {
+			this.bytes.append(byte(1))
+		} else {
+			this.bytes.append(byte(0))
+		}
+	}
+
+	## put_int writes the eight little-endian bytes of a two's-complement `int`.
+	pub mut fn put_int(v: int) {
+		mut sh := 0
+		for sh < 64 {
+			this.bytes.append(byte((v >> sh) & 255))
+			sh = sh + 8
+		}
+	}
+
+	## put_uint writes the eight little-endian bytes of a `uint`, which is also how a count goes.
+	pub mut fn put_uint(v: uint) {
+		mut sh := uint(0)
+		for sh < uint(64) {
+			this.bytes.append(byte(int((v >> sh) & uint(255))))
+			sh = sh + uint(8)
+		}
+	}
+
+	## put_str writes the byte count and then the UTF-8 bytes, with no trailing NUL.
+	pub mut fn put_str(s: str) {
+		raw := bytearray(s)
+		this.put_uint(uint(raw.len()))
+		for b in raw {
+			this.bytes.append(b)
+		}
+	}
+}
+
+## Decoder reads a value's bytes back from the front. `at` is how many are already read; the
+## bytes after a whole value are the caller's to judge, since a nested value always has some.
+pub struct Decoder {
+	pub bytes: list[byte]
+	pub at: int = 0
+}
+
+impl Decoder {
+	## remaining is how many bytes are left to read.
+	pub fn remaining() -> int {
+		return this.bytes.len() - this.at
+	}
+
+	# short is the failure of an input that ends before `n` more bytes, or nil when they are there.
+	fn short(n: int) -> Err? {
+		return ValueError(f"codec: the input ended at byte {this.bytes.len()}, before the value did") if this.remaining() < n
+
+		return nil
+	}
+
+	# word is the eight little-endian bytes at `at`, read without moving past them.
+	fn word() -> uint {
+		mut v := uint(0)
+		mut k := 0
+		for k < 8 {
+			v = v | (uint(int(this.bytes[this.at + k])) << uint(k * 8))
+			k = k + 1
+		}
+		return v
+	}
+
+	## take_byte reads one byte, and fails on an input that has ended.
+	pub mut fn take_byte() -> Result[byte] {
+		if e := this.short(1) {
+			return Either.Right(e)
+		}
+		b := this.bytes[this.at]
+		this.at = this.at + 1
+		return b
+	}
+
+	## take_flag reads a byte that must be `00` or `01` — a `bool`, or an optional's presence —
+	## and fails on any other. `what` names which, for the failure.
+	pub mut fn take_flag(what: str) -> Result[bool] {
+		if e := this.short(1) {
+			return Either.Right(e)
+		}
+		b := this.bytes[this.at]
+		return Either.Right(ValueError(f"codec: {what} is `00` or `01`, and byte {this.at} is {int(b)}")) if b > byte(1)
+
+		this.at = this.at + 1
+		return b == byte(1)
+	}
+
+	## take_int reads eight little-endian bytes as a two's-complement `int`.
+	pub mut fn take_int() -> Result[int] {
+		if e := this.short(8) {
+			return Either.Right(e)
+		}
+		mut v := 0
+		mut k := 0
+		for k < 8 {
+			v = v | (int(this.bytes[this.at + k]) << (k * 8))
+			k = k + 1
+		}
+		this.at = this.at + 8
+		return v
+	}
+
+	## take_uint reads eight little-endian bytes as a `uint`.
+	pub mut fn take_uint() -> Result[uint] {
+		if e := this.short(8) {
+			return Either.Right(e)
+		}
+		v := this.word()
+		this.at = this.at + 8
+		return v
+	}
+
+	## take_count reads a `str`'s or a `list`'s count. It fails before anything is built for it
+	## when the count does not fit an `int`, or is larger than the bytes that remain after it.
+	pub mut fn take_count() -> Result[int] {
+		if e := this.short(8) {
+			return Either.Right(e)
+		}
+		n := this.word()
+		return Either.Right(ValueError(f"codec: a count of {n} does not fit an `int` length")) if n > uint(9223372036854775807)
+
+		this.at = this.at + 8
+		c := int(n)
+		return Either.Right(ValueError(f"codec: a count of {c} is more than the {this.remaining()} bytes that remain")) if c > this.remaining()
+
+		return c
+	}
+
+	## take_str reads a count and that many bytes, and fails on bytes that are not a `str` —
+	## invalid UTF-8, or an embedded NUL.
+	pub mut fn take_str() -> Result[str] {
+		n := this.take_count()?
+		mut raw: list[byte] = []
+		mut i := 0
+		for i < n {
+			raw.append(this.bytes[this.at + i])
+			i = i + 1
+		}
+		this.at = this.at + n
+		return guard {
+			str(raw)
+		}
+	}
+}

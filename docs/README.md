@@ -53,7 +53,7 @@ makes the third a self-hosted compiler rather than a claim about one.
 | ---- | ------------------------------------------------------ | ----------------------------------- |
 | 0    | `./scripts/gen-version.sh`                             | `VERSION` becomes `zerg/version.zg` |
 | 1    | `go build -o bin/zerg0 ./cmd/zerg` in `src/bootstrap/` | `bin/zerg0` — the Go seed           |
-| 2    | `zerg0 build src/compiler/zergc.zg`                    | `bin/.zerg-stage1` — intermediate   |
+| 2    | `zerg0 build src/compiler/zergc_seed.zg`               | `bin/.zerg-stage1` — intermediate   |
 | 3    | `.zerg-stage1 build --emit bin src/compiler/zergc.zg`  | `bin/zerg` — deleted stage 1 after  |
 
 **The seed is not on the delivery path.** Step 3 is what produces the binary a user runs, and step

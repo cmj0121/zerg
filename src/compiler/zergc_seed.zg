@@ -1,0 +1,22 @@
+# zergc_seed — the entry `zerg0` builds stage1 from, and nothing ever ships.
+#
+# IT IS `zergc.zg` WITHOUT `--serve`. The seed cannot compile `net` (it drops a function holding
+# a `spawn` from an imported module, and it cannot `impl` another module's spec), so the one
+# command form that needs a socket is the one thing this entry leaves out. Stage1 only has to
+# build `zergc.zg`, and building reaches no socket; `make build` then ships the whole command
+# line from `zergc.zg`.
+import (
+	"cli"
+	"/cmd"
+)
+
+fn main(args: list[str]) {
+	__zrt_exit(cmd.root(do_doc_entry).exec(args))
+}
+
+# do_doc_entry is what `zerg doc` runs in stage1: every form but `--serve`, which is refused by
+# name rather than reached.
+fn do_doc_entry(c: cli.Ctx) -> int {
+	raise "`--serve` is not in the seed-built stage1; `make build` ships it" if c.has("serve")
+	return cmd.do_doc(c)
+}

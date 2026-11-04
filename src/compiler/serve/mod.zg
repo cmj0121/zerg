@@ -1,0 +1,6 @@
+# The `serve` module's surface: `zerg doc --serve`'s socket loop and the HTTP around it. Only the
+# shipped entry, `zergc.zg`, imports it, because it needs `net`, which the seed cannot compile —
+# so nothing under `cmd/` or `zerg/` may reach it. What a path is answered with is `cmd`'s
+# `doc_route`, which the seed can build.
+
+import pub "./serve"

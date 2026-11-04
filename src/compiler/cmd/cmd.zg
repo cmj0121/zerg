@@ -1,5 +1,5 @@
 # What each sub-command DOES — one file per command, and the machinery more than one of
-# them needs beside it. `zergc.zg` declares the command line; nothing in it says what a
+# them needs beside it. `root.zg` declares the command line; nothing in it says what a
 # command does, and nothing here says what the command line accepts.
 #
 # A command is TWO declarations that belong together: the `cli.Command` naming its flags,

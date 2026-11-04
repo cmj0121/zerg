@@ -31,6 +31,9 @@ cd "$ROOT" || exit 2
 # script still named a five-file compiler long after fmt.zg and lint.zg had joined it, and
 # still linked a runtime that had neither sched.c nor chan.c in it.
 ENTRY="${ZERG_ENTRY:-src/compiler/zergc.zg}"
+# The seed builds stage1 from its own entry, the compiler without what it cannot compile;
+# stage1 and stage2 then build ENTRY, and only those two are compared.
+SEED_ENTRY="${ZERG_SEED_ENTRY:-src/compiler/zergc_seed.zg}"
 JOBS="${JOBS:-4}"
 
 WORK="$(mktemp -d "${TMPDIR:-/tmp}/zerg-fixpoint.XXXXXX")" || exit 2
@@ -86,9 +89,9 @@ printf 'stage0: building the Go seed\n'
 build_step "the Go seed does not build" stage0.log \
 	go build -C src/bootstrap -o "$WORK/zerg0" ./cmd/zerg
 
-printf 'stage1: the seed builds a compiler from %s\n' "$ENTRY"
+printf 'stage1: the seed builds a compiler from %s\n' "$SEED_ENTRY"
 build_step "the seed could not build stage1" stage1-build.log \
-	"$WORK/zerg0" build "$ENTRY" -o "$WORK/stage1"
+	"$WORK/zerg0" build "$SEED_ENTRY" -o "$WORK/stage1"
 
 printf "stage1: emitting the compiler's own C\n"
 emit_step "stage1 could not emit its own source" stage1.c stage1-emit.log \

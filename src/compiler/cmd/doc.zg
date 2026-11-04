@@ -48,7 +48,9 @@ import (
 	"/zerg"
 )
 
-pub fn doc_cmd() -> cli.Command {
+# doc_cmd is handed the function it runs rather than naming `do_doc` itself: `--serve` needs
+# `net`, which only the shipped entry may import, so each entry passes its own `do_doc` wrapper.
+pub fn doc_cmd(run: fn (cli.Ctx) -> int) -> cli.Command {
 	return (
 		cli.command("doc", "read what a module exposes and the comments that document it")
 		.flag("a", "all", "every comment as written, the maintainer's `#` notes beside the reader's `##` text")
@@ -57,12 +59,14 @@ pub fn doc_cmd() -> cli.Command {
 		.opt("t", "timeout", "under --check, seconds one module's examples may take to build, and then to run", f"{test.TEST_TIMEOUT}")
 		.opt("s", "search", "list the exposed declarations whose name begins with this, across every module `zerg doc` lists or within the one named")
 		.opt("", "html", "write the reader's pages as static HTML into this directory — a page for every module `zerg doc` lists, or for the one named, an index, and a search over the names `--search` finds")
+		.opt("", "serve", "serve the reader's pages over HTTP on 127.0.0.1 at this port — the pages `--html` writes, rendered on each request")
 		.add(cli.positional("name", "a module, one of its declarations, or a path to a source"))
-		.run(do_doc)
+		.run(run)
 	)
 }
 
-fn do_doc(c: cli.Ctx) -> int {
+# do_doc is every form of `zerg doc` but `--serve`, which the entry's wrapper answers first.
+pub fn do_doc(c: cli.Ctx) -> int {
 	raise "`--html` writes the reader's whole pages, and takes none of `--all`, `--brief`, `--check` or `--search`" if c.has("html") and (c.has("all") or c.has("brief") or c.has("check") or c.has("search"))
 	return run_doc_html(c.get("html"), c.args()) if c.has("html")
 	raise doc_all_alone(c) if c.has("all") and (c.has("brief") or c.has("check") or c.has("search") or c.args().len() == 0)
@@ -272,19 +276,9 @@ fn run_doc_search(term: str, args: list[str], col: bool) -> int {
 # is named after the modules, so a second run over the same tree replaces every file the first
 # one wrote, byte for byte. A file of any other name is left alone, since nothing here wrote it.
 fn run_doc_html(dir: str, args: list[str]) -> int {
-	raise "`zerg doc --html` writes the modules `zerg doc` lists, or the one module or path named — one at most" if args.len() > 1
 	raise "`zerg doc --html` needs the directory to write the pages into" if dir == ""
 
-	mut mods: list[zerg.DocModule] = []
-	if args.len() == 0 {
-		mods = doc_index()
-	} else {
-		name := args[0]
-		at := doc_first_of(name, b'.')
-		raise f"`zerg doc --html` writes a module's page, and `{name}` is a declaration's name — name its module, and the declaration is on that page" if at > 0 and not doc_is_path(name) and source.module_sources(name, ".", ".").len() == 0
-
-		mods.append(doc_resolve(name))
-	}
+	mods := doc_site(args, "--html", "writes")
 	raise f"`{dir}` is not a directory `zerg doc --html` can write into" if not __zrt_mkdir(dir)
 
 	for m in mods {
@@ -296,6 +290,89 @@ fn run_doc_html(dir: str, args: list[str]) -> int {
 
 	io.write(f"{mods.len()} module page(s), the index, the search and the style sheet written to {dir}\n")
 	return 0
+}
+
+# doc_site is the modules a site of pages covers — `--html`'s and `--serve`'s one scope: the
+# index, or the one module or path named. A declaration is not a scope, since its page is its
+# module's, so its name is refused rather than read as a module that is not there.
+fn doc_site(args: list[str], flag: str, verb: str) -> list[zerg.DocModule] {
+	raise f"`zerg doc {flag}` {verb} the modules `zerg doc` lists, or the one module or path named — one at most" if args.len() > 1
+	return doc_index() if args.len() == 0
+
+	name := args[0]
+	at := doc_first_of(name, b'.')
+	raise f"`zerg doc {flag}` {verb} a module's page, and `{name}` is a declaration's name — name its module, and the declaration is on that page" if at > 0 and not doc_is_path(name) and source.module_sources(name, ".", ".").len() == 0
+
+	mut mods: list[zerg.DocModule] = []
+	mods.append(doc_resolve(name))
+	return mods
+}
+
+# --- serving --------------------------------------------------------------------------------
+#
+# `--serve` is two halves, and this is the one the seed can build: what was asked, checked before
+# anything listens, and the page a path is answered with. The socket loop and the HTTP around it
+# are `src/compiler/serve/`, which only the shipped entry imports, because it needs `net`.
+
+# DocServe is what `--serve` was asked: the port, the scope as named, and how many module pages
+# that scope holds — the count the startup line reports.
+pub struct DocServe {
+	pub port: int
+	pub scope: list[str]
+	pub pages: int
+}
+
+# DocReply is the page a path is answered with: the HTTP status, its content type, and its text.
+pub struct DocReply {
+	pub status: int
+	pub kind: str
+	pub body: str
+}
+
+const DOC_HTML_KIND := "text/html; charset=utf-8"
+
+# doc_serve_scope checks `--serve` before anything listens: the flags it stands beside, the
+# port, and the scope, which is resolved once here so that a name nothing answers is refused at
+# the command line rather than on the first request.
+pub fn doc_serve_scope(c: cli.Ctx) -> DocServe {
+	raise "`--serve` serves the reader's whole pages, and takes none of `--html`, `--all`, `--brief`, `--check` or `--search`" if c.has("html") or c.has("all") or c.has("brief") or c.has("check") or c.has("search")
+
+	port := doc_port(c.get("serve"))
+	args := c.args()
+	return DocServe(port, args, doc_site(args, "--serve", "serves").len())
+}
+
+# doc_port reads `--serve`'s port: a whole number from 0 to 65535, where 0 asks the OS for one.
+fn doc_port(v: str) -> int {
+	why := f"`--serve` is a port, a whole number from 0 to 65535 — `{v}` is not"
+	b := bytearray(v)
+	raise why if b.len() == 0 or b.len() > 5
+	for x in b {
+		raise why if x < b'0' or x > b'9'
+	}
+	n := strconv.parse_int(v, 10)
+	raise why if n > 65535
+
+	return n
+}
+
+# doc_route answers one path of the site `--html` writes, with the bytes it writes there.
+#
+# THE PAGES ARE RENDERED ON EVERY CALL, from the scope as named: an edited `##` comment is on
+# the page at the next reload, and no copy is kept that could go stale. A path that is no page
+# is a 404 that names it.
+pub fn doc_route(scope: list[str], path: str) -> DocReply {
+	return DocReply(200, "text/css; charset=utf-8", doc_html.render_html_style()) if path == "/" + doc_html.HTML_STYLE
+
+	mods := doc_site(scope, "--serve", "serves")
+
+	return DocReply(200, DOC_HTML_KIND, doc_html.render_html_index(mods)) if path == "/" or path == "/" + doc_html.HTML_INDEX
+	return DocReply(200, "text/javascript; charset=utf-8", doc_html.render_html_search(mods)) if path == "/" + doc_html.HTML_SEARCH
+
+	for m in mods {
+		return DocReply(200, DOC_HTML_KIND, doc_html.render_html_module(m)) if path == "/" + doc_html.html_page_of(m.name)
+	}
+	return DocReply(404, DOC_HTML_KIND, f"<!doctype html>\n<title>not found</title>\n<p><code>{doc_html.html_text(path)}</code> is no page here — <a href=\"/\">the index</a> lists them.</p>\n")
 }
 
 # doc_resolve resolves the one name `--check` or `--search` was given, by the same two doors

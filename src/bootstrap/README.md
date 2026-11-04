@@ -31,7 +31,7 @@ There is no `--emit lib`, and so no C header and no report of what one leaves ou
 ```text
 make build                        # or by hand, the three steps it runs:
 go build -o bin/zerg0 ./cmd/zerg  # 1. the Go seed — named zerg0, not zerg
-zerg0 build src/compiler/zergc.zg -o bin/.zerg-stage1
+zerg0 build src/compiler/zergc_seed.zg -o bin/.zerg-stage1
                                   # 2. the seed builds an INTERMEDIATE compiler
 zerg build --emit bin -o bin/zerg src/compiler/zergc.zg
                                   # 3. the intermediate builds the zerg that ships
@@ -42,10 +42,17 @@ only has to produce an intermediate good enough to build the real one. That keep
 off the delivery path, and it means every build exercises the self-host path. After that,
 the seed is only needed to re-derive `zerg` on a machine that has no `zerg` yet.
 
+**The seed builds stage1 from `zergc_seed.zg`, not `zergc.zg`.** The seed entry is the
+shipped one without `zerg doc --serve`, which needs `net`, and the seed cannot compile `net`:
+it drops a function holding a `spawn` from an imported module, it cannot `impl` a spec
+declared in another module, and it has no `Either` name. Stage1 only has to build `zergc.zg`,
+which reaches no socket; asked for `--serve`, it refuses by name. Step 3 builds the whole
+command line from `zergc.zg`.
+
 ## The contract: three tiers, and nothing in between
 
 The seed has one job — build the self-hosting compiler — so what it MUST support is not a
-taste question. It is whatever `src/compiler/zergc.zg`, `src/compiler/zerg/*.zg` and the
+taste question. It is whatever `src/compiler/zergc_seed.zg`, `src/compiler/zerg/*.zg` and the
 stdlib modules those import (`io`, `ascii`, `strconv`, `cli`) are actually written in. Every
 form the language has falls into exactly one of three tiers.
 
@@ -636,9 +643,9 @@ must not move**. If a change is genuinely dead-code removal, the emitted C is by
 before and after; if it is not, the difference is the change's real blast radius.
 
 ```sh
-zerg0 build --emit c src/compiler/zergc.zg > after.c  # compare against a pre-change capture
-go build ./... && go test ./...                       # the seed's own suite (unit tests only)
-make build                                            # and the chain still closes
+zerg0 build --emit c src/compiler/zergc_seed.zg > after.c  # compare against a pre-change capture
+go build ./... && go test ./...                            # the seed's own suite (unit tests only)
+make build                                                 # and the chain still closes
 ```
 
 The seed is covered by unit tests alone. The `test-data/` corpus describes the language,

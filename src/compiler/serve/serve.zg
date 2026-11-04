@@ -1,0 +1,219 @@
+# `zerg doc --serve <port>`: the pages `--html` writes, answered over HTTP on 127.0.0.1.
+#
+# ONE CONNECTION AT A TIME, and no `spawn`: a `main(args)` program that uses concurrency is
+# refused (E9097), and the compiler would overflow a coroutine's stack. With no scheduler every
+# wait in `net` blocks in place, so the loop is accept, read, route, write, release, and again.
+# A connection that sends nothing holds the loop until it closes, since `net` has no deadline.
+#
+# THE HTTP IS THE SUBSET A BROWSER AND `curl` NEED: the request line is read, and of the headers
+# only `Host`; `GET` and `HEAD` are answered, any other method is a 405; every response carries
+# its length and `nosniff`, and closes the connection. A request that is not
+# `METHOD SP PATH SP HTTP/1.x` within the first 8 KiB is a 400.
+#
+# THE HOST MUST NAME THIS SERVER: one `Host` of `127.0.0.1:<port>` or `localhost:<port>`, else a
+# 400. A page on another site that rebinds its own name to 127.0.0.1 sends that name, so it
+# cannot read these pages. A render error's text names local paths: it goes to stderr, and the
+# page is a plain 500.
+#
+# A FAILED CONNECTION IS THAT CONNECTION'S ALONE: a read or write error drops it, and a failed
+# accept is said on stderr, and the loop goes on.
+import (
+	"ascii"
+	"cli"
+	"io"
+	"net"
+	"strings"
+
+	"/cmd"
+)
+
+const HEAD_CAP := 8192
+const TEXT_KIND := "text/plain; charset=utf-8"
+
+# run is `zerg doc --serve`: the flags, port and scope checked by `cmd` before anything listens,
+# then the startup line, then requests until the process is stopped.
+pub fn run(c: cli.Ctx) -> int {
+	s := cmd.doc_serve_scope(c)
+	match net.listen("127.0.0.1", s.port) {
+		Left(l) => {
+			io.write(f"serving {s.pages} module page(s) at http://127.0.0.1:{l.port}/\n")
+			serve(l, s.scope, [f"127.0.0.1:{l.port}", f"localhost:{l.port}"])
+		}
+		Right(e) => {
+			raise e.message()
+		}
+	}
+	return 1
+}
+
+# serve is the accept loop, answering the requests whose `Host` is one of `hosts`. It never
+# returns: the process ends when it is stopped.
+fn serve(l: net.Listener, scope: list[str], hosts: list[str]) {
+	for {
+		match l.accept() {
+			Left(conn) => {
+				answer(conn, scope, hosts)
+				conn.release()
+			}
+			Right(e) => {
+				refused(e.message())
+			}
+		}
+	}
+}
+
+# refused says on stderr why an accept failed; the loop goes on to the next.
+fn refused(why: str) {
+	io.eprintln(why)
+}
+
+# answer reads one request and writes its response. A read or write that fails ends the
+# connection, which the caller releases either way, so the error is not carried further.
+fn answer(c: net.Conn, scope: list[str], hosts: list[str]) {
+	match reply(c, scope, hosts) {
+		Left(_) => {
+		}
+		Right(_) => {
+		}
+	}
+}
+
+# reply is the response to the request `c` sends: a 400 for one that is not a request line or
+# whose `Host` is not one of `hosts`, a 405 for a method other than `GET` or `HEAD`, and otherwise
+# the page `doc_route` answers the path with, its query string dropped.
+fn reply(c: net.Conn, scope: list[str], hosts: list[str]) -> Result[uint] {
+	head := read_head(c)?
+	lines := strings.split(head, "\r\n")
+	parts := strings.split(lines[0], " ")
+
+	return send(c, cmd.DocReply(400, TEXT_KIND, "not an HTTP/1 request line: METHOD PATH HTTP/1.x\n"), "", false) if parts.len() != 3 or parts[0] == "" or not strings.has_prefix(parts[1], "/") or not strings.has_prefix(parts[2], "HTTP/1.")
+	return send(c, cmd.DocReply(400, TEXT_KIND, f"the Host header must be {hosts[0]} or {hosts[1]}\n"), "", false) if not served_host(host_of(lines), hosts)
+
+	method := parts[0]
+	return send(c, cmd.DocReply(405, TEXT_KIND, f"{method} is not served here: the pages answer GET and HEAD\n"), "Allow: GET, HEAD\r\n", false) if method != "GET" and method != "HEAD"
+	path := strings.split(parts[1], "?")[0]
+	return send(c, route(scope, path), "", method == "HEAD")
+}
+
+# served_host is whether `host` is one of `hosts`.
+fn served_host(host: str, hosts: list[str]) -> bool {
+	for h in hosts {
+		return true if h == host
+	}
+	return false
+}
+
+# host_of is the value of the one `Host` header among the request's header lines, its name matched
+# in any case and its value trimmed and lowered; "" when there is none or more than one, or when a
+# header line is malformed: no `:`, or a name that is empty or holds whitespace (an obs-fold
+# continuation among them).
+fn host_of(lines: list[str]) -> str {
+	mut host := ""
+	mut seen := 0
+	mut i := 1
+	for i < lines.len() {
+		line := lines[i]
+		i = i + 1
+		continue if line == ""
+
+		name := strings.split(line, ":")[0]
+		return "" if name == line or not token(name)
+
+		if strings.to_lower(name) == "host" {
+			host = strings.to_lower(strings.trim(strings.trim_prefix(line, name + ":")))
+			seen = seen + 1
+		}
+	}
+	return host if seen == 1
+
+	return ""
+}
+
+# token is whether a header name is non-empty and holds no whitespace.
+fn token(name: str) -> bool {
+	return false if name == ""
+
+	for b in bytearray(name) {
+		return false if ascii.is_space(b)
+	}
+	return true
+}
+
+# printable is `s` with each control or non-ASCII byte written as `?`, so a request target said
+# on stderr cannot move the cursor or forge a line there.
+fn printable(s: str) -> str {
+	mut out: list[byte] = []
+	for b in bytearray(s) {
+		if b < b' ' or b > b'~' {
+			out.append(b'?')
+		} else {
+			out.append(b)
+		}
+	}
+	return str(out)
+}
+
+# route is `doc_route`'s page for the path, or a plain 500 when it could not be rendered, with
+# the reason said on stderr — a source in the scope moved or deleted since the server started is
+# that request's failure, not the server's, and the page serves again once the source is back.
+fn route(scope: list[str], path: str) -> cmd.DocReply {
+	mut r := cmd.DocReply(500, TEXT_KIND, "")
+	got := guard {
+		r = cmd.doc_route(scope, path)
+	}
+	why := match got {
+		Either.Left(_)  => ""
+		Either.Right(e) => e.message()
+	}
+	if why != "" {
+		io.eprintln(printable(f"{path}: {why}"))
+		return cmd.DocReply(500, TEXT_KIND, "the page could not be rendered: the server's terminal says why\n")
+	}
+
+	return r
+}
+
+# read_head reads the request up to the blank line that ends its headers. A peer that closes
+# before it, or no blank line within HEAD_CAP bytes, answers "", which no request line parses
+# from. Each read asks for no more than the cap leaves, and only the bytes a read added (and the
+# three before them) are searched for the blank line.
+fn read_head(c: net.Conn) -> Result[str] {
+	mut got: list[byte] = []
+	for got.len() < HEAD_CAP {
+		chunk := c.read_bytes(uint(HEAD_CAP - got.len()))?
+		return "" if chunk.len() == 0
+
+		mut i := 0
+		if got.len() > 3 {
+			i = got.len() - 3
+		}
+		for b in chunk {
+			got.append(b)
+		}
+		for i + 3 < got.len() {
+			return str(got) if got[i] == b'\r' and got[i + 1] == b'\n' and got[i + 2] == b'\r' and got[i + 3] == b'\n'
+			i = i + 1
+		}
+	}
+	return ""
+}
+
+# send writes the status line, the headers every response carries, `extra`'s, and the body
+# unless the request was a `HEAD`.
+fn send(c: net.Conn, r: cmd.DocReply, extra: str, head_only: bool) -> Result[uint] {
+	body := bytearray(r.body)
+	n := c.write_str(f"HTTP/1.1 {r.status} {reason(r.status)}\r\nContent-Type: {r.kind}\r\nContent-Length: {body.len()}\r\nX-Content-Type-Options: nosniff\r\n{extra}Connection: close\r\n\r\n")?
+	return n if head_only
+
+	return c.write(body)
+}
+
+# reason is the status line's phrase for each status this server answers.
+fn reason(status: int) -> str {
+	return "OK" if status == 200
+	return "Bad Request" if status == 400
+	return "Not Found" if status == 404
+	return "Internal Server Error" if status == 500
+
+	return "Method Not Allowed"
+}

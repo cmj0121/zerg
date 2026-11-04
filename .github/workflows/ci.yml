@@ -347,6 +347,11 @@ jobs:
       - name: The document is every exposed declaration, and no more
         run: REQUIRE_NODE=1 make doc-check
 
+      # The pages again, served: `zerg doc --serve` on a port the kernel picks, held by `curl`
+      # to the files `--html` writes, with the HTTP subset's refusals beside them.
+      - name: The served pages are the pages --html writes
+        run: make doc-serve
+
       # `bin/zerg` is a real target, so thirty-one gates no longer recompile a tree that has
       # not changed. The prerequisite list is the whole of that change: a gate running against
       # a stale binary reports green for a tree it did not test.

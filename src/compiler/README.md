@@ -24,9 +24,11 @@ in the language itself. The compiler here is the one that ships; the Go seed exi
 
 ```text
 src/compiler/
-  zergc.zg        # the command line, declared: `main`, `root`, the version banner
+  zergc.zg        # the shipped entry: `main`, and `do_doc_entry`, which runs `doc --serve`
+  zergc_seed.zg   # the entry `zerg0` builds stage1 from: the same, refusing `--serve`
   cmd/            # what each sub-command DOES — one directory module
     cmd.zg        # the module's own header, and no declaration (Go's `doc.go`)
+    root.zg       # the command line, declared: `root`, `env_help`, the version banner
     build.zg      # `zerg build` — the pipeline, and where its product is written
     test.zg       # `zerg test` — the run, the process per package, the report
     test_pkg.zg   #   which directories hold a test, and what each is built from
@@ -35,7 +37,7 @@ src/compiler/
     fmt.zg        # `zerg fmt`
     desugar.zg    # `zerg desugar`
     lint.zg       # `zerg lint`
-    lsp_cmd.zg    # `zerg lsp` (not `lsp.zg`: it would shadow `import "lsp"`)
+    lsp.zg        # `zerg lsp`
     diag.zg       # shared: the lexical gate and the diagnostic renderer
     source.zg     # shared: reading a source, and resolving what it imports
     layout.zg     # shared: where things are, and what cc is called with
@@ -55,6 +57,7 @@ src/compiler/
     version.zg    # generated from VERSION by ./scripts/gen-version.sh
   lsp/
     server.zg     # the language server — a module of its own
+  serve/          # `zerg doc --serve`'s socket loop and HTTP; only `zergc.zg` imports it
 ```
 
 The four `cmd` files marked **shared** are there because more than one sub-command reaches
@@ -132,12 +135,12 @@ object, which one link puts together. That split is what everything else rests o
   **cooperative**, so a CPU-bound coroutine holds its worker and buys concurrency rather
   than a shorter compile.
 
-Building the compiler with itself is **ten units** — the entry, `cmd/`, `zerg/`, `lsp/` and
-the six stdlib modules they reach. Over three runs it takes roughly 7 s cold at `-j1` and 6 s
-at `-j4`, with `-j8` inside the run-to-run spread of `-j4`, and about 5 s when nothing
-changed. That the numbers are so close is the point: `zerg/` is one directory module and so
-one unit, and it is most of the compiler, so `-j` cannot go below it. The cache is what buys
-time here, not the parallelism.
+Building the compiler with itself is **one unit per module** — the entry, `cmd/`, `zerg/`,
+`lsp/`, `serve/` and the stdlib modules they reach. Measured over three runs before `serve/`
+was added, it took roughly 7 s cold at `-j1` and 6 s at `-j4`, with `-j8` inside the
+run-to-run spread of `-j4`, and about 5 s when nothing changed. That the numbers are so close
+is the point: `zerg/` is one directory module and so one unit, and it is most of the
+compiler, so `-j` cannot go below it. The cache is what buys time here, not the parallelism.
 
 ## The corpus
 

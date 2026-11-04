@@ -1318,7 +1318,7 @@ const char *zrt_tcp_reason(int64_t code) {
 	case ZRT_TCP_BADPORT:
 		return sys_str_cell("port out of range 0..65535");
 	case ZRT_TCP_RELEASED:
-		return sys_str_cell("the connection was released");
+		return sys_str_cell("the socket was released");
 	case ZRT_TCP_UNSUPPORTED:
 		return sys_str_cell("TCP is not supported on this platform");
 	default:

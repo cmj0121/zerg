@@ -64,6 +64,7 @@ stays `#`. `zerg doc` prints the `##` lines; `zerg doc --all` prints both
 | [`rand`](#rand)       | `import "rand"`    | a deterministic, non-cryptographic generator       |
 | [`sha256`](#sha256)   | `import "sha256"`  | the FIPS 180-4 digest, for naming and integrity    |
 | [`codec`](#codec)     | `import "codec"`   | the wire form `#[derive(Encode, Decode)]` writes   |
+| [`net`](#net)         | `import "net"`     | TCP connections, as an `io` Reader and Writer      |
 | [`cli`](#cli)         | `import "cli"`     | a declared command line, and the help it renders   |
 | [`atomic`](#atomic)   | `import "atomic"`  | the safe shared-mutable primitive                  |
 | [`ffi`](#ffi)         | `import "ffi"`     | binding a C library's symbol in an `unsafe` group  |
@@ -292,6 +293,31 @@ The wire form a derived `Encode` writes and a derived `Decode` reads — the byt
 | `take_count()`, `take_flag(what)`             | a checked count; a `00`/`01` byte, as a `bool` |
 
 Every `take_*` answers a `Result`, so a short or malformed input is a value and never an abort.
+
+## `net`
+
+TCP connections. An address is a numeric IPv4 address and a port: there is no hostname lookup. A `Conn` is
+an `io.Reader` and an `io.Writer`, and copies of it share one socket, closed once — by `release()` or at the
+last holder's scope exit, whichever comes first.
+
+| Member                                       | Summary                                               |
+| -------------------------------------------- | ----------------------------------------------------- |
+| `dial(host: str, port: int) -> Result[Conn]` | connect to `host:port`                                |
+| `Conn.read_bytes(n: uint)`                   | at most `n` bytes, once one has arrived; empty is EOF |
+| `Conn.write(bytes: list[byte])`              | send every byte, answering the count                  |
+| `Conn.release()`                             | close for every copy; a second call does nothing      |
+
+Every failure is an `IOError` in the `Result`, never an abort: a refused connection, a host that is not a
+numeric IPv4 address, a port outside 0..65535, a peer that reset, and a read or write after `release()`.
+The message names the operation and the reason — `dial 127.0.0.1:1: connection refused`. `read_bytes(0)`
+is a `ValueError` and touches no socket: its empty answer could not be told from the end of the stream.
+
+A wait parks the coroutine: a read with nothing to read, a write the socket cannot take yet and a connect
+in progress leave the worker to other coroutines until the socket is ready, and a program with no `spawn`
+waits in place. A parked socket wait is not a deadlock ([Coroutines & Channels](../code/coroutine.md)).
+
+> **[not yet]** Listening and accepting a connection are unbuilt — `net.listen` is _E3084 module `net` has
+> no `listen`_.
 
 ## `log`
 

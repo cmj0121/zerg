@@ -539,7 +539,9 @@ channel。讓一個死亡變得*致命*是觀察者的職責（對那個被 rais
   是**呼叫端**的決定（例如帶 cancel 或 timeout arm 的 `select`）。
 - **全域 deadlock 偵測**——若每個 coroutine 都 block、無可能前進，runtime 會 raise **`DeadlockError`** 而非默默卡死。
   一個孤零零卡住、而其他 coroutine 仍在前進的 sender，不會被單獨偵測；一次待決的 sleep 也不算 deadlock——等
-  timer 的 coroutine 終究會前進，所以只要還有 sleep 未到期，偵測器就退場不判。
+  timer 的 coroutine 終究會前進，所以只要還有 sleep 未到期，偵測器就退場不判。park 在 **socket** 上的 coroutine 也
+  一樣讓它退場：它在等外部世界，而外部世界還可能回應。代價與 Go 相同——兩條 coroutine 各自讀同一條 loopback
+  連線的另一端時，會永遠等下去而不 raise，因為沒有東西分辨得出遠端就是這支程式本身。
 
   `DeadlockError` 是一次與其他 abort 無異的**乾淨 abort**：它 unwind、跑 pending `defer`，`guard` 也攔得住。
   在攔它之前有兩件事值得知道。

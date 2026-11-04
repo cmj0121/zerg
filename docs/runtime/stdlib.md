@@ -594,7 +594,7 @@ d := rand.below(g, 6)    # g advances; d in [0, 6)
 A command line is **declared**, not parsed by hand: a `Command` names its arguments, its sub-commands and the
 function each one runs, and that declaration is the only description of the command line that exists — the
 parser reads it, the help renderer reads it, the validator reads it. `zerg`'s own command line is declared with
-it (see [`src/compiler/zergc.zg`](../../src/compiler/zergc.zg)).
+it (see [`src/compiler/cmd/root.zg`](../../src/compiler/cmd/root.zg)).
 
 | Function                                                | Summary                                          |
 | ------------------------------------------------------- | ------------------------------------------------ |

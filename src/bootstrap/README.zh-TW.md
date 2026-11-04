@@ -27,7 +27,7 @@ zerg0 build -o out --keep-c f.zg   # 指定輸出路徑，並保留產生的 .c
 ```text
 make build                        # 或者手動跑它的三個步驟：
 go build -o bin/zerg0 ./cmd/zerg  # 1. Go 種子——叫 zerg0，不叫 zerg
-zerg0 build src/compiler/zergc.zg -o bin/.zerg-stage1
+zerg0 build src/compiler/zergc_seed.zg -o bin/.zerg-stage1
                                   # 2. 種子建出一個「中繼」編譯器
 zerg build --emit bin -o bin/zerg src/compiler/zergc.zg
                                   # 3. 由中繼建出實際出貨的 zerg
@@ -36,10 +36,15 @@ zerg build --emit bin -o bin/zerg src/compiler/zergc.zg
 出貨的編譯器是由「以 Zerg 寫成的編譯器」建出的，不是由種子——種子只需要造出一個夠好的中繼。這讓種子離開
 交付路徑，也讓每一次建置都走過自舉路徑。在那之後，種子只在「機器上還沒有 `zerg`」時，才需要重新推導出它。
 
+**種子從 `zergc_seed.zg` 建出 stage1，不是從 `zergc.zg`。** 種子的入口是少了 `zerg doc --serve` 的出貨入口；
+`--serve` 需要 `net`，而種子編譯不了 `net`：它會丟掉被 import 的模組裡含有 `spawn` 的函式，沒辦法 `impl`
+另一個模組宣告的 spec，也沒有 `Either` 這個名字。stage1 只需要建出 `zergc.zg`，建置碰不到任何 socket；
+被要求 `--serve` 時，它指名拒絕。步驟 3 從 `zergc.zg` 建出完整的命令列。
+
 ## 契約：三層，中間沒有灰色地帶
 
 種子只有一件工作——建出自舉編譯器——所以它**必須**支援什麼不是品味問題，而是
-`src/compiler/zergc.zg`、`src/compiler/zerg/*.zg` 以及它們 import 的 stdlib 模組
+`src/compiler/zergc_seed.zg`、`src/compiler/zerg/*.zg` 以及它們 import 的 stdlib 模組
 （`io`、`ascii`、`strconv`、`cli`）實際用什麼寫成。語言的每一種形式都恰好落在三層之一。
 
 **第一層——支援。** `Zerg-boot` 子集。降階成 C，並由種子自己的單元測試涵蓋。
@@ -489,9 +494,9 @@ chan[int]() }`——或任何不是字面值、模組常數，或它們之間算
 相同；若不相同，那個差異就是這項改動真正的影響半徑。
 
 ```sh
-zerg0 build --emit c src/compiler/zergc.zg > after.c  # 與改動前的擷取結果比對
-go build ./... && go test ./...                       # 種子自己的測試（只有單元測試）
-make build                                            # 而且自舉鏈仍能閉合
+zerg0 build --emit c src/compiler/zergc_seed.zg > after.c  # 與改動前的擷取結果比對
+go build ./... && go test ./...                            # 種子自己的測試（只有單元測試）
+make build                                                 # 而且自舉鏈仍能閉合
 ```
 
 種子只由單元測試覆蓋。`test-data/` 語料描述的是語言，因此歸自舉編譯器所有，由 `make corpus` 執行——見

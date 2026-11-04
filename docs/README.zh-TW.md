@@ -51,7 +51,7 @@ self-hosted 編譯器、而不只是宣稱自己是的東西。
 | ---- | ---------------------------------------------- | -------------------------------- |
 | 0    | `./scripts/gen-version.sh`                     | `VERSION` 生成 `zerg/version.zg` |
 | 1    | 在 `src/bootstrap/` 跑 `go build -o bin/zerg0` | `bin/zerg0` —— Go 種子           |
-| 2    | `zerg0 build src/compiler/zergc.zg`            | `bin/.zerg-stage1` —— 中繼品     |
+| 2    | `zerg0 build src/compiler/zergc_seed.zg`       | `bin/.zerg-stage1` —— 中繼品     |
 | 3    | `.zerg-stage1 build --emit bin src/compiler/…` | `bin/zerg`，之後刪掉 stage 1     |
 
 **種子不在交付路徑上。** 使用者實際跑的那個 binary 是步驟 3 產出的，而步驟 3 是由一個以 Zerg 寫成的

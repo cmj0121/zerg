@@ -13,6 +13,7 @@ zerg doc src/stdlib/log.zg    # 一個檔案、或一個目錄，就地成為文
 zerg doc --check strings      # 指名沒有 `##` 文字的宣告、跑每一個範例；任一出錯就以 1 結束
 zerg doc -s spl               # 名字以 `spl` 開頭的每一個宣告；`-s spl strings` 只找那一個
 zerg doc --html site          # 讀者的頁面寫成 site/ 裡的靜態 HTML，附索引與搜尋
+zerg doc --serve 8080         # 同樣的頁面經由 HTTP 提供，在 http://127.0.0.1:8080/
 ```
 
 ## 主張
@@ -99,7 +100,7 @@ DECLARATIONS
 
 `zerg doc --html <dir>` 把讀者的頁面寫進一個目錄，目錄不存在就建立：`zerg doc` 列出的每一個 module 各一頁——或是目錄
 後面指名的那一個 module 或路徑——一份列出它們的 `index.html`、一個 `search.js` 與一個 `style.css`。直接從磁碟打開
-`index.html`；沒有東西被伺服，也沒有東西被抓取。
+`index.html`；這些頁面不需要伺服器，也不抓取任何東西。
 
 ```sh
 zerg doc --html site                  # `zerg doc` 列出的每一個 module，以及它們的索引
@@ -132,6 +133,41 @@ zerg doc --html site src/compiler/cmd # 一個目錄 module，以及只有它的
 `node` 能執行這個 script 的地方，從名字推出的每一個詞，頁面的回答都與 `zerg doc -s` 相同（CI 設定的
 `REQUIRE_NODE=1` 讓缺少 `node` 成為失敗）。一個 fixture 把 `<`、`&` 與兩種引號放進開頭註解、註解、簽名與摘要，兩次
 執行逐位元組比較，而且沒有任何頁面可以指向這台機器以外的地方。
+
+## 提供頁面
+
+`zerg doc --serve <port>` 經由 HTTP 回應同樣的頁面，只在 `127.0.0.1`、不在其他位址，而且不必先寫出目錄。port `0`
+請 OS 挑一個空的，伺服器開始時印出的那一行會指名它拿到的 port：
+
+```sh
+zerg doc --serve 8080               # `zerg doc` 列出的每一個 module，在 http://127.0.0.1:8080/
+zerg doc --serve 0 src/compiler/cmd # 一個目錄 module，用 OS 挑的 port
+```
+
+```text
+serving 1 module page(s) at http://127.0.0.1:54924/
+```
+
+**範圍就是 `--html` 的範圍**，而且在開始監聽之前就檢查：不指名就是 `zerg doc` 列出的每一個 module，一個 module
+或路徑就是那一個，指名一個宣告或兩個名字會被拒絕。port 是 0 到 65535 的整數，否則被拒絕；無法監聽的 port 會帶著 OS
+給的理由被拒絕，以 1 結束。這些頁面是讀者的，所以 `--html`、`--all`、`--brief`、`--check` 與 `--search` 跟
+`--serve` 放在一起會被拒絕。
+
+**每一次請求都重新算繪頁面**，用當下的原始碼，產出 `--html` 在那一刻會寫的位元組。改過的 `##` 註解在下一次重新載入
+時就在頁面上，也沒有留下任何會過時的副本。算繪不了的頁面——範圍裡的原始碼被移走或刪掉——只回應一個通用的 `500`，
+理由會指名本機路徑，所以印在伺服器的終端機上；伺服器繼續提供服務，原始碼回來，頁面也就回來。伺服器一直執行到被停止為止。
+
+**HTTP 只做瀏覽器與 `curl` 需要的部分。** 回應 `GET` 與 `HEAD`，`HEAD` 只給標頭；`/` 就是 `index.html`，query
+string 會被丟掉。不是頁面的路徑是 `404`，其他 method 是帶著 `Allow: GET, HEAD` 的 `405`，第一行不是
+`METHOD PATH HTTP/1.x` 的請求是 `400`，請求標頭超過 8 KiB 也是。每一個回應都帶著它的 `Content-Length` 與
+`Content-Type`、`X-Content-Type-Options: nosniff`，以及 `Connection: close`。
+
+**`Host` 必須指名這個伺服器。** 只有帶著唯一一個 `Host` 標頭、而且它是伺服器所監聽 port 的 `127.0.0.1:<port>` 或
+`localhost:<port>`（不分大小寫）的請求才會被回應；其他的、沒有、兩個，或有格式錯誤的標頭行，都是 `400`。另一個網站上的頁
+面可以把它自己的名字指向 `127.0.0.1`（DNS rebinding），但它的請求仍帶著那個名字，所以讀不到這些頁面。
+
+**一次一個連線。** 伺服器讀取、回應並關閉一個連線之後，才接受下一個，而 `net` 沒有讀取期限。所以一個什麼都不送的
+連線——瀏覽器的 preconnect，在請求之前先開好的——會擋住其他每一個請求，直到它關閉為止。
 
 ## 露出什麼，就記錄什麼
 
@@ -483,13 +519,3 @@ listed
 
 **任何**剖析不過的檔案都會印出同一行 note，並指名那個檔案；指向標準函式庫章節的那半句，只有在檔案真的在標準函式庫
 裡時才會加上去。
-
-## 還沒做的東西
-
-寫在這裡而不是留給人去發現，因為一個把自己說得比實際多的文件工具，正是它唯一無法補救的失敗：
-
-| 還沒做    | issue                                            |
-| --------- | ------------------------------------------------ |
-| `--serve` | [#21](https://github.com/cmj0121/zerg/issues/21) |
-
-`--serve` 卡在比這個工具更大的東西上：這個語言完全沒有網路。上面的靜態頁面就是它要伺服的東西。

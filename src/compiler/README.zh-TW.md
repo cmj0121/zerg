@@ -23,9 +23,11 @@
 
 ```text
 src/compiler/
-  zergc.zg        # 宣告出來的命令列：`main`、`root`、版本橫幅
+  zergc.zg        # 出貨的入口：`main`，以及執行 `doc --serve` 的 `do_doc_entry`
+  zergc_seed.zg   # `zerg0` 建出 stage1 用的入口：同上，但拒絕 `--serve`
   cmd/            # 每個子命令「做什麼」——一個目錄模組
     cmd.zg        # 這個模組自己的標頭，不宣告任何東西（Go 的 `doc.go`）
+    root.zg       # 宣告出來的命令列：`root`、`env_help`、版本橫幅
     build.zg      # `zerg build`——pipeline，以及產物寫到哪裡
     test.zg       # `zerg test`——執行、每個 package 一個行程、回報
     test_pkg.zg   #   哪些目錄有測試，以及各自由哪些檔案組成
@@ -34,7 +36,7 @@ src/compiler/
     fmt.zg        # `zerg fmt`
     desugar.zg    # `zerg desugar`
     lint.zg       # `zerg lint`
-    lsp_cmd.zg    # `zerg lsp`（不是 `lsp.zg`：那會遮蔽 `import "lsp"`）
+    lsp.zg        # `zerg lsp`
     diag.zg       # 共用：詞法關卡與診斷算繪
     source.zg     # 共用：讀一份原始碼，並解析它 import 什麼
     layout.zg     # 共用：東西在哪裡，以及 cc 用什麼參數呼叫
@@ -54,6 +56,7 @@ src/compiler/
     version.zg    # 由 ./scripts/gen-version.sh 從 VERSION 產生
   lsp/
     server.zg     # language server——自成一個模組
+  serve/          # `zerg doc --serve` 的 socket 迴圈與 HTTP；只有 `zergc.zg` import 它
 ```
 
 `cmd` 裡標成**共用**的那四個檔案之所以在那裡，是因為不只一個子命令會用到它們，而且「是哪些」是在 call graph 上量出來的，
@@ -121,8 +124,8 @@ scope，所以 `token.zg`/`lexer.zg`/`parser.zg` 可以共用 `Kind` 與 AST 的
   coroutine：排程器是 M:N 但**協作式**的，一條 CPU-bound 的 coroutine 會一直佔住它的 worker，
   所以它買到的是並行，不是更短的編譯時間。
 
-用它自己建自己是**十個單元**——進入點、`cmd/`、`zerg/`、`lsp/`，加上它們用到的六個 stdlib 模組。
-量三次的結果是：冷建 `-j1` 約 7 秒、`-j4` 約 6 秒，而 `-j8` 落在 `-j4` 的執行間浮動範圍內，什麼
+用它自己建自己是**每個模組一個單元**——進入點、`cmd/`、`zerg/`、`lsp/`、`serve/`，加上它們用到的 stdlib 模組。
+在加入 `serve/` 之前量三次的結果是：冷建 `-j1` 約 7 秒、`-j4` 約 6 秒，而 `-j8` 落在 `-j4` 的執行間浮動範圍內，什麼
 都沒改時約 5 秒。這些數字之所以這麼接近，正是重點：`zerg/` 是一個目錄模組、因此是一個單元，而它
 就是編譯器的大部分，所以 `-j` 不可能低過它。在這裡買到時間的是快取，不是平行。
 

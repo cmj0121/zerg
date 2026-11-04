@@ -13,6 +13,7 @@ zerg doc src/stdlib/log.zg    # a file, or a directory, documented where it stan
 zerg doc --check strings      # name what carries no `##` text, run every example; exit 1 on either
 zerg doc -s spl               # every declaration whose name begins `spl`; `-s spl strings` within one
 zerg doc --html site          # the reader's pages as static HTML in site/, with an index and a search
+zerg doc --serve 8080         # the same pages over HTTP, at http://127.0.0.1:8080/
 ```
 
 ## The claim
@@ -114,7 +115,7 @@ this finds.
 
 `zerg doc --html <dir>` writes the reader's pages into a directory, made if it is not there: a page for every module
 `zerg doc` lists — or for the one module or path named after the directory — an `index.html` that lists them, a
-`search.js` and a `style.css`. Open `index.html` straight off the disk; nothing is served and nothing is fetched.
+`search.js` and a `style.css`. Open `index.html` straight off the disk; the pages need no server and fetch nothing.
 
 ```sh
 zerg doc --html site                  # every module `zerg doc` lists, and the index of them
@@ -153,6 +154,46 @@ its page, named as `-s` names it; the index is the index; the search's names are
 script, every term derived from the names is answered by the page as `zerg doc -s` answers it (`REQUIRE_NODE=1`, set in
 CI, makes a missing `node` a failure). A fixture puts `<`, `&` and both quotes in a header, a comment, a signature and a
 summary, two runs are compared byte for byte, and no page may name anything off the machine.
+
+## Serving the pages
+
+`zerg doc --serve <port>` answers the same pages over HTTP, on `127.0.0.1` and no other address, with no directory
+written first. Port `0` asks the OS for a free one, and the line the server starts with names the port it got:
+
+```sh
+zerg doc --serve 8080               # every module `zerg doc` lists, at http://127.0.0.1:8080/
+zerg doc --serve 0 src/compiler/cmd # one directory module, on a port the OS picks
+```
+
+```text
+serving 1 module page(s) at http://127.0.0.1:54924/
+```
+
+**The scope is `--html`'s**, and it is checked before anything listens: no name is every module `zerg doc` lists, a
+module or a path is that one, and a declaration or two names are refused. The port is a whole number from 0 to 65535,
+or a refusal; a port that cannot be listened on is refused with the OS's reason, exit 1. The pages are the reader's,
+so `--html`, `--all`, `--brief`, `--check` and `--search` beside `--serve` are refused.
+
+**A page is rendered on every request**, from the source as it stands then, with the bytes `--html` would write at that
+moment. An edited `##` comment is on the page at the next reload, and no copy is kept that could go stale. A page that
+cannot be rendered — a source in the scope moved or deleted — answers a plain `500`, and the reason, which names local
+paths, is printed on the server's terminal; the server keeps serving, and the page is back once the source is. The
+server runs until it is stopped.
+
+**The HTTP is what a browser and `curl` need.** `GET` and `HEAD` are answered, `HEAD` with the headers alone; `/` is
+`index.html`, and a query string is dropped. A path that is no page is a `404`, any other method a `405` with
+`Allow: GET, HEAD`, and a request whose first line is not `METHOD PATH HTTP/1.x` is a `400`, as is a request head
+longer than 8 KiB. Every response carries its `Content-Length` and `Content-Type`, `X-Content-Type-Options: nosniff`
+and `Connection: close`.
+
+**The `Host` must name the server.** A request is answered only when it has one `Host` header, and it is
+`127.0.0.1:<port>` or `localhost:<port>`, in any case, for the port the server is on; any other, none, two, or a header
+line that is malformed is a `400`. A page on another site can point its own name at `127.0.0.1` (DNS rebinding), but
+its requests still carry that name, so it cannot read these pages.
+
+**One connection at a time.** The server reads, answers and closes each connection before it accepts the next, and
+`net` has no read deadline. So a connection that sends nothing — a browser's preconnect, opened ahead of a request —
+holds every other request until it closes.
 
 ## What is exposed is what is documented
 
@@ -564,15 +605,3 @@ nothing failed, and the header is the only documentation such a file can give.
 
 The same note is printed for **any** file that will not parse, naming that file; the pointer
 into the standard library's chapter is added only when the file is in the standard library.
-
-## What is not built yet
-
-Named here rather than left to be discovered, because a documentation tool that overstates
-itself is the one failure it cannot recover from:
-
-| Not built | Issue                                            |
-| --------- | ------------------------------------------------ |
-| `--serve` | [#21](https://github.com/cmj0121/zerg/issues/21) |
-
-`--serve` is blocked on something larger than this tool: the language has no networking at all. The static pages
-above are what it would serve.

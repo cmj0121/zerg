@@ -35,8 +35,8 @@ client left waiting, reports nothing at all.
 ## Where it lives
 
 `src/compiler/lsp/` — a module of its own, importing `src/compiler/zerg/` across the `pub` boundary
-like any other consumer, wired in by one more `.sub(cmd.lsp_cmd())` in `zergc.zg`. The command that
-starts it is `src/compiler/cmd/lsp_cmd.zg`, beside the other five.
+like any other consumer, wired in by one more `.sub(lsp.lsp_cmd())` in `cmd/root.zg`. The command that
+starts it is `src/compiler/cmd/lsp.zg`, beside the other commands.
 
 **One binary, not two.** A sub-command makes version skew between the compiler and the server
 physically impossible — they are the same file — and an editor needs nothing on `PATH` that is not

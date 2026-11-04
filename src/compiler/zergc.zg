@@ -7,6 +7,7 @@
 import (
 	"cli"
 	"/cmd"
+	"/serve"
 )
 
 fn main(args: list[str]) {
@@ -17,6 +18,6 @@ fn main(args: list[str]) {
 # because `--serve` is the one form that needs `net`, and only this entry may import it — the
 # seed's entry, `zergc_seed.zg`, has its own copy that refuses `--serve`.
 fn do_doc_entry(c: cli.Ctx) -> int {
-	raise "`--serve` is not built yet" if c.has("serve")
+	return serve.run(c) if c.has("serve")
 	return cmd.do_doc(c)
 }

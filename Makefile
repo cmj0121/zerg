@@ -472,7 +472,7 @@ lint:                           # lint the compiler, the stdlib, the suites and 
 # stale; one of them was the bitwise chapter, whose whole subject is that operator.
 SELF_TREES := src/compiler src/stdlib examples
 
-SELF_SRCS := src/compiler/*.zg src/compiler/cmd/*.zg src/compiler/zerg/*.zg src/compiler/lsp/*.zg src/stdlib/*.zg
+SELF_SRCS := src/compiler/*.zg src/compiler/cmd/*.zg src/compiler/zerg/*.zg src/compiler/lsp/*.zg src/compiler/serve/*.zg src/stdlib/*.zg
 
 fmt:                            # rewrite every Zerg source this repository writes in canonical style
 	$(MAKE) build

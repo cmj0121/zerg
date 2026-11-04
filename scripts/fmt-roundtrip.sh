@@ -115,7 +115,7 @@ mkdir -p "$tmp/tree"
 cp -R src "$tmp/tree/src"
 
 self=$(ls "$tmp"/tree/src/compiler/*.zg "$tmp"/tree/src/compiler/cmd/*.zg \
-	"$tmp"/tree/src/compiler/zerg/*.zg "$tmp"/tree/src/compiler/lsp/*.zg \
+	"$tmp"/tree/src/compiler/zerg/*.zg "$tmp"/tree/src/compiler/lsp/*.zg "$tmp"/tree/src/compiler/serve/*.zg \
 	"$tmp"/tree/src/stdlib/*.zg 2>/dev/null)
 
 # THE ENTRIES THIS TREE IS PARSED THROUGH. `--emit ast` reads an entry and everything it

@@ -59,6 +59,7 @@ syscall／硬體 leaf 在 C runtime（見 [`src/runtime`](../../src/runtime/READ
 | [`rand`](#rand)       | `import "rand"`    | 確定性、非密碼學的產生器               |
 | [`sha256`](#sha256)   | `import "sha256"`  | FIPS 180-4 摘要,用來命名與驗完整性     |
 | [`codec`](#codec)     | `import "codec"`   | `#[derive(Encode, Decode)]` 的線上格式 |
+| [`net`](#net)         | `import "net"`     | TCP 連線，即 `io` 的 Reader 與 Writer  |
 | [`cli`](#cli)         | `import "cli"`     | 宣告式的命令列，以及它算繪的 help      |
 | [`atomic`](#atomic)   | `import "atomic"`  | 安全的共享可變原語                     |
 | [`ffi`](#ffi)         | `import "ffi"`     | 在 `unsafe` 分組裡綁定 C 函式庫的符號  |
@@ -272,6 +273,31 @@ derive 其中任一個 spec 的檔案要 import 這個模組。`Encode` 是 `fn 
 | `take_count()`、`take_flag(what)`             | 經檢查的個數;`00`/`01` 位元組,讀成 `bool` |
 
 每個 `take_*` 都回傳 `Result`,所以過短或格式錯誤的輸入是一個值,絕不是 abort。
+
+## `net`
+
+TCP 連線，撥出的或接受的。位址是數字 IPv4 位址加一個 port，沒有主機名稱查詢。不論哪一端建立，`Conn` 都是
+`io.Reader` 也是 `io.Writer`。`Conn` 或 `Listener` 的副本共用同一個 socket，只關一次——由 `release()` 或最後
+持有者的 scope 退出，看哪個先到。
+
+| 成員                                         | 說明                                              |
+| -------------------------------------------- | ------------------------------------------------- |
+| `dial(host: str, port: int) -> Result[Conn]` | 連到 `host:port`                                  |
+| `Conn.read_bytes(n: uint)`                   | 至多 `n` 個位元組，等到至少一個抵達；空的就是 EOF |
+| `Conn.write(bytes: list[byte])`              | 送出每一個位元組，回傳個數                        |
+| `Conn.release()`                             | 對每個副本關閉；第二次呼叫什麼都不做              |
+| `listen(host: str, port: int)`               | 綁定並監聽，回傳 `Result[Listener]`               |
+| `Listener.port`                              | 綁定的 port——要求 0 時是 OS 挑的那個              |
+| `Listener.accept() -> Result[Conn]`          | 撥到它的下一條連線                                |
+| `Listener.release()`                         | 對每個副本停止監聽；已接受的連線不受影響          |
+
+每個失敗都是 `Result` 裡的 `IOError`，絕不是 abort：連線被拒、host 不是數字 IPv4 位址、port 超出 0..65535 或已被
+綁定、對端 reset，以及 `release()` 之後的讀、寫或 accept。訊息寫出操作與原因——`dial 127.0.0.1:1: connection refused`。
+`read_bytes(0)` 是 `ValueError`，不碰 socket：它的空答案分不出是不是串流結束。
+
+等待會 park coroutine：沒東西可讀的讀、socket 還收不下的寫、進行中的連線、沒人撥入的 accept，都把 worker 讓給
+其他 coroutine，直到 socket 就緒；沒有 `spawn` 的程式就原地等待。park 在 socket 上的等待不算 deadlock
+（[Coroutine 與 Channel](../code/coroutine.zh-TW.md)）。
 
 ## `log`
 

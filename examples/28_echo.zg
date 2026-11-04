@@ -1,0 +1,108 @@
+# 28 — A TCP echo: `net.listen`, `accept`, `net.dial`, and both ends as streams.
+#
+# `net.listen("127.0.0.1", 0)` binds a port the OS picks and says which on
+# `.port`. A server coroutine `accept`s one connection and writes back what it
+# reads; `main` dials that port, writes, and reads the echo. A connection is
+# an `io.Reader` and an `io.Writer` whichever end made it.
+#
+# Every wait — the accept, both reads — parks its coroutine, so the server and
+# the client take turns on the scheduler rather than blocking each other.
+#
+# A TCP connection is a STREAM, not a sequence of messages: one write may
+# arrive in pieces, so `read_exactly` reads until the count it expects is in.
+#
+# Every failure is a value: a refused dial or a port already bound comes back
+# as the `Right` of a `Result`, so `?` passes it up and `main` matches it. The
+# socket closes when its last holder's scope ends.
+#
+# beyond-the-seed: the `net` module is built by `zerg` alone.
+import (
+	"net"
+	"strings"
+)
+
+MESSAGE := "hello, socket"
+
+# read_exactly reads until n bytes have arrived. An empty read is the peer
+# closing early, which is a failure here rather than a short answer.
+fn read_exactly(c: net.Conn, n: int) -> Result[list[byte]] {
+	mut out: list[byte] = []
+	for out.len() < n {
+		chunk := c.read_bytes(uint(n - out.len()))?
+		return Either.Right(IOError(f"the peer closed after {out.len()} of {n} bytes")) if chunk.len() == 0
+
+		for b in chunk {
+			out.append(b)
+		}
+	}
+	return out
+}
+
+fn echo_one(l: net.Listener) -> Result[uint] {
+	c := l.accept()?
+	got := read_exactly(c, bytearray(MESSAGE).len())?
+	return c.write(got)
+}
+
+fn server(l: net.Listener, done: chan[str]) {
+	match echo_one(l) {
+		Left(n) => {
+			done <- f"server: echoed {n} bytes"
+		}
+		Right(e) => {
+			done <- f"server: {e.message()}"
+		}
+	}
+}
+
+fn run() -> Result[nil] {
+	l := net.listen("127.0.0.1", 0)?
+	done := chan[str](1)
+	spawn server(l, done)
+
+	c := net.dial("127.0.0.1", l.port)?
+	sent := c.write_str(MESSAGE)?
+	back := read_exactly(c, bytearray(MESSAGE).len())?
+	if msg := <-done {
+		print msg
+	}
+	print f"client: sent {sent} bytes, read back \"{str(back)}\""
+	return nil
+}
+
+fn main() {
+	match run() {
+		Left(_) => {
+			print "done"
+		}
+		Right(e) => {
+			print f"failed: {e.message()}"
+		}
+	}
+	match refused() {
+		Left(reason) => {
+			print reason
+		}
+		Right(e) => {
+			print f"failed: {e.message()}"
+		}
+	}
+}
+
+# refused dials a port nothing listens on: one the OS just gave a listener,
+# released before the dial, so it is closed by construction. The port differs
+# from run to run, so the answer is the message with the port taken out.
+fn refused() -> Result[str] {
+	l := net.listen("127.0.0.1", 0)?
+	port := l.port
+	l.release()
+	mut said := "a released port answered"
+	match net.dial("127.0.0.1", port) {
+		Left(_) => {
+		}
+		Right(e) => {
+			said = strings.replace(e.message(), f":{port}:", ":<port>:")
+		}
+	}
+	return said
+}

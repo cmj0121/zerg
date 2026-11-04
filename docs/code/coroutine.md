@@ -631,7 +631,10 @@ Two limits bound the model:
 - **Global deadlock detection** — if every coroutine is blocked with no possible progress, the runtime
   raises **`DeadlockError`** rather than hanging. A lone blocked sender while others progress is not
   individually detected, and a pending sleep is not a deadlock — a coroutine waiting on a timer is going
-  to make progress, so the detector stands down while any sleep is outstanding.
+  to make progress, so the detector stands down while any sleep is outstanding. A coroutine parked on a
+  **socket** stands it down the same way: it waits on the outside world, which may yet answer. The cost
+  is the one Go pays — two coroutines each reading the other's end of one loopback connection wait
+  forever rather than raise, since nothing can tell that the far end is this same program.
 
   `DeadlockError` is a **clean abort** like any other: it unwinds, runs the pending `defer`s, and a
   `guard` catches it. Two properties are worth knowing before catching one.

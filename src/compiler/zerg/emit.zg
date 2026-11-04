@@ -13572,6 +13572,11 @@ fn c_call(mut &em: Emitter, name: str, args: list[ast.Expr], l: int, c: int, sb:
 		check.chk_intrinsic_call(em, name, args)
 		em.used_rt = true
 
+		# the one leaf that answers a box mints its type, as a written `Ref(…)` does
+		if name == "__zrt_tcp_box" {
+			c_ref_record(em, ast.Ty.TInt)
+		}
+
 		# A `Ref[T]` REACHES AN INTRINSIC AS ITS PAYLOAD. The runtime's signatures are about the
 		# value — `zrt_atomic_load(int64_t *p)` — and a `Ref[int]` is a pointer to the CELL,
 		# whose first words are the refcount header. Passed whole, `atomic.load` read the header
@@ -17225,6 +17230,11 @@ fn c_intrinsic_ret(name: str) -> ast.Ty {
 
 	return ast.Ty.TList(ast.Ty.TByte) if name == "__zrt_read"
 	return ast.Ty.TList(ast.Ty.TStr) if name == "__zrt_listdir"
+	return ast.Ty.TList(ast.Ty.TByte) if name == "__zrt_tcp_read"
+	return ast.Ty.TNamed("Ref[int]") if name == "__zrt_tcp_box"
+	return ast.Ty.TStr if name == "__zrt_tcp_reason"
+	return ast.Ty.TInt if name == "__zrt_tcp_dial" or name == "__zrt_tcp_listen" or name == "__zrt_tcp_accept" or name == "__zrt_tcp_port"
+	return ast.Ty.TInt if name == "__zrt_tcp_write" or name == "__zrt_tcp_status"
 
 	# `[pid, stdin, stdout, stderr]` — a child and the parent's ends of its three streams. A
 	# list of four and not a struct, because that is what crosses this boundary without a new

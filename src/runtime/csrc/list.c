@@ -164,6 +164,18 @@ void zrt_list_push(zrt_list *l, const void *elem) {
 	l->len++;
 }
 
+void zrt_list_append_raw(zrt_list *l, const void *src, size_t n) {
+	if (n == 0) {
+		return;
+	}
+	zrt_list_unshare(l);
+	if (l->len + n > l->cap) {
+		zrt_list_grow(l, l->len + n);
+	}
+	memcpy(l->data + l->len * l->elemsz, src, n * l->elemsz);
+	l->len += n;
+}
+
 void *zrt_list_at_ref(zrt_list *l, size_t i) {
 	if (i >= l->len) {
 		zrt_abort_kind(ZRT_ERR_INDEX, "index out of range");

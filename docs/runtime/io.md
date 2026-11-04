@@ -73,7 +73,7 @@ create(path: str) -> Result[File]      # write/truncate; File implements Writer
 
 A missing file is an **expected** value-failure, never an abort. Open modes, seeking, and metadata are
 `io` methods — stdlib detail, not new concepts. A **socket** is the same shape: a `Ref[handle]` that is a
-`Reader` and `Writer`, its network API left to `io`.
+`Reader` and `Writer`, and the network API is the [`net`](stdlib.md#net) module's.
 
 > **[not yet]** The `File` handle and `open` / `create` are unbuilt this phase — `io.open` is _E3084 module
 > `io` has no `open`_ — and what is wired is the pair of
@@ -173,7 +173,7 @@ deliberately shared ([FFI](ffi.md)).
 
 ## Deferred
 
-- The concrete **`io` catalogue** — open modes, seeking, buffered wrappers, sockets/network — is stdlib.
+- The concrete **`io` catalogue** — open modes, seeking, buffered wrappers — is stdlib; a socket is `net`'s.
 - A **write-back buffer** (`read`/`recv` filling a caller's `list[byte]`) is the FFI out-buffer open
   question ([FFI](ffi.md)); until then `read_bytes` returns a fresh `list[byte]`.
 - **Format specifiers** (`f"{x:>.2f}"`) route to a per-type format protocol (Formatting & text).

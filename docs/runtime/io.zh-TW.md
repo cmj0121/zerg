@@ -65,7 +65,8 @@ create(path: str) -> Result[File]      # 寫/truncate；File 實作 Writer
 ```
 
 檔案不存在是**預期**的 value 失敗、絕非 abort。開檔模式、seek、metadata 都是 `io` method——stdlib 細節、不是新
-概念。**socket** 是同一形狀：一個既是 `Reader` 又是 `Writer` 的 `Ref[handle]`，網路 API 留給 `io`。
+概念。**socket** 是同一形狀：一個既是 `Reader` 又是 `Writer` 的 `Ref[handle]`，
+網路 API 則屬於 [`net`](stdlib.zh-TW.md#net) 模組。
 
 > **[not yet]** `File` handle 與 `open` / `create` 此階段尚未建置；接好的是那一對整檔葉子，檔案不存在或不可讀時
 > raise **`IOError`**（用 `guard` 降級）——一經 `guard` 便與「檔案不存在是預期的 value 失敗」一致。兩個葉子都不交還
@@ -151,7 +152,7 @@ thread-safety 與 lifetime 遵循 FFI 規則——除非刻意共享，由單一
 
 ## 延後
 
-- 具體的 **`io` 清單**——開檔模式、seek、buffered wrapper、socket／網路——都是 stdlib。
+- 具體的 **`io` 清單**——開檔模式、seek、buffered wrapper——都是 stdlib；socket 屬於 `net`。
 - **write-back 緩衝**（`read`／`recv` 填滿呼叫者的 `list[byte]`）是 FFI 的 out-buffer open question
   （[FFI](ffi.zh-TW.md)）；在它落地前，`read_bytes` 回傳全新的 `list[byte]`。
 - **格式指示子**（`f"{x:>.2f}"`）導向 per-type 的 format 協定（Formatting & text）。

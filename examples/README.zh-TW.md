@@ -53,6 +53,7 @@ make                            # ./bin/zerg
 | [`25_errors.zg`](25_errors.zg)           | `Result[T]`、`?` / `??`，以及把 abort 降回值的 `guard`   |
 | [`26_derive.zg`](26_derive.zg)           | `#[derive(Eq)]`——相等是選擇加入的，由編譯器寫            |
 | [`27_ffi.zg`](27_ffi.zg)                 | 在 `unsafe` group 裡綁定的 C 符號，以及它交回的 `handle` |
+| [`28_echo.zg`](28_echo.zg)               | TCP echo：`net.listen`、`accept`、`net.dial` 與 park     |
 
 ## 模組這一層
 

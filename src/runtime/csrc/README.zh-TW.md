@@ -26,7 +26,7 @@ C 函式庫（libc / libSystem）之上，另有一小塊 per-architecture 組�
 
 ### Concurrency
 
-- **`sched.c`**——M:N cooperative coroutine scheduler 與 `spawn`。
+- **`sched.c`**——M:N cooperative coroutine scheduler 與 `spawn`，以及 socket 等待所 park 的 netpoller。
 - **`chan.c`**——channels：typed、buffered、支援 `select`。
 - **`ctx_arm64.S`**——AArch64 的 coroutine context switch。
 - **`ctx_x86_64.S`**——x86-64（System V）的 coroutine context switch。
@@ -40,7 +40,7 @@ C 函式庫（libc / libSystem）之上，另有一小塊 per-architecture 組�
   `zrt_proc_wait`、`zrt_mkdir`、`zrt_listdir`）、工具在時限下執行的子行程（串流寫進檔案、自己領一個行程群組的
   `zrt_proc_start`，帶期限的 `zrt_proc_wait_for`，`zrt_proc_kill`，以及給不與其他任何一趟共用的目錄用的
   `zrt_mkdtemp` / `zrt_remove_dir`）、標準函式庫 `io` 下沉所到的 `write` / `read` / `open` / `close` syscall
-  floor、abort 回報、`Atomic[int]` 運算，以及命令列 `args`。
+  floor、標準函式庫 `net` 下沉所到的 TCP floor（`zrt_tcp_*`）、abort 回報、`Atomic[int]` 運算，以及命令列 `args`。
 
 ### Header & tests
 

@@ -51,6 +51,12 @@
 #include <ucontext.h>
 #endif
 #include <unistd.h>
+#if !defined(_WIN32)
+#include <arpa/inet.h>
+#include <netinet/in.h>
+#include <poll.h>
+#include <sys/socket.h>
+#endif
 
 /* --- the place of a stop (zrt_site_*) -------------------------------------------
  *
@@ -1278,3 +1284,378 @@ const char *zrt_mkdtemp(const char *prefix) {
 bool zrt_remove_dir(const char *path) {
 	return rmdir(path) == 0;
 }
+
+/* --- TCP (the `net` module's floor) ----------------------------------------------
+ *
+ * Every leaf answers a failure as a negative code and never aborts: `net` turns the code into
+ * an IOError value, so a refused connection is something a program reads and carries on from.
+ *
+ * ONE LOCK, g_tcp_mu, holds a cell still while it is used. An operation reads the descriptor
+ * out of the cell and makes its (non-blocking) call under it, and release writes -1 and closes
+ * under it, so an operation never reaches a descriptor number the OS has already handed to
+ * someone else. It is never held across a wait. */
+
+static bool (*g_io_wait)(int64_t *cell, int fd, int events);
+static void (*g_io_release)(int64_t *cell);
+
+void zrt_io_install(bool (*wait)(int64_t *cell, int fd, int events), void (*release)(int64_t *cell)) {
+	g_io_wait = wait;
+	g_io_release = release;
+}
+
+/* the status zrt_tcp_read leaves for zrt_tcp_status. Per thread, which is per coroutine for
+ * the span it is read in: the read returns and the status is asked for with no park between. */
+static ZRT_THREAD_LOCAL int64_t t_tcp_status;
+
+int64_t zrt_tcp_status(void) {
+	return t_tcp_status;
+}
+
+const char *zrt_tcp_reason(int64_t code) {
+	switch (code) {
+	case ZRT_TCP_BADADDR:
+		return sys_str_cell("not a numeric IPv4 address");
+	case ZRT_TCP_BADPORT:
+		return sys_str_cell("port out of range 0..65535");
+	case ZRT_TCP_RELEASED:
+		return sys_str_cell("the connection was released");
+	case ZRT_TCP_UNSUPPORTED:
+		return sys_str_cell("TCP is not supported on this platform");
+	default:
+		break;
+	}
+	/* strerror's buffer is shared, and two workers may fail at once: the common answers are
+	 * spelled here, and the rest carry their number. */
+	switch (-code) {
+	case ECONNREFUSED:
+		return sys_str_cell("connection refused");
+	case ECONNRESET:
+		return sys_str_cell("connection reset by peer");
+	case ECONNABORTED:
+		return sys_str_cell("connection aborted");
+	case EPIPE:
+		return sys_str_cell("broken pipe");
+	case ETIMEDOUT:
+		return sys_str_cell("connection timed out");
+	case ENETUNREACH:
+		return sys_str_cell("network is unreachable");
+	case EHOSTUNREACH:
+		return sys_str_cell("host is unreachable");
+	case EADDRINUSE:
+		return sys_str_cell("address already in use");
+	case EADDRNOTAVAIL:
+		return sys_str_cell("address not available");
+	case EACCES:
+		return sys_str_cell("permission denied");
+	case EMFILE:
+	case ENFILE:
+		return sys_str_cell("too many open files");
+	default:
+		break;
+	}
+	char buf[48];
+	snprintf(buf, sizeof(buf), "system error %lld", (long long)-code);
+	return sys_str_cell(buf);
+}
+
+#if defined(_WIN32)
+
+int64_t zrt_tcp_dial(const char *host, int64_t port) {
+	(void)host;
+	(void)port;
+	return ZRT_TCP_UNSUPPORTED;
+}
+
+int64_t zrt_tcp_listen(const char *host, int64_t port) {
+	(void)host;
+	(void)port;
+	return ZRT_TCP_UNSUPPORTED;
+}
+
+int64_t zrt_tcp_accept(int64_t *cell) {
+	(void)cell;
+	return ZRT_TCP_UNSUPPORTED;
+}
+
+int64_t zrt_tcp_port(int64_t *cell) {
+	(void)cell;
+	return ZRT_TCP_UNSUPPORTED;
+}
+
+zrt_list zrt_tcp_read(int64_t *cell, uint64_t n) {
+	(void)cell;
+	(void)n;
+	zrt_list out;
+	zrt_list_init(&out, sizeof(uint8_t), NULL);
+	t_tcp_status = ZRT_TCP_UNSUPPORTED;
+	return out;
+}
+
+int64_t zrt_tcp_write(int64_t *cell, zrt_list bytes) {
+	(void)cell;
+	(void)bytes;
+	return ZRT_TCP_UNSUPPORTED;
+}
+
+void zrt_tcp_release(int64_t *cell) {
+	*cell = -1;
+}
+
+void *zrt_tcp_box(int64_t fd) {
+	void *box = zrt_ref_alloc(sizeof(int64_t), NULL);
+	*(int64_t *)zrt_ref_payload(box) = fd;
+	return box;
+}
+
+#else
+
+static pthread_mutex_t g_tcp_mu = PTHREAD_MUTEX_INITIALIZER;
+
+/* tcp_wait waits until fd is ready for events: a park when a coroutine is running, poll(2)
+ * otherwise. It answers nothing — the caller re-tries its call and reads what happened. */
+static void tcp_wait(int64_t *cell, int fd, int events) {
+	if (g_io_wait != NULL && g_io_wait(cell, fd, events)) {
+		return;
+	}
+	struct pollfd p = {fd, (short)events, 0};
+	while (poll(&p, 1, -1) < 0 && errno == EINTR) {
+	}
+}
+
+/* tcp_socket_setup makes fd non-blocking, closed across exec, and silent on a write to a closed
+ * peer (SO_NOSIGPIPE where it exists; MSG_NOSIGNAL on each send elsewhere). */
+static int64_t tcp_socket_setup(int fd) {
+	int flags = fcntl(fd, F_GETFL, 0);
+	if (flags < 0 || fcntl(fd, F_SETFL, flags | O_NONBLOCK) < 0 || fcntl(fd, F_SETFD, FD_CLOEXEC) < 0) {
+		return -errno;
+	}
+#ifdef SO_NOSIGPIPE
+	int on = 1;
+	if (setsockopt(fd, SOL_SOCKET, SO_NOSIGPIPE, &on, sizeof(on)) < 0) {
+		return -errno;
+	}
+#endif
+	return 0;
+}
+
+static int64_t tcp_socket(void) {
+	int fd = socket(AF_INET, SOCK_STREAM, 0);
+	if (fd < 0) {
+		return -errno;
+	}
+	int64_t rc = tcp_socket_setup(fd);
+	if (rc < 0) {
+		close(fd);
+		return rc;
+	}
+	return fd;
+}
+
+static int64_t tcp_address(const char *host, int64_t port, struct sockaddr_in *addr) {
+	memset(addr, 0, sizeof(*addr));
+	addr->sin_family = AF_INET;
+	if (inet_pton(AF_INET, host, &addr->sin_addr) != 1) {
+		return ZRT_TCP_BADADDR;
+	}
+	if (port < 0 || port > 65535) {
+		return ZRT_TCP_BADPORT;
+	}
+	addr->sin_port = htons((uint16_t)port);
+	return 0;
+}
+
+int64_t zrt_tcp_dial(const char *host, int64_t port) {
+	struct sockaddr_in addr;
+	int64_t rc = tcp_address(host, port, &addr);
+	if (rc < 0) {
+		return rc;
+	}
+	int64_t s = tcp_socket();
+	if (s < 0) {
+		return s;
+	}
+	int fd = (int)s;
+	if (connect(fd, (struct sockaddr *)&addr, sizeof(addr)) == 0) {
+		return fd;
+	}
+	if (errno != EINPROGRESS && errno != EINTR) {
+		int64_t e = -errno;
+		close(fd);
+		return e;
+	}
+	/* The connect finishes in the background; writable is its end, and SO_ERROR says how it
+	 * ended. No other holder can reach this fd yet, so no cell guards it. */
+	for (;;) {
+		struct pollfd p = {fd, POLLOUT, 0};
+		int n = poll(&p, 1, 0);
+		if (n < 0 && errno != EINTR) {
+			int64_t e = -errno;
+			close(fd);
+			return e;
+		}
+		if (n > 0) {
+			int err = 0;
+			socklen_t size = sizeof(err);
+			if (getsockopt(fd, SOL_SOCKET, SO_ERROR, &err, &size) < 0) {
+				err = errno;
+			}
+			if (err != 0) {
+				close(fd);
+				return -(int64_t)err;
+			}
+			return fd;
+		}
+		tcp_wait(NULL, fd, POLLOUT);
+	}
+}
+
+int64_t zrt_tcp_listen(const char *host, int64_t port) {
+	struct sockaddr_in addr;
+	int64_t rc = tcp_address(host, port, &addr);
+	if (rc < 0) {
+		return rc;
+	}
+	int64_t s = tcp_socket();
+	if (s < 0) {
+		return s;
+	}
+	int fd = (int)s;
+	int on = 1;
+	if (setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &on, sizeof(on)) < 0 ||
+	    bind(fd, (struct sockaddr *)&addr, sizeof(addr)) < 0 || listen(fd, SOMAXCONN) < 0) {
+		int64_t e = -errno;
+		close(fd);
+		return e;
+	}
+	return fd;
+}
+
+int64_t zrt_tcp_accept(int64_t *cell) {
+	for (;;) {
+		pthread_mutex_lock(&g_tcp_mu);
+		int fd = (int)*cell;
+		if (fd < 0) {
+			pthread_mutex_unlock(&g_tcp_mu);
+			return ZRT_TCP_RELEASED;
+		}
+		int got = accept(fd, NULL, NULL);
+		int err = errno;
+		pthread_mutex_unlock(&g_tcp_mu);
+		if (got >= 0) {
+			int64_t rc = tcp_socket_setup(got);
+			if (rc < 0) {
+				close(got);
+				return rc;
+			}
+			return got;
+		}
+		if (err == EAGAIN || err == EWOULDBLOCK) {
+			tcp_wait(cell, fd, POLLIN);
+			continue;
+		}
+		/* a connection the peer gave up on before it was taken is not the listener's failure */
+		if (err != EINTR && err != ECONNABORTED) {
+			return -(int64_t)err;
+		}
+	}
+}
+
+int64_t zrt_tcp_port(int64_t *cell) {
+	pthread_mutex_lock(&g_tcp_mu);
+	int fd = (int)*cell;
+	int64_t rc = ZRT_TCP_RELEASED;
+	if (fd >= 0) {
+		struct sockaddr_in addr;
+		socklen_t size = sizeof(addr);
+		rc = getsockname(fd, (struct sockaddr *)&addr, &size) < 0 ? -errno : (int64_t)ntohs(addr.sin_port);
+	}
+	pthread_mutex_unlock(&g_tcp_mu);
+	return rc;
+}
+
+zrt_list zrt_tcp_read(int64_t *cell, uint64_t n) {
+	zrt_list out;
+	zrt_list_init(&out, sizeof(uint8_t), NULL);
+	uint8_t buf[4096];
+	size_t cap = n < sizeof(buf) ? (size_t)n : sizeof(buf);
+	for (;;) {
+		pthread_mutex_lock(&g_tcp_mu);
+		int fd = (int)*cell;
+		if (fd < 0) {
+			pthread_mutex_unlock(&g_tcp_mu);
+			t_tcp_status = ZRT_TCP_RELEASED;
+			return out;
+		}
+		ssize_t got = cap == 0 ? 0 : recv(fd, buf, cap, 0);
+		int err = errno;
+		pthread_mutex_unlock(&g_tcp_mu);
+		if (got >= 0) {
+			zrt_list_append_raw(&out, buf, (size_t)got);
+			t_tcp_status = 0;
+			return out;
+		}
+		if (err == EAGAIN || err == EWOULDBLOCK) {
+			tcp_wait(cell, fd, POLLIN);
+		} else if (err != EINTR) {
+			t_tcp_status = -(int64_t)err;
+			return out;
+		}
+	}
+}
+
+/* zrt_tcp_write sends every byte, waiting as often as the socket's buffer fills, and answers
+ * the count sent — or the code of the failure that stopped it. */
+int64_t zrt_tcp_write(int64_t *cell, zrt_list bytes) {
+	int flags = 0;
+#ifdef MSG_NOSIGNAL
+	flags = MSG_NOSIGNAL;
+#endif
+	size_t sent = 0;
+	while (sent < bytes.len) {
+		pthread_mutex_lock(&g_tcp_mu);
+		int fd = (int)*cell;
+		if (fd < 0) {
+			pthread_mutex_unlock(&g_tcp_mu);
+			return ZRT_TCP_RELEASED;
+		}
+		ssize_t n = send(fd, bytes.data + sent, bytes.len - sent, flags);
+		int err = errno;
+		pthread_mutex_unlock(&g_tcp_mu);
+		if (n >= 0) {
+			sent += (size_t)n;
+		} else if (err == EAGAIN || err == EWOULDBLOCK) {
+			tcp_wait(cell, fd, POLLOUT);
+		} else if (err != EINTR) {
+			return -(int64_t)err;
+		}
+	}
+	return (int64_t)sent;
+}
+
+/* zrt_tcp_release closes the socket once: a second call, or the drop after an explicit one,
+ * finds -1. Under the scheduler the close goes through it, which wakes a coroutine parked on
+ * the fd and never closes one a poll(2) is watching. Never retried: an interrupted close may
+ * already have handed the number back to the OS. */
+void zrt_tcp_release(int64_t *cell) {
+	pthread_mutex_lock(&g_tcp_mu);
+	if (g_io_release != NULL) {
+		g_io_release(cell);
+	} else if (*cell >= 0) {
+		int fd = (int)*cell;
+		*cell = -1;
+		close(fd);
+	}
+	pthread_mutex_unlock(&g_tcp_mu);
+}
+
+static void tcp_drop(void *payload) {
+	zrt_tcp_release((int64_t *)payload);
+}
+
+void *zrt_tcp_box(int64_t fd) {
+	void *box = zrt_ref_alloc(sizeof(int64_t), tcp_drop);
+	*(int64_t *)zrt_ref_payload(box) = fd;
+	return box;
+}
+
+#endif

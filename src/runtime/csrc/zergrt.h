@@ -185,6 +185,10 @@ void zrt_list_init(zrt_list *l, size_t elemsz, const zrt_elem_vt *vt);
  * grow relocates the live prefix with a bit-move, not vt->copy. */
 void zrt_list_push(zrt_list *l, const void *elem);
 
+/* zrt_list_append_raw appends n elements from src in one copy — zrt_list_push's raw memcpy,
+ * n at a time, for a POD list a runtime leaf fills from a buffer. */
+void zrt_list_append_raw(zrt_list *l, const void *src, size_t n);
+
 /* zrt_list_at returns a pointer to element i's slot to be WRITTEN through, aborting
  * ("index out of range") when i is past the end — the `xs[i]` force path (IndexError).
  * It unshares first, so the pointer names storage this list alone owns.
@@ -1053,6 +1057,46 @@ int64_t zrt_path_kind(const char *path);
  * whether two spellings name the same directory. */
 const char *zrt_real_path(const char *path);
 
+/* --- TCP floor (sys.c) ---------------------------------------------------
+ *
+ * The leaves the stdlib `net` module lowers onto. EVERY FAILURE IS A VALUE: a leaf answers a
+ * negative code — `-errno` for what the OS refused, or one of the sentinels below — and never
+ * aborts, so `net` can hand it back as an IOError in a Result. zrt_tcp_reason is the sentence
+ * for a code. A socket lives in a `Ref[int]` cell (zrt_tcp_box) whose drop is zrt_tcp_release,
+ * so it is closed exactly once: by an explicit release or by the last holder's scope exit,
+ * whichever is first. Release writes -1 into the cell, and every alias then answers
+ * ZRT_TCP_RELEASED.
+ *
+ * Every socket is non-blocking. An operation that would block waits through the netpoller when
+ * the scheduler is running (sched.c installs it with zrt_io_install) and parks the coroutine;
+ * otherwise — a program with no `spawn` — it blocks in poll(2) itself.
+ *
+ * zrt_tcp_read answers its bytes (empty is end of stream) and leaves its status for
+ * zrt_tcp_status: 0, or the negative code. Nothing parks between the two calls, so the
+ * status is read on the worker that wrote it. */
+#define ZRT_TCP_BADADDR (-1000001)     /* not a numeric IPv4 address */
+#define ZRT_TCP_BADPORT (-1000002)     /* a port outside 0..65535 */
+#define ZRT_TCP_RELEASED (-1000003)    /* the socket was released */
+#define ZRT_TCP_UNSUPPORTED (-1000004) /* this platform has no TCP floor */
+int64_t     zrt_tcp_dial(const char *host, int64_t port);
+int64_t     zrt_tcp_listen(const char *host, int64_t port);
+int64_t     zrt_tcp_accept(int64_t *cell);
+int64_t     zrt_tcp_port(int64_t *cell);
+void       *zrt_tcp_box(int64_t fd);
+zrt_list    zrt_tcp_read(int64_t *cell, uint64_t n);
+int64_t     zrt_tcp_status(void);
+int64_t     zrt_tcp_write(int64_t *cell, zrt_list bytes);
+void        zrt_tcp_release(int64_t *cell);
+const char *zrt_tcp_reason(int64_t code);
+
+/* zrt_io_install is how the scheduler lends the TCP floor its netpoller; NULLs take it back.
+ * `wait` parks the current coroutine until fd is ready for `events` (poll(2) bits), answering
+ * false when no coroutine is running. `cell` is the socket's cell, or NULL for a socket no
+ * other holder can reach yet (a dial in progress). `release` marks the cell -1, wakes every
+ * waiter on its fd and closes it — or leaves the close to the poller while a poll(2) holds
+ * the fd. The floor calls `release` holding its own lock, so the scheduler lock nests inside. */
+void zrt_io_install(bool (*wait)(int64_t *cell, int fd, int events), void (*release)(int64_t *cell));
+
 /* --- minimal sys surface (sys.c) ----------------------------------------- */
 
 /* zrt_report writes one diagnostic line to stderr: `kind: msg`, or `msg` alone when kind
@@ -1372,6 +1416,13 @@ typedef struct zrt_coro {
 	bool             is_main;           /* coroutine 0: its end is the program's end */
 	bool             deadlocked;        /* resumed to raise DeadlockError; see sched.c */
 	int64_t          deadline;          /* zrt_sleep_ns wake time (zrt_time_mono); 0 = none */
+	/* an I/O wait (sched.c's netpoller): io_wait says the park is one, and the worker
+	 * completing the park files it by fd; io_gen tells this filing from an earlier one. */
+	bool             io_wait;
+	int              io_fd;
+	int              io_events;
+	int64_t         *io_cell;
+	uint64_t         io_gen;
 	void            *tsan_fiber;        /* ZRT_TSAN only; NULL otherwise. See below. */
 	/* ZRT_ASAN only, and NULL/0 otherwise. asan_fake is where AddressSanitizer parks this
 	 * coroutine's fake stack while it is suspended, and asan_sched_* is the stack of the

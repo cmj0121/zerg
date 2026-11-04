@@ -27,7 +27,7 @@ the compiler emits.
 
 ### Concurrency
 
-- **`sched.c`** — the M:N cooperative coroutine scheduler and `spawn`.
+- **`sched.c`** — the M:N cooperative coroutine scheduler and `spawn`, and the netpoller a socket wait parks on.
 - **`chan.c`** — channels: typed, buffered, with `select`.
 - **`ctx_arm64.S`** — the AArch64 coroutine context switch.
 - **`ctx_x86_64.S`** — the x86-64 (System V) coroutine context switch.
@@ -41,8 +41,8 @@ the compiler emits.
   (`zrt_exec`, `zrt_proc_spawn` / `zrt_proc_wait`, `zrt_mkdir`, `zrt_listdir`), the child a tool runs under a
   limit (`zrt_proc_start` with its streams in files and a process group of its own, `zrt_proc_wait_for` with a
   deadline, `zrt_proc_kill`, and `zrt_mkdtemp` / `zrt_remove_dir` for a directory no other run shares), the
-  `write` / `read` / `open` / `close` syscall floor the stdlib `io` lowers onto, abort reporting, the
-  `Atomic[int]` operations, and the command-line `args`.
+  `write` / `read` / `open` / `close` syscall floor the stdlib `io` lowers onto, the TCP floor `net` lowers
+  onto (`zrt_tcp_*`), abort reporting, the `Atomic[int]` operations, and the command-line `args`.
 
 ### Header & tests
 

@@ -2119,9 +2119,9 @@ fn chk_into_builtin(want: ast.Ty, got: ast.Ty) -> bool {
 # many operands it takes, and what type each operand is — because an arity is this list's LENGTH
 # and two lists of the same names is the drift this file refuses everywhere else.
 #
-# THE FIVE NULLARY PRIMITIVES CANNOT BE TOLD FROM A NON-PRIMITIVE BY THIS LIST, since both take
-# nothing. They are named in chk_intrinsic_nullary and nowhere else, which is five names rather
-# than a second copy of the rest.
+# THE NULLARY PRIMITIVES CANNOT BE TOLD FROM A NON-PRIMITIVE BY THIS LIST, since both take
+# nothing. They are named in chk_intrinsic_nullary and nowhere else, which is a handful of names
+# rather than a second copy of the rest.
 #
 # `TUnknown` IS AN OPERAND WITH NO CONSTRAINT, and it is written where this compiler cannot
 # state one rather than where none exists. The atomics take a `Ref[int]` cell first, and `zerg`
@@ -2174,6 +2174,15 @@ fn chk_intrinsic_params(name: str) -> list[ast.Ty] {
 	return [ast.Ty.TInt, ast.Ty.TStr] if name == "__zrt_write"
 	return [ast.Ty.TInt, ast.Ty.TList(ast.Ty.TByte)] if name == "__zrt_write_bytes"
 
+	# THE TCP LEAVES are `net`'s floor, and the seed has none of them: `net.zg` is built by this
+	# compiler alone, as `codec.zg` is. A socket's cell is a `Ref[int]`, written as the atomics
+	# write theirs, so `net` hands one over unwrapped from its `Ref[int]?` field.
+	return [ast.Ty.TStr, ast.Ty.TInt] if name == "__zrt_tcp_dial" or name == "__zrt_tcp_listen"
+	return [ast.Ty.TUnknown] if name == "__zrt_tcp_accept" or name == "__zrt_tcp_port" or name == "__zrt_tcp_release"
+	return [ast.Ty.TUnknown, ast.Ty.TUint] if name == "__zrt_tcp_read"
+	return [ast.Ty.TUnknown, ast.Ty.TList(ast.Ty.TByte)] if name == "__zrt_tcp_write"
+	return [ast.Ty.TInt] if name == "__zrt_tcp_box" or name == "__zrt_tcp_reason"
+
 	return [ast.Ty.TUnknown] if name == "__zrt_atomic_load"
 	return [ast.Ty.TUnknown, ast.Ty.TInt] if name == "__zrt_atomic_store" or name == "__zrt_atomic_swap" or name == "__zrt_atomic_add"
 	return [ast.Ty.TUnknown, ast.Ty.TInt, ast.Ty.TInt] if name == "__zrt_atomic_cas"
@@ -2181,10 +2190,11 @@ fn chk_intrinsic_params(name: str) -> list[ast.Ty] {
 	return none
 }
 
-# chk_intrinsic_nullary is the five that take nothing. They need naming because the list above
+# chk_intrinsic_nullary is the ones that take nothing. They need naming because the list above
 # cannot distinguish "no operands" from "no such primitive" — see there.
 fn chk_intrinsic_nullary(name: str) -> bool {
 	return true if name == "__zrt_time_unix" or name == "__zrt_time_mono"
+	return true if name == "__zrt_tcp_status"
 
 	return name == "__zrt_platform" or name == "__zrt_arch" or name == "__zrt_exe_path"
 }

@@ -38,6 +38,15 @@
  * because "every worker idle and coroutines remain" only means deadlock when none of
  * those coroutines is going to move on its own.
  *
+ * I/O IS THE OTHER. A socket operation that would block parks its coroutine on an I/O wait list
+ * (zrt_io_wait's half below, the netpoller), and one idle worker at a time waits in poll(2) for
+ * any of them — to the nearest timer deadline, so a sleep is still on time. A busy scheduler
+ * looks too, without waiting, at most once a millisecond, so a ready socket is not starved by
+ * coroutines that never leave the CPU. A pending I/O wait suspends the deadlock detector exactly
+ * as a sleep does: the program is waiting on the outside world, which may yet answer. The price
+ * is Go's: two coroutines each reading the other's end of one loopback connection wait forever
+ * rather than raising DeadlockError, since no detector here can know the peer is in-process.
+ *
  * Each coroutine carries its OWN unwind state (cleanup stack + abort handler) in
  * its zrt_coro.tls; the scheduler swaps the "current" bundle (zrt_tls_save /
  * zrt_tls_load) around every switch, so a coroutine's defers/drops and its abort
@@ -58,6 +67,9 @@
 
 #include "zergrt.h"
 
+#include <errno.h>
+#include <fcntl.h>
+#include <poll.h>
 #include <stdlib.h>
 #include <sys/mman.h>
 #include <unistd.h>
@@ -146,6 +158,47 @@ static size_t g_live_running;
  * sleeping one is. */
 static zrt_coro *g_timerq;
 
+/* --- the netpoller's state, all under g_lock ----------------------------------
+ *
+ * g_ioq is the coroutines parked on a socket, threaded on qnext for the reason the timer queue
+ * may be: a parked coroutine is on no other queue. Like g_timerq, a non-empty list also stands
+ * the deadlock detector down.
+ *
+ * g_polling is true while some worker is inside poll(2) with the lock dropped; it is what makes
+ * that worker THE poller, and two things key off it. Anything that adds work while it is set
+ * writes a byte to the wake pipe, so the poll returns and the new work is seen. And a release
+ * of a socket does not close a descriptor the poll may be watching: it files the close on
+ * g_closeq, which the poller empties once poll returns, so no live pollfd is ever closed.
+ *
+ * The poller's own arrays (g_pfds, g_pco, g_pgen) are a SNAPSHOT of g_ioq taken before the lock
+ * is dropped, and nothing in them is trusted afterwards: a coroutine is queued only if it is
+ * still on g_ioq, on the same fd, with the generation the snapshot saw. */
+static zrt_coro *g_ioq;
+static bool g_polling;
+static int g_wake_rd;
+static int g_wake_wr;
+static int *g_closeq;
+static size_t g_closeq_len;
+static size_t g_closeq_cap;
+static uint64_t g_io_gen;
+static int64_t g_last_poll;
+static struct pollfd *g_pfds;
+static zrt_coro **g_pco;
+static uint64_t *g_pgen;
+static size_t g_pcap;
+
+/* poller_kick cuts a poll in flight short; g_lock is HELD. Only while one is in flight: the
+ * pipe is drained by the poller alone, so a byte written with no poll to read it would end
+ * the next one at once for nothing. A full pipe already holds a wake, so a failed write is
+ * one too. */
+static void poller_kick(void) {
+	if (g_polling) {
+		char b = 1;
+		ssize_t n = write(g_wake_wr, &b, 1);
+		(void)n;
+	}
+}
+
 /* --- the schedule seed --------------------------------------------------------
  *
  * ZRT_SEED turns the run queue's order from ONE schedule into a sampled space of them,
@@ -208,6 +261,7 @@ static void runq_push(zrt_coro *co) {
 		g_runq_head = co;
 	}
 	g_runq_tail = co;
+	poller_kick(); /* a worker blocked in poll(2) has work to come back for */
 }
 
 static zrt_coro *runq_pop_seeded(void);
@@ -268,6 +322,7 @@ static void timerq_insert(zrt_coro *co) {
 	}
 	co->qnext = *link;
 	*link = co;
+	poller_kick(); /* a poll in flight was timed to the old head */
 }
 
 /* timers_fire_due moves every coroutine whose deadline has passed back onto the run
@@ -311,6 +366,200 @@ void zrt_sleep_ns(int64_t ns) {
 		zrt_sched_park();
 	}
 	co->deadline = 0;
+}
+
+/* --- the netpoller ------------------------------------------------------------ */
+
+/* io_wait is the TCP floor's park (zrt_io_install): record what this coroutine waits for and
+ * leave the CPU. The worker completing the park files it on g_ioq, as it files a sleep on the
+ * timer queue, and for the same reason — until the switch is done another worker must not be
+ * able to find it. Off a coroutine it answers false and the floor blocks in poll(2) itself.
+ *
+ * Like every park, a return is not a promise the fd is ready; the floor re-tries its call. */
+static bool io_wait(int64_t *cell, int fd, int events) {
+	zrt_coro *co = t_current;
+	if (co == NULL) {
+		return false;
+	}
+	co->io_cell = cell;
+	co->io_fd = fd;
+	co->io_events = events;
+	co->io_wait = true;
+	zrt_sched_park();
+	co->io_wait = false;
+	return true;
+}
+
+/* io_file puts a parked I/O waiter on g_ioq; g_lock is HELD, and the switch out is complete.
+ * A cell already released since the floor read it is not waited on: the coroutine goes straight
+ * back to the queue to read the -1. Release writes the cell under this lock, so it is either
+ * seen here or finds the waiter on g_ioq — never neither. */
+static void io_file(zrt_coro *co) {
+	if (co->io_cell != NULL && *co->io_cell != co->io_fd) {
+		co->state = ZRT_CORO_RUNNABLE;
+		runq_push(co);
+		zrt_cond_signal(&g_cond);
+		return;
+	}
+	co->io_gen = ++g_io_gen;
+	co->qnext = g_ioq;
+	g_ioq = co;
+	poller_kick();             /* a poll in flight does not watch this fd yet */
+	zrt_cond_signal(&g_cond); /* an idle worker may become the poller */
+}
+
+/* io_unlink takes co off g_ioq and queues it, when it is still there on fd with generation gen;
+ * g_lock is HELD. */
+static void io_unlink(zrt_coro *co, int fd, uint64_t gen) {
+	for (zrt_coro **link = &g_ioq; *link != NULL; link = &(*link)->qnext) {
+		zrt_coro *c = *link;
+		if (c == co && c->io_fd == fd && c->io_gen == gen) {
+			*link = c->qnext;
+			c->state = ZRT_CORO_RUNNABLE;
+			runq_push(c);
+			zrt_cond_signal(&g_cond);
+			return;
+		}
+	}
+}
+
+/* io_release is the TCP floor's release under the scheduler (zrt_io_install): the cell is
+ * marked, every coroutine waiting on its fd is woken to read the mark, and the fd is closed —
+ * at once, or by the poller after its poll returns when one is in flight. Never waits. */
+static void io_release(int64_t *cell) {
+	zrt_mutex_lock(&g_lock);
+	int fd = (int)*cell;
+	*cell = -1;
+	if (fd >= 0) {
+		zrt_coro **link = &g_ioq;
+		while (*link != NULL) {
+			zrt_coro *c = *link;
+			if (c->io_fd == fd) {
+				*link = c->qnext;
+				c->state = ZRT_CORO_RUNNABLE;
+				runq_push(c);
+				zrt_cond_signal(&g_cond);
+			} else {
+				link = &c->qnext;
+			}
+		}
+		if (g_polling) {
+			if (g_closeq_len == g_closeq_cap) {
+				g_closeq_cap = g_closeq_cap == 0 ? 8 : g_closeq_cap * 2;
+				g_closeq = (int *)realloc(g_closeq, g_closeq_cap * sizeof(int));
+				if (g_closeq == NULL) {
+					zrt_abort("out of memory (netpoller)");
+				}
+			}
+			g_closeq[g_closeq_len++] = fd;
+			/* the close may be what a polled fd is waiting for — the peer's end of a
+			 * loopback connection reads end-of-stream only once this one is gone */
+			poller_kick();
+		} else {
+			close(fd);
+		}
+	}
+	zrt_mutex_unlock(&g_lock);
+}
+
+/* io_poll asks poll(2) which waiters are ready, waiting at most timeout_ms (-1: until one is,
+ * or the wake pipe says there is other work); g_lock is HELD on entry and on return, and
+ * dropped across the poll. The caller has checked g_ioq is non-empty and nobody is polling,
+ * and says whether it is an idle worker (counted in g_idle).
+ *
+ * POLLHUP, POLLERR and POLLNVAL count as ready: the woken operation re-tries and answers the
+ * failure itself. */
+static void io_poll(int timeout_ms, bool idle_caller) {
+	size_t n = 1;
+	for (zrt_coro *c = g_ioq; c != NULL; c = c->qnext) {
+		n++;
+	}
+	if (n > g_pcap) {
+		size_t cap = g_pcap == 0 ? 16 : g_pcap;
+		while (cap < n) {
+			cap *= 2;
+		}
+		g_pfds = (struct pollfd *)realloc(g_pfds, cap * sizeof(*g_pfds));
+		g_pco = (zrt_coro **)realloc(g_pco, cap * sizeof(*g_pco));
+		g_pgen = (uint64_t *)realloc(g_pgen, cap * sizeof(*g_pgen));
+		if (g_pfds == NULL || g_pco == NULL || g_pgen == NULL) {
+			zrt_abort("out of memory (netpoller)");
+		}
+		g_pcap = cap;
+	}
+	g_pfds[0].fd = g_wake_rd;
+	g_pfds[0].events = POLLIN;
+	g_pfds[0].revents = 0;
+	size_t i = 1;
+	for (zrt_coro *c = g_ioq; c != NULL; c = c->qnext, i++) {
+		g_pfds[i].fd = c->io_fd;
+		g_pfds[i].events = (short)c->io_events;
+		g_pfds[i].revents = 0;
+		g_pco[i] = c;
+		g_pgen[i] = c->io_gen;
+	}
+	g_polling = true;
+	zrt_mutex_unlock(&g_lock);
+	int rc = poll(g_pfds, (nfds_t)n, timeout_ms);
+	/* a poll that FAILED (not one interrupted) would fail the same way on every retry, and the
+	 * idle poller would spin on it: every waiter is woken instead, to re-try its own call and
+	 * answer whatever the fd says now */
+	bool failed = rc < 0 && errno != EINTR;
+	zrt_mutex_lock(&g_lock);
+	g_polling = false;
+	g_last_poll = zrt_time_mono();
+	if (rc > 0 || failed) {
+		if (g_pfds[0].revents != 0) {
+			char buf[64];
+			while (read(g_wake_rd, buf, sizeof(buf)) > 0) {
+			}
+		}
+		for (i = 1; i < n; i++) {
+			if (failed || g_pfds[i].revents != 0) {
+				io_unlink(g_pco[i], g_pfds[i].fd, g_pgen[i]);
+			}
+		}
+	}
+	/* An idle worker that found this poll in flight went to an untimed wait. Nothing it queued
+	 * may wake it, so the poller's chair is handed back: one of them takes it. An idle poller
+	 * is itself counted in g_idle, and comes back round to the chair on its own. */
+	if (g_ioq != NULL && g_idle > (idle_caller ? 1u : 0u)) {
+		zrt_cond_signal(&g_cond);
+	}
+	for (i = 0; i < g_closeq_len; i++) {
+		close(g_closeq[i]);
+	}
+	g_closeq_len = 0;
+}
+
+/* io_poll_due is the look a BUSY scheduler takes; g_lock is HELD. Without it a worker that
+ * always has a coroutine to run never becomes the poller, and a ready socket waits on code that
+ * does not yield to it. At most once a millisecond and never waiting, and the empty list is
+ * answered before the clock is read: most programs never touch a socket. Answers whether it
+ * polled, since the lock was dropped and the caller's view of the world is stale. */
+static bool io_poll_due(void) {
+	if (g_ioq == NULL || g_polling) {
+		return false;
+	}
+	if (zrt_time_mono() - g_last_poll < 1000000) {
+		return false;
+	}
+	io_poll(0, false);
+	return true;
+}
+
+/* io_timeout is the poller's wait: to the next timer deadline, rounded up so the timer is due
+ * when it wakes, or without limit when nothing sleeps. */
+static int io_timeout(void) {
+	if (g_timerq == NULL) {
+		return -1;
+	}
+	int64_t ns = g_timerq->deadline - zrt_time_mono();
+	if (ns <= 0) {
+		return 0;
+	}
+	int64_t ms = (ns + 999999) / 1000000;
+	return ms > 1000000000 ? 1000000000 : (int)ms;
 }
 
 /* --- coroutine stacks (fixed size + guard page) ------------------------------ */
@@ -415,6 +664,11 @@ static void spawn_coro(void (*thunk)(void *env), void *env, void (*envdrop)(void
 	co->is_main = is_main;
 	co->deadlocked = false;
 	co->deadline = 0;
+	co->io_wait = false;
+	co->io_fd = -1;
+	co->io_events = 0;
+	co->io_cell = NULL;
+	co->io_gen = 0;
 	co->tsan_fiber = ZRT_TSAN_FIBER_NEW(); /* NULL, and free, unless this is a TSan build */
 	co->asan_fake = NULL;                  /* ASan only; the first switch out fills it in */
 	co->asan_sched_stack = NULL;           /* learned from the worker that starts us */
@@ -495,8 +749,9 @@ void zrt_sched_park(void) {
 	 * necessarily the one we parked on, which is why nothing here may cache a worker.
 	 *
 	 * The deadlock flag is consumed rather than answered: the bare park is only reached
-	 * from zrt_sleep_ns, and the detector stands down while any sleep is pending, so it
-	 * cannot be set here. Consuming it keeps the one-shot rule true for the next park. */
+	 * from zrt_sleep_ns and the netpoller's io_wait, and the detector stands down while any
+	 * sleep or I/O wait is pending, so it cannot be set here. Consuming it keeps the one-shot
+	 * rule true for the next park. */
 	(void)park_resumed(co);
 }
 
@@ -567,6 +822,25 @@ static void sched_init(void) {
 	t_current = NULL;
 	g_main_co = NULL;
 	g_timerq = NULL;
+	g_ioq = NULL;
+	g_polling = false;
+	g_closeq_len = 0;
+	g_last_poll = 0;
+	/* the poller's wake pipe: both ends non-blocking, so a kick never stalls a worker and the
+	 * drain stops when the pipe is empty, and closed across exec like every runtime fd. */
+	int wp[2];
+	if (pipe(wp) != 0) {
+		zrt_abort("cannot create the scheduler's wake pipe");
+	}
+	for (int i = 0; i < 2; i++) {
+		int fl = fcntl(wp[i], F_GETFL, 0);
+		if (fl < 0 || fcntl(wp[i], F_SETFL, fl | O_NONBLOCK) < 0 || fcntl(wp[i], F_SETFD, FD_CLOEXEC) < 0) {
+			zrt_abort("cannot configure the scheduler's wake pipe");
+		}
+	}
+	g_wake_rd = wp[0];
+	g_wake_wr = wp[1];
+	zrt_io_install(io_wait, io_release);
 	g_live_running = 0;
 	g_idle = 0;
 	g_workers = 0;
@@ -590,6 +864,9 @@ static void sched_run(void) {
 			break; /* main has finished: stand down, whatever is still queued */
 		}
 		timers_fire_due(); /* a due sleep is runnable work, so look before the queue */
+		if (io_poll_due()) {
+			continue; /* the lock was dropped: g_done may have been set meanwhile */
+		}
 		zrt_coro *co = runq_pop();
 		if (co == NULL) {
 			/* Coroutines remain but none is runnable HERE, which is three different
@@ -598,6 +875,15 @@ static void sched_run(void) {
 			 * and nothing sleeping, so nobody can ever wake anybody and this is a deadlock;
 			 * or the other workers still hold work, and this one waits for them. */
 			g_idle++;
+			if (g_ioq != NULL && !g_polling) {
+				/* A coroutine waits on a socket and nobody is polling: this worker is the
+				 * poller, until a socket is ready, the next sleep is due, or the wake pipe says
+				 * there is work. Its peers wait on the condition as below, and stand the
+				 * deadlock detector down while it polls. */
+				io_poll(io_timeout(), true);
+				g_idle--;
+				continue;
+			}
 			if (g_timerq != NULL) {
 				/* A sleep is pending, so this is not a deadlock however idle everyone is —
 				 * that coroutine will become runnable on its own. Sleep to its deadline
@@ -607,7 +893,10 @@ static void sched_run(void) {
 				g_idle--;
 				continue;
 			}
-			if (g_idle == g_workers && g_live_running == 0) {
+			/* A pending I/O wait is the outside world's to end, so it stands the detector
+			 * down like a sleep — even when the peer is a coroutine of this program that is
+			 * itself stuck, which only the sockets' far end could tell (the header's trade). */
+			if (g_idle == g_workers && g_live_running == 0 && g_ioq == NULL) {
 				/* Hand the raise to main and put it back on the queue. Marking and queueing
 				 * are both under g_lock and main is BLOCKED (the precondition above says so),
 				 * so this is the same transition a wake makes — the park site main resumes in
@@ -690,6 +979,7 @@ static void sched_run(void) {
 				 * come back round and see g_done, and none of them is waiting for work
 				 * any more. Whatever is still queued or parked stays where it is. */
 				g_done = true;
+				poller_kick(); /* a poller has to come back round and see it too */
 				zrt_cond_broadcast(&g_cond);
 			}
 			break;
@@ -706,6 +996,8 @@ static void sched_run(void) {
 				/* a sleep, not a channel wait: nothing will ever wake it, so the scheduler
 				 * itself has to, and files it by deadline now that the switch is complete. */
 				timerq_insert(co);
+			} else if (co->io_wait) {
+				io_file(co); /* a socket wait: the poller wakes it */
 			}
 			break; /* parked on a channel wait queue; a wake re-enqueues it */
 		}
@@ -813,6 +1105,24 @@ static void sched_drain(void) {
 		zrt_thread_join(&workers[i]);
 	}
 	sweep_unstarted();
+	/* A coroutine still parked on a socket is abandoned like one parked on a channel: its stack
+	 * stays mapped and stays a leak root. What the netpoller owns is given back, and the floor
+	 * is taken off it first, so a socket a global still holds is closed by the floor alone once
+	 * this lock is gone. No poll is in flight now, so g_closeq is empty. */
+	zrt_io_install(NULL, NULL);
+	g_ioq = NULL;
+	close(g_wake_rd);
+	close(g_wake_wr);
+	free(g_closeq);
+	free(g_pfds);
+	free(g_pco);
+	free(g_pgen);
+	g_closeq = NULL;
+	g_closeq_cap = 0;
+	g_pfds = NULL;
+	g_pco = NULL;
+	g_pgen = NULL;
+	g_pcap = 0;
 	zrt_mutex_destroy(&g_lock);
 	zrt_cond_destroy(&g_cond);
 }

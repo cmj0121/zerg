@@ -1,0 +1,77 @@
+## net — TCP connections over the runtime's socket floor (pure-Zerg stdlib).
+##
+## Bundled into a program that writes `import "net"`; its members are reached through the
+## namespace, as `net.dial("127.0.0.1", 8080)`. An address is a numeric IPv4 address and a
+## port: there is no hostname lookup.
+##
+## EVERY FAILURE IS A VALUE. A refused connection, a malformed address, a peer that reset and a
+## use after `release` each answer an IOError in the `Result`, never an abort, and the message
+## says what was asked and why it failed.
+##
+## A WAIT PARKS THE COROUTINE. A read with nothing to read, a write the socket cannot take yet
+## and a connect in progress each leave the CPU to the other coroutines until the socket is
+## ready. A program with no `spawn` waits in place.
+#
+# The floor is the runtime's `__zrt_tcp_*` leaves (sys.c), which answer a negative code where
+# the OS refused; this module turns the code into the sentence the runtime names for it. The
+# seed never builds this file, as it never builds `codec.zg`.
+
+import "io"
+
+## Conn is one TCP connection, an `io.Reader` and an `io.Writer`. Copies share the socket. It is
+## closed once: by `release()`, or when the last copy goes out of scope, whichever comes first.
+pub struct Conn {
+	fd: Ref[int]? = nil
+}
+
+## dial connects to `host` on `port`. The host is a numeric IPv4 address such as `127.0.0.1`,
+## and the port is in 0..65535.
+pub fn dial(host: str, port: int) -> Result[Conn] {
+	fd := __zrt_tcp_dial(host, port)
+	return Either.Right(IOError(f"dial {host}:{port}: {__zrt_tcp_reason(fd)}")) if fd < 0
+
+	return Conn(__zrt_tcp_box(fd))
+}
+
+impl Reader for Conn {
+	## read_bytes reads at most `n` bytes, waiting until at least one has arrived. An empty
+	## list is the end of the stream: the peer closed its side. Asking for none is a
+	## ValueError, since its answer could not be told from that end.
+	fn read_bytes(n: uint) -> Result[list[byte]] {
+		return Either.Right(ValueError("net: read_bytes(0) asks for nothing, and an empty answer is the end of the stream")) if n == uint(0)
+
+		if h := this.fd {
+			got := __zrt_tcp_read(h, n)
+			code := __zrt_tcp_status()
+			return Either.Right(IOError(f"read: {__zrt_tcp_reason(code)}")) if code < 0
+
+			return got
+		}
+
+		# a `Conn()` never dialled; a released one still holds its cell, and the floor answers
+		return Either.Right(IOError("read: not connected"))
+	}
+}
+
+impl Writer for Conn {
+	## write sends every byte, waiting as often as the socket is full, and answers the count.
+	fn write(bytes: list[byte]) -> Result[uint] {
+		if h := this.fd {
+			n := __zrt_tcp_write(h, bytes)
+			return Either.Right(IOError(f"write: {__zrt_tcp_reason(n)}")) if n < 0
+
+			return uint(n)
+		}
+		return Either.Right(IOError("write: not connected"))
+	}
+}
+
+impl Conn {
+	## release closes the connection for every copy. A read or write after it is an IOError,
+	## and a second release does nothing.
+	pub fn release() {
+		if h := this.fd {
+			__zrt_tcp_release(h)
+		}
+	}
+}

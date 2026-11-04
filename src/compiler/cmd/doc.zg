@@ -48,7 +48,9 @@ import (
 	"/zerg"
 )
 
-pub fn doc_cmd() -> cli.Command {
+# doc_cmd is handed the function it runs rather than naming `do_doc` itself: `--serve` needs
+# `net`, which only the shipped entry may import, so each entry passes its own `do_doc` wrapper.
+pub fn doc_cmd(run: fn (cli.Ctx) -> int) -> cli.Command {
 	return (
 		cli.command("doc", "read what a module exposes and the comments that document it")
 		.flag("a", "all", "every comment as written, the maintainer's `#` notes beside the reader's `##` text")
@@ -57,12 +59,14 @@ pub fn doc_cmd() -> cli.Command {
 		.opt("t", "timeout", "under --check, seconds one module's examples may take to build, and then to run", f"{test.TEST_TIMEOUT}")
 		.opt("s", "search", "list the exposed declarations whose name begins with this, across every module `zerg doc` lists or within the one named")
 		.opt("", "html", "write the reader's pages as static HTML into this directory — a page for every module `zerg doc` lists, or for the one named, an index, and a search over the names `--search` finds")
+		.opt("", "serve", "serve the reader's pages over HTTP on 127.0.0.1 at this port — the pages `--html` writes, rendered on each request")
 		.add(cli.positional("name", "a module, one of its declarations, or a path to a source"))
-		.run(do_doc)
+		.run(run)
 	)
 }
 
-fn do_doc(c: cli.Ctx) -> int {
+# do_doc is every form of `zerg doc` but `--serve`, which the entry's wrapper answers first.
+pub fn do_doc(c: cli.Ctx) -> int {
 	raise "`--html` writes the reader's whole pages, and takes none of `--all`, `--brief`, `--check` or `--search`" if c.has("html") and (c.has("all") or c.has("brief") or c.has("check") or c.has("search"))
 	return run_doc_html(c.get("html"), c.args()) if c.has("html")
 	raise doc_all_alone(c) if c.has("all") and (c.has("brief") or c.has("check") or c.has("search") or c.args().len() == 0)

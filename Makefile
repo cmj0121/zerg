@@ -10,13 +10,16 @@
 SUBDIR := editors src/bootstrap src/runtime
 
 # The self-hosting compiler is `zerg`; the Go seed that builds it is `zerg0`. Both
-# resolve `import` themselves, so either builds the compiler from the entry file alone.
+# resolve `import` themselves, so each needs only an entry file.
 #
 # The `zerg` that ships is compiled BY zerg, not by the seed: the seed only has to produce
-# a good-enough intermediate, which then builds the real one. That keeps the seed off the
+# a good-enough intermediate, which then builds the real one. The seed builds it from
+# ZERG_SEED_ENTRY — the compiler without `doc --serve`, whose `net` the seed cannot compile —
+# and that intermediate builds ZERG_ENTRY. That keeps the seed off the
 # delivery path, and it means every build exercises the self-host path rather than leaving
 # it to a separate command nobody runs.
 ZERG_ENTRY := src/compiler/zergc.zg
+ZERG_SEED_ENTRY := src/compiler/zergc_seed.zg
 ZERG_STAGE1 := ./bin/.zerg-stage1
 
 # VERSION is the toolchain's version and the repo's VERSION file is the only place it is
@@ -145,7 +148,7 @@ bin/zerg: bin/zerg0 $(ZERG_SRCS) $(RUNTIME_SRCS) VERSION
 	@# making every build dirty — and `bin/zerg` is written after it, so a version bump costs
 	@# one rebuild rather than two.
 	@./scripts/gen-version.sh
-	./bin/zerg0 build $(ZERG_ENTRY) -o $(ZERG_STAGE1)
+	./bin/zerg0 build $(ZERG_SEED_ENTRY) -o $(ZERG_STAGE1)
 	$(ZERG_STAGE1) build --emit bin -j $(JOBS) -o ./bin/zerg $(ZERG_ENTRY)
 	@rm -f $(ZERG_STAGE1) $(ZERG_STAGE1).c
 
@@ -403,7 +406,7 @@ LINUX_IMAGE ?= golang:1.26-bookworm
 # There is no exclusion list any more. If one is ever needed again it owes the shape
 # CORPUS_SKIP now has: a name is a claim, and the gate checks the claim rather than
 # remembering it.
-LINT_ENTRIES := $(ZERG_ENTRY) $(wildcard src/compiler/zerg/*_test.zg) $(wildcard src/stdlib/*.zg) $(wildcard $(EXAMPLE_SRCS))
+LINT_ENTRIES := $(ZERG_ENTRY) $(ZERG_SEED_ENTRY) $(wildcard src/compiler/zerg/*_test.zg) $(wildcard src/stdlib/*.zg) $(wildcard $(EXAMPLE_SRCS))
 
 # A FLOOR under how many entries were linted, of the kind `corpus`, `examples` and `fmt-corpus`
 # carry. The one glob above reaches a directory, and a glob that matches nothing leaves a loop

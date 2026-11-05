@@ -66,7 +66,9 @@ the thing itself, so `zerg doc --brief strings.split` prints the whole entry.
 comment has no `##` line is named at the place it was declared, a file that did not parse is named
 too — because a module whose declarations never reached the document would answer "nothing is
 missing" by having nothing to report — every worked example is run, and the run exits **1** if
-any of that went wrong. How an example is run is its own section below.
+any of that went wrong. How an example is run is its own section below. The name is a module or
+a path: a declaration's name is refused with its module named, and a name nothing answers with
+what can be read.
 
 The mark it reports is the one the document already prints. What did not exist before it is a
 way to _ask_: `(undocumented)` is met in the middle of a page, one module at a time, with no
@@ -104,7 +106,8 @@ answers to one question. For the same reason the match is **case sensitive**, as
 
 **The scope is the index**: every module `zerg doc` on its own lists, the ones beside the reader first and the
 standard library after, each in source order. A module or a path named after the term narrows it to that one,
-resolved as `--check` resolves one. A private declaration is on no page, so no search lists it.
+resolved as `--check` resolves one: a declaration's name is refused with its module named, and a name nothing answers
+with what can be read. A private declaration is on no page, so no search lists it.
 
 Each row is the name and the first sentence of its `##` text — the index's layout, and `--brief`'s summary — or
 `(undocumented)`. A search is a listing, so `--all`, `--brief` and `--check` beside it are refused. The list of
@@ -146,7 +149,8 @@ and the second of two declarations sharing a name takes `-2`. A file of any othe
 alone, so a page for a module that is gone stays until it is removed.
 
 The pages are the **reader's**: `--all`, `--brief`, `--check` and `--search` beside `--html` are refused, and so are a
-declaration and two names — a page is a module's.
+declaration and two names — a page is a module's. A name nothing answers is refused with what can be read: the modules
+there are, or what the module it names declares.
 
 `make doc-check` holds each page to its terminal page. With the markup, the backticks and the whitespace taken off,
 every module's page is its terminal page with the fence lines taken off; each exposed declaration is one element of
@@ -170,9 +174,10 @@ serving 1 module page(s) at http://127.0.0.1:54924/
 ```
 
 **The scope is `--html`'s**, and it is checked before anything listens: no name is every module `zerg doc` lists, a
-module or a path is that one, and a declaration or two names are refused. The port is a whole number from 0 to 65535,
-or a refusal; a port that cannot be listened on is refused with the OS's reason, exit 1. The pages are the reader's,
-so `--html`, `--all`, `--brief`, `--check` and `--search` beside `--serve` are refused.
+module or a path is that one, a declaration or two names are refused, and a name nothing answers is refused with what
+can be read. The port is a whole number from 0 to 65535, or a refusal; a port that cannot be listened on is refused
+with the OS's reason, exit 1. The pages are the reader's, so `--html`, `--all`, `--brief`, `--check` and `--search`
+beside `--serve` are refused.
 
 **A page is rendered on every request**, from the source as it stands then, with the bytes `--html` would write at that
 moment. An edited `##` comment is on the page at the next reload, and no copy is kept that could go stale. A page that

@@ -11007,6 +11007,61 @@ fn main() {
 }
 EOF
 
+# `Ok` and `Err` name a Result[T]'s two sides and no other Either's: a plain Either has no
+# success side for them to mean. Each spelling is its own case, so a rule that let one of the
+# two through on an Either would leave the other case red.
+reject ok-on-an-either-that-is-not-a-result E3132 'the pattern `Ok` on an Either[int, str]' <<'EOF'
+fn g() -> Either[int, str] {
+	return Either.Left(1)
+}
+
+fn main() {
+	match g() {
+		Ok(v) => { print v }
+		Right(s) => { print s }
+	}
+}
+EOF
+
+reject err-on-an-either-that-is-not-a-result E3132 'the pattern `Err` on an Either[int, str]' <<'EOF'
+fn g() -> Either[int, str] {
+	return Either.Left(1)
+}
+
+fn main() {
+	match g() {
+		Left(v) => { print v }
+		Err(s) => { print s }
+	}
+}
+EOF
+
+# `Ok` covers the Left side and nothing more: a match on a Result[T] that names only `Ok` is
+# still missing its Err, and the sentence names that side by the spelling the type gives it.
+reject a-match-over-a-result-naming-only-ok E4066 'missing the Err (Right) case' <<'EOF'
+fn g() -> Result[int] {
+	return Either.Left(1)
+}
+
+fn main() {
+	match g() {
+		Ok(v) => { print v }
+	}
+}
+EOF
+
+reject a-match-over-a-result-naming-only-err E4066 'missing the Ok (Left) case' <<'EOF'
+fn g() -> Result[int] {
+	return Either.Left(1)
+}
+
+fn main() {
+	match g() {
+		Err(e) => { print e.message() }
+	}
+}
+EOF
+
 reject two-constants-that-name-each-other E4068 <<'EOF'
 const A := B + 1
 const B := A + 1

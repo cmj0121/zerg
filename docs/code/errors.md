@@ -20,6 +20,20 @@ propagated:
 - **`Result[T]`** = `Either[T, Err]`, where `Err` is the `Error` spec (any implementing type).
 - **`T?`** = `Either[T, nil]`; **`nil`** is its placeholder value.
 
+**`Ok` and `Err` — a `Result`'s sides by meaning.** A `match` on a `Result[T]` may name its two sides
+`Ok(v)` and `Err(e)`: the same arms as `Left(v)` and `Right(e)`, which stay valid and mix with them, so
+one arm of each covers the match. A plain `Either` has no success side, so on any other `Either` the two
+are refused by name (`E3132`). The spelling is for patterns only: a value is still built with
+`Either.Left(…)` and `Either.Right(…)`. In a pattern `Err(e)` names the side; everywhere else `Err` is
+still the erased error type.
+
+```text
+match net.dial("127.0.0.1", port) {
+    Ok(c)  => { serve(c) }
+    Err(e) => { print f"refused: {e.message()}" }
+}
+```
+
 **`?` — propagate.** `x?` unwraps the left value, or early-returns the right from the enclosing
 function (sugar for that early return), so the function must share the same right type. There's no
 implicit bridge between `T?` and `Result`: convert first with `opt.ok_or(err)` or `res.ok()`.

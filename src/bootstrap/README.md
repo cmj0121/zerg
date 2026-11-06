@@ -318,6 +318,10 @@ byte)` compiles to a truncation and cc warns about the generated C. `zerg` refus
   does not find `Either` and reports an undefined name. `zerg` requires the qualified form
   (a variant is named through its type, with no exception for a built-in), which is why the
   three corpus programs that use it are skipped here with that reason.
+- **`Ok(v)` and `Err(e)` on a `Result[T]` are refused.** `zerg` reads them as a second
+  spelling of a Result's `Left` and `Right` patterns; the seed knows the two sides by those
+  names alone and reports the pattern as one the type does not have. The compiler's own
+  source writes `Left` and `Right`, so the seed is the narrower compiler here.
 - **`#[obj]` is an unknown decorator.** `zerg` expands it into a companion struct of
   function values and a generic wrap; the seed reads `#[derive(…)]` and no other. Its
   expansion needs closure capture, which the seed also has not got, so the hand-written half

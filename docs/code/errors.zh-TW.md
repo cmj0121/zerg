@@ -16,6 +16,19 @@ abort，`guard` 把 abort 降級回值。**
 - **`Result[T]`** = `Either[T, Err]`，其中 `Err` 是 `Error` spec（任何實作它的型別）。
 - **`T?`** = `Either[T, nil]`；**`nil`** 是它的 placeholder 值。
 
+**`Ok` 與 `Err`——依意義命名 `Result` 的兩側。** 對 `Result[T]` 的 `match` 可以用 `Ok(v)` 與 `Err(e)`
+命名它的兩側：它們就是 `Left(v)` 與 `Right(e)` 那兩個 arm，後者依然有效，也能混用，所以每側各一個 arm 即涵蓋整個
+match。一般的 `Either` 沒有「成功」那一側，因此在其他 `Either` 上這兩個名字會被點名拒絕（`E3132`）。這個寫法只用
+於 pattern：建構值仍寫 `Either.Left(…)` 與 `Either.Right(…)`。在 pattern 裡 `Err(e)` 命名的是那一側；其他地方
+`Err` 仍是被抹除的錯誤型別。
+
+```text
+match net.dial("127.0.0.1", port) {
+    Ok(c)  => { serve(c) }
+    Err(e) => { print f"refused: {e.message()}" }
+}
+```
+
 **`?`——傳遞。** `x?` 拆出左值，或從所在函式**提早 return** 右值（early return 的語法糖），因此函式必須有相同的
 右型別。`T?` 與 `Result` 之間沒有隱式橋接：先用 `opt.ok_or(err)` 或 `res.ok()` 轉換。
 

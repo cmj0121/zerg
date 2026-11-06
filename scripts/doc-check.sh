@@ -110,7 +110,7 @@ ZERG="${ZERG:-./bin/zerg}"
 MIN_DECLS="${MIN_DECLS:-183}"
 MIN_MODULES="${MIN_MODULES:-15}"
 UNDOC_LIST="${UNDOC_LIST:-scripts/doc-undocumented}"
-MIN_CHECKS="${MIN_CHECKS:-137}"
+MIN_CHECKS="${MIN_CHECKS:-143}"
 MIN_RULES="${MIN_RULES:-26}"
 
 # `MIN_TERMS` is §12's: the terms the page's search and `zerg doc -s` are both asked, which are
@@ -915,13 +915,14 @@ checks=$((checks + 1))
 # run has to be clean. Then one fixture per way an example can be wrong, because a check that
 # only ever sees right examples passes just as well when it runs none of them.
 
-# bounded_check <seconds> <out-file> <args…> runs `zerg doc --check <args…>` and answers its
-# status, or 124 when it was still running after <seconds>. A runner that hangs is the failure
-# two of the cases below exist to catch, and a gate that hangs with it catches nothing.
-bounded_check() {
+# bounded_doc <seconds> <out-file> <args…> runs `zerg doc <args…>` and answers its status, or
+# 124 when it was still running after <seconds>. A `--check` runner that hangs is a failure
+# the cases below catch, and so is a `--serve` that listens instead of refusing its name
+# (THE REFUSALS); a gate that hangs with either catches nothing.
+bounded_doc() {
 	local secs=$1 outf=$2 pid dog rc
 	shift 2
-	"$ZERG_ABS" doc --check "$@" >"$outf" 2>&1 &
+	"$ZERG_ABS" doc "$@" >"$outf" 2>&1 &
 	pid=$!
 	(
 		sleep "$secs"
@@ -938,6 +939,13 @@ bounded_check() {
 		return 124
 	fi
 	return "$rc"
+}
+
+# bounded_check <seconds> <out-file> <args…> is `bounded_doc` on `zerg doc --check <args…>`.
+bounded_check() {
+	local secs=$1 outf=$2
+	shift 2
+	bounded_doc "$secs" "$outf" --check "$@"
 }
 
 # THE COUNT IS DERIVED, not written down. A second opinion reads the example lines out of the
@@ -1696,7 +1704,7 @@ else
 	checks=$((checks + 1))
 fi
 
-# THE REFUSALS: a listing flag beside `--html`, a declaration, and two names
+# THE REFUSALS: a listing flag beside `--html`, and then the names a scope flag will not take.
 for args in '--brief' '--check' '--all' '-s spl'; do
 	# shellcheck disable=SC2086
 	if "$ZERG" doc --html "$tmp/rsite" $args strings >"$tmp/ref.out" 2>&1; then
@@ -1707,16 +1715,51 @@ for args in '--brief' '--check' '--all' '-s spl'; do
 		note "\`zerg doc --html DIR $args\` was refused with \"$(head -1 "$tmp/ref.out")\""
 	fi
 done
-for args in 'strings.split' 'strings log'; do
-	# shellcheck disable=SC2086
-	if "$ZERG" doc --html "$tmp/rsite" $args >"$tmp/ref.out" 2>&1; then
-		note "\`zerg doc --html DIR $args\` exited 0, and a page is one module's"
-	elif grep -qE "is a declaration's name|one at most" "$tmp/ref.out"; then
-		checks=$((checks + 1))
-	else
-		note "\`zerg doc --html DIR $args\` was refused with \"$(head -1 "$tmp/ref.out")\""
+
+# A NAME IS REFUSED FOR WHAT IT IS, by every flag that takes a scope. A declaration's name is
+# refused with its module named; a module that does not declare the key with what it does
+# declare; and a name nothing answers with what can be read. Each case holds its own sentence
+# and neither of the other two, so a name that reaches the wrong refusal fails here instead of
+# passing for being refused at all. `--serve` refuses before it listens, and a server that
+# listened would never exit — so every case is bounded.
+R_DECL="is a declaration's name"
+R_NODECL="declares nothing called"
+R_NONAME="nothing here is called"
+# scope_refused <want> <args…> — `zerg doc <args…>` exits non-zero with <want> and none of the
+# other rules' sentences.
+scope_refused() {
+	local want=$1 rule rc
+	shift
+	bounded_doc 30 "$tmp/ref.out" "$@"
+	rc=$?
+	if [ "$rc" -eq 124 ]; then
+		note "\`zerg doc $*\` was still running after 30s, and a name it does not take is refused before anything starts"
+		return
+	elif [ "$rc" -eq 0 ]; then
+		note "\`zerg doc $*\` exited 0, and it was to be refused with \"$want\""
+		return
 	fi
-done
+	if ! grep -qF "$want" "$tmp/ref.out"; then
+		note "\`zerg doc $*\` was refused with \"$(head -1 "$tmp/ref.out")\", not \"$want\""
+		return
+	fi
+	for rule in "$R_DECL" "$R_NODECL" "$R_NONAME"; do
+		[ "$rule" = "$want" ] && continue
+		if grep -qF "$rule" "$tmp/ref.out"; then
+			note "\`zerg doc $*\` was refused with \"$(head -1 "$tmp/ref.out")\", which also says \"$rule\""
+			return
+		fi
+	done
+	checks=$((checks + 1))
+}
+scope_refused "$R_DECL" --html "$tmp/rsite" strings.split
+scope_refused "$R_DECL" --html "$tmp/rsite" log.Logger.level
+scope_refused "one at most" --html "$tmp/rsite" strings log
+scope_refused "$R_NONAME" --html "$tmp/rsite" nosuch.zg
+scope_refused "$R_NODECL" --html "$tmp/rsite" strings.nosuch
+scope_refused "$R_NONAME" --serve 0 nosuch.zg
+scope_refused "$R_DECL" --check strings.split
+scope_refused "$R_DECL" --search spl strings.split
 
 if [ "$pages" -lt "$MIN_MODULES" ]; then
 	note "$pages module pages were compared with their terminal pages and the floor is $MIN_MODULES"

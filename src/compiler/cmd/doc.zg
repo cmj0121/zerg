@@ -162,7 +162,7 @@ fn run_doc_check(args: list[str], secs: int) -> int {
 	if args.len() == 0 {
 		mods = doc_index()
 	} else {
-		mods.append(doc_resolve(args[0]))
+		mods.append(doc_resolve(args[0], "--check"))
 	}
 
 	mut out := ""
@@ -248,7 +248,7 @@ fn run_doc_search(term: str, args: list[str], col: bool) -> int {
 	if args.len() == 0 {
 		mods = doc_index()
 	} else {
-		mods.append(doc_resolve(args[0]))
+		mods.append(doc_resolve(args[0], "--search"))
 		scope = f"`{args[0]}`"
 	}
 
@@ -267,10 +267,10 @@ fn run_doc_search(term: str, args: list[str], col: bool) -> int {
 # run_doc_html is `--html` (#20): the reader's page of every module in scope, written as static
 # HTML into `dir`, with the index of those modules and the search over their names beside them.
 #
-# THE SCOPE IS `--search`'s: the index, or the one module or path named, resolved by the same
-# two doors. A declaration is not a scope — its page is its module's, and a site of one entry
-# would be a page with no module around it — so `strings.split` is refused as `--check` refuses
-# it.
+# THE SCOPE IS `--search`'s: the index, or the one module or path named, resolved by
+# `doc_resolve`. A declaration is not a scope — its page is its module's, and a site of one
+# entry would be a page with no module around it — so `strings.split` is refused with its
+# module named, as `--check` refuses it.
 #
 # THE DIRECTORY IS MADE when it is not there, and the pages in it are REWRITTEN: what is written
 # is named after the modules, so a second run over the same tree replaces every file the first
@@ -293,18 +293,14 @@ fn run_doc_html(dir: str, args: list[str]) -> int {
 }
 
 # doc_site is the modules a site of pages covers — `--html`'s and `--serve`'s one scope: the
-# index, or the one module or path named. A declaration is not a scope, since its page is its
-# module's, so its name is refused rather than read as a module that is not there.
+# index, or the one module or path named, resolved by `doc_resolve` — which refuses a
+# declaration's name, since its page is its module's.
 fn doc_site(args: list[str], flag: str, verb: str) -> list[zerg.DocModule] {
 	raise f"`zerg doc {flag}` {verb} the modules `zerg doc` lists, or the one module or path named — one at most" if args.len() > 1
 	return doc_index() if args.len() == 0
 
-	name := args[0]
-	at := doc_first_of(name, b'.')
-	raise f"`zerg doc {flag}` {verb} a module's page, and `{name}` is a declaration's name — name its module, and the declaration is on that page" if at > 0 and not doc_is_path(name) and source.module_sources(name, ".", ".").len() == 0
-
 	mut mods: list[zerg.DocModule] = []
-	mods.append(doc_resolve(name))
+	mods.append(doc_resolve(args[0], flag))
 	return mods
 }
 
@@ -375,10 +371,16 @@ pub fn doc_route(scope: list[str], path: str) -> DocReply {
 	return DocReply(404, DOC_HTML_KIND, f"<!doctype html>\n<title>not found</title>\n<p><code>{doc_html.html_text(path)}</code> is no page here — <a href=\"/\">the index</a> lists them.</p>\n")
 }
 
-# doc_resolve resolves the one name `--check` or `--search` was given, by the same two doors
-# `run_doc` opens and in the same order — a path that is really there, then a module — so that a
-# name which reads one way for `zerg doc` cannot read another way beside a flag.
-fn doc_resolve(name: str) -> zerg.DocModule {
+# doc_resolve resolves the one name a scope flag (`flag`) was given, by the same doors `run_doc`
+# opens and in the same order — a path that is really there, then a module, then a module's
+# declaration — so that a name which reads one way for `zerg doc` cannot read another way
+# beside a flag.
+#
+# A DECLARATION IS REFUSED, NOT READ: a scope is a module, so the refusal names the module the
+# declaration is in. It is a declaration only when its module really declares it — a name that
+# merely carries a `.` (`nosuch.zg`, `1.5`) is a name nothing answers, and is refused with what
+# can be read; a module that declares no such name is refused with what that module declares.
+fn doc_resolve(name: str, flag: str) -> zerg.DocModule {
 	if doc_is_path(name) {
 		files := doc_path_files(name)
 		raise doc_no_source(name) if files.len() == 0
@@ -387,9 +389,47 @@ fn doc_resolve(name: str) -> zerg.DocModule {
 	}
 
 	whole := source.module_sources(name, ".", ".")
-	raise doc_no_such(name) if whole.len() == 0
+	return doc_read(source.path_tail(name), whole) if whole.len() > 0
 
-	return doc_read(source.path_tail(name), whole)
+	d := doc_decl_module(name)
+	raise doc_no_decl(d.m, d.key) if zerg.doc_find(d.m, d.key).len() == 0
+
+	raise doc_scope_decl(name, flag)
+}
+
+# doc_scope_decl is the refusal for a declaration's name beside a scope flag, in that flag's
+# own words: what it does with a module, and where the declaration is once its module is named.
+fn doc_scope_decl(name: str, flag: str) -> str {
+	tail := f"and `{name}` is a declaration's name — name its module, and the declaration"
+
+	return f"`zerg doc --check` checks a module or a path, {tail} is checked with it" if flag == "--check"
+	return f"`zerg doc --search` searches a module or a path, {tail} is searched with it" if flag == "--search"
+	return f"`zerg doc --serve` serves a module's page, {tail} is on that page" if flag == "--serve"
+
+	return f"`zerg doc --html` writes a module's page, {tail} is on that page"
+}
+
+# DocDecl is a name read as `module.declaration`: the module before the first `.`, read, and
+# the key after it.
+struct DocDecl {
+	pub m: zerg.DocModule
+	pub key: str
+}
+
+# doc_decl_module reads the module a `module.declaration` name is in, split at its FIRST `.` —
+# the one reading `run_doc_decl` and `doc_resolve` share, so the two cannot disagree about where
+# a module ends. A name with no `.` past its first byte, or whose prefix is no module, is a name
+# nothing answers.
+fn doc_decl_module(name: str) -> DocDecl {
+	at := doc_first_of(name, b'.')
+	raise doc_no_such(name) if at <= 0
+
+	b := bytearray(name)
+	mod := diag.line_slice(b, 0, at)
+	files := source.module_sources(mod, ".", ".")
+	raise doc_no_such(name) if files.len() == 0
+
+	return DocDecl(doc_read(source.path_tail(mod), files), diag.line_slice(b, at + 1, b.len()))
 }
 
 # run_doc_decl reads `module.declaration`, which is the form left once the name has resolved to
@@ -410,21 +450,11 @@ fn doc_resolve(name: str) -> zerg.DocModule {
 # `--brief` is not read here. A single declaration is shown whole, which is what a reader asking
 # for one wants; brief is what shortens a LISTING, and a listing of one is the thing itself.
 fn run_doc_decl(name: str, all: bool, col: bool) -> int {
-	at := doc_first_of(name, b'.')
-	raise doc_no_such(name) if at < 0
+	d := doc_decl_module(name)
+	hits := zerg.doc_find(d.m, d.key)
+	raise doc_no_decl(d.m, d.key) if hits.len() == 0
 
-	b := bytearray(name)
-	mod := diag.line_slice(b, 0, at)
-	key := diag.line_slice(b, at + 1, b.len())
-
-	files := source.module_sources(mod, ".", ".")
-	raise doc_no_such(name) if files.len() == 0
-
-	m := doc_read(source.path_tail(mod), files)
-	hits := zerg.doc_find(m, key)
-	raise doc_no_decl(m, key) if hits.len() == 0
-
-	io.write(doc_render.render_doc_decls(m, hits, all, col))
+	io.write(doc_render.render_doc_decls(d.m, hits, all, col))
 	return 0
 }
 

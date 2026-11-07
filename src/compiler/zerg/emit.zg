@@ -15995,6 +15995,7 @@ fn c_check_exhaustive(mut &em: Emitter, arms: list[ast.Arm], st: ast.Ty) {
 			l = "Ok (Left)"
 			r = "Err (Right)"
 		}
+
 		raise c_arm_missing_side(em, l) if not c_arm_covers_side(arms, st, "Left")
 		raise c_arm_missing_side(em, r) if not c_arm_covers_side(arms, st, "Right")
 
@@ -16257,6 +16258,7 @@ fn c_either_side(st: ast.Ty, ctor: str) -> str {
 # a pattern the type does not have.
 fn c_result_tag(mut &em: Emitter, ctor: str, st: ast.Ty) -> int {
 	side := c_either_side(st, ctor)
+
 	return 0 if side == "Left"
 	return 1 if side == "Right"
 

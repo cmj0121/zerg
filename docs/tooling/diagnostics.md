@@ -333,7 +333,7 @@ shipping compiler rather than a part of it (the line
 | `E3129` | the method `…` on a … — a carrier answers `ok_or` on a `T?` and `ok` on an `Either`                   |
 | `E3130` | `….…(…)` — an enum type answers `of(n)` and its own variants                                          |
 | `E3131` | the method `…` on a …                                                                                 |
-| `E3132` | the pattern `…` on a Result[T] — it has Left and Right                                                |
+| `E3132` | the pattern `…` on a … — it has Left and Right, and a Result[T] also Ok and Err                       |
 | `E3133` | `fn main() -> …` — the entry's shapes are `fn main()`, `-> int` and `-> Result[nil]`                  |
 | `E3134` | the method `…` on a keyed container — it answers `len` and `has`, and is read with `m[k]`             |
 | `E3135` | the field `…` on an Err — it has `kind`, and its message is `message()`                               |

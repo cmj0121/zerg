@@ -309,7 +309,7 @@ seed 全程維持句子比對:代碼是語言的契約,而 seed 是建置正式�
 | `E3129` | … 上的方法 `…` — carrier 在 `T?` 上回答 `ok_or`、在 `Either` 上回答 `ok`                              |
 | `E3130` | `….…(…)` — enum 型別只回答 `of(n)` 與它自己的變體                                                     |
 | `E3131` | … 上的方法 `…`                                                                                        |
-| `E3132` | 在 Result[T] 上用 pattern `…` — 它只有 Left 與 Right                                                  |
+| `E3132` | 在 … 上用 pattern `…` — 它只有 Left 與 Right，Result[T] 另有 Ok 與 Err                                |
 | `E3133` | `fn main() -> …` — 進入點的形狀是 `fn main()`、`-> int` 與 `-> Result[nil]`                           |
 | `E3134` | keyed container 上的方法 `…` — 它只回答 `len` 與 `has`,並且用 `m[k]` 讀                               |
 | `E3135` | Err 上的欄位 `…` — 它只有 `kind`,訊息要用 `message()`                                                 |

@@ -518,6 +518,9 @@ pattern      ::= sub-pattern ( '|' sub-pattern )*       # or-pattern binds same 
 sub-pattern  ::= pattern-core ( 'as' identifier )?
 pattern-core ::= variant-pat | struct-pat | tuple-pat | list-pat | literal-pat | binding-pat | '_'
 variant-pat  ::= type-name '.' identifier ( '(' pattern-list ')' )?   # Color.Red, Either.Left(v)
+# On a Result[T] scrutinee the two sides may also be named 'Ok' and 'Err': 'Ok(v)' is the Left
+# arm and 'Err(e)' the Right, mixing freely with 'Left'/'Right'. On any other Either both are
+# refused (E3132) — a plain Either has no success side. 'Err' is still a type everywhere else.
 struct-pat   ::= type-name '{' struct-fields? '}'       # Div{q, r}; Div{q, ..}; Div{..}
 struct-fields ::= field-pat ( ',' field-pat )* ( ',' '..' )? | '..'
 tuple-pat    ::= '(' pattern-list ')'                   # (a, b) — also a bind-target

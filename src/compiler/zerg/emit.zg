@@ -8168,7 +8168,7 @@ fn c_pat_env(mut &em: Emitter, pt: ast.Pat, st: ast.Ty) {
 		# binding takes whichever the pattern names. Answering `Err` for every Right is what a
 		# Result-shaped assumption looks like.
 		return if names.len() == 0
-		if c_result_tag(em, ctor) == 0 {
+		if c_result_tag(em, ctor, st) == 0 {
 			c_add_var(em, names[0], c_either_left(st), false, false)
 		} else {
 			c_add_var(em, names[0], c_either_right(st), false, false)
@@ -15986,10 +15986,18 @@ fn c_check_exhaustive(mut &em: Emitter, arms: list[ast.Arm], st: ast.Ty) {
 		return
 	}
 
-	# an Either has exactly two sides, and naming both is exhaustive
+	# an Either has exactly two sides, and naming both is exhaustive — under either spelling
+	# a Result[T] gives them, so `Ok(v)` and `Right(e)` cover it as `Left(v)` and `Err(e)` do
 	if c_is_either(st) {
-		raise c_arm_missing_side(em, "Left") if not c_arm_covers(arms, "Left")
-		raise c_arm_missing_side(em, "Right") if not c_arm_covers(arms, "Right")
+		mut l := "Left"
+		mut r := "Right"
+		if c_is_result(st) {
+			l = "Ok (Left)"
+			r = "Err (Right)"
+		}
+
+		raise c_arm_missing_side(em, l) if not c_arm_covers_side(arms, st, "Left")
+		raise c_arm_missing_side(em, r) if not c_arm_covers_side(arms, st, "Right")
 
 		return
 	}
@@ -16232,14 +16240,33 @@ fn c_arms(mut &em: Emitter, arms: list[ast.Arm], i: int, s: str, st: ast.Ty, sb:
 	return f"({cond} ? {body} : {rest})"
 }
 
-# c_result_tag is which side of a Result a constructor pattern names. A Result is not a
-# declared enum — it has no row in the variant table — so `Left` and `Right` are answered
-# here rather than looked up, and anything else is a pattern the type does not have.
-fn c_result_tag(mut &em: Emitter, ctor: str) -> int {
-	return 0 if ctor == "Left"
-	return 1 if ctor == "Right"
+# c_either_side is the side of an Either that a constructor pattern names, or "" for a name
+# that is neither. An Either is not a declared enum — it has no row in the variant table — so
+# its sides are answered here rather than looked up. `Left` and `Right` name them on every
+# Either; on a Result[T] `Ok` and `Err` name the same two, read as success and failure, and
+# nowhere else: a plain Either has no success side for `Ok` to mean.
+fn c_either_side(st: ast.Ty, ctor: str) -> str {
+	return ctor if ctor == "Left" or ctor == "Right"
+	return "" if not c_is_result(st)
+	return "Left" if ctor == "Ok"
+	return "Right" if ctor == "Err"
 
-	raise c_diag(em, rule.Rule.ResultPatternUnknown, f"the pattern `{ctor}` on a Result[T] — it has Left and Right")
+	return ""
+}
+
+# c_result_tag is the tag of the side c_either_side names, and a name that is neither side is
+# a pattern the type does not have.
+fn c_result_tag(mut &em: Emitter, ctor: str, st: ast.Ty) -> int {
+	side := c_either_side(st, ctor)
+
+	return 0 if side == "Left"
+	return 1 if side == "Right"
+
+	mut has := f"on an {ast.ty_name(st)} — it has Left and Right"
+	if c_is_result(st) {
+		has = "on a Result[T] — it has Ok and Err, or Left and Right"
+	}
+	raise c_diag(em, rule.Rule.ResultPatternUnknown, f"the pattern `{ctor}` {has}")
 }
 
 # c_arm_subst extends sb with an arm's bindings: a bind arm aliases the scrutinee; an enum
@@ -16361,7 +16388,7 @@ fn c_pat_subst(mut &em: Emitter, pt: ast.Pat, s: str, st: ast.Ty, sb: Subst) -> 
 		# `Left(v)` reads the value, `Right(e)` the Err; neither is a tagged union of the
 		# kind the variant table describes, so the field is named directly
 		return sb if names.len() == 0
-		return c_extend_bound(em, sb, names[0], c_res_val(em, st, s), ps[0]) if c_result_tag(em, ctor) == 0
+		return c_extend_bound(em, sb, names[0], c_res_val(em, st, s), ps[0]) if c_result_tag(em, ctor, st) == 0
 
 		return c_extend_bound(em, sb, names[0], c_res_err(s), ps[0])
 	}
@@ -16559,7 +16586,7 @@ fn c_pat_cond(mut &em: Emitter, pt: ast.Pat, s: str, st: ast.Ty, sb: Subst) -> s
 
 	ctor := c_pat_ctor(pt)
 	if ctor != "" {
-		return f"({c_res_tag(s)} == {c_result_tag(em, ctor)})" if c_is_either(st)
+		return f"({c_res_tag(s)} == {c_result_tag(em, ctor, st)})" if c_is_either(st)
 
 		return f"({s}.tag == {c_variant_tag_in(em, c_named_of(st), ctor)})"
 	}
@@ -16589,6 +16616,32 @@ fn c_pat_covers_ctor(pt: ast.Pat, ctor: str) -> bool {
 fn c_pats_cover_ctor(ps: list[ast.Pat], ctor: str) -> bool {
 	for pt in ps {
 		return true if c_pat_covers_ctor(pt, ctor)
+	}
+	return false
+}
+
+# c_arm_covers_side is c_arm_covers for an Either, which asks about a SIDE rather than a name:
+# c_either_side reads each arm's constructor, so every spelling of the side covers it.
+fn c_arm_covers_side(arms: list[ast.Arm], st: ast.Ty, side: str) -> bool {
+	for a in arms {
+		return true if not a.has_guard and c_pat_covers_side(a.pat, st, side)
+	}
+	return false
+}
+
+fn c_pat_covers_side(pt: ast.Pat, st: ast.Ty, side: str) -> bool {
+	return true if c_either_side(st, c_pat_ctor(pt)) == side
+
+	return match pt {
+		Pat.POr(ps) => c_pats_cover_side(ps, st, side)
+		Pat.PAs(inner, _, _, _) => c_pat_covers_side(inner, st, side)
+		_ => false
+	}
+}
+
+fn c_pats_cover_side(ps: list[ast.Pat], st: ast.Ty, side: str) -> bool {
+	for pt in ps {
+		return true if c_pat_covers_side(pt, st, side)
 	}
 	return false
 }

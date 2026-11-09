@@ -126,6 +126,10 @@ pub enum Rule {
 	AssocFnIsMut = 2090
 	AssocFnReadsThis = 2091
 
+	# GRAMMAR#match-arm ends in an `expr`: a reassignment or a send standing as an arm's whole body
+	# is a statement, and a block body is how an arm holds one.
+	ArmBodyStatement = 2092
+
 	# checking — a form whose meaning does not hold together — reported against the tree, all at once
 	NotPublicMember = 3001
 	AssignTargetNotAPlace = 3002
@@ -573,7 +577,6 @@ pub enum Rule {
 	NotYetIfExprBindingHead = 9032
 	NotYetClosureParamDefault = 9034
 	NotYetImplTypeArgument = 9038
-	NotYetMatchArmStatement = 9041
 	NotYetTypedefNonScalar = 9042
 	NotYetJumpOutOfGuard = 9043
 	NotYetCompileTimeBuiltin = 9046

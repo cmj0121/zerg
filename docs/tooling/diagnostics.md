@@ -203,6 +203,7 @@ shipping compiler rather than a part of it (the line
 | `E2089` | `fn This.…` in an inherent `impl`, where the body decides                                             |
 | `E2090` | `mut fn This.…` — an associated fn has no receiver to mutate                                          |
 | `E2091` | `fn This.…` whose body reads `this`                                                                   |
+| `E2092` | … is a statement, and a match arm's body is an expression                                             |
 | `E3001` | `…` is not a public member of module `…`                                                              |
 | `E3002` | `…` is not a place, and an assignment needs one                                                       |
 | `E3003` | cannot assign to `…`: it is a module `const`, and a constant is never written                         |
@@ -503,7 +504,6 @@ shipping compiler rather than a part of it (the line
 | `E9032` | a binding head in an `if` EXPRESSION                                                                  |
 | `E9034` | a default on a closure parameter                                                                      |
 | `E9038` | an `impl` on a built-in container target                                                              |
-| `E9041` | a match arm's body is an expression, and this one is a statement                                      |
 | `E9042` | `type … = …` over a non-scalar                                                                        |
 | `E9043` | `…` leaving a `guard` block                                                                           |
 | `E9046` | the compile-time built-in `…[T]`                                                                      |
@@ -734,6 +734,7 @@ name now is the prelude rule (`E2061`), which is about the name rather than abou
 | `E9040` | `E2074` | every derived expression has a home or its own code                    |
 | `E9082` | `E4077` | reachable only when the two files are literally one module             |
 | `E9098` | `E4078` | everything call-shaped left earlier                                    |
+| `E9041` | `E2092` | `GRAMMAR#match-arm` ends in an `expr`, and a statement is none         |
 | `E9007` | `E2077` | the three item forms all have arms; a statement is none                |
 | `E9016` | —       | the tuple pattern is built                                             |
 | `E9006` | —       | the associated value is built                                          |

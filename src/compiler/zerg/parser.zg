@@ -5167,7 +5167,7 @@ fn at_range_arm(mut &p: Parser) -> bool {
 # `what` names the shape, because one code covers both and the reader has to be told which
 # statement was left behind.
 fn p_arm_body_stmt(mut &p: Parser, what: str) -> str {
-	return p_diag(p, rule.Rule.NotYetMatchArmStatement, f"NotImplemented: a match arm's body is an expression — {what} in an arm needs a block body, which this emitter cannot yet lower (GRAMMAR#match-arm)")
+	return p_diag(p, rule.Rule.ArmBodyStatement, f"{what} is a statement, and a match arm's body is an expression — brace it, and the arm has a block body (GRAMMAR#match-arm)")
 }
 
 # --- patterns (GRAMMAR#pattern) -----------------------------------------------------------

@@ -5073,11 +5073,20 @@ fn parse_if_expr(mut &p: Parser) -> ast.Expr {
 	p_no_brace_head(p, "an `if` head", false)
 	t := cur(p)
 
-	# THE BINDING HEAD, `if v := e { … }` (GRAMMAR#if-head), which runs the branch only when
-	# `e` is present. It is grammatical in expression position and this compiler unwraps an
-	# optional in the STATEMENT form only, so the `:=` reached the condition's expression
-	# parser and reported itself.
-	raise p_diag_at(p, t.line, t.col, rule.Rule.NotYetIfExprBindingHead, f"NotImplemented: a binding head in an `if` EXPRESSION — `if {token.says(t)} := …` unwraps an optional, and this compiler does that in the statement form only; bind it before the expression, or use `??` (GRAMMAR#if-head)") if p_at(p, token.Kind.Ident) and peek_kind(p, 1) == token.Kind.Walrus
+	# THE BINDING HEAD, `if v := e { … }` (GRAMMAR#if-head): the then-branch runs only when `e`
+	# is present, with `v` bound to what it held there and nowhere else. It is told from a
+	# condition by the `:=` alone, as in the statement form (parse_if). The `else` it needs is the
+	# one every if-expression needs, and an `else if` chain after it is the same right-nested
+	# if-expression the plain head takes.
+	if p_names_here(p, p.pos) and peek_kind(p, 1) == token.Kind.Walrus {
+		name := p_name(p, "an `if let` binding")
+		p_advance(p) # ':='
+		value := parse_expr(p)
+		then_b := parse_if_branch(p)
+		expect(p, token.Kind.Else)
+		return ast.Expr.EIfLet(name, value, then_b, parse_if_expr(p), t.line, t.col) if p_at(p, token.Kind.If)
+		return ast.Expr.EIfLet(name, value, then_b, parse_if_branch(p), t.line, t.col)
+	}
 
 	cond := parse_expr(p)
 	then_e := parse_if_branch(p)

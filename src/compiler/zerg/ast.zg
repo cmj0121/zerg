@@ -242,6 +242,17 @@ pub enum Expr {
 	# alone has, so it is spliced as an ordinary literal at the hole rather than carried.
 	EFmt(Expr, str, str)
 	EIf(Expr, Expr, Expr)
+
+	# EIfLet is the binding form in EXPRESSION position, `if v := e { a } else { b }`
+	# (GRAMMAR#if-head): `a` when `e` is present, with `v` bound to what it held in `a` only, and
+	# `b` otherwise. The name, the carrier, the two branches, and where the name was written.
+	#
+	# It is ONE `match` over the carrier, and the emitter lowers it as that match — but which
+	# patterns spell "present" is the carrier's TYPE (`nil` and a bare name over a `T?`, `Ok(v)`
+	# and `_` over a `Result[T]`), which the parser has not got, so the form is carried to where
+	# the type is known. A walk that asks only what an expression holds and binds sees it as
+	# iflet_shape, the same match with a pattern that is right for every carrier at that level.
+	EIfLet(str, Expr, Expr, Expr, int, int)
 	EMatch(Expr, list[Arm])
 
 	# ERange is `a..b` / `a..=b`. GRAMMAR puts it between comparison and addition, so
@@ -2656,6 +2667,7 @@ pub fn expr_kind(e: Expr) -> str {
 		Expr.EConv(_, _, nm) => "convert " + nm
 		Expr.EFmt(_, _, _) => "format hole"
 		Expr.EIf(_, _, _) => "if-expr"
+		Expr.EIfLet(_, _, _, _, _, _) => "if-let-expr"
 		Expr.EMatch(_, _) => "match"
 		Expr.ERange(_, _, _) => "range"
 		Expr.ETuple(_) => "tuple"
@@ -2723,6 +2735,7 @@ pub fn expr_parts(e: Expr) -> list[Expr] {
 		Expr.EConv(_, x, _) => [x]
 		Expr.EFmt(x, _, _) => [x]
 		Expr.EIf(c, a, b) => [c, a, b]
+		Expr.EIfLet(_, v, a, b, _, _) => [v, a, b]
 		Expr.EMatch(scrut, arms) => expr_parts_arms(scrut, arms)
 		Expr.ERange(lo, hi, _) => [lo, hi]
 		Expr.ETuple(elems) => elems
@@ -3033,6 +3046,7 @@ pub fn expr_stmts(e: Expr) -> list[Stmt] {
 		Expr.EConv(_, _, _) => stmt_kids_none()
 		Expr.EFmt(_, _, _) => stmt_kids_none()
 		Expr.EIf(_, _, _) => stmt_kids_none()
+		Expr.EIfLet(_, _, _, _, _, _) => stmt_kids_none()
 		Expr.EMatch(_, _) => stmt_kids_none()
 		Expr.ERange(_, _, _) => stmt_kids_none()
 		Expr.ETuple(_) => stmt_kids_none()
@@ -3091,6 +3105,7 @@ pub fn stmt_binds(s: Stmt) -> list[str] {
 pub fn expr_binds(e: Expr) -> list[str] {
 	return match e {
 		Expr.EMatch(_, arms) => expr_arm_binds(arms)
+		Expr.EIfLet(nm, _, _, _, _, _) => [nm]
 		Expr.EFn(ps, _, _, _) => expr_param_names(ps)
 		Expr.EInt(_, _, _) => stmt_binds_none()
 		Expr.EFloat(_) => stmt_binds_none()
@@ -3653,4 +3668,12 @@ pub fn ty_names(ts: list[Ty]) -> str {
 		i = i + 1
 	}
 	return out
+}
+
+# iflet_shape is an if-let expression as the `match` it is, with the one pattern pair that is
+# right for every carrier when nothing asks which carrier it is: the name bound in the first
+# arm, a wildcard in the second. A walk that wants what the form holds and binds reads this;
+# the emitter, which knows the carrier, lowers c_iflet_match's pair instead.
+pub fn iflet_shape(name: str, value: Expr, then_e: Expr, else_e: Expr, l: int, c: int) -> Expr {
+	return Expr.EMatch(value, [Arm(Pat.PBind(name, l, c), false, Expr.ENil, then_e, l, c), Arm(Pat.PWild, false, Expr.ENil, else_e, l, c)])
 }

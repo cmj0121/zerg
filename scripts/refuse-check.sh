@@ -3565,21 +3565,6 @@ fn main() {
 }
 EOF
 
-# The if-EXPRESSION shape that needs more than a parse. It used to be reported as the token
-# that could not continue the condition — "expected `{`, found `:=`" — for a form
-# GRAMMAR#if-head derives. The `else if` chain (codegen/if_expr_forms) and the branch of
-# several statements (codegen/if_expr_block_branch) are built.
-expect "$ZERG" if-expression-with-a-binding-head E9032 <<'EOF'
-fn get() -> int? {
-	return 3
-}
-
-fn main() {
-	x := if v := get() { v } else { -1 }
-	print x
-}
-EOF
-
 # A TOP-LEVEL `unsafe` OPENS A GROUP OR MARKS A `fn`, and a third thing used to fall through
 # to the statement fallback and be read as an EXPRESSION — an answer describing a form the file
 # does not contain, since there is no expression in `unsafe struct P`. GRAMMAR derives no

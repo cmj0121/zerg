@@ -1046,6 +1046,17 @@ fn c_carrier_fit(mut &em: Emitter, where: str, want: ast.Ty, e: ast.Expr, sb: Su
 			b := c_carrier_fit(em, where, want, else_e, sb)
 			fitted = f"({ct} ? {a} : {b})"
 		}
+
+		# AN IF-LET EXPRESSION IS FITTED BRANCH BY BRANCH TOO, for the same reason — `x: int? =
+		# if v := o { v } else { nil }` is two spellings of one `int?` — but its then-branch can
+		# only be typed with `v` in scope, which a fit from out here has not got. So each branch
+		# is handed the carrier as a TYPED BINDING, the form that already fits a value to a
+		# declared type, and the match it lowers to answers the carrier on both sides.
+		Expr.EIfLet(nm, v, then_e, else_e, l, c) => {
+			fa := c_fit_as_binding(want, then_e)
+			fb := c_fit_as_binding(want, else_e)
+			fitted = c_expr(em, ast.Expr.EIfLet(nm, v, fa, fb, l, c), sb)
+		}
 		_ => {
 			nop
 		}
@@ -9359,6 +9370,7 @@ fn c_expr_node(mut &em: Emitter, e: ast.Expr, sb: Subst) -> str {
 		Expr.EConv(ty, x, nm) => c_conv(em, ty, x, nm, sb)
 		Expr.EFmt(x, cv, sp) => c_fmt_hole(em, x, cv, sp, sb)
 		Expr.EIf(cond, then_e, else_e) => c_ternary(em, cond, then_e, else_e, sb)
+		Expr.EIfLet(nm, v, a, b, l, c) => c_expr(em, c_iflet_match(em, nm, v, a, b, l, c), sb)
 		Expr.EMatch(scrut, arms) => c_match(em, scrut, arms, sb)
 
 		# A range reaching HERE is one used as a value — a slice bound or a match arm —
@@ -16995,11 +17007,12 @@ fn c_infer_node(mut &em: Emitter, e: ast.Expr) -> ast.Ty {
 		Expr.EIndex(target, idx) => c_elem_ty(em, target, idx)
 		Expr.EListLit(elems) => c_infer_listlit(em, elems)
 
-		Expr.EFill(v, _)         => c_infer_fill(em, v)
-		Expr.EConv(ty, x, _)     => ty
-		Expr.EFmt(_, _, _)       => ast.Ty.TStr
-		Expr.EIf(_, then_e, _)   => c_infer(em, then_e)
+		Expr.EFill(v, _) => c_infer_fill(em, v)
+		Expr.EConv(ty, x, _) => ty
+		Expr.EFmt(_, _, _) => ast.Ty.TStr
+		Expr.EIf(_, then_e, _) => c_infer(em, then_e)
 		Expr.EMatch(scrut, arms) => c_infer_match(em, scrut, arms)
+		Expr.EIfLet(nm, v, a, b, l, c) => c_infer(em, c_iflet_match(em, nm, v, a, b, l, c))
 
 		# A RANGE'S TYPE IS ITS BOUNDS'. It answered TUnknown while the form was refused, and
 		# an unknown type is what every rule in check.zg returns early on — so a range in a
@@ -20227,10 +20240,11 @@ fn c_free_sel(arms: list[ast.SelArm], mut &bound: list[str], mut &out: list[str]
 
 fn c_free_expr(e: ast.Expr, mut &bound: list[str], mut &out: list[str], mut &calls: list[str]) {
 	match e {
-		Expr.EIdent(nm, _, _)      => c_free_read(nm, bound, out)
-		Expr.ECall(nm, _, _, _, _) => c_free_call(e, nm, bound, out, calls)
-		Expr.EMatch(scrut, arms)   => c_free_match(scrut, arms, bound, out, calls)
-		Expr.EFn(ps, _, _, body)   => c_free_fn(ps, body, bound, out, calls)
+		Expr.EIdent(nm, _, _)          => c_free_read(nm, bound, out)
+		Expr.ECall(nm, _, _, _, _)     => c_free_call(e, nm, bound, out, calls)
+		Expr.EMatch(scrut, arms)       => c_free_match(scrut, arms, bound, out, calls)
+		Expr.EIfLet(nm, v, a, b, l, c) => c_free_expr(ast.iflet_shape(nm, v, a, b, l, c), bound, out, calls)
+		Expr.EFn(ps, _, _, body)       => c_free_fn(ps, body, bound, out, calls)
 
 		# every other expression binds nothing: its parts, and the block it carries if it does
 		_ => c_free_parts(e, bound, out, calls)
@@ -23920,9 +23934,17 @@ fn c_if(mut &em: Emitter, cond: ast.Expr, then_body: list[ast.Stmt], has_else: b
 #
 # The binding's C name comes from c_add_var rather than being written down here, because
 # an outer `v` may already be in scope and C has no shadowing inside a function.
-fn c_iflet(mut &em: Emitter, name: str, value: ast.Expr, then_body: list[ast.Stmt], has_else: bool, else_body: list[ast.Stmt], ind: str) -> str {
+# c_iflet_carrier is the type an `if v := e` binds out of, in either form: the statement's and
+# the expression's head are one rule, and a value that is no carrier is refused by it.
+fn c_iflet_carrier(mut &em: Emitter, name: str, value: ast.Expr) -> ast.Ty {
 	t := c_infer(em, value)
 	raise c_diag(em, rule.Rule.IfBindNotCarrier, f"`if {name} := …` over a {ast.ty_name(t)} — it binds the Left of a Result[T] or a T?") if not c_is_carrier(t)
+
+	return t
+}
+
+fn c_iflet(mut &em: Emitter, name: str, value: ast.Expr, then_body: list[ast.Stmt], has_else: bool, else_body: list[ast.Stmt], ind: str) -> str {
+	t := c_iflet_carrier(em, name, value)
 
 	elem := c_carrier_elem(t)
 	cn := c_carrier_of(em, t)
@@ -24099,6 +24121,45 @@ fn c_cond(mut &em: Emitter, x: ast.Expr, site: str) -> str {
 
 # c_ternary lowers `a if c else b`. It is its own function only so the condition can be
 # checked before it is rendered — a match arm has nowhere to put a statement.
+# c_fit_as_binding is `{ t: want = e; t }` — `e` fitted to `want` by the typed binding that is
+# the language's own way of doing it, as a block whose value is the binding. The name cannot
+# capture anything: `e` is evaluated before it is bound, and the block reads nothing else.
+fn c_fit_as_binding(want: ast.Ty, e: ast.Expr) -> ast.Expr {
+	nm := "zgt_fit"
+	bind := ast.Stmt.SLet(nm, want, true, false, false, e, 0, 0)
+	return ast.Expr.EBlock([bind, ast.Stmt.SExpr(ast.Expr.EIdent(nm, 0, 0))])
+}
+
+# c_iflet_match is an if-let EXPRESSION as the `match` it is (GRAMMAR#if-head): the
+# then-branch under the pattern that says "present" for this carrier and binds what it held,
+# the else-branch under the one that says "absent". Which patterns those are is the carrier's
+# type — over a `T?` they are a bare name after `nil`, over an Either (a `Result[T]`, a receive
+# that may fail) `Left(v)` before `_` — so the form waits until here, where the type is known,
+# and from here it is the match in every respect: its one-type rule, its ownership of what an
+# arm hands over, and its scope, which keeps `v` out of the else-branch.
+#
+# A value that is no carrier is the statement form's refusal, in the statement form's words.
+fn c_iflet_match(mut &em: Emitter, name: str, value: ast.Expr, then_e: ast.Expr, else_e: ast.Expr, l: int, c: int) -> ast.Expr {
+	t := c_iflet_carrier(em, name, value)
+	bind := ast.Pat.PBind(name, l, c)
+	mut present := ast.Arm(ast.Pat.PVariant("", "Left", [bind], l, c), false, ast.Expr.ENil, then_e, l, c)
+	mut absent := ast.Arm(ast.Pat.PWild, false, ast.Expr.ENil, else_e, l, c)
+	if ast.ty_is_opt(t) {
+		present.pat = bind
+		absent.pat = ast.Pat.PLit(ast.Expr.ENil)
+	}
+
+	# THE TWO BRANCHES ARE AN `if`'S, and a disagreement between them is told in an `if`'s words
+	# (E3020) before the match it lowers to can say it in a match's: the reader wrote no arms.
+	# The then-branch is typed through its arm, which is what puts `v` in scope for it. Once it
+	# is told, the else-branch alone stands in for the form, so nothing says it a second time.
+	return else_e if check.chk_branch_tys(em, c_infer_arm_body(em, present, t), c_infer(em, else_e))
+
+	return ast.Expr.EMatch(value, [absent, present]) if ast.ty_is_opt(t)
+
+	return ast.Expr.EMatch(value, [present, absent])
+}
+
 fn c_ternary(mut &em: Emitter, cond: ast.Expr, then_e: ast.Expr, else_e: ast.Expr, sb: Subst) -> str {
 	check.chk_condition(em, cond, "an `if` expression")
 	check.chk_branch_types(em, then_e, else_e)
@@ -28065,6 +28126,7 @@ fn c_ren_expr(r: TyRen, e: ast.Expr) -> ast.Expr {
 		Expr.EFmt(x, cv, sp) => ast.Expr.EFmt(c_ren_expr(r, x), cv, sp)
 		Expr.EIf(c, a, b) => ast.Expr.EIf(c_ren_expr(r, c), c_ren_expr(r, a), c_ren_expr(r, b))
 		Expr.EMatch(x, arms) => ast.Expr.EMatch(c_ren_expr(r, x), c_ren_arms(r, arms))
+		Expr.EIfLet(nm, v, a, b, l, c) => ast.Expr.EIfLet(nm, c_ren_expr(r, v), c_ren_expr(r, a), c_ren_expr(r, b), l, c)
 		Expr.ERange(a, b, inc) => ast.Expr.ERange(c_ren_expr(r, a), c_ren_expr(r, b), inc)
 		Expr.ETuple(xs) => ast.Expr.ETuple(c_ren_exprs(r, xs))
 		Expr.EMapLit(ks, vs) => ast.Expr.EMapLit(c_ren_exprs(r, ks), c_ren_exprs(r, vs))

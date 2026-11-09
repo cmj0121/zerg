@@ -55,18 +55,19 @@ inside a present carrier and the absence was gone with nothing reported; the mir
 
 ---
 
-> **[not yet]** One shape of the value form is refused by name: **if-let in an expression position**.
-> `return if x := opt { use(x) } else { fallback }`, and any if-let reaching a `:=` or an argument, reports
-> _E9032 NotImplemented: a binding head in an `if` EXPRESSION_ — so the binding form is a statement only this
-> phase, not the "wherever an `if` does" the paragraph above specifies. The **`else if` chain** used to stand
-> beside it and no longer does: `x := if a { 1 } else if b { 2 } else { 3 }` is built, yields the taken
-> branch, and the one-type rule holds across the whole chain.
->
-> A branch of **several statements** is built: it is the block expression `{ … }` already is, so its value
-> is its last statement's, its locals end with it, and only the taken branch runs. It takes a block's
-> limits with it — a branch whose value the compiler cannot name a type for is _E9069 NotImplemented: …
-> whose value has no type this compiler can name — give the block's last expression a call, a literal or a
-> typed binding_.
+The binding form is built in **expression position** too: `return if x := opt { use(x) } else { fallback }`
+yields `use(x)` when `opt` is present and `fallback` otherwise, `x` is in scope in the then-branch only, and
+the one-type rule is the `if`'s (_E3020_). It is the `match` it reads as — a bare name after `nil` over a `T?`
+(a receive `<-ch` is one), `Left(v)` before `_` over a `Result[T]` — and a branch that answers `nil` fits a
+carrier the way a plain `if`'s does: `x: int? = if v := o { v } else { nil }` is empty when `o` is. The
+**`else if` chain** holds across both heads: `x := if a { 1 } else if v := o { v } else { 3 }`.
+
+A branch of **several statements** is built: it is the block expression `{ … }` already is, so its value is
+its last statement's, its locals end with it, and only the taken branch runs.
+
+> **[not yet]** A branch takes a block's limits with it: one whose value the compiler cannot name a type for
+> is _E9069 NotImplemented: … whose value has no type this compiler can name — give the block's last
+> expression a call, a literal or a typed binding_.
 
 **`for`** — the one loop keyword, three forms: **`for { … }`** infinite (leave via `break` / `return`),
 **`for x in it { … }`** over an `it: Iterable`, binding `x` **by copy** each round (**`for mut x`** binds

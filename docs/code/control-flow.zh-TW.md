@@ -44,17 +44,17 @@ its own_(或 _the empty map `{:}`_)——先把它綁到一個寫了型別的名
 
 ---
 
-> **[not yet]** 值形式只剩一種樣子會被指名拒絕：**在運算式位置的 if-let**。
-> `return if x := opt { use(x) } else { fallback }`，以及任何抵達 `:=` 或引數的 if-let，都會回報
-> _E9032 NotImplemented: a binding head in an `if` EXPRESSION_——所以這個階段綁定形式只是 statement，而不是上文
-> 所載的「`if` 能出現的任何位置」。**`else if` 串**曾與它並列，現在不再：`x := if a { 1 } else if b { 2 } else { 3 }`
-> 已建置、產出被取用的那一支，而且一型規則橫跨整串成立。
->
-> **多個語句**的分支已建置：它就是 `{ … }` 本來就是的那個區塊運算式，所以它的值是最後一個語句的值、
-> 它的區域變數隨它結束，而且只有被取用的那一支會執行。它也帶著區塊的限制——值的型別編譯器叫不出名字的分支是
-> _E9069 NotImplemented: …
-> whose value has no type this compiler can name — give the block's last expression a call, a literal or a
-> typed binding_。
+綁定形式在**運算式位置**也已建置:`return if x := opt { use(x) } else { fallback }` 在 `opt` 存在時產出
+`use(x)`、否則產出 `fallback`;`x` 只在 then 分支裡有效,一型規則是 `if` 的那一條(_E3020_)。它就是它讀起來的那個
+`match`——對 `T?`(接收 `<-ch` 也是一個)是 `nil` 之後的一個裸名字,對 `Result[T]` 是 `_` 之前的 `Left(v)`——而
+回答 `nil` 的分支填入 carrier 的方式和一般 `if` 相同:`o` 缺席時 `x: int? = if v := o { v } else { nil }` 是空的。
+**`else if` 串**跨兩種開頭都成立:`x := if a { 1 } else if v := o { v } else { 3 }`。
+
+**多個語句**的分支已建置:它就是 `{ … }` 本來就是的那個區塊運算式,所以它的值是最後一個語句的值、它的區域變數
+隨它結束,而且只有被取用的那一支會執行。
+
+> **[not yet]** 分支也帶著區塊的限制:值的型別編譯器叫不出名字的分支是 _E9069 NotImplemented: … whose value
+> has no type this compiler can name — give the block's last expression a call, a literal or a typed binding_。
 
 **`for`**——唯一的迴圈關鍵字、三種形式：**`for { … }`** 無窮（用 `break` / `return` 離開）、
 **`for x in it { … }`** 走訪 `it: Iterable`，每一輪以 **copy** 綁定 `x`（**`for mut x`** 就地綁定，僅當 `it` 為

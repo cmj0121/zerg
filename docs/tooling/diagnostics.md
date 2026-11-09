@@ -500,7 +500,6 @@ shipping compiler rather than a part of it (the line
 | `E9025` | `for mut v in …`                                                                                      |
 | `E9028` | an associated type projection `….…`                                                                   |
 | `E9029` | a value generic parameter `…: …`                                                                      |
-| `E9031` | an `if` EXPRESSION whose branch has more than one statement                                           |
 | `E9032` | a binding head in an `if` EXPRESSION                                                                  |
 | `E9034` | a default on a closure parameter                                                                      |
 | `E9038` | an `impl` on a built-in container target                                                              |
@@ -744,6 +743,7 @@ name now is the prelude rule (`E2061`), which is about the name rather than abou
 | `E9018` | —       | the `as` binding is built                                              |
 | `E9002` | —       | a `spec` member with a body is built; it is a provided default         |
 | `E9035` | —       | `mut &` is part of a function type, and the type is built              |
+| `E9031` | —       | a branch of several statements is a block expression, and it is built  |
 | `E9065` | —       | as above, on the value side: the marker rides in the type              |
 | `E9017` | —       | the fixed-size array is built; its length is part of its type          |
 | `E9019` | —       | the interpolating command literal is built; it splices into argv       |

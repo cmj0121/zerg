@@ -312,6 +312,7 @@ module.exports = grammar({
 				optional(
 					choice(
 						seq(
+							optional("mut"),
 							field("binder", $._bind_target),
 							"in",
 							field("iterable", $._expression),

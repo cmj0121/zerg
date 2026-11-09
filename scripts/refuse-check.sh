@@ -3565,23 +3565,10 @@ fn main() {
 }
 EOF
 
-# The two if-EXPRESSION shapes that need more than a parse. Both used to be reported as the
-# token that could not continue the condition — "expected `}`, found `:=`" and "expected
-# `{`, found `:=`" — for forms GRAMMAR#if-expr and GRAMMAR#if-head derive. The `else if`
-# chain, which is the third, now parses (codegen/if_expr_forms).
-expect "$ZERG" if-expression-with-a-multi-statement-branch E9031 <<'EOF'
-fn main() {
-	c := true
-	x := if c {
-		a := 2
-		a * 3
-	} else {
-		0
-	}
-	print x
-}
-EOF
-
+# The if-EXPRESSION shape that needs more than a parse. It used to be reported as the token
+# that could not continue the condition — "expected `{`, found `:=`" — for a form
+# GRAMMAR#if-head derives. The `else if` chain (codegen/if_expr_forms) and the branch of
+# several statements (codegen/if_expr_block_branch) are built.
 expect "$ZERG" if-expression-with-a-binding-head E9032 <<'EOF'
 fn get() -> int? {
 	return 3

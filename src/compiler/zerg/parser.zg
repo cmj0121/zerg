@@ -5090,20 +5090,58 @@ fn parse_if_expr(mut &p: Parser) -> ast.Expr {
 }
 
 # parse_if_branch is one `{ … }` arm of an if-expression. A branch is a BLOCK in GRAMMAR and
-# a block's value is its last statement's, so a multi-statement arm is grammatical — and this
-# compiler lowers an if-expression to a C conditional, which holds one expression and no
-# statements. The arm is named rather than reported as the token that could not continue it.
+# a block's value is its last statement's, so a branch of several statements is the EBlock a
+# `{ … }` in expression position already is: the emitter lowers that to a statement-expression,
+# and its value rule, its scope cleanup and its type are the ones every block expression has.
+#
+# A branch of ONE statement is read as the expression it was always read as, so the conditional
+# the emitter writes for `if c { a } else { b }` is unchanged — and so is every refusal a lone
+# branch gets: a statement standing there, an empty `[]` or `{:}` with no type to take. Which of
+# the two a branch is is decided BEFORE it is read, by p_branch_is_many, because a statement
+# list and an expression disagree about a leading `{` (a block statement, or a map literal).
 fn parse_if_branch(mut &p: Parser) -> ast.Expr {
+	return ast.Expr.EBlock(parse_block(p)) if p_branch_is_many(p)
+
 	expect(p, token.Kind.LBrace)
 	skip_semis(p)
 	e := parse_expr(p)
 	skip_semis(p)
-
-	t := cur(p)
-	raise p_diag_at(p, t.line, t.col, rule.Rule.NotYetIfExprManyStatements, "NotImplemented: an `if` EXPRESSION whose branch has more than one statement — a block's value is its last statement's, and this compiler lowers the expression form to a conditional, which holds no statements. Use the `if` STATEMENT and assign in each branch (GRAMMAR#if-expr)") if not p_at(p, token.Kind.RBrace)
-
 	expect(p, token.Kind.RBrace)
 	return e
+}
+
+# p_branch_is_many reports whether the `{ … }` at the cursor holds more than one statement: a
+# separator at the branch's own depth with something other than the closing `}` after it. It
+# only LOOKS — the separators the lexer inserts are tokens, and brackets nest — so the reading
+# that follows is the one the answer chose, never a second attempt at the same tokens.
+fn p_branch_is_many(mut &p: Parser) -> bool {
+	mut depth := 0
+	mut i := p.pos
+	mut seen := false
+	mut sep := false
+	for i < p.toks.len() {
+		k := p.toks[i].kind
+		return false if k == token.Kind.Eof
+
+		closes := k == token.Kind.RBrace or k == token.Kind.RParen or k == token.Kind.RBrack
+		if depth == 1 and not closes {
+			if k == token.Kind.Semi {
+				sep = seen
+			} else {
+				return true if sep
+
+				seen = true
+			}
+		}
+		if k == token.Kind.LBrace or k == token.Kind.LParen or k == token.Kind.LBrack {
+			depth = depth + 1
+		} else if closes {
+			depth = depth - 1
+			return false if depth == 0
+		}
+		i = i + 1
+	}
+	return false
 }
 
 fn parse_match(mut &p: Parser) -> ast.Expr {

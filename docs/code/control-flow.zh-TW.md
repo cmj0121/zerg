@@ -49,6 +49,12 @@ its own_(或 _the empty map `{:}`_)——先把它綁到一個寫了型別的名
 > _E9032 NotImplemented: a binding head in an `if` EXPRESSION_——所以這個階段綁定形式只是 statement，而不是上文
 > 所載的「`if` 能出現的任何位置」。**`else if` 串**曾與它並列，現在不再：`x := if a { 1 } else if b { 2 } else { 3 }`
 > 已建置、產出被取用的那一支，而且一型規則橫跨整串成立。
+>
+> **多個語句**的分支已建置：它就是 `{ … }` 本來就是的那個區塊運算式，所以它的值是最後一個語句的值、
+> 它的區域變數隨它結束，而且只有被取用的那一支會執行。它也帶著區塊的限制——值的型別編譯器叫不出名字的分支是
+> _E9069 NotImplemented: …
+> whose value has no type this compiler can name — give the block's last expression a call, a literal or a
+> typed binding_。
 
 **`for`**——唯一的迴圈關鍵字、三種形式：**`for { … }`** 無窮（用 `break` / `return` 離開）、
 **`for x in it { … }`** 走訪 `it: Iterable`，每一輪以 **copy** 綁定 `x`（**`for mut x`** 就地綁定，僅當 `it` 為

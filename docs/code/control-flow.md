@@ -62,12 +62,11 @@ inside a present carrier and the absence was gone with nothing reported; the mir
 > beside it and no longer does: `x := if a { 1 } else if b { 2 } else { 3 }` is built, yields the taken
 > branch, and the one-type rule holds across the whole chain.
 >
-> Two limits of the value form keep their own sentences. A branch of more than one statement is _E9031
-> NotImplemented: an `if` EXPRESSION whose branch has more than one statement — this compiler lowers the
-> expression form to a conditional, which holds no statements. Use the `if` STATEMENT and assign in it_.
-> And a branch whose value the compiler cannot name a type for is _E9069 NotImplemented: … whose value
-> has no type this compiler can name — give the block's last expression a call, a literal or a typed
-> binding_.
+> A branch of **several statements** is built: it is the block expression `{ … }` already is, so its value
+> is its last statement's, its locals end with it, and only the taken branch runs. It takes a block's
+> limits with it — a branch whose value the compiler cannot name a type for is _E9069 NotImplemented: …
+> whose value has no type this compiler can name — give the block's last expression a call, a literal or a
+> typed binding_.
 
 **`for`** — the one loop keyword, three forms: **`for { … }`** infinite (leave via `break` / `return`),
 **`for x in it { … }`** over an `it: Iterable`, binding `x` **by copy** each round (**`for mut x`** binds

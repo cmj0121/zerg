@@ -163,14 +163,11 @@ A **`str` literal** arm compares TEXT, through the same `strcmp` an expression's
 a **pointer** comparison, so `match s { "y" => 1  _ => -1 }` answered `-1` for `s == "y"` — silently, since
 the trailing `_` absorbs every miss and two equal literals may or may not share storage.
 
-> **[not yet]** Three of the pattern kinds above are refused **in the parser**, so none of them reaches the
-> checker or the emitter, and each names itself:
+> **[not yet]** These pattern kinds are refused **in the parser**, so none of them reaches the checker or the
+> emitter, and each names itself:
 >
 > - a **nested pattern** — `Left(Some(v))`, and `L(0)` too — is _E9076 NotImplemented: a sub-pattern inside a
 >   variant payload_, so a payload position takes a binding name or `_` and every pattern is one level deep;
-> - a **NAMED rest** in a list pattern — `[a, ..rest]` — is _E9110_, and `[a, ..]` is not: a named one binds
->   a fresh list, and a `match` arm is an expression with nowhere to keep it, so every use of the name would
->   allocate another and release none;
 > - a **NAMED rest** — `[a, ..rest]` — is _E9110 NotImplemented: a NAMED rest in a list pattern_. The
 >   anonymous `..` is built; a named one binds a fresh list, and a `match` arm is an expression with
 >   nowhere to keep it, so every use of the name would allocate another and release none.

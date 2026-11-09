@@ -130,7 +130,7 @@ list 先以**長度**比對——指名每個元素的 pattern 用 `==`，帶 `.
 比較,所以 `match s { "y" => 1  _ => -1 }` 在 `s == "y"` 時回答 `-1`——而且無聲,因為結尾的 `_` 吸收掉每一次落空,
 且兩個相等的 literal 不保證共用儲存。
 
-> **[not yet]** 上面三種 pattern 是在 **parser** 裡就被拒絕的,沒有一種抵達得了檢查器或 emitter,而每一種都指名
+> **[not yet]** 下面這些 pattern 是在 **parser** 裡就被拒絕的,沒有一種抵達得了檢查器或 emitter,而每一種都指名
 > 自己:
 >
 > - **nested pattern**——`Left(Some(v))`，還有 `L(0)`——是 _E9076 NotImplemented: a sub-pattern inside a variant

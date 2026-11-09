@@ -531,7 +531,6 @@ shipping compiler rather than a part of it (the line
 | `E9106` | module `…` declares the function `…`, and a module's function is not a value here                     |
 | `E9107` | the method `…` on a … — `display`, `debug`, `format`; `next` on a channel; `iter` on what `for` walks |
 | `E9108` | `del …` on an owning struct, list or map — the early free, where the release is a scope-exit unwind   |
-| `E9110` | a NAMED rest in a list pattern                                                                        |
 | `E9111` | an array length reached through an import                                                             |
 | `E9112` | the array method `…`                                                                                  |
 | `E9117` | a slice of an array — its length is part of its type                                                  |
@@ -737,7 +736,7 @@ name now is the prelude rule (`E2061`), which is about the name rather than abou
 | `E9007` | `E2077` | the three item forms all have arms; a statement is none                |
 | `E9016` | —       | the tuple pattern is built                                             |
 | `E9006` | —       | the associated value is built                                          |
-| `E9023` | —       | the list pattern is built; a NAMED rest is E9110                       |
+| `E9023` | —       | the list pattern is built                                              |
 | `E9026` | —       | the struct pattern is built                                            |
 | `E9024` | —       | the or-pattern is built                                                |
 | `E9018` | —       | the `as` binding is built                                              |
@@ -746,6 +745,7 @@ name now is the prelude rule (`E2061`), which is about the name rather than abou
 | `E9031` | —       | a branch of several statements is a block expression, and it is built  |
 | `E9032` | —       | the binding head in an `if` expression is built                        |
 | `E9025` | —       | `for mut` is built; what it may walk is E3163 and E3164                |
+| `E9110` | —       | the named rest in a list pattern is built                              |
 | `E9065` | —       | as above, on the value side: the marker rides in the type              |
 | `E9017` | —       | the fixed-size array is built; its length is part of its type          |
 | `E9019` | —       | the interpolating command literal is built; it splices into argv       |

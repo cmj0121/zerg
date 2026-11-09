@@ -780,7 +780,6 @@ asm-operand ::= 'in' '(' str-lit ')' expr | 'out' '(' str-lit ')' lvalue
 | 4     | `E9067` | 用 `map[K, V](…)` 當建構子 —— 空 map 是字面值 `{:}`                                      |
 | 5     | `E9034` | **closure** 參數的預設值                                                                 |
 | 6     | `E9076` | variant payload 裡的子樣式 —— `L(Some(v))`、`L(0)`                                       |
-| 6     | `E9110` | list 樣式裡**具名**的 rest —— `[a, ..rest]`;單獨的 `..` 已建好                           |
 | 7     | `E9075` | 泛型別名 `type X[T] = …`                                                                 |
 | 7     | `E9038` | 對內建型別的 `impl`                                                                      |
 | 7     | `E9046` | `alignof[T]`                                                                             |

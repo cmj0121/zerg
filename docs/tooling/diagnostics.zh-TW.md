@@ -507,7 +507,6 @@ seed 全程維持句子比對:代碼是語言的契約,而 seed 是建置正式�
 | `E9106` | module `…` 宣告了函式 `…`,而模組的函式在這裡不是一個值                                                |
 | `E9107` | … 上的方法 `…` —— `display`、`debug`、`format`;channel 上的 `next`;`for` 走得到的東西上的 `iter`      |
 | `E9108` | `del …` 用在擁有值（struct/list/map）上 —— 提早釋放,而 release 是 scope 退出時的 unwind               |
-| `E9110` | list pattern 裡具名的 rest                                                                            |
 | `E9111` | 透過 import 取得的陣列長度                                                                            |
 | `E9112` | 陣列的方法 `…`                                                                                        |
 | `E9117` | array 的切片——它的長度是型別的一部分                                                                  |
@@ -684,7 +683,7 @@ composite 都有了，`print xs` 與 `xs.display()` 也都在用；只剩走 `st
 | `E9007` | `E2077` | 三種項目形式都有分支;statement 不是其中任何一種          |
 | `E9016` | —       | tuple pattern 已經建好了                                 |
 | `E9006` | —       | 關聯值已經建好了                                         |
-| `E9023` | —       | list pattern 已經建好了,具名的 rest 是 E9110             |
+| `E9023` | —       | list pattern 已經建好了                                  |
 | `E9026` | —       | struct pattern 已經建好了                                |
 | `E9024` | —       | or-pattern 已經建好了                                    |
 | `E9018` | —       | `as` 綁定已經建好了                                      |
@@ -693,6 +692,7 @@ composite 都有了，`print xs` 與 `xs.display()` 也都在用；只剩走 `st
 | `E9031` | —       | 多個語句的分支就是區塊運算式,已經建好了                  |
 | `E9032` | —       | `if` 運算式裡的繫結頭已經建好了                          |
 | `E9025` | —       | `for mut` 已經建好;它能走訪什麼是 E3163 與 E3164         |
+| `E9110` | —       | list pattern 裡具名的 rest 已經建好                      |
 | `E9065` | —       | 同上,值那一側:標記是坐在型別裡的                         |
 | `E9017` | —       | 定長陣列已經建好了,它的長度是型別的一部分                |
 | `E9019` | —       | 內插的命令字面量建好了,它接進 argv                       |

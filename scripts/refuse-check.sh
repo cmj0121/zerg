@@ -2541,18 +2541,6 @@ fn main() {
 }
 EOF
 
-# THE LIST PATTERN IS BUILT, and the named rest is the half that is not: `..rest` binds a fresh
-# list, and a `match` arm is an expression with nowhere to declare the temporary that would own
-# it — so every use of the name would allocate another and release none.
-expect "$ZERG" a-named-rest-in-a-list-pattern E9110 <<'EOF'
-fn main() {
-	print match [1, 2, 3] {
-		[a, ..rest] => a
-		[..] => 0
-	}
-}
-EOF
-
 expect "$ZERG" a-list-pattern-on-a-scalar E4084 <<'EOF'
 fn main() {
 	print match 1 {

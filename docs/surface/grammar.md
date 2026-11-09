@@ -914,7 +914,6 @@ production, not the one that first mentions it.
 | 4     | `E9067` | `map[K, V](…)` as a constructor — an empty map is the literal `{:}`                     |
 | 5     | `E9034` | a default on a **closure** parameter                                                    |
 | 6     | `E9076` | a sub-pattern inside a variant payload — `L(Some(v))`, `L(0)`                           |
-| 6     | `E9110` | a **named** rest in a list pattern — `[a, ..rest]`; the bare `..` is built              |
 | 7     | `E9075` | a generic `type X[T] = …` alias                                                         |
 | 7     | `E9038` | an `impl` on a built-in type                                                            |
 | 7     | `E9046` | `alignof[T]`                                                                            |

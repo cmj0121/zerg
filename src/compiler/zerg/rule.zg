@@ -642,7 +642,6 @@ pub enum Rule {
 	# every exit unwinds to a mark. The channel case next door (9066) is the same absence read
 	# from the other side, and both retire when a release can be taken out of the middle.
 	NotYetDelOwning = 9108
-	NotYetListPatternRestBinding = 9110
 	NotYetArrayLenImported = 9111
 	NotYetArrayMethod = 9112
 

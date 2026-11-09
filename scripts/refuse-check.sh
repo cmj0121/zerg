@@ -4407,7 +4407,7 @@ fn main() {
 }
 EOF
 
-expect "$ZERG" a-reassignment-as-a-match-arm-body E9041 'a reassignment in an arm' <<'EOF'
+expect "$ZERG" a-reassignment-as-a-match-arm-body E2092 'a reassignment is a statement' <<'EOF'
 fn main() {
 	mut y := 0
 	match 1 {
@@ -4418,7 +4418,7 @@ fn main() {
 }
 EOF
 
-expect "$ZERG" a-send-as-a-match-arm-body E9041 'a send in an arm' <<'EOF'
+expect "$ZERG" a-send-as-a-match-arm-body E2092 'a send is a statement' <<'EOF'
 fn main() {
 	ch := chan[int](1)
 	match 1 {

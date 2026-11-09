@@ -126,7 +126,7 @@ that fits, and yields its result. An arm's body is an **expression** (`GRAMMAR#m
 is one** — so `pattern => { … }` holds several statements and still yields, its value being the block's
 last statement's. What an arm's whole body may **not** be is a statement, because there the arm has
 nothing left to yield: `1 => print "one"` is _E2073 `print` is a statement, and an expression
-is wanted here_ (a `return` in an arm is the same refusal), and a reassignment or a send is _E9041_, which
+is wanted here_ (a `return` in an arm is the same refusal), and a reassignment or a send is _E2092_, which
 names which of the two it found. Brace it and the arm has a block, which yields.
 Every arm yields the **same type** (_E3021 a `match` answers ONE type, and its arms give … and …_), so a
 `match` is a value usable at a `:=`, a `return`, or an argument — arms that yield `nil` read as a plain

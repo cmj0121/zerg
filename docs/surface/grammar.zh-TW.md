@@ -765,8 +765,8 @@ asm-operand ::= 'in' '(' str-lit ')' expr | 'out' '(' str-lit ')' lvalue
 
 以下每個形式都是 **[not yet]**:文法定義了它,`zerg` **以它自己的名字**拒絕它,沒有任何用到它的程式會被編譯成
 別的東西。這份清單不是散文 —— `scripts/refuse-check.sh` 每一列都有對應案例,而 **Code** 欄就是該列被釘住的那個
-拒絕——把 range 當值是 `E9077`、泛型別名 `type X[T] = …` 是 `E9075`、body 是 reassignment 或 send 的 `match` arm
-是 `E9041`——所以一個形式若悄悄開始能動、或悄悄換了失敗方式,gate 就會擋下來。
+拒絕——把 range 當值是 `E9077`、泛型別名 `type X[T] = …` 是 `E9075`、`for mut` 迴圈綁定是 `E9025`——
+所以一個形式若悄悄開始能動、或悄悄換了失敗方式,gate 就會擋下來。
 
 **Group** 欄用的是本章自己的編號（見上）——導出該 production 的那一節，而不是最早提到它的那一節。
 
@@ -779,7 +779,6 @@ asm-operand ::= 'in' '(' str-lit ')' expr | 'out' '(' str-lit ')' lvalue
 | 4     | `E2035` | 後面沒有呼叫的後綴型別引數 —— `map[str, int]`、`f[int]`                                  |
 | 4     | `E9067` | 用 `map[K, V](…)` 當建構子 —— 空 map 是字面值 `{:}`                                      |
 | 5     | `E9034` | **closure** 參數的預設值                                                                 |
-| 6     | `E9041` | body 是 reassignment 或 send 的 `match` arm —— 那些需要 block body                       |
 | 6     | `E9025` | `for mut v in …` —— 把每個被編輯的元素寫回去的迴圈綁定                                   |
 | 6     | `E9032` | 帶綁定頭、或分支超過一個語句的 `if` **運算式**                                           |
 | 6     | `E9076` | variant payload 裡的子樣式 —— `L(Some(v))`、`L(0)`                                       |

@@ -179,6 +179,7 @@ seed 全程維持句子比對:代碼是語言的契約,而 seed 是建置正式�
 | `E2089` | inherent `impl` 裡的 `fn This.…`,那裡由 body 決定                                                     |
 | `E2090` | `mut fn This.…`——associated fn 沒有 receiver 可改                                                     |
 | `E2091` | `fn This.…` 的 body 讀了 `this`                                                                       |
+| `E2092` | … 是 statement,而 match arm 的 body 是 expression                                                     |
 | `E3001` | `…` 不是 module `…` 的公開成員                                                                        |
 | `E3002` | `…` 不是一個位置,而賦值需要一個                                                                       |
 | `E3003` | 不能對 `…` 賦值:它是 module `const`,而常數永遠不被寫入                                                |
@@ -479,7 +480,6 @@ seed 全程維持句子比對:代碼是語言的契約,而 seed 是建置正式�
 | `E9032` | `if` 運算式裡的繫結頭                                                                                 |
 | `E9034` | closure 參數上的預設值                                                                                |
 | `E9038` | 標在內建容器目標上的 `impl`                                                                           |
-| `E9041` | match arm 的 body 是 expression,而這個是 statement                                                    |
 | `E9042` | 對非純量做 `type … = …`                                                                               |
 | `E9043` | 跳出 `guard` block                                                                                    |
 | `E9046` | 編譯期內建 `…[T]`                                                                                     |
@@ -681,6 +681,7 @@ composite 都有了，`print xs` 與 `xs.display()` 也都在用；只剩走 `st
 | `E9040` | `E2074` | 每個推導得出的運算式都有歸屬或自己的代碼                 |
 | `E9082` | `E4077` | 只有在兩個檔案字面上就是同一個 module 時才到得了         |
 | `E9098` | `E4078` | 所有呼叫形狀的東西都更早離開了                           |
+| `E9041` | `E2092` | `GRAMMAR#match-arm` 以 `expr` 結尾,statement 不是 expr   |
 | `E9007` | `E2077` | 三種項目形式都有分支;statement 不是其中任何一種          |
 | `E9016` | —       | tuple pattern 已經建好了                                 |
 | `E9006` | —       | 關聯值已經建好了                                         |

@@ -455,7 +455,7 @@ treesitter:                     # the tree-sitter grammar reads every Zerg file 
 	# TWO DIRECTORIES ARE EXCLUDED BY NAME, and both for the same reason: they deliberately
 	# hold what this compiler will not read. `counterexamples` is programs GRAMMAR does not
 	# derive. `conformance` holds forms refused BY NAME — its `g04_expressions` is `E9010`,
-	# `g06_control_flow` is `E9025`, `g07_types` is `E2011` — and a grammar that read them
+	# `g07_types` is `E2011` — and a grammar that read them
 	# would be the defect. The gate's own sentence is "the grammar cannot read files the
 	# compiler CAN", so a file the compiler cannot read is outside the claim.
 	#

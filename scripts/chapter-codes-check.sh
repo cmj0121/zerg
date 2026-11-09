@@ -106,8 +106,12 @@ for gsrc in "$GRAMMAR_DOC" "$GRAMMAR_DOC_ZH"; do
 	awk '/^\| Group \| Code/ {intable = 1; next} intable && !/^\|/ {intable = 0} intable' "$gsrc" |
 		grep -oE '^\| *[0-9]+ *\| *`E[0-9]{4}`' | grep -oE 'E[0-9]{4}' | sort -u >"$tmp/rows"
 
+	# THE FLOOR IS A FLOOR UNDER THE EXTRACTION, not a count of the table. The table is MEANT to
+	# shrink — a row leaves the day its form is built — so the floor sits well under it and only
+	# says the awk still finds the table at all; a floor at the table's size fails the commit that
+	# builds the next form.
 	rows=$(grep -c . "$tmp/rows" || true)
-	if [ "$rows" -lt "${GRAMMAR_ROWS_MIN:-15}" ]; then
+	if [ "$rows" -lt "${GRAMMAR_ROWS_MIN:-5}" ]; then
 		echo "STALE     only $rows rows were read from $gsrc — the table moved and this stopped reading it" >&2
 		fail=1
 		continue

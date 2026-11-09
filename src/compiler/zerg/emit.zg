@@ -209,7 +209,11 @@ pub struct Emitter {
 	# writes `for i in 0..n` needs no such type — the loop is lowered to its bounds — so the
 	# typedef is emitted for a program that binds, passes or returns one.
 	pub used_range: bool
-	pub ref_names: list[str]
+	# ref_rows are the environment ROWS that hold an address rather than a value — a `mut &`
+	# parameter — so a read of one dereferences it. A row and not a name: a body that declares
+	# its own binding of the same name in a nested block holds a value, and asking by name
+	# dereferenced that one too, which reached cc as an indirection through an integer.
+	pub ref_rows: list[int]
 	pub pr_fn: list[str]
 
 	# pr_mod is the MODULE each parameter row belongs to, parallel to pr_fn — the same fact
@@ -2326,7 +2330,7 @@ fn c_reset_env(mut &em: Emitter) {
 	em.loop_mark = ""
 	em.force_mark = ""
 	em.fn_mark_used = false
-	em.ref_names = []
+	em.ref_rows = []
 
 	# a module constant is a global: in scope everywhere, so every function body starts
 	# with them already bound
@@ -5440,10 +5444,11 @@ fn c_param_row_in(mut &em: Emitter, fname: str, idx: int, mod: str, path: str) -
 }
 
 fn c_is_ref_name(mut &em: Emitter, name: str) -> bool {
-	mut i := 0
-	for i < em.ref_names.len() {
-		return true if em.ref_names[i] == name
-		i = i + 1
+	row := c_live_idx(em, name)
+	return false if row < 0
+
+	for r in em.ref_rows {
+		return true if r == row
 	}
 	return false
 }
@@ -15087,7 +15092,7 @@ pub struct DefAt {
 	pub sub: Subst
 	pub open: list[int]
 	pub cur: int
-	pub refs: list[str]
+	pub refs: list[int]
 }
 
 # c_default_enter enters the default of parameter idx of `key`, with `prior` the C values of
@@ -15109,7 +15114,7 @@ fn c_default_enter(mut &em: Emitter, key: str, idx: int, base: int, prior: list[
 pub fn c_default_bind(mut &em: Emitter, name: str, t: ast.Ty, is_ref: bool, cval: str) {
 	c_env_row(em, name, t, cval, false, false)
 	if is_ref {
-		em.ref_names.append(name)
+		em.ref_rows.append(em.env_names.len() - 1)
 	}
 }
 
@@ -15125,7 +15130,7 @@ pub fn c_default_enter_at(mut &em: Emitter, path: str, line: int, col: int) -> D
 	c_mark(em, line, col)
 	em.sub = c_nosub()
 	em.open_scopes = [0]
-	em.ref_names = []
+	em.ref_rows = []
 	c_scope_open(em)
 	return saved
 }
@@ -15133,7 +15138,7 @@ pub fn c_default_enter_at(mut &em: Emitter, path: str, line: int, col: int) -> D
 # c_default_stay is a DefAt of the state as it stands, so a c_default_leave of it changes
 # nothing — what a written argument takes where a default would have entered its own file.
 fn c_default_stay(mut &em: Emitter) -> DefAt {
-	return DefAt(em.at_path, em.at_line, em.at_col, em.at_end_line, em.at_end_col, em.sub, em.open_scopes, em.scope_cur, em.ref_names)
+	return DefAt(em.at_path, em.at_line, em.at_col, em.at_end_line, em.at_end_col, em.sub, em.open_scopes, em.scope_cur, em.ref_rows)
 }
 
 pub fn c_default_leave(mut &em: Emitter, saved: DefAt) {
@@ -15142,7 +15147,7 @@ pub fn c_default_leave(mut &em: Emitter, saved: DefAt) {
 	em.sub = saved.sub
 	em.open_scopes = saved.open
 	em.scope_cur = saved.cur
-	em.ref_names = saved.refs
+	em.ref_rows = saved.refs
 }
 
 # c_default_arg renders `d`, the default of parameter i, which a call left off the end.
@@ -19869,7 +19874,7 @@ fn c_lambda(mut &em: Emitter, ps: list[ast.Param], has_ret: bool, ret: ast.Ty, b
 	saved_cur := em.scope_cur
 	saved_rel_cnames := em.rel_cnames
 	saved_rel_fns := em.rel_fns
-	saved_refs := em.ref_names
+	saved_refs := em.ref_rows
 
 	# and the freeze stack: c_reset_env clears it for the lambda's own body — a capture is
 	# a copy, so no enclosing loop's collection is reachable from inside — and the loop the
@@ -19897,7 +19902,7 @@ fn c_lambda(mut &em: Emitter, ps: list[ast.Param], has_ret: bool, ret: ast.Ty, b
 	em.scope_cur = saved_cur
 	em.rel_cnames = saved_rel_cnames
 	em.rel_fns = saved_rel_fns
-	em.ref_names = saved_refs
+	em.ref_rows = saved_refs
 	em.frz_idxs = saved_frz
 	em.frz_paths = saved_frz_paths
 	em.frz_roots = saved_frz_roots
@@ -24674,7 +24679,7 @@ fn c_fn(mut &em: Emitter, fn_d: ast.FnDecl) -> str {
 				pdefer = pdefer + c_pend_drop(em, pm.ty, pc, "    ")
 			}
 			if pm.is_ref {
-				em.ref_names.append(pm.name)
+				em.ref_rows.append(c_live_idx(em, pm.name))
 				sig = sig + c_type(pm.ty) + "* " + pc
 			} else {
 				sig = sig + c_type(pm.ty) + " " + pc

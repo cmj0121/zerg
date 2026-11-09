@@ -573,7 +573,6 @@ pub enum Rule {
 	NotYetForMutBinding = 9025
 	NotYetAssocTypeProjection = 9028
 	NotYetValueGenericParam = 9029
-	NotYetIfExprBindingHead = 9032
 	NotYetClosureParamDefault = 9034
 	NotYetImplTypeArgument = 9038
 	NotYetTypedefNonScalar = 9042

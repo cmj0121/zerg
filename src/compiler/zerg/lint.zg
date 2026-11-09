@@ -1398,6 +1398,7 @@ fn walk_expr(e: ast.Expr, mut &ids: list[str], mut &calls: list[str], mut &ns: l
 		Expr.EFmt(x, _, _) => walk_expr(x, ids, calls, ns)
 		Expr.EIf(cond, then_e, else_e) => walk_three(cond, then_e, else_e, ids, calls, ns)
 		Expr.EMatch(scrut, arms) => walk_match(scrut, arms, ids, calls, ns)
+		Expr.EIfLet(nm, v, a, b, l, c) => walk_expr(ast.iflet_shape(nm, v, a, b, l, c), ids, calls, ns)
 		Expr.ERange(lo, hi, _) => walk_pair(lo, hi, ids, calls, ns)
 		Expr.ETuple(elems) => walk_all(elems, ids, calls, ns)
 		Expr.EMapLit(ks, vs) => walk_two_lists(ks, vs, ids, calls, ns)

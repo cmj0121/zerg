@@ -1690,21 +1690,33 @@ fn c_is_fieldref(e: ast.Expr) -> bool {
 # so this is chk_fits and not the adoption question: a literal branch adopts nothing from its
 # sibling, exactly as one match arm adopts nothing from the next.
 pub fn chk_branch_types(mut &em: emit.Emitter, then_e: ast.Expr, else_e: ast.Expr) {
-	want := emit.c_infer(em, then_e)
-	got := emit.c_infer(em, else_e)
+	chk_branch_tys(em, emit.c_infer(em, then_e), emit.c_infer(em, else_e))
+}
 
-	return if emit.c_is_unknown(want) or emit.c_is_unknown(got)
-	return if ast.ty_eq(want, ast.Ty.TVoid) or ast.ty_eq(got, ast.Ty.TVoid)
+# chk_branch_tys is the rule chk_branch_types holds, on the two branches' TYPES, and it answers
+# whether it reported. It takes types because an if-let expression's then-branch is typed with
+# its binding in scope, which only the caller holding it can do.
+pub fn chk_branch_tys(mut &em: emit.Emitter, want: ast.Ty, got: ast.Ty) -> bool {
+	msg := chk_branch_clash(em, want, got)
+	return false if msg == ""
+
+	chk_at(em, rule.Rule.IfBranchTypes, msg)
+	return true
+}
+
+fn chk_branch_clash(mut &em: emit.Emitter, want: ast.Ty, got: ast.Ty) -> str {
+	return "" if emit.c_is_unknown(want) or emit.c_is_unknown(got)
+	return "" if ast.ty_eq(want, ast.Ty.TVoid) or ast.ty_eq(got, ast.Ty.TVoid)
 
 	# A `nil` BRANCH HAS NO TYPE TO DISAGREE WITH. It is one of the five typeless forms, so
 	# `x: int? = if c { 1 } else { nil }` is a carrier taking a value on one side and absence
 	# on the other — two spellings of one `int?` and not two answers. Every OTHER branch does
 	# bring its type, a literal included: a branch is not a typed position for its sibling, the
 	# same way one match arm is not one for the next.
-	return if ast.ty_eq(want, ast.Ty.TNil) or ast.ty_eq(got, ast.Ty.TNil)
-	return if chk_fits(em, want, got) or chk_fits(em, got, want)
+	return "" if ast.ty_eq(want, ast.Ty.TNil) or ast.ty_eq(got, ast.Ty.TNil)
+	return "" if chk_fits(em, want, got) or chk_fits(em, got, want)
 
-	chk_at(em, rule.Rule.IfBranchTypes, f"an `if` expression answers ONE type, and its branches give {ast.ty_name(want)} and {ast.ty_name(got)}")
+	return f"an `if` expression answers ONE type, and its branches give {ast.ty_name(want)} and {ast.ty_name(got)}"
 }
 
 pub fn chk_arm_types(mut &em: emit.Emitter, arms: list[ast.Arm], st: ast.Ty) {

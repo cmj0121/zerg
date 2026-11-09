@@ -500,6 +500,22 @@ chan[int]() }`——或任何不是字面值、模組常數，或它們之間算
   `test-data/codegen/if_expr_block_branch` 先綁定再 return，讓 `make oracle` 能拿其餘部分比對兩個編譯器；
   `test-data/behaviour/if-expr` 則 return 一個，只有 `zerg` 執行它。
 
+- **`for mut` 走訪它無法寫回的東西會被接受。** `zerg` 把迴圈變數綁到被走訪 collection 的槽位，所以它
+  問一次寫入需要的東西：這個 scope 可寫的 collection（不可變的 `xs` 是 `E3006`）、以及凍結拼得出的 place
+  （呼叫結果是 `E3164`）。種子兩者都建起來，改了一個沒有人讀的值。
+
+  這對 bootstrap 不花任何代價：編譯器自己的原始碼沒有用 `for mut` 走訪不可變的 collection 或呼叫結果。
+  `scripts/reject-check.sh` 的 `for-mut-over-an-immutable-list` 與 `for-mut-over-a-call-result` 帶著
+  `seed-gap` 標記。
+
+- **`for mut` 會丟掉種子沒寫回的編輯，而且什麼都不說。** 種子綁一份 copy，在一輪跑到結尾時寫回，
+  而且只對以名字或欄位指名的 list 這樣做。所以當這一輪以 `continue` 或 `break` 離開、被走訪的是陣列、
+  或經由索引（`g[0]`）到達時，編輯都會被丟掉：每一種都印出迴圈之前的值，而綁定槽位本身的 `zerg`
+  印出編輯後的值。
+
+  這對 bootstrap 不花任何代價：編譯器自己的原始碼沒有寫任何 `for mut`。`test-data/codegen/for_mut`
+  放兩者一致的形狀給 `make oracle`；`test-data/codegen/for_mut_more` 放這些，只由 `zerg` 執行。
+
 ## 修改種子時
 
 讓一項改動可以放心進行的不變量：**自舉原始碼所產生的 C 不得變動**。若那是真正的死碼移除，前後產生的 C 會逐位元組

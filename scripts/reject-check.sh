@@ -11028,6 +11028,38 @@ fn main() {
 }
 EOF
 
+# A PATTERN BINDS EACH NAME ONCE: the body reads a name through one substitution and types it
+# from one registration, and with two of each they disagreed. The two names have DIFFERENT
+# types, and each shape is one way a pattern holds a name twice — two elements, an element and
+# a named rest, an `as` over what binds it — so a rule that missed one leaves its case red.
+reject a-tuple-pattern-binding-one-name-twice E4126 'binds `a` twice' <<'EOF'
+fn main() {
+	x := match (1, "s") {
+		(a, a) => a
+	}
+	print x
+}
+EOF
+
+reject a-list-pattern-whose-rest-has-an-elements-name E4126 'binds `r` twice' <<'EOF'
+fn main() {
+	x := match [1, 2] {
+		[r, ..r] => r
+		_ => 0
+	}
+	print x
+}
+EOF
+
+reject an-as-name-the-pattern-under-it-binds E4126 'binds `a` twice' <<'EOF'
+fn main() {
+	x := match (1, "s") {
+		(a, b) as a => b
+	}
+	print x
+}
+EOF
+
 reject a-constructor-pattern-on-an-either-that-is-neither-side E3132 <<'EOF'
 fn g() -> Result[int] {
 	return Left(1)

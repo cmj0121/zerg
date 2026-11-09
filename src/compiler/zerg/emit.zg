@@ -15940,6 +15940,15 @@ fn c_match(mut &em: Emitter, scrut: ast.Expr, arms: list[ast.Arm], sb: Subst) ->
 fn c_check_arm_pats(mut &em: Emitter, arms: list[ast.Arm], st: ast.Ty) {
 	check.chk_arm_types(em, arms, st)
 
+	# A PATTERN BINDS EACH NAME ONCE. The arm's body reads the name through one substitution
+	# and types it from one registration, and with two of either they disagreed: `(a, a)` over
+	# an `(int, str)` read the `int` and typed the `str`, and cc reported the C. It is asked
+	# before the subject's type because it is about the pattern alone.
+	for a in arms {
+		dup := c_pat_dup_name(a.pat)
+		raise c_diag(em, rule.Rule.PatternBindsTwice, f"a pattern binds each name once, and this one binds `{dup}` twice") if dup != ""
+	}
+
 	# a subject inference could not name has nothing to check the pattern against; guessing
 	# would turn a typing gap into a refusal of a working program
 	return if c_is_unknown(st) or c_is_either(st)
@@ -16775,6 +16784,48 @@ fn c_pat_binds(pt: ast.Pat) -> list[str] {
 	}
 
 	# a named rest is a name the list pattern itself binds, beside its elements' own
+	rn := c_pat_list_rest_name(pt)
+	if rn != "" {
+		out.append(rn)
+	}
+	return out
+}
+
+# c_pat_dup_name is a name the pattern binds twice, or "". An or-pattern binds ITS names once
+# per side, so one side stands for it: the sides binding the same names is E4088's to ask.
+fn c_pat_dup_name(pt: ast.Pat) -> str {
+	names := c_pat_names_once(pt)
+	mut i := 1
+	for i < names.len() {
+		mut j := 0
+		for j < i {
+			return names[i] if names[j] == names[i]
+			j = j + 1
+		}
+		i = i + 1
+	}
+	return ""
+}
+
+# c_pat_names_once — every name a pattern binds, an `as` name and a named rest included, with
+# an or-pattern counted by its first side.
+fn c_pat_names_once(pt: ast.Pat) -> list[str] {
+	alts := c_pat_or_alts(pt)
+	return c_pat_names_once(alts[0]) if alts.len() > 0
+
+	bn := c_pat_bind_name(pt)
+	return [bn] if bn != ""
+
+	mut out: list[str] = []
+	an := c_pat_as_name(pt)
+	if an != "" {
+		out.append(an)
+	}
+	for sub in c_pat_children(pt) {
+		for n in c_pat_names_once(sub) {
+			out.append(n)
+		}
+	}
 	rn := c_pat_list_rest_name(pt)
 	if rn != "" {
 		out.append(rn)

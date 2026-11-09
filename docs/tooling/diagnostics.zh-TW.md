@@ -458,6 +458,7 @@ seed 全程維持句子比對:代碼是語言的契約,而 seed 是建置正式�
 | `E4123` | `ffi.symbol(…)` 寫在沒有 foreign binding 的地方                                                       |
 | `E4124` | `#[derive(Encode)]` / `#[derive(Decode)]` 遇到沒有列、或無從委派的欄位                                |
 | `E4125` | 沒有 import `codec` 的檔案裡的 `#[derive(Encode)]` / `#[derive(Decode)]`                              |
+| `E4126` | 一個 pattern 每個名字只綁一次，而這個把 `…` 綁了兩次                                                  |
 | `E5001` | 這個進入點檔案沒有宣告 `fn main`                                                                      |
 | `E5002` | 無法解析 import `…`,以及它到哪裡找過                                                                  |
 | `E5007` | `…` 是這次建置編進來、而本 module 沒有 import 的 module                                               |

@@ -773,7 +773,7 @@ asm-operand ::= 'in' '(' str-lit ')' expr | 'out' '(' str-lit ')' lvalue
 | Group | Code    | 形式                                                                                     |
 | ----- | ------- | ---------------------------------------------------------------------------------------- |
 | 4     | `E9009` | optional 上的方法呼叫 —— `p?.m(…)`                                                       |
-| 4     | `E2071` | 沒有**下界**的 range —— `xs[..n]`,以及與它同形的 list 樣式 `[a, ..rest]`                 |
+| 4     | `E2071` | 沒有**下界**的 range —— `xs[..n]`                                                        |
 | 4     | `E9050` | 需要界限處的**開放** range —— `xs[a..]`、`for i in n..`                                  |
 | 4     | `E9077` | 把**邊界無法比較的** range 當值 —— `"a".."z"`                                            |
 | 4     | `E2035` | 後面沒有呼叫的後綴型別引數 —— `map[str, int]`、`f[int]`                                  |
@@ -782,6 +782,8 @@ asm-operand ::= 'in' '(' str-lit ')' expr | 'out' '(' str-lit ')' lvalue
 | 6     | `E9041` | body 是 reassignment 或 send 的 `match` arm —— 那些需要 block body                       |
 | 6     | `E9025` | `for mut v in …` —— 把每個被編輯的元素寫回去的迴圈綁定                                   |
 | 6     | `E9032` | 帶綁定頭、或分支超過一個語句的 `if` **運算式**                                           |
+| 6     | `E9076` | variant payload 裡的子樣式 —— `L(Some(v))`、`L(0)`                                       |
+| 6     | `E9110` | list 樣式裡**具名**的 rest —— `[a, ..rest]`;單獨的 `..` 已建好                           |
 | 7     | `E9075` | 泛型別名 `type X[T] = …`                                                                 |
 | 7     | `E9038` | 對內建型別的 `impl`                                                                      |
 | 7     | `E9046` | `alignof[T]`                                                                             |

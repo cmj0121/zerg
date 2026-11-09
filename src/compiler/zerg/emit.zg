@@ -209,7 +209,12 @@ pub struct Emitter {
 	# writes `for i in 0..n` needs no such type — the loop is lowered to its bounds — so the
 	# typedef is emitted for a program that binds, passes or returns one.
 	pub used_range: bool
-	pub ref_names: list[str]
+
+	# ref_rows are the environment ROWS that hold an address rather than a value — a `mut &`
+	# parameter — so a read of one dereferences it. A row and not a name: a body that declares
+	# its own binding of the same name in a nested block holds a value, and asking by name
+	# dereferenced that one too, which reached cc as an indirection through an integer.
+	pub ref_rows: list[int]
 	pub pr_fn: list[str]
 
 	# pr_mod is the MODULE each parameter row belongs to, parallel to pr_fn — the same fact
@@ -2326,7 +2331,7 @@ fn c_reset_env(mut &em: Emitter) {
 	em.loop_mark = ""
 	em.force_mark = ""
 	em.fn_mark_used = false
-	em.ref_names = []
+	em.ref_rows = []
 
 	# a module constant is a global: in scope everywhere, so every function body starts
 	# with them already bound
@@ -2904,11 +2909,11 @@ fn c_let_at(mut &em: Emitter, name: str, ty: ast.Ty, has_type: bool, is_mut: boo
 	return out
 }
 
-fn c_forin_at(mut &em: Emitter, var: str, iter: ast.Expr, body: list[ast.Stmt], l: int, c: int, ind: str) -> str {
-	return c_forin(em, var, iter, body, ind) if not em.want_index
+fn c_forin_at(mut &em: Emitter, var: str, is_mut: bool, iter: ast.Expr, body: list[ast.Stmt], l: int, c: int, ind: str) -> str {
+	return c_forin_any(em, var, is_mut, iter, body, ind) if not em.want_index
 
 	start := em.env_names.len()
-	out := c_forin(em, var, iter, body, ind)
+	out := c_forin_any(em, var, is_mut, iter, body, ind)
 	c_nx_bind_new(em, start, var, l, c, true)
 	return out
 }
@@ -5440,10 +5445,11 @@ fn c_param_row_in(mut &em: Emitter, fname: str, idx: int, mod: str, path: str) -
 }
 
 fn c_is_ref_name(mut &em: Emitter, name: str) -> bool {
-	mut i := 0
-	for i < em.ref_names.len() {
-		return true if em.ref_names[i] == name
-		i = i + 1
+	row := c_live_idx(em, name)
+	return false if row < 0
+
+	for r in em.ref_rows {
+		return true if r == row
 	}
 	return false
 }
@@ -9849,7 +9855,7 @@ fn c_guard_no_jump(mut &em: Emitter, body: list[ast.Stmt], in_loop: bool) {
 			Stmt.SIf(_, then_b, _, else_b) => c_guard_no_jump_two(em, then_b, else_b, in_loop)
 			Stmt.SIfLet(_, _, then_b, _, else_b, _, _) => c_guard_no_jump_two(em, then_b, else_b, in_loop)
 			Stmt.SFor(_, _, body_b) => c_guard_no_jump(em, body_b, true)
-			Stmt.SForIn(_, _, body_b, _, _) => c_guard_no_jump(em, body_b, true)
+			Stmt.SForIn(_, _, _, body_b, _, _) => c_guard_no_jump(em, body_b, true)
 			Stmt.SSelect(arms) => c_guard_no_jump_sel(em, arms, in_loop)
 
 			# and inside a bare block, where a `return` was leaving a `guard` unseen: the
@@ -15087,7 +15093,7 @@ pub struct DefAt {
 	pub sub: Subst
 	pub open: list[int]
 	pub cur: int
-	pub refs: list[str]
+	pub refs: list[int]
 }
 
 # c_default_enter enters the default of parameter idx of `key`, with `prior` the C values of
@@ -15109,7 +15115,7 @@ fn c_default_enter(mut &em: Emitter, key: str, idx: int, base: int, prior: list[
 pub fn c_default_bind(mut &em: Emitter, name: str, t: ast.Ty, is_ref: bool, cval: str) {
 	c_env_row(em, name, t, cval, false, false)
 	if is_ref {
-		em.ref_names.append(name)
+		em.ref_rows.append(em.env_names.len() - 1)
 	}
 }
 
@@ -15125,7 +15131,7 @@ pub fn c_default_enter_at(mut &em: Emitter, path: str, line: int, col: int) -> D
 	c_mark(em, line, col)
 	em.sub = c_nosub()
 	em.open_scopes = [0]
-	em.ref_names = []
+	em.ref_rows = []
 	c_scope_open(em)
 	return saved
 }
@@ -15133,7 +15139,7 @@ pub fn c_default_enter_at(mut &em: Emitter, path: str, line: int, col: int) -> D
 # c_default_stay is a DefAt of the state as it stands, so a c_default_leave of it changes
 # nothing — what a written argument takes where a default would have entered its own file.
 fn c_default_stay(mut &em: Emitter) -> DefAt {
-	return DefAt(em.at_path, em.at_line, em.at_col, em.at_end_line, em.at_end_col, em.sub, em.open_scopes, em.scope_cur, em.ref_names)
+	return DefAt(em.at_path, em.at_line, em.at_col, em.at_end_line, em.at_end_col, em.sub, em.open_scopes, em.scope_cur, em.ref_rows)
 }
 
 pub fn c_default_leave(mut &em: Emitter, saved: DefAt) {
@@ -15142,7 +15148,7 @@ pub fn c_default_leave(mut &em: Emitter, saved: DefAt) {
 	em.sub = saved.sub
 	em.open_scopes = saved.open
 	em.scope_cur = saved.cur
-	em.ref_names = saved.refs
+	em.ref_rows = saved.refs
 }
 
 # c_default_arg renders `d`, the default of parameter i, which a call left off the end.
@@ -17469,7 +17475,7 @@ fn c_stmt(mut &em: Emitter, s: ast.Stmt, ind: str) -> str {
 		Stmt.SIf(cond, then_body, has_else, else_body) => c_if(em, cond, then_body, has_else, else_body, ind)
 		Stmt.SIfLet(name, value, then_body, has_else, else_body, l, c) => c_iflet_at(em, name, value, then_body, has_else, else_body, l, c, ind)
 		Stmt.SFor(has_cond, cond, body) => c_for(em, has_cond, cond, body, ind)
-		Stmt.SForIn(var, iter, body, l, c) => c_forin_at(em, var, iter, body, l, c, ind)
+		Stmt.SForIn(var, im, iter, body, l, c) => c_forin_at(em, var, im, iter, body, l, c, ind)
 		Stmt.SRaise(x, hc, c) => c_raise(em, x, hc, c, ind)
 		Stmt.SAssert(body) => c_assert(em, body, ind)
 		Stmt.SScope(body, is_unsafe) => c_scope(em, body, is_unsafe, ind)
@@ -19869,7 +19875,7 @@ fn c_lambda(mut &em: Emitter, ps: list[ast.Param], has_ret: bool, ret: ast.Ty, b
 	saved_cur := em.scope_cur
 	saved_rel_cnames := em.rel_cnames
 	saved_rel_fns := em.rel_fns
-	saved_refs := em.ref_names
+	saved_refs := em.ref_rows
 
 	# and the freeze stack: c_reset_env clears it for the lambda's own body — a capture is
 	# a copy, so no enclosing loop's collection is reachable from inside — and the loop the
@@ -19897,7 +19903,7 @@ fn c_lambda(mut &em: Emitter, ps: list[ast.Param], has_ret: bool, ret: ast.Ty, b
 	em.scope_cur = saved_cur
 	em.rel_cnames = saved_rel_cnames
 	em.rel_fns = saved_rel_fns
-	em.ref_names = saved_refs
+	em.ref_rows = saved_refs
 	em.frz_idxs = saved_frz
 	em.frz_paths = saved_frz_paths
 	em.frz_roots = saved_frz_roots
@@ -20183,7 +20189,7 @@ fn c_free_stmt(s: ast.Stmt, mut &bound: list[str], mut &out: list[str], mut &cal
 		Stmt.SDestructure(_, _, _, _, _) => c_free_binding(s, bound, out, calls)
 		Stmt.SIf(c, tb, _, eb) => c_free_branch(c, [], tb, eb, bound, out, calls)
 		Stmt.SIfLet(_, v, tb, _, eb, _, _) => c_free_branch(v, ast.stmt_binds(s), tb, eb, bound, out, calls)
-		Stmt.SForIn(_, it, b, _, _) => c_free_branch(it, ast.stmt_binds(s), b, [], bound, out, calls)
+		Stmt.SForIn(_, _, it, b, _, _) => c_free_branch(it, ast.stmt_binds(s), b, [], bound, out, calls)
 		Stmt.SSelect(arms) => c_free_sel(arms, bound, out, calls)
 		Stmt.SForSelect(arms) => c_free_sel(arms, bound, out, calls)
 
@@ -23083,6 +23089,83 @@ fn c_frz_pop(mut &em: Emitter, pushed: bool, iter: ast.Expr) {
 	c_ints_drop_last(em.frz_roots)
 }
 
+# c_forin_any is the two `for … in` forms: the plain one binds a copy, `for mut` the slot.
+fn c_forin_any(mut &em: Emitter, var: str, is_mut: bool, iter: ast.Expr, body: list[ast.Stmt], ind: str) -> str {
+	return c_formut(em, var, iter, body, ind) if is_mut
+
+	return c_forin(em, var, iter, body, ind)
+}
+
+# c_formut lowers `for mut x in xs` (GRAMMAR#for-stmt): `x` IS the element's slot for the
+# length of the round, so every edit — an assignment, a field or an index written through it,
+# a `mut this` method, a `mut &` argument — lands in `xs` as it is made, and leaving the round
+# by any path, a `?` or an abort included, has nothing left to write back.
+#
+# It is a `mut &` parameter in everything but where the address comes from: a row in ref_rows,
+# read and written through a pointer, never given back by this scope. The pointer is fetched
+# afresh at every use through the WRITE accessor, which unshares, so a body that copies `xs`
+# and then edits `x` edits `xs` alone — value semantics hold across the copy.
+#
+# THE FREEZE IS WHAT MAKES THE POINTER SAFE. The walked collection and everything holding it
+# are frozen for the body (c_frz_push), so no append moves the buffer the slot is in; that is
+# why the walked expression must be a place the freeze can spell (E3164), and must be one this
+# scope may write (E3007, the assignment rule, since every round writes through it).
+fn c_formut(mut &em: Emitter, var: str, iter: ast.Expr, body: list[ast.Stmt], ind: str) -> str {
+	ct := c_infer(em, iter)
+	if not c_is_list(ct) and not c_is_arr(ct) {
+		if not c_is_unknown(ct) {
+			check.chk_at(em, rule.Rule.ForMutNoSlots, f"`for mut` binds each element in place, and a {ast.ty_name(ct)} has no slots to bind — walk it with `for … in` and build what changes")
+		}
+		return c_forin(em, var, iter, body, ind)
+	}
+	if check.chk_path_text(iter) == "" {
+		check.chk_at(em, rule.Rule.ForMutNotAPath, f"`for mut` edits the collection it walks, so it walks a place spelled by names, fields and literal indexes, and this `{ast.expr_kind(iter)}` is not one — bind it to a `mut` name first")
+		return c_forin(em, var, iter, body, ind)
+	}
+	check.chk_assignable(em, iter)
+
+	em.used_rt = true
+	tag := strconv.to_string(em.op_n, 10)
+	em.op_n = em.op_n + 1
+	is_list := c_is_list(ct)
+	mut elem := c_arr_elem(ct)
+	if is_list {
+		elem = c_list_elem(ct)
+	}
+
+	et := c_type(elem)
+	hold := "zgt_fh" + tag
+	idx := "zgt_fi" + tag
+	place := c_lvalue(em, iter, c_nosub())
+
+	in2 := ind + "    "
+	mut out := ind + "{\n"
+	mut n := f"zrt_list_len({hold})"
+	mut slot := f"(({et}*)zrt_list_at({hold}, {idx}))"
+	if is_list {
+		out = out + in2 + f"zrt_list *{hold} = &({place});\n"
+	} else {
+		out = out + in2 + f"{c_type(ct)} *{hold} = &({place});\n"
+		n = strconv.to_string(c_arr_len(em, ct), 10)
+		slot = f"(&{hold}->v[{idx}])"
+	}
+	out = out + in2 + f"for (size_t {idx} = 0; {idx} < (size_t){n}; {idx}++) {{\n"
+
+	outer_scope := c_scope_open(em)
+	c_add_var_named(em, var, elem, slot, true, false)
+	em.ref_rows.append(c_live_idx(em, var))
+	keep := em.rel_cnames.len()
+
+	frz := c_frz_push(em, iter)
+	out = out + c_loop_block(em, body, in2 + "    ")
+	c_frz_pop(em, frz, iter)
+
+	c_ints_drop_last(em.ref_rows)
+	c_scope_close(em, outer_scope)
+	c_scope_forget(em, keep)
+	return out + in2 + "}\n" + ind + "}\n"
+}
+
 # c_forin lowers `for v in xs { ... }` to an index loop over the runtime list.
 # c_forchan lowers `for v in ch`. The channel IS the iterator: it yields values until its
 # last sender leaves, and that close is the StopIteration which ends the loop. There is no
@@ -24546,7 +24629,7 @@ fn c_check_loop_jump(mut &em: Emitter, body: list[ast.Stmt], in_loop: bool) {
 			Stmt.SIf(_, then_b, _, else_b) => c_check_loop_jump_two(em, then_b, else_b, in_loop)
 			Stmt.SIfLet(_, _, then_b, _, else_b, _, _) => c_check_loop_jump_two(em, then_b, else_b, in_loop)
 			Stmt.SFor(_, _, body_b) => c_check_loop_jump(em, body_b, true)
-			Stmt.SForIn(_, _, body_b, _, _) => c_check_loop_jump(em, body_b, true)
+			Stmt.SForIn(_, _, _, body_b, _, _) => c_check_loop_jump(em, body_b, true)
 			Stmt.SSelect(arms) => c_check_loop_jump_sel(em, arms, in_loop)
 
 			# A BARE BLOCK DOES NOT MAKE A LOOP, and without this arm the walk never looked
@@ -24674,7 +24757,7 @@ fn c_fn(mut &em: Emitter, fn_d: ast.FnDecl) -> str {
 				pdefer = pdefer + c_pend_drop(em, pm.ty, pc, "    ")
 			}
 			if pm.is_ref {
-				em.ref_names.append(pm.name)
+				em.ref_rows.append(c_live_idx(em, pm.name))
 				sig = sig + c_type(pm.ty) + "* " + pc
 			} else {
 				sig = sig + c_type(pm.ty) + " " + pc
@@ -28074,7 +28157,7 @@ fn c_ren_stmt(r: TyRen, s: ast.Stmt) -> ast.Stmt {
 		Stmt.SExpr(v) => ast.Stmt.SExpr(c_ren_expr(r, v))
 		Stmt.SIf(c, tb, he, eb) => ast.Stmt.SIf(c_ren_expr(r, c), c_ren_block(r, tb), he, c_ren_block(r, eb))
 		Stmt.SFor(hc, c, b) => ast.Stmt.SFor(hc, c_ren_expr(r, c), c_ren_block(r, b))
-		Stmt.SForIn(nm, it, b, l, c) => ast.Stmt.SForIn(nm, c_ren_expr(r, it), c_ren_block(r, b), l, c)
+		Stmt.SForIn(nm, im, it, b, l, c) => ast.Stmt.SForIn(nm, im, c_ren_expr(r, it), c_ren_block(r, b), l, c)
 		Stmt.SForSelect(arms) => ast.Stmt.SForSelect(c_ren_sel_arms(r, arms))
 		Stmt.SRaise(e, hf, cause) => ast.Stmt.SRaise(c_ren_expr(r, e), hf, c_ren_expr(r, cause))
 		Stmt.SDefer(v) => ast.Stmt.SDefer(c_ren_expr(r, v))

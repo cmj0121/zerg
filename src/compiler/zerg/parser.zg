@@ -4211,10 +4211,17 @@ fn parse_for(mut &p: Parser) -> ast.Stmt {
 		return ast.Stmt.SForSelect(parse_sel_arms(p))
 	}
 
-	# `for mut v in xs` binds the element MUTABLY and writes the edit back to its slot
-	# (GRAMMAR#for-stmt). The `mut` was not read here, so it fell into the condition expression
-	# and was reported as whatever that made of it.
-	raise p_diag(p, rule.Rule.NotYetForMutBinding, "NotImplemented: `for mut v in …` — the mutable loop binding writes each edited element back to its slot, which this compiler does not do (GRAMMAR#for-stmt)") if p_at(p, token.Kind.Mut)
+	# `for mut v in xs` binds each element IN PLACE (GRAMMAR#for-stmt): the `mut` is the
+	# binding's, and what it may walk — a collection with slots, named by a place — is the
+	# emitter's question, since only the type says whether there are slots.
+	if p_at(p, token.Kind.Mut) {
+		p_advance(p)
+		mt := cur(p)
+		mname := p_name(p, "a `for mut` loop binding")
+		expect(p, token.Kind.In)
+		miter := parse_expr(p)
+		return ast.Stmt.SForIn(mname, true, miter, parse_block(p), mt.line, mt.col)
+	}
 
 	# for-in: `for name in iterable { ... }`
 	if p_names_here(p, p.pos) and peek_kind(p, 1) == token.Kind.In {
@@ -4222,7 +4229,7 @@ fn parse_for(mut &p: Parser) -> ast.Stmt {
 		vname := p_name(p, "a loop binding")
 		p_advance(p) # 'in'
 		iter := parse_expr(p)
-		return ast.Stmt.SForIn(vname, iter, parse_block(p), vt.line, vt.col)
+		return ast.Stmt.SForIn(vname, false, iter, parse_block(p), vt.line, vt.col)
 	}
 	cond := parse_expr(p)
 	body := parse_block(p)

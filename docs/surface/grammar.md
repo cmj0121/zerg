@@ -898,7 +898,7 @@ Every form below is **[not yet]**: the grammar defines it, `zerg` refuses it **b
 name**, and no program that uses one compiles into something else. This list is not prose —
 `scripts/refuse-check.sh` holds a case for each row, and the **Code** column names the
 refusal each row is pinned by — `E9077` for a range used as a value, `E9075` for a generic
-`type X[T] = …` alias, `E9025` for the `for mut` loop binding — so
+`type X[T] = …` alias, `E9076` for a sub-pattern inside a variant payload — so
 a form that quietly starts working, or quietly starts failing differently, fails the gate.
 
 The **Group** column is this chapter's own numbering, above — the section that derives the
@@ -913,7 +913,6 @@ production, not the one that first mentions it.
 | 4     | `E2035` | postfix type arguments with no call after them — `map[str, int]`, `f[int]`              |
 | 4     | `E9067` | `map[K, V](…)` as a constructor — an empty map is the literal `{:}`                     |
 | 5     | `E9034` | a default on a **closure** parameter                                                    |
-| 6     | `E9025` | `for mut v in …` — the loop binding that writes each edited element back                |
 | 6     | `E9076` | a sub-pattern inside a variant payload — `L(Some(v))`, `L(0)`                           |
 | 6     | `E9110` | a **named** rest in a list pattern — `[a, ..rest]`; the bare `..` is built              |
 | 7     | `E9075` | a generic `type X[T] = …` alias                                                         |

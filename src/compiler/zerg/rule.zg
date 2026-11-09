@@ -341,6 +341,11 @@ pub enum Rule {
 	DeriveSpecEnumAssocFn = 3161
 	ObjWithAssocFn = 3162
 
+	# `for mut` binds a slot in place: what it walks must have slots, and must be a place the
+	# loop can keep writing through, spelled so the freeze can hold it.
+	ForMutNoSlots = 3163
+	ForMutNotAPath = 3164
+
 	# emitting — a form this compiler will not lower
 	LoopKeywordOutsideLoop = 4001
 	FromCauseNotErr = 4002
@@ -570,7 +575,6 @@ pub enum Rule {
 	NotYetDecoratorLayout = 9005
 	NotYetCallee = 9009
 	NotYetImplAssocType = 9015
-	NotYetForMutBinding = 9025
 	NotYetAssocTypeProjection = 9028
 	NotYetValueGenericParam = 9029
 	NotYetClosureParamDefault = 9034

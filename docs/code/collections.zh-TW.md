@@ -159,12 +159,9 @@ elide 成唯讀 by-ref）；要就地改就綁 `mut x`（一個 by-ref，要求 
 _E4020 `==` on a list[N], which compares its N: a N has no `Eq`_。兩邊是同一個型別，而 literal 由它自己的元素定型——
 對 `list[byte]` 寫 `bs == [1, 2]` 是 `E3046`，`xs == []` 是 `E3034`。
 
-> **[not yet]** `for mut x` 走訪一個 collection 對**每一種**元素型別都還沒建、包含 POD：不論 `ys` 裝什麼，
-> `for mut x in ys` 都是 `E9025`，所以下面範例的第二行不是一個程式。
-
 ```text
 for x in xs { total = total + x }         # 讀取
-for mut x in ys { x = x * 2 }             # 就地改——[not yet]，對每一種元素型別都被拒絕
+for mut x in ys { x = x * 2 }             # 就地改
 ```
 
 ## 迭代與變動
@@ -172,8 +169,14 @@ for mut x in ys { x = x * 2 }             # 就地改——[not yet]，對每一
 在 `for … in xs` 內，`xs` 對**結構性變更凍結**——在迴圈裡 append、insert、remove、grow/shrink、或 rebind 它都是
 **compile error**——所以 iterator **永遠不會失效**（無 dangling cursor、無 runtime fail-fast 檢查）。這是一條
 **local** 規則——迴圈知道自己走訪的是哪個 collection——所以**不需要 borrow checker，runtime 也零成本**。就地改
-某個 **元素**（`for mut x`）還是可以：它不會移動 cursor——不過那個綁定本身是 **[not yet]**（見
-[順序與相等性](#順序與相等性)）。
+某個 **元素**（`for mut x`）還是可以：它不會移動 cursor。
+
+`for mut x in ys` 在 `list` 或陣列上把 `x` 綁到這一輪**元素的槽位**：每一個編輯——賦值、經由 `x` 寫入欄位或索引、
+`mut this` 方法、`mut &` 引數——都在發生當下落進 `ys`，所以以 `continue`、`break`、`return`、`?` 或 abort 離開這一輪，
+這一輪已改的都保留。它是一次經由 `ys` 的寫入，所以 `ys` 必須是這個 scope 可寫的（_E3006_）；而上面的凍結就是讓槽位
+不動的東西——所以 `ys` 必須是以名字、欄位與字面索引拼出的 place，和凍結的拼法一樣（呼叫結果或計算出的索引是
+_E3164_）。map、set、`str`、range 與 channel 沒有可綁定的槽位（_E3163_）。value semantics 跨越複製也成立：body 寫了
+`zs = ys` 之後再改 `x`，只改到 `ys`。
 
 這道凍結除了裸名之外也看得見**路徑**,而說「這兩個是同一個 collection」的依據,是它們**被寫成同一個樣子**:
 `for x in p.xs { p.xs.append(v) }` 與 `for x in xs[0] { xs[0].append(v) }` 都是 `E3089`。那是把本地規則往外多讀一
@@ -270,8 +273,8 @@ row := [b'\0'; WIDTH]           # WIDTH 是 top-level const——在裸 := 下�
   > 所以兩個模組各自宣告 `WIDTH` 會變成同一個 key;要分得開靠的是 module identity,而這個編譯器替一次 call
   > 決定它、不替一個長度決定。
 
-- **迭代／derive／slice**——它實作 `Iterator`／`Iterable`（`for x in a`；**`for mut x in a` 是 [not yet]**，對每一
-  種元素型別皆然、包含 POD），並**逐元素** derive：當元素型別 `T` 具備時，陣列才逐元素 derive `Eq`／`Ord`（以及建置後的
+- **迭代／derive／slice**——它實作 `Iterator`／`Iterable`（`for x in a`，以及就地的
+  `for mut x in a`），並**逐元素** derive：當元素型別 `T` 具備時，陣列才逐元素 derive `Eq`／`Ord`（以及建置後的
   `Hash`／`Encode`）——兩個同型別陣列於是逐元素比較（與雜湊）。**沒有**任何一律 auto-derive 的 `Object`；相等性只來自
   元素上的 `derive(Eq)`。`a.slice(p, q)` 意圖產出**唯讀 `list[T]`** view——從陣列橋回 list 家族的 COW 通道——但
   `slice` 這個 **method** 是 **[not yet]**——_E9112 NotImplemented: the array method `slice`_（見 [切片](#切片唯讀子區間)）。

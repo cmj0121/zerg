@@ -439,6 +439,40 @@ fn main() {
 }
 EOF
 
+# `for mut` BINDS A SLOT, so the three things it needs are three rules: slots to bind (a map
+# has keys, not slots), a place the freeze can spell (a call result is no place, and a computed
+# index would move), and a place this scope may write — each round writes through it.
+reject for-mut-over-a-map E3163 'has no slots to bind' <<'EOF'
+fn main() {
+	mut m: map[str, int] = {"a": 1}
+	for mut k in m {
+		print k
+	}
+}
+EOF
+
+reject for-mut-over-a-call-result E3164 'and this `call mk` is not one' seed-gap <<'EOF'
+fn mk() -> list[int] {
+	return [1, 2]
+}
+
+fn main() {
+	for mut x in mk() {
+		x = x + 1
+	}
+}
+EOF
+
+reject for-mut-over-an-immutable-list E3006 'cannot assign to `xs`' seed-gap <<'EOF'
+fn main() {
+	xs := [1, 2]
+	for mut x in xs {
+		x = 0
+	}
+	print xs.len()
+}
+EOF
+
 # `m[k] = v` INSERTS when `k` is new, and whether it is new is a runtime fact — so inside
 # the map's own loop the whole form is refused. The LIST spelling of the same syntax stays
 # legal there (`xs[0] = 9` moves no cursor), which is why the case pins the map.

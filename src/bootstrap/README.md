@@ -650,6 +650,26 @@ byte(N)` and `byte(N * 3)` are compile errors. The seed folds the literal alone:
   can hold the two compilers to the rest of it; `test-data/behaviour/if-expr` returns one, and
   only `zerg` runs it.
 
+- **`for mut` OVER WHAT IT CANNOT WRITE BACK INTO IS ACCEPTED.** `zerg` binds the loop variable
+  to the walked collection's slot, so it asks what a write needs: a collection this scope may
+  write (`E3006` on an immutable `xs`) and a place the freeze can spell (`E3164` on a call
+  result). The seed builds both, editing a value nobody reads.
+
+  It costs the bootstrap nothing: the compiler's own sources walk no immutable collection and no
+  call result with `for mut`. `scripts/reject-check.sh`'s `for-mut-over-an-immutable-list` and
+  `for-mut-over-a-call-result` carry the `seed-gap` marker.
+
+- **`for mut` LOSES EDITS THE SEED DOES NOT WRITE BACK, with nothing said.** The seed binds a
+  copy and writes it back at the end of a round that runs to its end, over a list named by a
+  name or a field. So an edit is dropped when the round leaves by `continue` or `break`, when
+  the walked collection is an array, and when it is reached through an index (`g[0]`): each
+  prints the value from before the loop where `zerg`, which binds the slot itself, prints the
+  edit.
+
+  It costs the bootstrap nothing: the compiler's own sources write no `for mut`.
+  `test-data/codegen/for_mut` holds the shapes the two agree on for `make oracle`;
+  `test-data/codegen/for_mut_more` holds these and runs under `zerg` alone.
+
 ## Changing the seed
 
 The invariant that makes a change safe to make: **the C emitted for the self-host source

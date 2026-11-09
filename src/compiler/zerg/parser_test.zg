@@ -105,7 +105,7 @@ fn arms_none() -> list[ast.Arm] {
 fn stmt_where(s: ast.Stmt) -> str {
 	return match s {
 		Stmt.SLet(n, _, _, _, _, _, l, c) => f"let {n}@{l}:{c}"
-		Stmt.SForIn(n, _, _, l, c) => f"for {n}@{l}:{c}"
+		Stmt.SForIn(n, _, _, _, l, c) => f"for {n}@{l}:{c}"
 		Stmt.SIfLet(n, _, _, _, _, l, c) => f"if-let {n}@{l}:{c}"
 		Stmt.SDel(n, l, c) => f"del {n}@{l}:{c}"
 		_ => "?"

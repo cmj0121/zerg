@@ -365,6 +365,8 @@ shipping compiler rather than a part of it (the line
 | `E3160` | an associated fn of a spec, reached through a box or the spec                                         |
 | `E3161` | `#[derive(S)]` on an enum, and `S` declares an associated fn                                          |
 | `E3162` | `#[obj]` on a spec that declares an associated fn                                                     |
+| `E3163` | `for mut` binds each element in place, and a … has no slots to bind                                   |
+| `E3164` | `for mut` walks a place spelled by names, fields and literal indexes, and this `…` is not one         |
 | `E4001` | `…` outside of a loop: it belongs to a `for`, and a `select` arm is not one                           |
 | `E4002` | a `from` cause is an `Err`, and … is not one                                                          |
 | `E4004` | `…(…)` names one side of an `Either`, which holds exactly one value                                   |
@@ -497,7 +499,6 @@ shipping compiler rather than a part of it (the line
 | `E9005` | the decorator `#[…]`                                                                                  |
 | `E9009` | calling an optional chain — `p?.m(…)`                                                                 |
 | `E9015` | an associated type binding `type … = …` in an `impl`                                                  |
-| `E9025` | `for mut v in …`                                                                                      |
 | `E9028` | an associated type projection `….…`                                                                   |
 | `E9029` | a value generic parameter `…: …`                                                                      |
 | `E9034` | a default on a closure parameter                                                                      |
@@ -744,6 +745,7 @@ name now is the prelude rule (`E2061`), which is about the name rather than abou
 | `E9035` | —       | `mut &` is part of a function type, and the type is built              |
 | `E9031` | —       | a branch of several statements is a block expression, and it is built  |
 | `E9032` | —       | the binding head in an `if` expression is built                        |
+| `E9025` | —       | `for mut` is built; what it may walk is E3163 and E3164                |
 | `E9065` | —       | as above, on the value side: the marker rides in the type              |
 | `E9017` | —       | the fixed-size array is built; its length is part of its type          |
 | `E9019` | —       | the interpolating command literal is built; it splices into argv       |

@@ -450,7 +450,7 @@ pub enum Stmt {
 	SExpr(Expr)
 	SIf(Expr, list[Stmt], bool, list[Stmt])
 	SFor(bool, Expr, list[Stmt])
-	SForIn(str, Expr, list[Stmt], int, int)
+	SForIn(str, bool, Expr, list[Stmt], int, int)
 
 	# `for select { … }` — the multi-way wait as a LOOP: one ready arm per round, and the
 	# loop ends when every watched receive channel has. It is its own node rather than an
@@ -2625,7 +2625,7 @@ fn dump_stmt(s: Stmt, ind: str) -> str {
 		Stmt.SIfLet(name, value, then_b, _, else_b, _, _) => ind + "if-let " + name + "\n" + dump_block(then_b, ind + "\t") + dump_block(else_b, ind + "\t")
 		Stmt.SScope(body_b, is_unsafe) => ind + scope_kind(is_unsafe) + "\n" + dump_block(body_b, ind + "\t")
 		Stmt.SFor(_, cond, body_b) => ind + "for " + expr_kind(cond) + "\n" + dump_block(body_b, ind + "\t")
-		Stmt.SForIn(name, iter, body_b, _, _) => ind + "for " + name + " in " + expr_kind(iter) + "\n" + dump_block(body_b, ind + "\t")
+		Stmt.SForIn(name, _, iter, body_b, _, _) => ind + "for " + name + " in " + expr_kind(iter) + "\n" + dump_block(body_b, ind + "\t")
 		Stmt.SForSelect(_) => ind + "for-select\n"
 		Stmt.SRaise(x, _, _) => f"{ind}raise {expr_kind(x)}\n"
 		Stmt.SAssert(body_b) => ind + "assert\n" + dump_block(body_b, ind + "\t")
@@ -2915,7 +2915,7 @@ pub fn stmt_exprs(s: Stmt) -> list[Expr] {
 		Stmt.SExpr(v) => [v]
 		Stmt.SIf(c, _, _, _) => [c]
 		Stmt.SFor(_, c, _) => [c]
-		Stmt.SForIn(_, it, _, _, _) => [it]
+		Stmt.SForIn(_, _, it, _, _, _) => [it]
 		Stmt.SForSelect(arms) => stmt_sel_exprs(arms)
 		Stmt.SRaise(v, _, cz) => [v, cz]
 		Stmt.SAssert(_) => stmt_exprs_none()
@@ -2945,7 +2945,7 @@ pub fn stmt_kids(s: Stmt) -> list[Stmt] {
 		Stmt.SExpr(_) => stmt_kids_none()
 		Stmt.SIf(_, tb, _, eb) => stmt_kids_cat(tb, eb)
 		Stmt.SFor(_, _, b) => b
-		Stmt.SForIn(_, _, b, _, _) => b
+		Stmt.SForIn(_, _, _, b, _, _) => b
 		Stmt.SForSelect(arms) => stmt_sel_kids(arms)
 		Stmt.SRaise(_, _, _) => stmt_kids_none()
 
@@ -3072,7 +3072,7 @@ pub fn stmt_binds(s: Stmt) -> list[str] {
 	return match s {
 		Stmt.SLet(nm, _, _, _, _, _, _, _) => [nm]
 		Stmt.SDestructure(t, _, is_bind, _, _) => tgt_binds(t, is_bind)
-		Stmt.SForIn(nm, _, _, _, _) => stmt_bind_name(nm)
+		Stmt.SForIn(nm, _, _, _, _, _) => stmt_bind_name(nm)
 		Stmt.SIfLet(nm, _, _, _, _, _, _) => stmt_bind_name(nm)
 		Stmt.SSelect(arms) => stmt_sel_binds(arms)
 		Stmt.SForSelect(arms) => stmt_sel_binds(arms)

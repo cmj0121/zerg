@@ -76,8 +76,8 @@ re-raised — is [Iteration](../core/specs.md)), and **`for cond { … }`** the 
 (a `bool`) holds. There is **no `while` keyword** (bare `for cond` is the while loop) and **no C-style
 three-clause `for`**. The infinite form, the while form, and `for x in it` over a **range**, a **`list`**, a
 **`map`** (binding each **key**) all work. Over a **`str`** it binds each **`rune`** — the code points, not
-the bytes; walk `bytearray(s)` when you want those. **`for mut x`**, the mutable loop binding that
-writes each edited element back to its slot, is **[not yet]** (`E9025`). Testing membership with **`v in range`**
+the bytes; walk `bytearray(s)` when you want those. **`for mut x`** binds each element **in place** over a
+`list` or an array ([Collections](collections.md#iterating--mutation)). Testing membership with **`v in range`**
 (`x in 0..n` → `bool`) works. Treating a **range as a value** anywhere else is **[not yet]** — the form is
 refused by name and with a place (`E9077`); a range exists only as the thing a `for` walks, a `match` arm
 contains, and an `in` tests against.

@@ -62,7 +62,8 @@ its own_(或 _the empty map `{:}`_)——先把它綁到一個寫了型別的名
 即 **while** 形式——當 `cond`（一個 `bool`）成立時反覆執行。**沒有 `while` 關鍵字**（裸 `for cond` 就是 while 迴圈）、
 也**沒有 C 式三段 `for`**。無窮形式、while 形式、以及 `for x in it` 走訪一個 **range**、一個 **`list`**、一個
 **`map`**（綁每個 **key**）都可用。走訪一個 **`str`** 會綁每個 **`rune`**——是 code point 而不是 byte;
-要走 byte 就用 `bytearray(s)`。**`for mut x`**（把改過的元素寫回原槽的可變迴圈綁定）是 **[not yet]**（`E9025`）。用
+要走 byte 就用 `bytearray(s)`。**`for mut x`** 在 `list` 或陣列上把每個元素**就地**綁定
+（[集合](collections.zh-TW.md#迭代與變動)）。用
 **`v in range`** 測試成員關係（`x in 0..n` → `bool`）可用。把 **range 當成值**用在別處則是 **[not yet]**——這個形式
 會被指名拒絕、帶位置（`E9077`）；range 今天只存在於「`for` 走訪的東西」、「`match` arm 包含的東西」與「`in`
 拿來測的東西」裡。

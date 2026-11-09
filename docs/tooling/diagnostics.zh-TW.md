@@ -341,6 +341,8 @@ seed 全程維持句子比對:代碼是語言的契約,而 seed 是建置正式�
 | `E3160` | 透過箱子或 spec 本身去叫 spec 的 associated fn                                                        |
 | `E3161` | enum 上的 `#[derive(S)]`,而 `S` 宣告了 associated fn                                                  |
 | `E3162` | 宣告了 associated fn 的 spec 上的 `#[obj]`                                                            |
+| `E3163` | `for mut` 就地綁定每個元素,而 … 沒有可綁定的槽位                                                      |
+| `E3164` | `for mut` 走訪以名字、欄位與字面索引拼出的 place,而這個 `…` 不是                                      |
 | `E4001` | `break` / `continue` 在它所屬的迴圈之外                                                               |
 | `E4002` | `raise … from` 的 cause 不是 `Err`                                                                    |
 | `E4004` | `…(…)` names one side of an `Either`, which holds exactly one value                                   |
@@ -473,7 +475,6 @@ seed 全程維持句子比對:代碼是語言的契約,而 seed 是建置正式�
 | `E9005` | decorator `#[…]`                                                                                      |
 | `E9009` | 呼叫一個 optional chain —— `p?.m(…)`                                                                  |
 | `E9015` | `impl` 裡的 associated type 綁定 `type … = …`                                                         |
-| `E9025` | `for mut v in …`                                                                                      |
 | `E9028` | associated type 投影 `….…`                                                                            |
 | `E9029` | 值 generic 參數 `…: …`                                                                                |
 | `E9034` | closure 參數上的預設值                                                                                |
@@ -691,6 +692,7 @@ composite 都有了，`print xs` 與 `xs.display()` 也都在用；只剩走 `st
 | `E9035` | —       | `mut &` 是函式型別的一部分,而這個型別已經建好了          |
 | `E9031` | —       | 多個語句的分支就是區塊運算式,已經建好了                  |
 | `E9032` | —       | `if` 運算式裡的繫結頭已經建好了                          |
+| `E9025` | —       | `for mut` 已經建好;它能走訪什麼是 E3163 與 E3164         |
 | `E9065` | —       | 同上,值那一側:標記是坐在型別裡的                         |
 | `E9017` | —       | 定長陣列已經建好了,它的長度是型別的一部分                |
 | `E9019` | —       | 內插的命令字面量建好了,它接進 argv                       |

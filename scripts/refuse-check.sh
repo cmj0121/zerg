@@ -1109,25 +1109,6 @@ fn main() {
 }
 EOF
 
-# `for mut` OVER A MAP. The case below walks a list; docs/code/collections.md says the binding
-# is unbuilt for every element type, and a map is the other container it has.
-expect "$ZERG" for-mut-over-a-map E9025 'for mut' <<'EOF'
-fn main() {
-	mut m: map[str, int] = {"a": 1}
-	for mut k in m {
-		print k
-	}
-}
-EOF
-
-expect "$ZERG" for-mut-binding E9025 <<'EOF'
-fn main() {
-	for mut v in [1, 2] {
-		print v
-	}
-}
-EOF
-
 # A body that declares a result and falls off the end used to emit a C function with no
 # return: the call answered whatever was in the return register.
 expect "$ZERG" body-falls-off-the-end E4023 <<'EOF'

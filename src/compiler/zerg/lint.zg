@@ -540,7 +540,7 @@ fn writes_this_in(s: ast.Stmt, refs: list[str]) -> bool {
 		Stmt.SIf(_, tb, _, eb) => writes_this(tb, refs) or writes_this(eb, refs)
 		Stmt.SIfLet(_, _, tb, _, eb, _, _) => writes_this(tb, refs) or writes_this(eb, refs)
 		Stmt.SFor(_, _, b) => writes_this(b, refs)
-		Stmt.SForIn(_, _, b, _, _) => writes_this(b, refs)
+		Stmt.SForIn(_, _, _, b, _, _) => writes_this(b, refs)
 		Stmt.SSelect(arms) => writes_this_arms(arms, refs)
 		Stmt.SForSelect(arms) => writes_this_arms(arms, refs)
 
@@ -750,7 +750,7 @@ fn lint_captures_body(body: list[ast.Stmt], at: LWhere, refs: list[str], mut &mu
 			Stmt.SIf(_, tb, _, eb) => lint_captures_two(tb, eb, w, refs, muts, out)
 			Stmt.SIfLet(nm, v, tb, _, eb, _, _) => lint_captures_two(tb, eb, w, refs, muts, out)
 			Stmt.SFor(_, _, b) => lint_captures_body(b, w, refs, muts, out)
-			Stmt.SForIn(nm, _, b, _, _) => lint_captures_body(b, w, refs, muts, out)
+			Stmt.SForIn(nm, _, _, b, _, _) => lint_captures_body(b, w, refs, muts, out)
 			Stmt.SAssert(b) => lint_captures_body(b, w, refs, muts, out)
 
 			# a select arm's body is a block like any other, and it is where coroutines
@@ -1295,7 +1295,7 @@ fn walk_body(body: list[ast.Stmt], mut &ids: list[str], mut &calls: list[str], m
 			Stmt.SIf(cond, then_b, _, else_b) => walk_if(cond, then_b, else_b, ids, calls, ns)
 			Stmt.SIfLet(_, value, then_b, _, else_b, _, _) => walk_if(value, then_b, else_b, ids, calls, ns)
 			Stmt.SFor(_, cond, body_b) => walk_loop(cond, body_b, ids, calls, ns)
-			Stmt.SForIn(_, iter, body_b, _, _) => walk_loop(iter, body_b, ids, calls, ns)
+			Stmt.SForIn(_, _, iter, body_b, _, _) => walk_loop(iter, body_b, ids, calls, ns)
 			Stmt.SRaise(x, hc, c) => walk_raise(x, hc, c, ids, calls, ns)
 
 			# an `assert` holds the author's own expressions, desugared: an import reached

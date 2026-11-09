@@ -181,12 +181,9 @@ when what it holds does: over a `list[N]` whose `N` has no `Eq` it is _E4020 `==
 compares its N: a N has no `Eq`_. The two sides are one type, and a literal is typed by its own elements —
 `bs == [1, 2]` over a `list[byte]` is `E3046`, and `xs == []` is `E3034`.
 
-> **[not yet]** `for mut x` over a collection is unbuilt for **every** element type, POD included:
-> `for mut x in ys` is `E9025` whatever `ys` holds, so the second line of the example below is not a program.
-
 ```text
 for x in xs { total = total + x }         # read
-for mut x in ys { x = x * 2 }             # edit in place — [not yet], refused for every element type
+for mut x in ys { x = x * 2 }             # edit in place
 ```
 
 ## Iterating & mutation
@@ -195,8 +192,16 @@ Within a `for … in xs`, `xs` is **frozen against structural change** — appen
 growing/shrinking, or rebinding it inside the loop is a **compile error** — so an iterator can **never be
 invalidated** (no dangling cursor, no runtime fail-fast check). This is a **local** rule — the loop knows
 the collection it walks — so it needs no borrow checker and costs you nothing at runtime. Editing an
-**element** in place (`for mut x`) stays fine: it never moves the cursor — though that binding is itself
-**[not yet]** — _E9025_ (see [Order & equality](#order--equality)).
+**element** in place (`for mut x`) stays fine: it never moves the cursor.
+
+`for mut x in ys` binds `x` to **the element's slot** for the round, over a `list` or an array: every edit —
+an assignment, a field or an index written through `x`, a `mut this` method, a `mut &` argument — lands in
+`ys` as it is made, so leaving the round by `continue`, `break`, `return`, a `?` or an abort keeps what the
+round had already changed. It is a write through `ys`, so `ys` must be one this scope may write (_E3006_), and
+the freeze above is what keeps the slot where it is — which is why `ys` must be a place spelled by names,
+fields and literal indexes, as the freeze spells it (_E3164_ for a call result or a computed index). A map, a
+set, a `str`, a range and a channel have no slots to bind (_E3163_). Value semantics hold across a copy: a
+body that writes `zs = ys` and then edits `x` changes `ys` alone.
 
 The freeze sees a **path** as well as a bare name, and what says two of them are the same collection is
 that they are **spelled the same way**: `for x in p.xs { p.xs.append(v) }` and `for x in xs[0] {
@@ -307,8 +312,8 @@ of the rules already stated for `list`:
   > merged program, so two modules declaring `WIDTH` would be one key; telling them apart is module
   > identity, which this compiler settles for a call and not for a length.
 
-- **Iterate / derive / slice** — it implements `Iterator` / `Iterable` (`for x in a`; **`for mut x in a` is
-  [not yet]**, _E9025_, for every element type, POD included), and derives **element-wise**: an array derives `Eq` / `Ord`
+- **Iterate / derive / slice** — it implements `Iterator` / `Iterable` (`for x in a`, and `for mut x in a`
+  in place), and derives **element-wise**: an array derives `Eq` / `Ord`
   (and, when built, `Hash` / `Encode`) exactly when its element type `T` does — two same-type arrays then
   compare (and hash) element-wise. There is **no** blanket auto-derived `Object`; equality comes only from
   `derive(Eq)` on the element. `a.slice(p, q)` is intended to yield a **read-only `list[T]`** view — the COW

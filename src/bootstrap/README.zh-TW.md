@@ -516,6 +516,16 @@ chan[int]() }`——或任何不是字面值、模組常數，或它們之間算
   這對 bootstrap 不花任何代價：編譯器自己的原始碼沒有寫任何 `for mut`。`test-data/codegen/for_mut`
   放兩者一致的形狀給 `make oracle`；`test-data/codegen/for_mut_more` 放這些，只由 `zerg` 執行。
 
+- **variant pattern 的限定名不會被檢查。** 種子讀單獨的 variant 名，丟掉寫在它前面的 enum，所以 `Nope.Red`
+  對一個 `Colour` 會走進那個 arm，`E.A | F.B` 對一個 `E` 也一樣。`zerg` 不論 pattern 在哪裡，都拿限定名去比
+  subject（`E4074`）。這對 bootstrap 不花任何代價：編譯器自己的 pattern 寫的都是 subject 的 enum。
+  `pattern-qualifier-names-nothing` 與 `a-wrong-qualifier-inside-an-or-pattern` 帶著 `seed-gap` 標記。
+
+- **帶 payload pattern 的 arm 會涵蓋它的 variant。** 種子把任何指名某個 variant 的 arm 都算成涵蓋它，所以
+  `A(0)` 搭 `E.B` 對它來說是 exhaustive 的，而 `E.A(1)` 得到的是 `E.B` 那個 arm 的答案：最後一個 arm 是降階裡
+  不測試的 `else`。`zerg` 只在每個 payload 位置都比對一切時才把 arm 算進去（`E4019`）。這對 bootstrap 不花任何代價：
+  編譯器自己的 payload 都是名字。`a-literal-payload-does-not-cover-its-variant` 帶著 `seed-gap` 標記。
+
 ## 修改種子時
 
 讓一項改動可以放心進行的不變量：**自舉原始碼所產生的 C 不得變動**。若那是真正的死碼移除，前後產生的 C 會逐位元組

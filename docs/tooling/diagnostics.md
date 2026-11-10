@@ -520,7 +520,6 @@ shipping compiler rather than a part of it (the line
 | `E9070` | `…` re-binds a name a `match` arm's pattern already binds                                             |
 | `E9071` | the default on field `…` reads the field `…`                                                          |
 | `E9075` | a generic `type …[…] = …`                                                                             |
-| `E9076` | a sub-pattern inside a variant payload                                                                |
 | `E9077` | a range of a kind this compiler cannot compare, as a value                                            |
 | `E9078` | `is …` names no type to compare against                                                               |
 | `E9079` | the decorator `#[sealed]` — reserved                                                                  |
@@ -747,6 +746,7 @@ name now is the prelude rule (`E2061`), which is about the name rather than abou
 | `E9032` | —       | the binding head in an `if` expression is built                        |
 | `E9025` | —       | `for mut` is built; what it may walk is E3163 and E3164                |
 | `E9110` | —       | the named rest in a list pattern is built                              |
+| `E9076` | —       | a variant's payload takes a pattern; it is built                       |
 | `E9065` | —       | as above, on the value side: the marker rides in the type              |
 | `E9017` | —       | the fixed-size array is built; its length is part of its type          |
 | `E9019` | —       | the interpolating command literal is built; it splices into argv       |

@@ -3823,27 +3823,6 @@ fn main() {
 }
 EOF
 
-# GRAMMAR#variant-pat's payload is a `pattern-list`, so a pattern inside a pattern is derived.
-# This compiler takes a binding name or `_` there, and said so with a bare parser complaint.
-expect "$ZERG" a-sub-pattern-in-a-variant-payload E9076 <<'EOF'
-enum Inner {
-	A(int)
-	B
-}
-
-enum Outer {
-	Wrap(Inner)
-}
-
-fn main() {
-	o := Outer.Wrap(Inner.A(3))
-	print match o {
-		Outer.Wrap(Inner.A(v)) => v
-		_                      => 0
-	}
-}
-EOF
-
 # A RANGE IS A VALUE NOW (#173) — it binds, passes and returns, and its case is in the corpus.
 # What is left of `E9077` is a range whose BOUNDS this compiler cannot compare, which is the
 # same clause `in` has always had: the comparison is C's own, and a `str` bound would compare

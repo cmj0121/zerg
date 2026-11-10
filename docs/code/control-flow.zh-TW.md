@@ -138,12 +138,12 @@ list 先以**長度**比對——指名每個元素的 pattern 用 `==`，帶 `.
 比較,所以 `match s { "y" => 1  _ => -1 }` 在 `s == "y"` 時回答 `-1`——而且無聲,因為結尾的 `_` 吸收掉每一次落空,
 且兩個相等的 literal 不保證共用儲存。
 
-> **[not yet]** **nested pattern**——`Left(Some(v))`，還有 `L(0)`——在 **parser** 裡就被拒絕，是 _E9076
-> NotImplemented: a sub-pattern inside a variant payload_，所以它抵達不了檢查器或 emitter：payload 位置只收一個
-> 綁定名字或 `_`，每個 pattern 都只有一層深。
->
-> 在 parse 就拒絕,也把意圖中那個檢查器唯一的軟處掏空了:對**巢狀** payload 的 exhaustiveness 本來只證明頂層
-> variant、不證明每一種巢狀組合——而現在沒有巢狀 case 抵達得了它。
+variant 的 **payload** 每個位置都收一個 pattern（GRAMMAR#variant-pat）：`Node(Leaf(a), _)`、`Circle(0)`、
+`Click(P{x: 0, y})`。payload 在 tag 之後測試，所以一個位置的測試讀的是 tag 剛指名的那個 variant；payload 裡的
+**名字**照原樣綁住欄位——`T?` 欄位就綁成 `T?`。constructor pattern 不論放在哪裡，都拿它所在位置的型別來檢查
+（_E4018_、_E4065_、_E4074_）。**exhaustiveness 不看 payload 裡面**：只有當每個 payload 位置都比對一切時，arm
+才算涵蓋它的 variant，所以 `Circle(0)` 與 `Circle(r)` 一起涵蓋 `Circle` 只靠後者；若要靠幾個巢狀 arm 合起來
+涵蓋一個 variant，就用 `_` 寫明。
 
 ```text
 msg := match ev {

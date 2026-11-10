@@ -598,7 +598,6 @@ pub enum Rule {
 	NotYetRebindMatchBinding = 9070
 	NotYetDefaultReadsField = 9071
 	NotYetGenericTypedef = 9075
-	NotYetSubPatternInPayload = 9076
 	NotYetRangeOfKind = 9077
 
 	# an ARRAY has no slice: its length is part of its type, so the result of slicing one is a

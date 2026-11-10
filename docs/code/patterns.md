@@ -117,19 +117,16 @@ A struct target asks the same three questions a struct **pattern** does, because
 ([`GRAMMAR#struct-pat`](../../GRAMMAR)) in another position: the type it names must be the value's, every
 field it names must exist, and without a `..` it names them **all**.
 
-> **[not yet]** `L(Yes(v))` and `L(0)` are both _E9076 NotImplemented: a sub-pattern inside a variant payload,
-> beginning at `…`_. A RESERVED WORD in a payload position is a different rule and keeps its own: `L(this)`
-> is _E2013 `this` is a reserved word and cannot name a pattern binding_.
->
-> **Binding the whole matched value beside its parts is built** — `pattern as name`, which tests nothing
-> of its own and names what the pattern under it matched. GRAMMAR attaches it to a `sub-pattern`, which is
-> the SIBLING of a range arm rather than one of its forms, so `1..=9 as n` is derived by nothing.
->
-> Two more shapes an arm can be written with are refused by name. Matching absence literally is
-> _E9068 NotImplemented: `nil` as a `match` pattern_; and shadowing an
-> arm's own binding inside that arm is _E9070 NotImplemented: `v` re-binds a name a `match` arm's
-> pattern already binds in this block — the arm's binding is spliced in as text, so the new one would
-> never be read_.
+A `match` pattern nests where a target does, and into a variant's payload as well: `L(Yes(v))` and `L(0)`
+test the payload after the tag. A RESERVED WORD in a payload position is its own rule: `L(this)` is
+_E2013 `this` is a reserved word and cannot name a pattern binding_. Binding the whole matched value beside
+its parts is `pattern as name`, which tests nothing of its own and names what the pattern under it matched.
+GRAMMAR attaches it to a `sub-pattern`, which is the SIBLING of a range arm rather than one of its forms, so
+`1..=9 as n` is derived by nothing.
+
+> **[not yet]** Shadowing an arm's own binding inside that arm is _E9070 NotImplemented: `v` re-binds a name
+> a `match` arm's pattern already binds in this block — the arm's binding is spliced in as text, so the new
+> one would never be read_.
 
 ## Deliberately not added
 

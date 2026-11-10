@@ -8194,32 +8194,70 @@ fn c_pat_env(mut &em: Emitter, pt: ast.Pat, st: ast.Ty) {
 	ctor := c_pat_ctor(pt)
 	return if ctor == ""
 
-	names := c_payload_names(c_pat_payload(pt))
-	if c_is_either(st) {
-		# an Either's sides are not in the variant table: they are the TYPE's own two, so the
-		# binding takes whichever the pattern names. Answering `Err` for every Right is what a
-		# Result-shaped assumption looks like.
-		return if names.len() == 0
-		if c_result_tag(em, ctor, st) == 0 {
-			c_add_var(em, names[0], c_either_left(st), false, false)
-		} else {
-			c_add_var(em, names[0], c_either_right(st), false, false)
-		}
-		if em.want_index {
-			c_nx_bind_to(em, em.env_names.len() - 1, c_nx_pat_decl(em, c_pat_payload(pt)[0]))
-		}
-		return
-	}
-
-	en := c_named_of(st)
+	# A PAYLOAD NAME BINDS THE FIELD AS IT IS, a `T?` field as a `T?` — it is not a name over a
+	# carrier, which binds what the carrier holds. A payload position holding any other pattern
+	# is that pattern over the field's type (GRAMMAR#variant-pat takes a `pattern-list`).
+	ps := c_pat_payload(pt)
+	names := c_payload_names(ps)
 	mut i := 0
 	for i < names.len() {
-		c_add_var(em, names[i], c_variant_field_ty(em, en, ctor, i), false, false)
-		if em.want_index {
-			c_nx_bind_to(em, em.env_names.len() - 1, c_nx_pat_decl(em, c_pat_payload(pt)[i]))
+		fty := c_payload_ty(em, st, ctor, i)
+		if names[i] == "" {
+			c_pat_env(em, ps[i], fty)
+		} else {
+			c_add_var(em, names[i], fty, false, false)
+			if em.want_index {
+				c_nx_bind_to(em, em.env_names.len() - 1, c_nx_pat_decl(em, ps[i]))
+			}
 		}
 		i = i + 1
 	}
+}
+
+# c_payload_ty is the type of a variant pattern's payload position `i`. An Either's sides are
+# not in the variant table: they are the TYPE's own two, so the position takes whichever side
+# the pattern names — answering `Err` for every Right is what a Result-shaped assumption looks
+# like.
+fn c_payload_ty(mut &em: Emitter, st: ast.Ty, ctor: str, i: int) -> ast.Ty {
+	if c_is_either(st) {
+		return c_either_left(st) if c_result_tag(em, ctor, st) == 0
+
+		return c_either_right(st)
+	}
+	return c_variant_field_ty(em, c_named_of(st), ctor, i)
+}
+
+# c_payload_acc is the C that reads a variant pattern's payload position `i` out of `s`, the
+# one accessor the test and the binding of that position both read.
+fn c_payload_acc(mut &em: Emitter, st: ast.Ty, ctor: str, i: int, s: str) -> str {
+	if c_is_either(st) {
+		return c_res_val(em, st, s) if c_result_tag(em, ctor, st) == 0
+
+		return c_res_err(s)
+	}
+
+	en := c_named_of(st)
+	acc := f"{s}.u.{ctor}.f{i}"
+
+	# unbox a self-recursive payload back to the enum value
+	return f"(*({c_ty_cname(en)}*)zrt_ref_payload({acc}))" if c_is_boxed(em, en, ctor, i)
+
+	return acc
+}
+
+# c_payload_total is whether a variant pattern's payload matches every value the variant can
+# hold, so the arm covers the variant: a name or `_` does, and so does a pattern that covers
+# its position's type. `A(0)` does not cover `A`, and nor does `A(B)` — exhaustiveness over a
+# nested payload is not proved from the arms beside it, so a match that relies on one says so
+# with a `_`.
+fn c_payload_total(mut &em: Emitter, st: ast.Ty, ctor: str, ps: list[ast.Pat]) -> bool {
+	names := c_payload_names(ps)
+	mut i := 0
+	for i < names.len() {
+		return false if names[i] == "" and not c_pat_catchall(ps[i], c_payload_ty(em, st, ctor, i))
+		i = i + 1
+	}
+	return true
 }
 
 # c_needs_runtime reports whether any enum has a boxed field, so the translation unit
@@ -16005,7 +16043,16 @@ fn c_check_pat(mut &em: Emitter, pt: ast.Pat, st: ast.Ty) {
 	}
 
 	ctor := c_pat_ctor(pt)
-	return if ctor == "" or c_is_either(st)
+	return if ctor == ""
+
+	# a payload position holding a pattern is asked about the type that position holds
+	ps := c_pat_payload(pt)
+	if c_is_either(st) {
+		if ps.len() > 0 {
+			c_check_pat(em, ps[0], c_payload_ty(em, st, ctor, 0))
+		}
+		return
+	}
 
 	qual := c_pat_qual(pt)
 
@@ -16040,7 +16087,13 @@ fn c_check_pat(mut &em: Emitter, pt: ast.Pat, st: ast.Ty) {
 	# HERE and not in c_bind_env, which is a lowering helper: c_arms calls it from
 	# both c_arm_cond and c_arm_body, so a check hung there fired twice for every
 	# arm but the last — the count of a diagnostic depended on where the arm sat.
-	check.chk_variant_arity(em, en, ctor, c_payload_names(c_pat_payload(pt)).len(), "pattern binds")
+	check.chk_variant_arity(em, en, ctor, ps.len(), "pattern binds")
+
+	mut i := 0
+	for i < ps.len() {
+		c_check_pat(em, ps[i], c_variant_field_ty(em, en, ctor, i))
+		i = i + 1
+	}
 }
 
 # c_check_exhaustive refuses a `match` that does not cover its scrutinee. The lowering below
@@ -16085,8 +16138,8 @@ fn c_check_exhaustive(mut &em: Emitter, arms: list[ast.Arm], st: ast.Ty) {
 			r = "Err (Right)"
 		}
 
-		raise c_arm_missing_side(em, l) if not c_arm_covers_side(arms, st, "Left")
-		raise c_arm_missing_side(em, r) if not c_arm_covers_side(arms, st, "Right")
+		raise c_arm_missing_side(em, l) if not c_arm_covers_side(em, arms, st, "Left")
+		raise c_arm_missing_side(em, r) if not c_arm_covers_side(em, arms, st, "Right")
 
 		return
 	}
@@ -16096,7 +16149,7 @@ fn c_check_exhaustive(mut &em: Emitter, arms: list[ast.Arm], st: ast.Ty) {
 	if en != "" and c_is_enum_name(em, en) {
 		mut i := 0
 		for i < em.var_name.len() {
-			raise c_diag(em, rule.Rule.MatchMissingVariant, f"non-exhaustive match: missing variant {en}.{em.var_name[i]}") if em.var_enum[i] == en and not c_arm_covers(arms, em.var_name[i])
+			raise c_diag(em, rule.Rule.MatchMissingVariant, f"non-exhaustive match: missing variant {en}.{em.var_name[i]}") if em.var_enum[i] == en and not c_arm_covers(em, arms, st, em.var_name[i])
 			i = i + 1
 		}
 		return
@@ -16284,11 +16337,11 @@ fn c_catchall_at(arms: list[ast.Arm], st: ast.Ty) -> int {
 }
 
 # c_arm_covers reports whether some UNGUARDED constructor arm names `ctor`.
-fn c_arm_covers(arms: list[ast.Arm], ctor: str) -> bool {
+fn c_arm_covers(mut &em: Emitter, arms: list[ast.Arm], st: ast.Ty, ctor: str) -> bool {
 	mut i := 0
 	for i < arms.len() {
 		a := arms[i]
-		return true if not a.has_guard and ctor != "" and c_pat_covers_ctor(a.pat, ctor)
+		return true if not a.has_guard and ctor != "" and c_pat_covers_ctor(em, a.pat, st, ctor)
 		i = i + 1
 	}
 	return false
@@ -16497,27 +16550,18 @@ fn c_pat_subst(mut &em: Emitter, pt: ast.Pat, s: str, st: ast.Ty, sb: Subst) -> 
 	if em.want_index {
 		c_nx_pat_ctor(em, pt, st)
 	}
+
 	ps := c_pat_payload(pt)
 	names := c_payload_names(ps)
-	if c_is_either(st) {
-		# `Left(v)` reads the value, `Right(e)` the Err; neither is a tagged union of the
-		# kind the variant table describes, so the field is named directly
-		return sb if names.len() == 0
-		return c_extend_bound(em, sb, names[0], c_res_val(em, st, s), ps[0]) if c_result_tag(em, ctor, st) == 0
-
-		return c_extend_bound(em, sb, names[0], c_res_err(s), ps[0])
-	}
-
-	en := c_named_of(st)
 	mut r := sb
 	mut i := 0
 	for i < names.len() {
-		mut acc := f"{s}.u.{ctor}.f{i}"
-		if c_is_boxed(em, en, ctor, i) {
-			# unbox a self-recursive payload back to the enum value
-			acc = f"(*({c_ty_cname(en)}*)zrt_ref_payload({acc}))"
+		acc := c_payload_acc(em, st, ctor, i, s)
+		if names[i] == "" {
+			r = c_pat_subst(em, ps[i], acc, c_payload_ty(em, st, ctor, i), r)
+		} else {
+			r = c_extend_bound(em, r, names[i], acc, ps[i])
 		}
-		r = c_extend_bound(em, r, names[i], acc, ps[i])
 		i = i + 1
 	}
 	return r
@@ -16706,12 +16750,28 @@ fn c_pat_cond(mut &em: Emitter, pt: ast.Pat, s: str, st: ast.Ty, sb: Subst) -> s
 	}
 
 	ctor := c_pat_ctor(pt)
-	if ctor != "" {
-		return f"({c_res_tag(s)} == {c_result_tag(em, ctor, st)})" if c_is_either(st)
+	return "1" if ctor == ""
 
-		return f"({s}.tag == {c_variant_tag_in(em, c_named_of(st), ctor)})"
+	mut out := f"({s}.tag == {c_variant_tag_in(em, c_named_of(st), ctor)})"
+	if c_is_either(st) {
+		out = f"({c_res_tag(s)} == {c_result_tag(em, ctor, st)})"
 	}
-	return "1"
+
+	# A PAYLOAD POSITION THAT IS A PATTERN TESTS TOO, after the tag: its accessor reads the
+	# variant the tag has just said is there, and `&&` keeps it from reading any other.
+	ps := c_pat_payload(pt)
+	names := c_payload_names(ps)
+	mut i := 0
+	for i < names.len() {
+		if names[i] == "" {
+			c := c_pat_cond(em, ps[i], c_payload_acc(em, st, ctor, i, s), c_payload_ty(em, st, ctor, i), sb)
+			if c != "1" {
+				out = f"({out} && {c})"
+			}
+		}
+		i = i + 1
+	}
+	return out
 }
 
 # c_pat_list_* read a list pattern's three parts. `rest` is the index the `..` sits at, or -1
@@ -16724,45 +16784,46 @@ fn c_pat_cond(mut &em: Emitter, pt: ast.Pat, s: str, st: ast.Ty, sb: Subst) -> s
 # `E.A(x) | E.B(x)` covers BOTH, and the exhaustiveness rule that asked `c_pat_ctor` got "" for
 # the whole thing: an arm naming two variants counted for neither, and the match was reported
 # non-exhaustive over cases it plainly handles.
-fn c_pat_covers_ctor(pt: ast.Pat, ctor: str) -> bool {
-	return true if c_pat_ctor(pt) == ctor
+fn c_pat_covers_ctor(mut &em: Emitter, pt: ast.Pat, st: ast.Ty, ctor: str) -> bool {
+	return c_payload_total(em, st, ctor, c_pat_payload(pt)) if c_pat_ctor(pt) == ctor
 
 	return match pt {
-		Pat.POr(ps) => c_pats_cover_ctor(ps, ctor)
-		Pat.PAs(inner, _, _, _) => c_pat_covers_ctor(inner, ctor)
+		Pat.POr(ps) => c_pats_cover_ctor(em, ps, st, ctor)
+		Pat.PAs(inner, _, _, _) => c_pat_covers_ctor(em, inner, st, ctor)
 		_ => false
 	}
 }
 
-fn c_pats_cover_ctor(ps: list[ast.Pat], ctor: str) -> bool {
+fn c_pats_cover_ctor(mut &em: Emitter, ps: list[ast.Pat], st: ast.Ty, ctor: str) -> bool {
 	for pt in ps {
-		return true if c_pat_covers_ctor(pt, ctor)
+		return true if c_pat_covers_ctor(em, pt, st, ctor)
 	}
 	return false
 }
 
 # c_arm_covers_side is c_arm_covers for an Either, which asks about a SIDE rather than a name:
 # c_either_side reads each arm's constructor, so every spelling of the side covers it.
-fn c_arm_covers_side(arms: list[ast.Arm], st: ast.Ty, side: str) -> bool {
+fn c_arm_covers_side(mut &em: Emitter, arms: list[ast.Arm], st: ast.Ty, side: str) -> bool {
 	for a in arms {
-		return true if not a.has_guard and c_pat_covers_side(a.pat, st, side)
+		return true if not a.has_guard and c_pat_covers_side(em, a.pat, st, side)
 	}
 	return false
 }
 
-fn c_pat_covers_side(pt: ast.Pat, st: ast.Ty, side: str) -> bool {
-	return true if c_either_side(st, c_pat_ctor(pt)) == side
+fn c_pat_covers_side(mut &em: Emitter, pt: ast.Pat, st: ast.Ty, side: str) -> bool {
+	ctor := c_pat_ctor(pt)
+	return c_payload_total(em, st, ctor, c_pat_payload(pt)) if c_either_side(st, ctor) == side
 
 	return match pt {
-		Pat.POr(ps) => c_pats_cover_side(ps, st, side)
-		Pat.PAs(inner, _, _, _) => c_pat_covers_side(inner, st, side)
+		Pat.POr(ps) => c_pats_cover_side(em, ps, st, side)
+		Pat.PAs(inner, _, _, _) => c_pat_covers_side(em, inner, st, side)
 		_ => false
 	}
 }
 
-fn c_pats_cover_side(ps: list[ast.Pat], st: ast.Ty, side: str) -> bool {
+fn c_pats_cover_side(mut &em: Emitter, ps: list[ast.Pat], st: ast.Ty, side: str) -> bool {
 	for pt in ps {
-		return true if c_pat_covers_side(pt, st, side)
+		return true if c_pat_covers_side(em, pt, st, side)
 	}
 	return false
 }

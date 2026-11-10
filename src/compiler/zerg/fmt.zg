@@ -1223,8 +1223,8 @@ fn fmt_brace_is_pattern(mut &toks: list[token.Token], at: int) -> bool {
 # fmt_pat_tail is whether what follows the closer at `at` is the rest of a pattern head, walked
 # out to its end. A `)`, a `}` or a list's `]` closes a group the pattern sits in, an `as name`
 # names it, and a `,` or a `|` is followed by more of the group; any of them may end in the
-# head's `=>`, `:=` or `=`. Anything else is not a pattern's tail. An INDEX's `]` is not a
-# list's, which keeps `xs[match i { … }] = 5` a match.
+# head's `=>`, `:=` or `=`, or in a guard (fmt_guard_ends_arm). Anything else is not a
+# pattern's tail. An INDEX's `]` is not a list's, which keeps `xs[match i { … }] = 5` a match.
 fn fmt_pat_tail(mut &toks: list[token.Token], at: int) -> bool {
 	mut j := at
 	for j >= 0 {
@@ -1232,7 +1232,10 @@ fn fmt_pat_tail(mut &toks: list[token.Token], at: int) -> bool {
 		return false if n < 0
 
 		k := toks[n].kind
+
 		return true if fmt_ends_pat_head(k)
+
+		return fmt_guard_ends_arm(toks, n) if k == token.Kind.If
 
 		if k == token.Kind.As {
 			j = fmt_next_code(toks, n)
@@ -1251,6 +1254,28 @@ fn fmt_pat_tail(mut &toks: list[token.Token], at: int) -> bool {
 		} else {
 			return false
 		}
+	}
+	return false
+}
+
+# fmt_guard_ends_arm is whether the `if` at `at` is an arm's GUARD: its condition runs to a `=>`
+# on the same level, where an `if` statement's runs into a block and a separator first.
+fn fmt_guard_ends_arm(mut &toks: list[token.Token], at: int) -> bool {
+	mut depth := 0
+	mut i := at + 1
+	for i < toks.len() {
+		k := toks[i].kind
+		if k == token.Kind.LParen or k == token.Kind.LBrack or is_lbrace(k) {
+			depth = depth + 1
+		} else if k == token.Kind.RParen or k == token.Kind.RBrack or is_rbrace(k) {
+			return false if depth == 0
+
+			depth = depth - 1
+		} else if depth == 0 {
+			return true if k == token.Kind.FatArrow
+			return false if is_semi(k)
+		}
+		i = i + 1
 	}
 	return false
 }

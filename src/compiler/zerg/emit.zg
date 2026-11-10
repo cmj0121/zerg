@@ -15949,51 +15949,98 @@ fn c_check_arm_pats(mut &em: Emitter, arms: list[ast.Arm], st: ast.Ty) {
 		raise c_diag(em, rule.Rule.PatternBindsTwice, f"a pattern binds each name once, and this one binds `{dup}` twice") if dup != ""
 	}
 
+	for a in arms {
+		c_check_pat(em, a.pat, st)
+	}
+}
+
+# c_check_pat asks a constructor pattern about the subject it is written against, WHEREVER it
+# sits. It asked only the arm's own pattern, so one inside a tuple, a list, a struct, an `as`
+# or an or-pattern met none of the rules below: `(F.C, _)` over an `(E, int)` compared F's
+# tag with E's, and took the arm for `E.A` — the two first variants share tag 0. Each nested
+# position is asked against the type that position holds.
+fn c_check_pat(mut &em: Emitter, pt: ast.Pat, st: ast.Ty) {
 	# a subject inference could not name has nothing to check the pattern against; guessing
 	# would turn a typing gap into a refusal of a working program
-	return if c_is_unknown(st) or c_is_either(st)
+	return if c_is_unknown(st)
 
-	mut i := 0
-	for i < arms.len() {
-		a := arms[i]
-		ctor := c_pat_ctor(a.pat)
-		qual := c_pat_qual(a.pat)
-		if ctor != "" {
-			# ASKED OF THE SUBJECT'S ENUM, which is the only enum a constructor pattern can
-			# name a variant of. It used to ask which enum owns the bare name program-wide and
-			# then compare: `match s { Red => … }` on a `Signal` was answered `Colour`, so the
-			# arm was refused as unable to match a subject it matches exactly.
-			en := c_named_of(st)
-
-			raise c_diag(em, rule.Rule.NoSuchVariantInPattern, f"no variant named `{ctor}` — a constructor pattern names a variant of the subject's enum") if c_var_row_any(em, ctor) < 0
-			raise c_diag(em, rule.Rule.VariantPatternWrongEnum, f"variant pattern `{ctor}` cannot match a subject of type {ast.ty_name(st)}") if not c_is_variant_in(em, en, ctor)
-
-			# THE QUALIFICATION MUST BE TRUE (GRAMMAR#variant-pat), and until now it was not
-			# asked at all. The two rules above look up the VARIANT and compare THAT to the
-			# subject, so a qualifier naming a different enum was caught only because its
-			# variant was elsewhere — and a qualifier naming NOTHING was ignored outright:
-			# `match c { Nope.Red => … }` on a `Colour` built, ran, and took the arm, so
-			# renaming an enum left every pattern of it still matching and said nothing.
-			#
-			# The enum written in a pattern is an ASSERTION and not a reference: the subject's
-			# type is what decides which enum this is, and the name is here to be checked
-			# against it. That is why it never names a module — a module qualifier would be
-			# answering "which one", which the subject has already answered.
-			# A SPECIALIZATION IS SPELLED WITH ITS ARGUMENTS AND WRITTEN WITHOUT THEM. The
-			# subject of `enum Maybe[T]` at `int` is a `Maybe[int]`, and the pattern names
-			# `Maybe` — the parameters are the subject's to carry, not the pattern's to repeat,
-			# which is the same reason the qualifier never names a module. So the assertion is
-			# checked against the applied name's BASE as well; for an unparameterized enum the
-			# base IS the name and this asks exactly what it asked before.
-			raise c_diag(em, rule.Rule.VariantPatternWrongQualifier, f"variant pattern `{qual}.{ctor}` names the enum `{qual}`, and the subject is a {ast.ty_name(st)} — the enum written in a pattern is checked against the subject, so it must be the subject's") if qual != "" and qual != en and qual != c_app_base(en)
-
-			# HERE and not in c_bind_env, which is a lowering helper: c_arms calls it from
-			# both c_arm_cond and c_arm_body, so a check hung there fired twice for every
-			# arm but the last — the count of a diagnostic depended on where the arm sat.
-			check.chk_variant_arity(em, en, ctor, c_payload_names(c_pat_payload(a.pat)).len(), "pattern binds")
-		}
-		i = i + 1
+	if c_pat_is_as(pt) {
+		c_check_pat(em, c_pat_as_inner(pt), st)
+		return
 	}
+	if c_pat_is_or(pt) {
+		for alt in c_pat_or_alts(pt) {
+			c_check_pat(em, alt, st)
+		}
+		return
+	}
+	if c_pat_is_tuple(pt) {
+		elems := c_pat_tuple_elems(pt)
+		ets := c_tuple_elems(st)
+		mut i := 0
+		for i < elems.len() and i < ets.len() {
+			c_check_pat(em, elems[i], ets[i])
+			i = i + 1
+		}
+		return
+	}
+	if c_pat_is_list(pt) {
+		return if not c_is_list(st)
+
+		for el in c_pat_list_elems(pt) {
+			c_check_pat(em, el, c_list_elem(st))
+		}
+		return
+	}
+	if c_pat_is_struct(pt) {
+		sn := c_named_of(st)
+		fs := c_pat_struct_fields(pt)
+		ps := c_pat_struct_pats(pt)
+		mut i := 0
+		for i < fs.len() {
+			c_check_pat(em, ps[i], c_field_ty(em, sn, fs[i]))
+			i = i + 1
+		}
+		return
+	}
+
+	ctor := c_pat_ctor(pt)
+	return if ctor == "" or c_is_either(st)
+
+	qual := c_pat_qual(pt)
+
+	# ASKED OF THE SUBJECT'S ENUM, which is the only enum a constructor pattern can
+	# name a variant of. It used to ask which enum owns the bare name program-wide and
+	# then compare: `match s { Red => … }` on a `Signal` was answered `Colour`, so the
+	# arm was refused as unable to match a subject it matches exactly.
+	en := c_named_of(st)
+
+	raise c_diag(em, rule.Rule.NoSuchVariantInPattern, f"no variant named `{ctor}` — a constructor pattern names a variant of the subject's enum") if c_var_row_any(em, ctor) < 0
+	raise c_diag(em, rule.Rule.VariantPatternWrongEnum, f"variant pattern `{ctor}` cannot match a subject of type {ast.ty_name(st)}") if not c_is_variant_in(em, en, ctor)
+
+	# THE QUALIFICATION MUST BE TRUE (GRAMMAR#variant-pat), and until now it was not
+	# asked at all. The two rules above look up the VARIANT and compare THAT to the
+	# subject, so a qualifier naming a different enum was caught only because its
+	# variant was elsewhere — and a qualifier naming NOTHING was ignored outright:
+	# `match c { Nope.Red => … }` on a `Colour` built, ran, and took the arm, so
+	# renaming an enum left every pattern of it still matching and said nothing.
+	#
+	# The enum written in a pattern is an ASSERTION and not a reference: the subject's
+	# type is what decides which enum this is, and the name is here to be checked
+	# against it. That is why it never names a module — a module qualifier would be
+	# answering "which one", which the subject has already answered.
+	# A SPECIALIZATION IS SPELLED WITH ITS ARGUMENTS AND WRITTEN WITHOUT THEM. The
+	# subject of `enum Maybe[T]` at `int` is a `Maybe[int]`, and the pattern names
+	# `Maybe` — the parameters are the subject's to carry, not the pattern's to repeat,
+	# which is the same reason the qualifier never names a module. So the assertion is
+	# checked against the applied name's BASE as well; for an unparameterized enum the
+	# base IS the name and this asks exactly what it asked before.
+	raise c_diag(em, rule.Rule.VariantPatternWrongQualifier, f"variant pattern `{qual}.{ctor}` names the enum `{qual}`, and the subject is a {ast.ty_name(st)} — the enum written in a pattern is checked against the subject, so it must be the subject's") if qual != "" and qual != en and qual != c_app_base(en)
+
+	# HERE and not in c_bind_env, which is a lowering helper: c_arms calls it from
+	# both c_arm_cond and c_arm_body, so a check hung there fired twice for every
+	# arm but the last — the count of a diagnostic depended on where the arm sat.
+	check.chk_variant_arity(em, en, ctor, c_payload_names(c_pat_payload(pt)).len(), "pattern binds")
 }
 
 # c_check_exhaustive refuses a `match` that does not cover its scrutinee. The lowering below

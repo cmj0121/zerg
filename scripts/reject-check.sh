@@ -11060,6 +11060,73 @@ fn main() {
 }
 EOF
 
+# A CONSTRUCTOR PATTERN IS ASKED ABOUT ITS OWN SUBJECT WHEREVER IT SITS. Only the arm's own
+# pattern was, so one inside a tuple compared another enum's tag and took the arm — `F.C` and
+# `E.A` are both tag 0. One case per position and per rule, each wrong in a different way.
+reject a-wrong-enum-variant-inside-a-tuple-pattern E4018 'variant pattern `C` cannot match a subject of type E' <<'EOF'
+enum E {
+	A(int)
+	B
+}
+
+enum F {
+	C
+}
+
+fn main() {
+	x := match (E.A(1), 2) {
+		(F.C, _) => 1
+		_ => 0
+	}
+	print x
+}
+EOF
+
+reject an-unknown-variant-inside-a-list-pattern E4065 'no variant named `Nope`' <<'EOF'
+enum E {
+	A(int)
+	B
+}
+
+fn main() {
+	x := match [E.B] {
+		[Nope(q)] => q
+		_ => 0
+	}
+	print x
+}
+EOF
+
+reject a-wrong-qualifier-inside-an-or-pattern E4074 'names the enum `F`' seed-gap <<'EOF'
+enum E {
+	A
+	B
+}
+
+fn main() {
+	x := match E.A {
+		E.A | F.B => 1
+		_ => 0
+	}
+	print x
+}
+EOF
+
+reject a-variant-of-the-wrong-arity-inside-a-tuple-pattern E3010 'carries 1 argument and this pattern binds 2' <<'EOF'
+enum E {
+	A(int)
+	B
+}
+
+fn main() {
+	x := match (E.A(1), 2) {
+		(A(a, b), _) => a + b
+		_ => 0
+	}
+	print x
+}
+EOF
+
 reject a-constructor-pattern-on-an-either-that-is-neither-side E3132 <<'EOF'
 fn g() -> Result[int] {
 	return Left(1)

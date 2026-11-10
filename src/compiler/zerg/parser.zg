@@ -5243,38 +5243,6 @@ fn p_at_literal_word(mut &p: Parser) -> bool {
 	return p_at(p, token.Kind.True) or p_at(p, token.Kind.False) or p_at(p, token.Kind.Nil)
 }
 
-# p_pat_unbuilt refuses the pattern shapes this compiler does not lower, each by the name it has
-# always had. THEY ARE REFUSED AT THE PARSE because they are decided by SHAPE alone — no type is
-# consulted to know that a tuple pattern is one — and the stage a refusal comes from is part of
-# what a reader gets: a top-level script carrying an `as` pattern is answered about the `as`,
-# and not about the top-level statement the checker would reach first.
-#
-# It reads the built tree rather than the tokens, which is what the tree bought: the guessing
-# this used to do — is a `(` a tuple pattern or a parenthesised one? — is gone.
-fn p_pat_unbuilt(mut &p: Parser, pt: ast.Pat, line: int, col: int) {
-	msg := match pt {
-		Pat.PVariant(_, _, ps, _, _) => p_payload_unbuilt(p, ps, line, col)
-		_ => ""
-	}
-
-	raise msg if msg != ""
-}
-
-fn p_payload_unbuilt(mut &p: Parser, ps: list[ast.Pat], line: int, col: int) -> str {
-	for pt in ps {
-		return p_diag_at(p, line, col, rule.Rule.NotYetSubPatternInPayload, "NotImplemented: a sub-pattern inside a variant payload — GRAMMAR#variant-pat takes a `pattern-list`, and this compiler binds a name per field") if not p_pat_is_name(pt)
-	}
-	return ""
-}
-
-fn p_pat_is_name(pt: ast.Pat) -> bool {
-	return match pt {
-		Pat.PBind(_, _, _) => true
-		Pat.PWild => true
-		_ => false
-	}
-}
-
 fn p_pattern(mut &p: Parser) -> ast.Pat {
 	mut alts: list[ast.Pat] = []
 	alts.append(p_sub_pattern(p))
@@ -5452,7 +5420,6 @@ fn parse_arm(mut &p: Parser) -> ast.Arm {
 		pat = ast.Pat.PLit(parse_expr(p))
 	} else {
 		pat = p_pattern(p)
-		p_pat_unbuilt(p, pat, aline, acol)
 	}
 
 	mut has_guard := false

@@ -105,12 +105,15 @@ pattern**。`match` 問的是「這個值是不是這個形狀」,而解構綁�
 （[`GRAMMAR#struct-pat`](../../GRAMMAR)）擺在另一個位置:它指名的型別必須就是那個值的型別、它指名的每個欄位都
 必須存在,而沒有 `..` 時它要指名**全部**。
 
-每一種會觸發的 pattern 都只有**一層深**。所以在有巢狀 pattern 的語言裡會寫成 `L(Yes(v))` 的地方,就比對一層、
-把 payload 綁起來,再對那個 binding 做一次 `match`。
+`match` 的 pattern 在 target 能巢狀的地方都能巢狀，也能放進 variant 的 payload：`L(Yes(v))` 與 `L(0)` 在 tag
+之後測試 payload。payload 位置上的**保留字**是另一條規則：`L(this)` 是 _E2013 `this` is a reserved word and
+cannot name a pattern binding_。在各部分之外再綁住整個被比對的值，寫成 `pattern as name`：它自己不測試任何東西，
+只為底下那個 pattern 比對到的東西命名。GRAMMAR 把它掛在 `sub-pattern` 上，而 `sub-pattern` 是 range arm 的
+**兄弟**、不是它的一種形式，所以沒有任何產生式推得出 `1..=9 as n`。
 
-> **[not yet]** `L(Yes(v))` 與 `L(0)` 都是 _E9076 NotImplemented: a sub-pattern inside a variant payload,
-> beginning at `…`_。payload 位置上的**保留字**是另一條規則、保有它自己的碼：`L(this)` 是
-> _E2013 `this` is a reserved word and cannot name a pattern binding_。
+> **[not yet]** 在一個 arm 裡遮蔽它自己的綁定，是 _E9070 NotImplemented: `v` re-binds a name a `match` arm's
+> pattern already binds in this block — the arm's binding is spliced in as text, so the new one would never be
+> read_。
 
 ## 刻意不加的
 

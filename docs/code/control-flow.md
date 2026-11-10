@@ -165,13 +165,13 @@ A **`str` literal** arm compares TEXT, through the same `strcmp` an expression's
 a **pointer** comparison, so `match s { "y" => 1  _ => -1 }` answered `-1` for `s == "y"` — silently, since
 the trailing `_` absorbs every miss and two equal literals may or may not share storage.
 
-> **[not yet]** A **nested pattern** — `Left(Some(v))`, and `L(0)` too — is refused **in the parser**, as
-> _E9076 NotImplemented: a sub-pattern inside a variant payload_, so it reaches neither the checker nor the
-> emitter: a payload position takes a binding name or `_` and every pattern is one level deep.
->
-> Refusing at the parse also empties the intended checker's one soft spot — exhaustiveness over **nested**
-> payloads was to prove the top-level variants without proving every nested combination — since no nested
-> case reaches it.
+A variant's **payload** takes a pattern in each position (GRAMMAR#variant-pat): `Node(Leaf(a), _)`,
+`Circle(0)`, `Click(P{x: 0, y})`. The payload is tested after the tag, so a position's test reads the variant
+the tag has just named; a payload **name** binds the field as it is — a `T?` field as a `T?`. A constructor
+pattern is checked against the type its own position holds, wherever it sits (_E4018_, _E4065_, _E4074_).
+**Exhaustiveness does not look inside a payload**: an arm counts toward its variant only when each payload
+position matches everything, so `Circle(0)` and `Circle(r)` cover `Circle` together only through the
+second, and a match that relies on nested arms covering a variant between them says so with a `_`.
 
 ```text
 msg := match ev {

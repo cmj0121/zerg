@@ -670,6 +670,19 @@ byte(N)` and `byte(N * 3)` are compile errors. The seed folds the literal alone:
   `test-data/codegen/for_mut` holds the shapes the two agree on for `make oracle`;
   `test-data/codegen/for_mut_more` holds these and runs under `zerg` alone.
 
+- **A VARIANT PATTERN'S QUALIFIER IS NOT CHECKED.** The seed reads the bare variant and drops the
+  enum written before it, so `Nope.Red` on a `Colour` takes the arm, and so does `E.A | F.B` on an
+  `E`. `zerg` checks the qualifier against the subject wherever the pattern sits (`E4074`). It
+  costs the bootstrap nothing: the compiler's own patterns name the subject's enum.
+  `pattern-qualifier-names-nothing` and `a-wrong-qualifier-inside-an-or-pattern` carry the
+  `seed-gap` marker.
+
+- **AN ARM WITH A PAYLOAD PATTERN COVERS ITS VARIANT.** The seed counts a variant as covered by any
+  arm that names it, so `A(0)` beside `E.B` is exhaustive to it, and `E.A(1)` answers the `E.B` arm:
+  the last arm is the lowering's untested `else`. `zerg` counts an arm only when every payload
+  position matches everything (`E4019`). It costs the bootstrap nothing: the compiler's own payloads
+  are names. `a-literal-payload-does-not-cover-its-variant` carries the `seed-gap` marker.
+
 ## Changing the seed
 
 The invariant that makes a change safe to make: **the C emitted for the self-host source

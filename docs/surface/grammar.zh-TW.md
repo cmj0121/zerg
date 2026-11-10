@@ -765,7 +765,7 @@ asm-operand ::= 'in' '(' str-lit ')' expr | 'out' '(' str-lit ')' lvalue
 
 以下每個形式都是 **[not yet]**:文法定義了它,`zerg` **以它自己的名字**拒絕它,沒有任何用到它的程式會被編譯成
 別的東西。這份清單不是散文 —— `scripts/refuse-check.sh` 每一列都有對應案例,而 **Code** 欄就是該列被釘住的那個
-拒絕——把 range 當值是 `E9077`、泛型別名 `type X[T] = …` 是 `E9075`、variant payload 裡的子樣式是 `E9076`——
+拒絕——把 range 當值是 `E9077`、泛型別名 `type X[T] = …` 是 `E9075`、閉包參數上的預設值是 `E9034`——
 所以一個形式若悄悄開始能動、或悄悄換了失敗方式,gate 就會擋下來。
 
 **Group** 欄用的是本章自己的編號（見上）——導出該 production 的那一節，而不是最早提到它的那一節。
@@ -779,7 +779,6 @@ asm-operand ::= 'in' '(' str-lit ')' expr | 'out' '(' str-lit ')' lvalue
 | 4     | `E2035` | 後面沒有呼叫的後綴型別引數 —— `map[str, int]`、`f[int]`                                  |
 | 4     | `E9067` | 用 `map[K, V](…)` 當建構子 —— 空 map 是字面值 `{:}`                                      |
 | 5     | `E9034` | **closure** 參數的預設值                                                                 |
-| 6     | `E9076` | variant payload 裡的子樣式 —— `L(Some(v))`、`L(0)`                                       |
 | 7     | `E9075` | 泛型別名 `type X[T] = …`                                                                 |
 | 7     | `E9038` | 對內建型別的 `impl`                                                                      |
 | 7     | `E9046` | `alignof[T]`                                                                             |

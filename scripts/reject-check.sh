@@ -11127,6 +11127,47 @@ fn main() {
 }
 EOF
 
+# A PAYLOAD POSITION HOLDING A PATTERN is asked about the field's type, as any position is: an
+# arm over the wrong enum there compared another enum's tag. And it COVERS its variant only when
+# it matches everything, so `A(0)` beside `E.B` leaves `A(1)` to an untested `else`.
+reject a-wrong-enum-variant-inside-a-payload E4018 'variant pattern `C` cannot match a subject of type E2' <<'EOF'
+enum E {
+	A(E2)
+	B
+}
+
+enum E2 {
+	X
+}
+
+enum F {
+	C
+}
+
+fn main() {
+	x := match E.B {
+		A(F.C) => 1
+		_ => 2
+	}
+	print x
+}
+EOF
+
+reject a-literal-payload-does-not-cover-its-variant E4019 'missing variant E.A' seed-gap <<'EOF'
+enum E {
+	A(int)
+	B
+}
+
+fn main() {
+	x := match E.A(1) {
+		A(0) => 1
+		E.B => 2
+	}
+	print x
+}
+EOF
+
 reject a-constructor-pattern-on-an-either-that-is-neither-side E3132 <<'EOF'
 fn g() -> Result[int] {
 	return Left(1)

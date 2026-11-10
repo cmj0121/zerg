@@ -1182,34 +1182,16 @@ fn fmt_opens_block(mut &toks: list[token.Token], at: int) -> bool {
 	return not fmt_brace_is_map(toks, at)
 }
 
-# fmt_enclosing_brace is the `{` that HOLDS the one at `at`, or -1 at the outermost. It walks
-# LEFT, which is what makes the recursion above terminate: each step is strictly nearer index 0.
-fn fmt_enclosing_brace(mut &toks: list[token.Token], at: int) -> int {
-	mut depth := 0
-	mut i := at - 1
-	for i >= 0 {
-		k := toks[i].kind
-		if is_rbrace(k) {
-			depth = depth + 1
-		} else if is_lbrace(k) {
-			return i if depth == 0
-
-			depth = depth - 1
-		}
-		i = i - 1
-	}
-	return 0 - 1
-}
-
 # fmt_brace_is_pattern — the `{` of a STRUCT SHAPE, which is not a block and not a map.
 #
 # `P{x, y} => …` and `if c { … }` look the same at this layer: a `{` after a name. What tells
 # them apart is where the matching `}` lands — a shape's is followed by the token that ends its
 # head, and a block's is not. There are three of those, and they are the three positions
 # GRAMMAR derives a `struct-pat` in: `=>` ends a `match` arm, and `:=` and `=` end a
-# destructuring target (GRAMMAR#bind-target, GRAMMAR#assign-target). A NESTED one
-# (`Wrap{inner: P{x}, tag}`) is followed by a `,` or a `}` instead, so the question is asked
-# again of the brace outside it, which terminates at the outermost one.
+# destructuring target (GRAMMAR#bind-target, GRAMMAR#assign-target). A NESTED one is followed
+# by what closes or continues the pattern around it instead — a `,` or a `}` in a shape, a `)`
+# in a tuple or a variant's payload, a `]` in a list, an `as` or a `|` — so fmt_pat_tail walks
+# out through those to the head's end.
 #
 # THIS IS THE ONE PLACE the decision lives, which is why it is asked here rather than at each of
 # the eight sites that consult `is_lbrace`. Before it, `P{x} => x` had its `{` read as a block
@@ -1231,26 +1213,94 @@ fn fmt_brace_is_pattern(mut &toks: list[token.Token], at: int) -> bool {
 			depth = depth + 1
 		} else if is_rbrace(k) {
 			depth = depth - 1
-			if depth == 0 {
-				n := fmt_next_code(toks, i)
-
-				return false if n < 0
-				return true if toks[n].kind == token.Kind.FatArrow or toks[n].kind == token.Kind.Walrus or toks[n].kind == token.Kind.Assign
-
-				# NESTED INSIDE ANOTHER PATTERN: ask the brace that HOLDS this one, which is
-				# found by walking OUT and not by asking what this `}` closes. Asking the
-				# latter was a recursion that never moved — the first version of this looked up
-				# the opener of the brace it was already standing in, and overflowed the stack
-				# on the compiler's own sources.
-				o := fmt_enclosing_brace(toks, at)
-
-				return false if o < 0
-				return fmt_brace_is_pattern(toks, o) if toks[n].kind == token.Kind.Comma or is_rbrace(toks[n].kind)
-
-				return false
-			}
+			return fmt_pat_tail(toks, i) if depth == 0
 		}
 		i = i + 1
+	}
+	return false
+}
+
+# fmt_pat_tail is whether what follows the closer at `at` is the rest of a pattern head, walked
+# out to its end. A `)`, a `}` or a list's `]` closes a group the pattern sits in, an `as name`
+# names it, and a `,` or a `|` is followed by more of the group; any of them may end in the
+# head's `=>`, `:=` or `=`. Anything else is not a pattern's tail. An INDEX's `]` is not a
+# list's, which keeps `xs[match i { … }] = 5` a match.
+fn fmt_pat_tail(mut &toks: list[token.Token], at: int) -> bool {
+	mut j := at
+	for j >= 0 {
+		n := fmt_next_code(toks, j)
+		return false if n < 0
+
+		k := toks[n].kind
+		return true if fmt_ends_pat_head(k)
+
+		if k == token.Kind.As {
+			j = fmt_next_code(toks, n)
+		} else if k == token.Kind.Comma or k == token.Kind.Pipe {
+			j = fmt_pat_group_next(toks, n)
+
+			return false if j < 0
+			return true if fmt_ends_pat_head(toks[j].kind)
+			return false if toks[j].kind == token.Kind.RBrack and fmt_brack_is_index(toks, j)
+		} else if k == token.Kind.RParen or is_rbrace(k) {
+			j = n
+		} else if k == token.Kind.RBrack {
+			return false if fmt_brack_is_index(toks, n)
+
+			j = n
+		} else {
+			return false
+		}
+	}
+	return false
+}
+
+fn fmt_ends_pat_head(k: token.Kind) -> bool {
+	return k == token.Kind.FatArrow or k == token.Kind.Walrus or k == token.Kind.Assign
+}
+
+# fmt_pat_group_next is, from the `,` or `|` at `at`, the first token at the same depth that
+# closes the group or ends the head — or -1 at a separator first, where no pattern runs on.
+fn fmt_pat_group_next(mut &toks: list[token.Token], at: int) -> int {
+	mut depth := 0
+	mut i := at + 1
+	for i < toks.len() {
+		k := toks[i].kind
+		if k == token.Kind.LParen or k == token.Kind.LBrack or is_lbrace(k) {
+			depth = depth + 1
+		} else if k == token.Kind.RParen or k == token.Kind.RBrack or is_rbrace(k) {
+			return i if depth == 0
+
+			depth = depth - 1
+		} else if depth == 0 {
+			return i if fmt_ends_pat_head(k)
+			return -1 if is_semi(k)
+		}
+		i = i + 1
+	}
+	return -1
+}
+
+# fmt_brack_is_index is whether the `]` at `at` closes an index — its `[` follows a value —
+# rather than a list.
+fn fmt_brack_is_index(mut &toks: list[token.Token], at: int) -> bool {
+	mut depth := 0
+	mut i := at - 1
+	for i >= 0 {
+		k := toks[i].kind
+		if k == token.Kind.RBrack {
+			depth = depth + 1
+		} else if k == token.Kind.LBrack {
+			if depth == 0 {
+				p := fmt_prev_code(toks, i)
+				return false if p < 0
+
+				pk := toks[p].kind
+				return pk == token.Kind.Ident or pk == token.Kind.RParen or pk == token.Kind.RBrack
+			}
+			depth = depth - 1
+		}
+		i = i - 1
 	}
 	return false
 }

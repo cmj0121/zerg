@@ -128,7 +128,8 @@ _E2073 `print` is a statement, and an expression is wanted here_(arm 裡的 `ret
 或**萬用 `_`**，比對任何值、不綁定。這些連同下面的 **product pattern**、一個 **list pattern**
 （`[a, b]`、`[a, ..]`、`[a, .., z]`）、以及一個 **range** arm（`1..=2 =>`，以 containment 比對）都會觸發。
 list 先以**長度**比對——指名每個元素的 pattern 用 `==`，帶 `..` 的用 `>=`——而 `..` 的位置決定其餘：在它之前的
-元素在自己的索引上，在它之後的則是距**尾端**那麼遠。只有 `[..]` 是 catch-all。一個 **or-pattern**（`A | B =>`，
+元素在自己的索引上，在它之後的則是距**尾端**那麼遠。**具名**的 rest（`[h, ..t]`）把 pattern 沒指名的元素依序綁成
+一個與 subject 同型別的新 list——跟每個綁定一樣是 copy——並在 arm 結束時交還。只有 `[..]` 是 catch-all。一個 **or-pattern**（`A | B =>`，
 以及綁定形式 `A(x) | B(x) =>`）也會觸發：它的降階是兩側條件的 **or**，而讓它成為一種形式的規則是**兩側綁同樣的
 名字**——arm 的 body 只有一個，所以只有一側供應的名字是一個「有時候才在」的名字（_E4088_）。有綁定時，那個名字
 讀的是**當時匹配的那一側**；而只要有一側涵蓋一切，整個就涵蓋一切：`_ | A` 就是多寫了幾個字的 `_`。
@@ -137,14 +138,9 @@ list 先以**長度**比對——指名每個元素的 pattern 用 `==`，帶 `.
 比較,所以 `match s { "y" => 1  _ => -1 }` 在 `s == "y"` 時回答 `-1`——而且無聲,因為結尾的 `_` 吸收掉每一次落空,
 且兩個相等的 literal 不保證共用儲存。
 
-> **[not yet]** 下面這些 pattern 是在 **parser** 裡就被拒絕的,沒有一種抵達得了檢查器或 emitter,而每一種都指名
-> 自己:
->
-> - **nested pattern**——`Left(Some(v))`，還有 `L(0)`——是 _E9076 NotImplemented: a sub-pattern inside a variant
->   payload_,所以 payload 位置只收一個綁定名字或 `_`,每個 pattern 都只有一層深;
-> - **具名的 rest**——`[a, ..rest]`——是 _E9110 NotImplemented: a NAMED rest in a list pattern_。匿名的 `..`
->   已經建好了；具名的那個會綁一個新的 list，而 `match` arm 是一個運算式、沒有地方放擁有它的暫存，所以每次
->   使用那個名字都會再配置一份、而且一份都不釋放。
+> **[not yet]** **nested pattern**——`Left(Some(v))`，還有 `L(0)`——在 **parser** 裡就被拒絕，是 _E9076
+> NotImplemented: a sub-pattern inside a variant payload_，所以它抵達不了檢查器或 emitter：payload 位置只收一個
+> 綁定名字或 `_`，每個 pattern 都只有一層深。
 >
 > 在 parse 就拒絕,也把意圖中那個檢查器唯一的軟處掏空了:對**巢狀** payload 的 exhaustiveness 本來只證明頂層
 > variant、不證明每一種巢狀組合——而現在沒有巢狀 case 抵達得了它。

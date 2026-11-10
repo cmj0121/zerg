@@ -152,7 +152,9 @@ binding nothing. These, together with a **product pattern** (below), a **list
 pattern** (`[a, b]`, `[a, ..]`, `[a, .., z]`) and a **range** arm (`1..=2 =>`, which matches by
 containment), all fire. A list is matched by **length first** — `==` for a pattern that names every
 element, `>=` for one carrying a `..` — and where the `..` sits decides the rest: an element before it is
-at its own index, one after it is that far from the **end**. Only `[..]` is a catch-all. An **or-pattern**
+at its own index, one after it is that far from the **end**. A **named** rest (`[h, ..t]`) binds the
+elements the pattern did not name, in order, as a fresh list of the subject's type — a copy, like every
+binding — given back when the arm ends. Only `[..]` is a catch-all. An **or-pattern**
 (`A | B =>`, and the binding form `A(x) | B(x) =>`) fires too: its lowering is the **or** of its sides'
 conditions, and the rule that makes it a form is that **both sides bind the same names** — the arm's body
 is one body, so a name only one side supplies is a name that is sometimes there (_E4088_). Where they do
@@ -163,14 +165,9 @@ A **`str` literal** arm compares TEXT, through the same `strcmp` an expression's
 a **pointer** comparison, so `match s { "y" => 1  _ => -1 }` answered `-1` for `s == "y"` — silently, since
 the trailing `_` absorbs every miss and two equal literals may or may not share storage.
 
-> **[not yet]** These pattern kinds are refused **in the parser**, so none of them reaches the checker or the
-> emitter, and each names itself:
->
-> - a **nested pattern** — `Left(Some(v))`, and `L(0)` too — is _E9076 NotImplemented: a sub-pattern inside a
->   variant payload_, so a payload position takes a binding name or `_` and every pattern is one level deep;
-> - a **NAMED rest** — `[a, ..rest]` — is _E9110 NotImplemented: a NAMED rest in a list pattern_. The
->   anonymous `..` is built; a named one binds a fresh list, and a `match` arm is an expression with
->   nowhere to keep it, so every use of the name would allocate another and release none.
+> **[not yet]** A **nested pattern** — `Left(Some(v))`, and `L(0)` too — is refused **in the parser**, as
+> _E9076 NotImplemented: a sub-pattern inside a variant payload_, so it reaches neither the checker nor the
+> emitter: a payload position takes a binding name or `_` and every pattern is one level deep.
 >
 > Refusing at the parse also empties the intended checker's one soft spot — exhaustiveness over **nested**
 > payloads was to prove the top-level variants without proving every nested combination — since no nested

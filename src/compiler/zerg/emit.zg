@@ -813,6 +813,19 @@ pub struct Emitter {
 	# kv_paths is the FILE each kv_names row was declared in, which is what lets chk_const_of
 	# read the reader's own `LIMIT` where two files each declare one (c_k_path).
 	pub kv_paths: list[str]
+
+	# rs_tmps / rs_inits / rs_thunks / rs_drops are the slices a named `..rest` binds while
+	# its arm is lowered, row for row: the C temporary, the statement that fills it, what gives
+	# it back on an early exit and inline. A binding is spliced in as TEXT, so a slice written
+	# as the name's text would be built again at every use and given back at none; the arm
+	# declares each one once instead (c_rest_open). rs_guard is the test an or-pattern's side
+	# has to pass before its accessors can be read — a side that did not match may name an
+	# element the list does not have — and "" outside one.
+	pub rs_tmps: list[str]
+	pub rs_inits: list[str]
+	pub rs_thunks: list[str]
+	pub rs_drops: list[str]
+	pub rs_guard: str
 }
 
 # Subst is an active set of identifier substitutions: an EIdent whose name appears in
@@ -2523,6 +2536,7 @@ fn c_nx_pat_decl(mut &em: Emitter, pt: ast.Pat) -> int {
 	d := match pt {
 		Pat.PBind(n, l, c) => c_nx_decl(em, em.at_path, l, c, n, ast.NK_LOCAL)
 		Pat.PAs(_, n, l, c) => c_nx_decl(em, em.at_path, l, c, n, ast.NK_LOCAL)
+		Pat.PList(_, _, n, l, c) => c_nx_decl(em, em.at_path, l, c, n, ast.NK_LOCAL)
 		_ => -1
 	}
 	ast.nx_mark(em.nx, d, ast.NF_HEAD)
@@ -8141,18 +8155,19 @@ fn c_pat_env(mut &em: Emitter, pt: ast.Pat, st: ast.Ty) {
 
 		raise c_diag(em, rule.Rule.ListPatternNotAList, f"a list pattern matches a list, and this one is matched against a {ast.ty_name(st)}") if not c_is_list(st)
 
-		# A NAMED REST HAS NOWHERE TO LIVE. `..rest` binds a fresh list — a slice — and a
-		# binding here is spliced in as TEXT, so every use of the name would allocate another
-		# one and release none. A `match` lowers to a conditional expression, which has no place
-		# to declare the temporary that would own it. The anonymous `..` needs none, and is
-		# built.
-		raise c_diag(em, rule.Rule.NotYetListPatternRestBinding, "NotImplemented: a NAMED rest in a list pattern — `..rest` binds a fresh list and a `match` arm is an expression with nowhere to keep it; write `..` and index what you need (GRAMMAR#list-pat-elem)") if c_pat_list_rest_name(pt) != ""
-
 		et := c_list_elem(st)
 		mut i := 0
 		for i < elems.len() {
 			c_pat_env(em, elems[i], et)
 			i = i + 1
+		}
+
+		# A NAMED REST IS A LIST OF THE SUBJECT'S OWN TYPE: the elements the pattern did not
+		# name, in order, as a fresh list (c_rest_tmp builds it).
+		rn := c_pat_list_rest_name(pt)
+		if rn != "" {
+			c_add_var(em, rn, st, false, false)
+			c_nx_bind_to(em, em.env_names.len() - 1, c_nx_pat_decl(em, pt))
 		}
 		return
 	}
@@ -15925,6 +15940,15 @@ fn c_match(mut &em: Emitter, scrut: ast.Expr, arms: list[ast.Arm], sb: Subst) ->
 fn c_check_arm_pats(mut &em: Emitter, arms: list[ast.Arm], st: ast.Ty) {
 	check.chk_arm_types(em, arms, st)
 
+	# A PATTERN BINDS EACH NAME ONCE. The arm's body reads the name through one substitution
+	# and types it from one registration, and with two of either they disagreed: `(a, a)` over
+	# an `(int, str)` read the `int` and typed the `str`, and cc reported the C. It is asked
+	# before the subject's type because it is about the pattern alone.
+	for a in arms {
+		dup := c_pat_dup_name(a.pat)
+		raise c_diag(em, rule.Rule.PatternBindsTwice, f"a pattern binds each name once, and this one binds `{dup}` twice") if dup != ""
+	}
+
 	# a subject inference could not name has nothing to check the pattern against; guessing
 	# would turn a typing gap into a refusal of a working program
 	return if c_is_unknown(st) or c_is_either(st)
@@ -16334,18 +16358,41 @@ fn c_pat_subst(mut &em: Emitter, pt: ast.Pat, s: str, st: ast.Ty, sb: Subst) -> 
 	# written as the choice it is: `x` becomes `(condA ? accA : accB)`. Both sides bind the same
 	# names — the rule in the first walk says so — and each side's accessor is what that side
 	# would have bound on its own.
+	#
+	# EACH SIDE IS SUBSTITUTED ONCE, under its own test (rs_guard): a named rest on a side
+	# fills its slice only when that side matched, since the other side's accessors may read
+	# past the list's end.
 	if c_pat_is_or(pt) {
 		alts := c_pat_or_alts(pt)
+		return sb if c_pat_binds(alts[0]).len() == 0
+
+		mut conds: list[str] = []
+		mut subs: list[Subst] = []
+		was := em.rs_guard
+		for alt in alts {
+			cond := c_pat_cond(em, alt, s, st, sb)
+			em.rs_guard = c_guard_and(was, cond)
+			subs.append(c_pat_subst(em, alt, s, st, c_nosub()))
+			em.rs_guard = was
+			conds.append(cond)
+		}
+
+		# A REST'S CHOICE IS CHOSEN BY ADDRESS, since a conditional is not a place and a list
+		# is read through `&` — and each side's slice is a C temporary, which has one
+		rests := c_pat_rest_binds(alts[0])
 		mut r := sb
 		for nm in c_pat_binds(alts[0]) {
+			by_addr := c_name_in(rests, nm)
 			mut acc := ""
 			mut k := alts.len() - 1
 			for k >= 0 {
-				a := c_sub_of(c_pat_subst(em, alts[k], s, st, c_nosub()), nm)
+				a := c_sub_of(subs[k], nm)
 				if acc == "" {
 					acc = a
+				} else if by_addr {
+					acc = f"(*({conds[k]} ? &{a} : &{acc}))"
 				} else {
-					acc = f"({c_pat_cond(em, alts[k], s, st, sb)} ? {a} : {acc})"
+					acc = f"({conds[k]} ? {a} : {acc})"
 				}
 				k = k - 1
 			}
@@ -16379,6 +16426,9 @@ fn c_pat_subst(mut &em: Emitter, pt: ast.Pat, s: str, st: ast.Ty, sb: Subst) -> 
 			r = c_pat_subst(em, elems[i], c_list_pat_at(s, ct, i, rest, n), et, r)
 			i = i + 1
 		}
+		rn := c_pat_list_rest_name(pt)
+		return c_extend_bound(em, r, rn, c_rest_tmp(em, s, st, rest, n), pt) if rn != ""
+
 		return r
 	}
 
@@ -16445,10 +16495,16 @@ fn c_arm_cond(mut &em: Emitter, a: ast.Arm, s: str, st: ast.Ty, sb: Subst) -> st
 
 fn c_arm_cond_in(mut &em: Emitter, a: ast.Arm, s: str, st: ast.Ty, sb: Subst) -> str {
 	cond := c_pat_cond(em, a.pat, s, st, sb)
+	return cond if not a.has_guard
 
-	return f"({cond} && {c_arm_guard(em, a, c_arm_subst(em, a, s, st, sb))})" if a.has_guard
-
-	return cond
+	# the guard reads the arm's bindings, so a named rest is in hand for it too — its own,
+	# built after the pattern's test, which is what makes the slice's bounds hold
+	mark := em.rs_tmps.len()
+	sub := c_arm_subst(em, a, s, st, sb)
+	keep := em.rel_cnames.len()
+	decl := c_rest_open(em, mark)
+	g := c_arm_guard(em, a, sub)
+	return f"({cond} && {c_rest_close(em, mark, keep, decl, g, false)})"
 }
 
 # c_tuple_elems — a tuple type's element types, or nothing for a type that is not one.
@@ -16726,6 +16782,69 @@ fn c_pat_binds(pt: ast.Pat) -> list[str] {
 			out.append(n)
 		}
 	}
+
+	# a named rest is a name the list pattern itself binds, beside its elements' own
+	rn := c_pat_list_rest_name(pt)
+	if rn != "" {
+		out.append(rn)
+	}
+	return out
+}
+
+# c_pat_dup_name is a name the pattern binds twice, or "". An or-pattern binds ITS names once
+# per side, so one side stands for it: the sides binding the same names is E4088's to ask.
+fn c_pat_dup_name(pt: ast.Pat) -> str {
+	names := c_pat_names_once(pt)
+	mut i := 1
+	for i < names.len() {
+		mut j := 0
+		for j < i {
+			return names[i] if names[j] == names[i]
+			j = j + 1
+		}
+		i = i + 1
+	}
+	return ""
+}
+
+# c_pat_names_once — every name a pattern binds, an `as` name and a named rest included, with
+# an or-pattern counted by its first side.
+fn c_pat_names_once(pt: ast.Pat) -> list[str] {
+	alts := c_pat_or_alts(pt)
+	return c_pat_names_once(alts[0]) if alts.len() > 0
+
+	bn := c_pat_bind_name(pt)
+	return [bn] if bn != ""
+
+	mut out: list[str] = []
+	an := c_pat_as_name(pt)
+	if an != "" {
+		out.append(an)
+	}
+	for sub in c_pat_children(pt) {
+		for n in c_pat_names_once(sub) {
+			out.append(n)
+		}
+	}
+	rn := c_pat_list_rest_name(pt)
+	if rn != "" {
+		out.append(rn)
+	}
+	return out
+}
+
+# c_pat_rest_binds — the names a pattern binds with a named `..rest`, anywhere in it.
+fn c_pat_rest_binds(pt: ast.Pat) -> list[str] {
+	mut out: list[str] = []
+	for sub in c_pat_children(pt) {
+		for n in c_pat_rest_binds(sub) {
+			out.append(n)
+		}
+	}
+	rn := c_pat_list_rest_name(pt)
+	if rn != "" {
+		out.append(rn)
+	}
 	return out
 }
 
@@ -16830,6 +16949,76 @@ fn c_list_pat_at(s: str, ct: str, i: int, rest: int, n: int) -> str {
 
 	back := n - i
 	return f"(*({ct}*)zrt_list_at_ref(&({s}), zrt_list_len(&({s})) - (size_t)({back})))"
+}
+
+# c_rest_tmp is what a named `..rest` is spliced in as: a C temporary the arm declares, filled
+# with the elements between the `rest` named in front and the `n - rest` named behind. The arm
+# owns it (c_rest_open, c_rest_close); the name's text is the temporary, so every use reads the
+# one slice. Under an or-pattern's side the fill waits on that side's test (rs_guard), and the
+# temporary starts as an empty header so the give-back is the same either way.
+fn c_rest_tmp(mut &em: Emitter, s: str, st: ast.Ty, rest: int, n: int) -> str {
+	tmp := c_tmp(em, "zgt_rs")
+	back := strconv.to_string(n - rest, 10)
+	mut fill := f"zrt_list_slice(&{tmp}, &({s}), (size_t){strconv.to_string(rest, 10)}, zrt_list_len(&({s})) - (size_t){back});"
+	if em.rs_guard != "" {
+		fill = f"if ({em.rs_guard}) {{ {fill} }}"
+	}
+
+	em.used_rt = true
+	em.rs_tmps.append(tmp)
+	em.rs_inits.append(f"zrt_list {tmp} = {{0}}; {fill} ")
+	em.rs_thunks.append(c_drop_thunk(em, st))
+	em.rs_drops.append(c_drop_stmt(em, st, tmp) + " ")
+	return tmp
+}
+
+# c_guard_and is two tests that must both hold, either of which may be "" for none.
+fn c_guard_and(a: str, b: str) -> str {
+	return b if a == ""
+	return a if b == ""
+
+	return f"({a}) && ({b})"
+}
+
+# c_rest_open declares and fills the slices bound since `mark`, and holds each one (c_hold):
+# the arm runs the program's own code, and one that raises or returns never reaches the drop
+# c_rest_close writes after it. "" when the arm bound none.
+fn c_rest_open(mut &em: Emitter, mark: int) -> str {
+	mut out := ""
+	mut i := mark
+	for i < em.rs_tmps.len() {
+		out = out + em.rs_inits[i]
+		if em.rs_thunks[i] != "" {
+			out = out + c_hold_with(em, em.rs_thunks[i], em.rs_tmps[i])
+		}
+		i = i + 1
+	}
+	return out
+}
+
+# c_rest_close wraps what the arm rendered — its body or its guard — so the slices c_rest_open
+# declared live exactly as long as it: declared before, given back after, the value carried
+# across the give-back in a temporary of its own. `keep` is the hold count before c_rest_open.
+# The rows since `mark` are taken off, so the next arm starts with none.
+fn c_rest_close(mut &em: Emitter, mark: int, keep: int, decl: str, out: str, no_val: bool) -> str {
+	return out if em.rs_tmps.len() == mark
+
+	mut drops := ""
+	mut i := mark
+	for i < em.rs_tmps.len() {
+		drops = drops + em.rs_drops[i]
+		i = i + 1
+	}
+	em.rs_tmps = c_strs_take(em.rs_tmps, mark)
+	em.rs_inits = c_strs_take(em.rs_inits, mark)
+	em.rs_thunks = c_strs_take(em.rs_thunks, mark)
+	em.rs_drops = c_strs_take(em.rs_drops, mark)
+	un := c_unhold(em, keep)
+
+	return f"({{ {decl}{out}; {un}{drops}}})" if no_val
+
+	rv := c_tmp(em, "zgt_rv")
+	return f"({{ {decl}__auto_type {rv} = {out}; {un}{drops}{rv}; }})"
 }
 
 fn c_pat_is_tuple(pt: ast.Pat) -> bool {
@@ -16951,7 +17140,12 @@ fn c_arm_body(mut &em: Emitter, a: ast.Arm, s: str, st: ast.Ty, sb: Subst) -> st
 	# payload binding is a SUBSTITUTION into the scrutinee's own field, so `mut ys := match
 	# b { One(q) => q … }` handed back the enum's own list header and a write through `ys`
 	# was read back through `b`. It is the carrier extraction's rule, one shape along.
-	out := c_copied(em, c_infer(em, a.body), a.body, c_arm_subst(em, a, s, st, sb))
+	t := c_infer(em, a.body)
+	mark := em.rs_tmps.len()
+	sub := c_arm_subst(em, a, s, st, sb)
+	keep := em.rel_cnames.len()
+	decl := c_rest_open(em, mark)
+	out := c_rest_close(em, mark, keep, decl, c_copied(em, t, a.body, sub), c_is_nil_ty(t))
 	c_scope_close(em, outer)
 	return out
 }
@@ -28406,7 +28600,7 @@ fn c_emit_unit_as(prog0: ast.File, own0: ast.File, ft: FileTypes, ms: Mods, whol
 	# is what makes that invariant hold for a multi-unit program, at the place it already lives,
 	# and it is what lets the declaration passes below go back to reading the WHOLE program.
 	seen := diags.len()
-	mut em := Emitter([], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], false, false, false, false, [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], 0, [], 0, [], [], false, "", "", [], [], ast.Ty.TVoid, 0, "", 0, 0, 0, 0, "", diags, 0, 0, [], [], [], [], [], false, 0, false, "", 0, false, false, [], [], [], [], [], [], [], [], [], [], [], "", want_lints, [], [], [], [], [], [], [], [], [], [], [], [], false, 0, [], [], "", c_nosub(), [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], false, ast.no_index(), [], [], [], [], [], [], [], [], [], [], [], [], false, [], [], [], [], [], [], [])
+	mut em := Emitter([], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], false, false, false, false, [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], 0, [], 0, [], [], false, "", "", [], [], ast.Ty.TVoid, 0, "", 0, 0, 0, 0, "", diags, 0, 0, [], [], [], [], [], false, 0, false, "", 0, false, false, [], [], [], [], [], [], [], [], [], [], [], "", want_lints, [], [], [], [], [], [], [], [], [], [], [], [], false, 0, [], [], "", c_nosub(), [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], false, ast.no_index(), [], [], [], [], [], [], [], [], [], [], [], [], false, [], [], [], [], [], [], [], [], [], [], [], "")
 
 	# ASSIGNED, NOT PASSED. Every argument above is a zero value, and `layering` asserts that
 	# — it lines the call up with the fields by KIND, which only works while nothing in it

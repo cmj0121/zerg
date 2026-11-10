@@ -5033,7 +5033,7 @@ fn parse_primary(mut &p: Parser) -> ast.Expr {
 	# A bare `..` is a RANGE with nothing on its left (GRAMMAR#range-expr): `xs[..2]` is the open
 	# form of a slice. It was named as a list pattern, which is a different form the same
 	# token opens — advice about something nobody wrote.
-	raise p_diag(p, rule.Rule.RangeNoLower, "a range with no lower bound — write `xs[0..n]`; a list PATTERN takes `..`, and a named `..rest` is E9110") if k == token.Kind.DotDot
+	raise p_diag(p, rule.Rule.RangeNoLower, "a range with no lower bound — write `xs[0..n]`; `..` and a named `..rest` belong in a list PATTERN") if k == token.Kind.DotDot
 
 	# ANY OTHER TOKEN. This used to be `p_advance(p); return ENil` — the token was consumed
 	# and the expression became nil, which emits `0`. So every form this parser does not

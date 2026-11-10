@@ -525,6 +525,9 @@ pub enum Rule {
 	DeriveCodecField = 4124
 	DeriveCodecMissing = 4125
 
+	# a pattern that binds one name twice — `(a, a)`, `[x, ..x]`, `(a, b) as a`
+	PatternBindsTwice = 4126
+
 	# building — the program as a set of files, which no single file's text answers: imports resolved
 	# before anything is lexed, and `fn main` looked for after everything is emitted
 	EntryHasNoMain = 5001
@@ -642,7 +645,6 @@ pub enum Rule {
 	# every exit unwinds to a mark. The channel case next door (9066) is the same absence read
 	# from the other side, and both retire when a release can be taken out of the middle.
 	NotYetDelOwning = 9108
-	NotYetListPatternRestBinding = 9110
 	NotYetArrayLenImported = 9111
 	NotYetArrayMethod = 9112
 

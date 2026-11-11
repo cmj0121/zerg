@@ -708,7 +708,8 @@ postfix       += '?' | '!' | '?.' identifier
   short-circuits. The right side may instead **diverge** — `x ?? break`, `v ?? return nil`, `p ?? raise e` —
   since `break` / `continue` / `return` / `raise` never yield a value.
 - **`a?.b`** — **optional chain** (`T?` only): read `.b` when `a` is present, else short-circuit to `nil` in
-  place (it never returns from the function, unlike `?`).
+  place (it never returns from the function, unlike `?`). A call after it, `a?.m(…)`, calls `m` on the value
+  the same way, its arguments evaluated only when `a` is present.
 - **`x!`** — **force-unwrap**: unwrap the `Left`, or **raise `UnwrapError`** (a value→abort hatch). Logical
   negation is the keyword `not`, so postfix `!` is free.
 - **`raise e`** — **abort** carrying an `Err` (value→abort); **`raise e from c`** records `c` as `e`'s cause.
@@ -909,7 +910,6 @@ production, not the one that first mentions it.
 
 | Group | Code    | Form                                                                                    |
 | ----- | ------- | --------------------------------------------------------------------------------------- |
-| 4     | `E9009` | an optional method call — `p?.m(…)`                                                     |
 | 4     | `E2071` | a range with no **lower** bound — `xs[..n]`                                             |
 | 4     | `E9050` | an **open-ended** range where a bound is needed — `xs[a..]`, `for i in n..`             |
 | 4     | `E9077` | a range **of a type this compiler cannot compare** as a value — `"a".."z"`              |

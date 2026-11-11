@@ -58,23 +58,23 @@ type, and this position gives it none_.
 > target only**: `text.make(1)` compiles, and `f := text.make` written above it reports _E3084 module `text`
 > has no `make`_ — the member lookup that resolves a qualified name lives on the call path, and the bare-name
 > path never learned it. So a cross-module function can be called, but not bound, passed, or stored.
->
-> **[not yet]** One form that shares the indexed-callee shape is still unbuilt: an optional method call,
-> `p?.m(…)`. A call through a function VALUE held in a container is built — `fs[0](x)`, and `fs[i](x)` at an
-> index that is a name. An explicit type argument at a use site — `id[int](7)` — left the language: a postfix
-> bracket is always an index ([Grammar](../surface/grammar.md)), so where `id` is a function rather than a
-> binding it is refused by name — _E2035 `id[int](…)` writes a call's type arguments, and a postfix `[ … ]` is
-> an index_.
->
-> **And it is not coming back under another spelling.** A generic takes its type from its ARGUMENTS, and
-> where inference is not enough a **typed binding** steers it — `xs: list[int] = empty()`. Reopening the
-> question would need an inference failure a typed position cannot fix, and the one that looks like it — a
-> type parameter appearing only in the return — is exactly what the binding's type answers.
->
-> The `mut &` distinction is **carried by the type**: `fn(mut &int)` and `fn(int)` are two types, and a value
-> of one is not a value of the other — _E3033 cannot bind fn(mut &int) -> void to a fn(int) -> void binding_.
-> A call through a value reads the convention from the type it is calling, having no callee name to read it
-> from, so the borrow rules hold there exactly as they do at a call by name.
+
+A callee that is not a name is an expression. A call through a function VALUE held in a container is built —
+`fs[0](x)`, and `fs[i](x)` at an index that is a name — and so is the optional method call `p?.m(…)`, which
+calls `m` only when `p` is present ([Errors](errors.md)). An explicit type argument at a use site —
+`id[int](7)` — left the language: a postfix bracket is always an index ([Grammar](../surface/grammar.md)), so
+where `id` is a function rather than a binding it is refused by name — _E2035 `id[int](…)` writes a call's
+type arguments, and a postfix `[ … ]` is an index_.
+
+**And it is not coming back under another spelling.** A generic takes its type from its ARGUMENTS, and
+where inference is not enough a **typed binding** steers it — `xs: list[int] = empty()`. Reopening the
+question would need an inference failure a typed position cannot fix, and the one that looks like it — a
+type parameter appearing only in the return — is exactly what the binding's type answers.
+
+The `mut &` distinction is **carried by the type**: `fn(mut &int)` and `fn(int)` are two types, and a value
+of one is not a value of the other — _E3033 cannot bind fn(mut &int) -> void to a fn(int) -> void binding_.
+A call through a value reads the convention from the type it is calling, having no callee name to read it
+from, so the borrow rules hold there exactly as they do at a call by name.
 
 **A function's type is its input/output contract, and only that.** It reveals its parameters — with `mut &`
 marking the one argument-level effect, a mutable reference that writes back to the caller — and its result, where a

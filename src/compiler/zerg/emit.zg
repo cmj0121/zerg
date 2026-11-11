@@ -1463,8 +1463,7 @@ fn c_ctor_side_of(nm: str, n: int) -> int {
 # exactly as `??` does; and the branch is a statement rather than a ternary because the two
 # sides fill different fields of the answer.
 fn c_optchain(mut &em: Emitter, target: ast.Expr, fld: str, l: int, c: int, sb: Subst) -> str {
-	t := c_infer(em, target)
-	raise c_diag(em, rule.Rule.OptionalChainOnNonOptional, f"`?.` reads through an optional, and {ast.ty_name(t)} is not one — use `.` for a value that is always there") if not ast.ty_is_opt(t)
+	t := c_optchain_operand(em, target)
 	inner := c_opt_elem(t)
 	if em.want_index {
 		c_nx_field(em, inner, fld, l, c)
@@ -1511,6 +1510,100 @@ fn c_optchain(mut &em: Emitter, target: ast.Expr, fld: str, l: int, c: int, sb: 
 		out = out + f" {df}(&{tv});"
 	}
 	return out + " " + rv + "; })"
+}
+
+# c_optchain_operand is the type a chain reads through, and the one rule both links have: `?.`
+# is for an optional, whether a field or a call follows it.
+fn c_optchain_operand(mut &em: Emitter, target: ast.Expr) -> ast.Ty {
+	t := c_infer(em, target)
+	raise c_diag(em, rule.Rule.OptionalChainOnNonOptional, f"`?.` reads through an optional, and {ast.ty_name(t)} is not one — use `.` for a value that is always there") if not ast.ty_is_opt(t)
+
+	return t
+}
+
+# c_optmethod lowers `a?.m(…)`: call `m` on the payload when `a` is present, else nil in place.
+# It answers what c_optchain answers, for the same reason — an `R?` that a chain, a `??` or a
+# `!` reads on — and an `R?` result is not wrapped again, as an optional field is not.
+#
+# THE CALL IS AN ORDINARY METHOD CALL on `t!`, where `t` is the operand's temp: the receiver
+# is a value rather than a place, so a method that writes through its receiver is refused
+# exactly as `a!.m(…)` refuses it, and every read-only one is the method `.` would have
+# called. The ARGUMENTS ARE INSIDE THE BRANCH, which is the short-circuit — nothing to the
+# right of `?.` runs when `a` is absent (docs/core/memory.md).
+#
+# A method answering nothing makes the whole expression answer nothing: there is no value to
+# be absent, so it is the call made only when `a` is there.
+fn c_optmethod(mut &em: Emitter, target: ast.Expr, meth: str, args: list[ast.Expr], l: int, c: int, sb: Subst) -> str {
+	t := c_optchain_operand(em, target)
+	src := c_opt_name(em, c_opt_elem(t))
+	tag := strconv.to_string(em.op_n, 10)
+	em.op_n = em.op_n + 1
+
+	tv := "zgt_om" + tag
+	rv := "zgt_omr" + tag
+	head := f"({{ {src} {tv} = {c_expr(em, target, sb)};"
+
+	rt := c_optmethod_call_ty(em, t, tv, meth, args, l, c)
+	outer := c_scope_open(em)
+	body := c_expr(em, c_optmethod_call(em, t, tv, meth, args, l, c), sb)
+	c_scope_close(em, outer)
+
+	df := c_carrier_temp_drop(em, t, target)
+	mut give := ""
+	if df != "" {
+		give = f" {df}(&{tv});"
+	}
+	return f"{head} if ({c_res_is_left(tv)}) {{ {body}; }}{give} }})" if ast.ty_eq(rt, ast.Ty.TVoid)
+
+	ot := c_opt_once(rt)
+	mut take := f"{rv} = {body};"
+	if not ast.ty_is_opt(rt) {
+		take = f"{c_res_mark_left(rv)} {c_res_put(em, ot, rv, body)}"
+	}
+	out := f"{head} {c_opt_name(em, c_opt_elem(ot))} {rv}; if ({c_res_is_left(tv)}) {{ {take} }} else {{ {c_res_mark_right(rv)} }}"
+	return out + give + " " + rv + "; })"
+}
+
+# c_optmethod_call is the call `a?.m(…)` makes once its operand is bound: a binding under a name
+# no source can write, holding the operand's type in the C name `tv`, and the ordinary method
+# call on its payload. The caller opens the scope the binding lives in, because the call is
+# lowered inside it as well as typed.
+fn c_optmethod_call(mut &em: Emitter, t: ast.Ty, tv: str, meth: str, args: list[ast.Expr], l: int, c: int) -> ast.Expr {
+	nm := "?." + strconv.to_string(em.op_n, 10)
+	em.op_n = em.op_n + 1
+	c_add_var_named(em, nm, t, tv, false, false)
+
+	return ast.Expr.EMethod(ast.Expr.EForce(ast.Expr.EIdent(nm, 0, 0)), meth, args, l, c)
+}
+
+# c_optmethod_call_ty is the type that call answers, asked of the BOUND payload so the operand is
+# inferred once. Typing it through `target!` inferred the operand again at every link, which made
+# a chain of calls exponential in its length.
+fn c_optmethod_call_ty(mut &em: Emitter, t: ast.Ty, tv: str, meth: str, args: list[ast.Expr], l: int, c: int) -> ast.Ty {
+	outer := c_scope_open(em)
+	rt := c_infer(em, c_optmethod_call(em, t, tv, meth, args, l, c))
+	c_scope_close(em, outer)
+
+	return rt
+}
+
+# c_optmethod_ty is the type `a?.m(…)` answers: the method's own, made optional once.
+fn c_optmethod_ty(mut &em: Emitter, target: ast.Expr, meth: str, args: list[ast.Expr], l: int, c: int) -> ast.Ty {
+	t := c_infer(em, target)
+	return ast.Ty.TUnknown if not ast.ty_is_opt(t)
+
+	rt := c_optmethod_call_ty(em, t, "", meth, args, l, c)
+	return rt if c_is_unknown(rt) or ast.ty_eq(rt, ast.Ty.TVoid)
+
+	return c_opt_once(rt)
+}
+
+# c_opt_once makes a type optional unless it already is: `T??` is not a type, so an optional
+# read through a chain — a field or a method's answer — is not wrapped a second time.
+fn c_opt_once(rt: ast.Ty) -> ast.Ty {
+	return rt if ast.ty_is_opt(rt)
+
+	return ast.Ty.TOpt(rt)
 }
 
 # c_try lowers `x?` (GRAMMAR group 8): the payload, or an early return of the absent side
@@ -1590,9 +1683,8 @@ fn c_optchain_ty(mut &em: Emitter, target: ast.Expr, fld: str) -> ast.Ty {
 	ft := c_field_ty(em, c_named_of(c_opt_elem(t)), fld)
 
 	return ast.Ty.TUnknown if c_is_unknown(ft)
-	return ft if ast.ty_is_opt(ft)
 
-	return ast.Ty.TOpt(ft)
+	return c_opt_once(ft)
 }
 
 fn c_opt_elem(t: ast.Ty) -> ast.Ty {
@@ -9440,6 +9532,7 @@ fn c_expr_node(mut &em: Emitter, e: ast.Expr, sb: Subst) -> str {
 		Expr.ENamedArg(nm, _, _, _) => c_named_arg_misplaced(em, nm)
 		Expr.EField(target, fld, l, c) => c_fieldref(em, target, fld, l, c, sb)
 		Expr.EOptChain(target, fld, l, c) => c_optchain(em, target, fld, l, c, sb)
+		Expr.EOptMethod(target, meth, args, l, c) => c_optmethod(em, target, meth, args, l, c, sb)
 		Expr.ETry(x) => c_try(em, x, sb)
 		Expr.EIndex(target, idx) => c_index(em, target, idx, sb)
 		Expr.EMethod(target, meth, args, l, c) => c_method(em, target, meth, args, l, c, sb)
@@ -12211,12 +12304,25 @@ pub fn c_place_why(mut &em: Emitter, e: ast.Expr) -> str {
 	return "a map index" if c_is_map_index(em, e)
 	return "a slice" if c_is_slice(e)
 	return "a literal" if c_is_literal_expr(e)
+
+	# `p!`, and the receiver `p?.m(…)` calls on, are a payload copied out of the carrier
+	return "an unwrapped payload" if ast.is_force(e)
 	return "a call result" if c_ident_name(e) == "" and not c_is_lvalue(e)
 
 	# an lvalue by SHAPE whose path stops being storage further down — name where it stops
 	return c_place_why(em, check.chk_store_target(e)) if c_is_lvalue(e) and c_ident_name(e) == ""
 
 	return "a call result"
+}
+
+# c_place_hint is what to do about the value c_place_why names, and it is keyed off that answer
+# so the two cannot name different steps of a path. Binding it to a name is the remedy for a call
+# result, a literal, a slice; for an unwrapped payload it is not, since `p` already has a name
+# and the payload is a COPY of what `p` holds — a change reaches `p` only when it is stored back.
+pub fn c_place_hint(mut &em: Emitter, e: ast.Expr) -> str {
+	return "it is a copy of the payload, so unwrap it into a `mut` binding, change that, and store it back" if c_place_why(em, e) == "an unwrapped payload"
+
+	return "bind it to a name first"
 }
 
 # c_meth_mutates reports the list methods that write through their receiver.
@@ -12750,9 +12856,9 @@ fn c_list_method(mut &em: Emitter, target: ast.Expr, meth: str, args: list[ast.E
 		# calls a subrange "an ordinary read-only `list[T]` value" and a plain `xs` frozen, and a
 		# written value has no storage anywhere in the program — so there is no day a
 		# `NotImplemented:` on any of the three would have retired.
-		raise c_diag(em, rule.Rule.MutateAValueNotAPlace, f"`{meth}` MUTATES its list, and `{c_place_why(em, target)}` is a value rather than a place — bind it to a name first") if c_meth_mutates(meth) and not (c_is_index(target) and c_is_map(c_infer(em, c_index_target(target))))
+		raise c_diag(em, rule.Rule.MutateAValueNotAPlace, f"`{meth}` MUTATES its list, and `{c_place_why(em, target)}` is a value rather than a place — {c_place_hint(em, target)}") if c_meth_mutates(meth) and not c_is_map_index(em, target)
 
-		raise c_diag(em, rule.Rule.NotYetMutateListRvalue, f"NotImplemented: `{meth}` MUTATES its list, and `{c_place_why(em, target)}` is a value rather than a place — bind it to a name first (docs/core/memory.md)") if c_meth_mutates(meth)
+		raise c_diag(em, rule.Rule.NotYetMutateListRvalue, f"NotImplemented: `{meth}` MUTATES its list, and `{c_place_why(em, target)}` is a value rather than a place — {c_place_hint(em, target)} (docs/core/memory.md)") if c_meth_mutates(meth)
 
 		return c_list_method_rv(em, target, meth, args, tty, sb)
 	}
@@ -17609,6 +17715,7 @@ fn c_infer_node(mut &em: Emitter, e: ast.Expr) -> ast.Ty {
 		Expr.EMethod(target, meth, args, _, _) => c_infer_methcall(em, target, meth, args)
 		Expr.EField(target, fld, _, _) => c_field_ty_of(em, target, fld)
 		Expr.EOptChain(target, fld, _, _) => c_optchain_ty(em, target, fld)
+		Expr.EOptMethod(target, meth, args, l, c) => c_optmethod_ty(em, target, meth, args, l, c)
 		Expr.ETry(x) => c_carrier_elem(c_infer(em, x))
 		Expr.EIndex(target, idx) => c_elem_ty(em, target, idx)
 		Expr.EListLit(elems) => c_infer_listlit(em, elems)
@@ -28846,6 +28953,7 @@ fn c_ren_expr(r: TyRen, e: ast.Expr) -> ast.Expr {
 		Expr.ENamedArg(nm, x, l, c) => ast.Expr.ENamedArg(nm, c_ren_expr(r, x), l, c)
 		Expr.EField(x, f, l, c) => ast.Expr.EField(c_ren_expr(r, x), f, l, c)
 		Expr.EOptChain(x, f, l, c) => ast.Expr.EOptChain(c_ren_expr(r, x), f, l, c)
+		Expr.EOptMethod(x, m, xs, l, c) => ast.Expr.EOptMethod(c_ren_expr(r, x), m, c_ren_exprs(r, xs), l, c)
 		Expr.ETry(x) => ast.Expr.ETry(c_ren_expr(r, x))
 		Expr.EIndex(x, i) => ast.Expr.EIndex(c_ren_expr(r, x), c_ren_expr(r, i))
 		Expr.EMethod(x, m, xs, l, c) => ast.Expr.EMethod(c_ren_expr(r, x), m, c_ren_exprs(r, xs), l, c)

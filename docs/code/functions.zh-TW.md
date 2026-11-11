@@ -48,21 +48,20 @@ _E3081 the closure parameter `x` has no type, and this position gives it none_�
 > **[not yet]** 這個值停在模組邊界上。透過另一個模組指名的函式只是一個**呼叫目標**：`text.make(1)` 編得過，而
 > 寫在它上一行的 `f := text.make` 會報 _E3084 module `text` has no `make`_——解析限定名字的成員查找寫在呼叫那條
 > 路上，裸名字那條路從來沒學會它。所以跨模組的函式可以被呼叫，卻不能被綁定、傳遞或存起來。
->
-> **[not yet]** 共用 indexed-callee 形狀的形式還有一個未建置:optional method call `p?.m(…)`。透過容器裡的
-> 函式**值**呼叫已經建置——`fs[0](x)`,以及索引是一個名字的 `fs[i](x)`。使用點的顯式型別引數——`id[int](7)`——
-> 已經離開這個語言:postfix 的中括號一律是索引（見[文法](../surface/grammar.zh-TW.md)）,所以當 `id` 是函式而
-> 不是 binding 時它會被指名拒絕——_E2035 `id[int](…)` writes a call's type arguments, and a postfix `[ … ]` is
-> an index_。
->
-> **它也不會換個拼法回來。** 一個 generic 的型別是從它的**引數**取得的,而推論不夠時由**帶型別的 binding** 導引
-> ——`xs: list[int] = empty()`。要重開這個問題,得先有一個「帶型別的位置也修不了的推論失敗」,而看起來像那樣的
-> 唯一一個——型別參數只出現在回傳位置——正好就是 binding 的型別回答掉的。型別引數從引數型別推論,是今天實例化一個
-> generic 的唯一途徑。
->
-> `mut &` 的區分是**由型別帶著的**：`fn(mut &int)` 與 `fn(int)` 是兩個型別，其中一個的值不是另一個的值——
-> _E3033 cannot bind fn(mut &int) -> void to a fn(int) -> void binding_。透過值的呼叫是從它所呼叫的那個型別讀出
-> 慣例的——它沒有被呼叫者的名字可讀——所以借用規則在那裡成立的方式，和指名呼叫完全一樣。
+
+不是名字的被呼叫者是一個運算式。透過容器裡的函式**值**呼叫已經建置——`fs[0](x)`,以及索引是一個名字的
+`fs[i](x)`——optional method call `p?.m(…)` 也已建置：只有 `p` 存在時才呼叫 `m`（見[錯誤](errors.zh-TW.md)）。使用點
+的顯式型別引數——`id[int](7)`——已經離開這個語言:postfix 的中括號一律是索引（見[文法](../surface/grammar.zh-TW.md)）,
+所以當 `id` 是函式而不是 binding 時它會被指名拒絕——_E2035 `id[int](…)` writes a call's type arguments, and a
+postfix `[ … ]` is an index_。
+
+**它也不會換個拼法回來。** 一個 generic 的型別是從它的**引數**取得的,而推論不夠時由**帶型別的 binding** 導引
+——`xs: list[int] = empty()`。要重開這個問題,得先有一個「帶型別的位置也修不了的推論失敗」,而看起來像那樣的
+唯一一個——型別參數只出現在回傳位置——正好就是 binding 的型別回答掉的。
+
+`mut &` 的區分是**由型別帶著的**：`fn(mut &int)` 與 `fn(int)` 是兩個型別，其中一個的值不是另一個的值——
+_E3033 cannot bind fn(mut &int) -> void to a fn(int) -> void binding_。透過值的呼叫是從它所呼叫的那個型別讀出
+慣例的——它沒有被呼叫者的名字可讀——所以借用規則在那裡成立的方式，和指名呼叫完全一樣。
 
 **一個函式的型別就是它的輸入／輸出契約，僅此而已。** 它揭露參數——`mut &` 標出唯一的「引數層 effect」:寫回呼叫端的
 可變參考——以及結果，可回復的失敗會以 `Result` / `Either` 顯示在那裡。它**不追蹤任何其他 effect**：一個函式有沒有做

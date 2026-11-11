@@ -1232,7 +1232,7 @@ fn chk_store_path(mut &em: emit.Emitter, e: ast.Expr) {
 }
 
 fn chk_store_through(mut &em: emit.Emitter, e: ast.Expr) {
-	chk_at(em, rule.Rule.StoreThroughValue, f"cannot store through {emit.c_place_why(em, e)} — it is a value rather than a place, so the write would land on a copy; bind it to a name first")
+	chk_at(em, rule.Rule.StoreThroughValue, f"cannot store through {emit.c_place_why(em, e)} — it is a value rather than a place, so the write would land on a copy; {emit.c_place_hint(em, e)}")
 }
 
 # chk_str_not_indexable is the language's rule that a str has no subscript.
@@ -1787,7 +1787,7 @@ pub fn chk_arm_types(mut &em: emit.Emitter, arms: list[ast.Arm], st: ast.Ty) {
 # writing to a copy is not writing.
 pub fn chk_ref_arg(mut &em: emit.Emitter, key: str, pos: int, a: ast.Expr) {
 	if not emit.c_is_place(em, a) {
-		chk_at(em, rule.Rule.BorrowOfValue, f"{chk_arg_says(key, pos)} borrows {emit.c_place_why(em, a)}, which is a value rather than a place — bind it to a name first")
+		chk_at(em, rule.Rule.BorrowOfValue, f"{chk_arg_says(key, pos)} borrows {emit.c_place_why(em, a)}, which is a value rather than a place — {emit.c_place_hint(em, a)}")
 		return
 	}
 

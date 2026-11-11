@@ -1451,11 +1451,9 @@ EOF
 # reported as ``undefined function ` ``` — an empty name, naming nothing, for a program with
 # no typo in it. They were one root cause and three separate unbuilt features.
 #
-# TWO OF THE THREE ARE BUILT (#172): `fs[0](…)` calls the element and a lambda called where it
-# is written calls the lambda, so `call-a-fn-value-from-a-list` has left this file for the
-# corpus, where a form that WORKS is pinned. What is left under `E9009` is the optional method
-# call below, and it is not this shape wearing another spelling — `?.` answers an optional, so
-# the call has to be conditional and its result has to be one too.
+# ALL THREE ARE BUILT: `fs[0](…)` calls the element and a lambda called where it is written calls
+# the lambda (#172), and `p?.m(…)` calls `m` when `p` is present (#439), so the cases left this
+# file for the corpus, where a form that WORKS is pinned.
 #
 # WHAT A VALUE CALLEE CAN STILL GET WRONG is not being a function, and that is a wrong program
 # rather than an unbuilt form: there is nothing to look up, only a type that is not a `fn`.
@@ -1627,23 +1625,6 @@ fn main() {
 	mut xs := [1, 2]
 	xs.append(v: 3)
 	print xs.len()
-}
-EOF
-
-expect "$ZERG" optional-method-call E9009 <<'EOF'
-struct P {
-	pub x: int
-}
-
-impl P {
-	fn get() -> int {
-		return this.x
-	}
-}
-
-fn main() {
-	p: P? = P(3)
-	print p?.get() ?? 0
 }
 EOF
 

@@ -649,20 +649,13 @@ fn lint_opt_body(body: list[ast.Stmt], at: LWhere, who: str, mut &out: list[Find
 }
 
 fn lint_opt_expr(e: ast.Expr, w: LWhere, who: str, mut &out: list[Finding]) {
-	if who != "" and lint_is_force(e) {
+	if who != "" and ast.is_force(e) {
 		out.append(Finding("", w.path, w.line, w.col, "L202", f"`!` in {who}, which answers a `T?` — `?` hands the absence back instead of aborting"))
 	}
 	for k in ast.expr_parts(e) {
 		lint_opt_expr(k, w, who, out)
 	}
 	lint_opt_body(ast.expr_stmts(e), w, lint_opt_inner(e, w, who), out)
-}
-
-fn lint_is_force(e: ast.Expr) -> bool {
-	return match e {
-		Expr.EForce(_) => true
-		_ => false
-	}
 }
 
 # lint_opt_inner is who the statements an expression carries answer for: a closure for itself,
@@ -798,6 +791,7 @@ fn lint_captures_expr(e: ast.Expr, w: LWhere, refs: list[str], mut &muts: list[s
 		Expr.EFn(_, _, _, b) => lint_captures_body(b, w, refs, muts, out)
 		Expr.ECall(_, args, _, _, _) => lint_captures_each(args, w, refs, muts, out)
 		Expr.EMethod(_, _, args, _, _) => lint_captures_each(args, w, refs, muts, out)
+		Expr.EOptMethod(_, _, args, _, _) => lint_captures_each(args, w, refs, muts, out)
 		_ => lint_skip()
 	}
 }
@@ -1399,6 +1393,7 @@ fn walk_expr(e: ast.Expr, mut &ids: list[str], mut &calls: list[str], mut &ns: l
 		Expr.ETry(x) => walk_expr(x, ids, calls, ns)
 		Expr.EIndex(target, idx) => walk_pair(target, idx, ids, calls, ns)
 		Expr.EMethod(target, meth, args, _, _) => walk_method(target, meth, args, ids, calls, ns)
+		Expr.EOptMethod(target, meth, args, _, _) => walk_method(target, meth, args, ids, calls, ns)
 		Expr.EListLit(elems) => walk_all(elems, ids, calls, ns)
 		Expr.EFill(v, n) => walk_pair(v, n, ids, calls, ns)
 		Expr.EConv(_, x, _) => walk_expr(x, ids, calls, ns)

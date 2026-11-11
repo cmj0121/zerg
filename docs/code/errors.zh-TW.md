@@ -48,6 +48,12 @@ fn load() -> Result[Config] {
 不會從函式 return）；用在任何非 `T?` 型別都是 compile error。若該欄位**本身就是 optional 就會壓平**——整串回答的
 是那個欄位的型別，而不是巢狀的 `T??`（那不是這個語言寫得出來的型別）。
 
+`a?.m(…)` 以同樣的方式呼叫方法：`a` 有值時才在那個值上執行 `m`,引數也只在那時才求值，而整個呼叫回答 `R?`——
+`m` 本身已回答 optional 時就像欄位一樣壓平，所以 `p?.next()?.name()` 能一節一節接下去。不回答任何值的方法讓這個
+呼叫成為一個只在 `a` 存在時才執行的敘述。接收者是從 `a` 複製出來的值，不是位置，所以透過接收者寫入的方法會像在
+`a!` 上一樣被拒絕——_E4081 `append` MUTATES its list, and `an unwrapped payload` is a value rather than a
+place_:那個改動只會落在副本上。要修改它，先拆進一個 `mut` binding、改動它，再存回 `a`。
+
 **`!`——force-unwrap（值 → abort）。** `x!` 拆出左值，否則對一個缺席的 optional **raise**——刻意的「我確定它有值」
 逃生口，是從值那層跨進 abort 的一種入口。（邏輯否定用關鍵字 `not`，所以 postfix `!` 空出來給它。）
 

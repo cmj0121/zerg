@@ -152,11 +152,11 @@ pub struct AsmOp {
 # Expr is an expression node.
 #
 # A NODE THAT CARRIES A NAME CARRIES THE NAME'S PLACE — the trailing `int, int` of EIdent,
-# ECall, ENamedArg, EField, EOptChain and EMethod is the 1-based line and BYTE column of the
-# name token, the convention EInt already keeps. It is what lets a position be answered with
-# the declaration a name resolves to (#24), which a statement's SAt cannot: one statement
-# holds many names. A node the compiler SYNTHESIZES — a desugaring, an operator lowered to a
-# method — carries 0, 0, which means "written nowhere" and is never indexed.
+# ECall, ENamedArg, EField, EOptChain, EOptMethod and EMethod is the 1-based line and BYTE
+# column of the name token, the convention EInt already keeps. It is what lets a position be
+# answered with the declaration a name resolves to (#24), which a statement's SAt cannot: one
+# statement holds many names. A node the compiler SYNTHESIZES — a desugaring, an operator
+# lowered to a method — carries 0, 0, which means "written nowhere" and is never indexed.
 pub enum Expr {
 	EInt(str, int, int)
 	EFloat(str)
@@ -206,6 +206,12 @@ pub enum Expr {
 	# PLACE — the result is itself an optional, which is what lets a chain keep going
 	# without a test at every link.
 	EOptChain(Expr, str, int, int)
+
+	# EOptMethod is `a?.m(…)`, the optional chain's call: `m` is called on `a`'s payload when
+	# `a` is present — its arguments are evaluated only then — and the whole expression is nil
+	# otherwise. It is a node of its own rather than an EOptChain under a call, because the
+	# chain answers an OPTIONAL and a call on that would call the optional.
+	EOptMethod(Expr, str, list[Expr], int, int)
 
 	# ETry is `x?` (GRAMMAR group 8): unwrap the payload, or early-return the absent side
 	# from the ENCLOSING function. It is the one operator that is a control transfer wearing
@@ -2653,6 +2659,14 @@ pub fn is_nil_lit(e: Expr) -> bool {
 	}
 }
 
+# is_force is `e!`, and the receiver `e?.m(…)` calls on, which is built as one.
+pub fn is_force(e: Expr) -> bool {
+	return match e {
+		Expr.EForce(_) => true
+		_ => false
+	}
+}
+
 pub fn expr_kind(e: Expr) -> str {
 	return match e {
 		Expr.EInt(lex, _, _) => "int " + lex
@@ -2668,6 +2682,7 @@ pub fn expr_kind(e: Expr) -> str {
 		Expr.ENamedArg(nm, _, _, _) => f"named argument {nm}:"
 		Expr.EField(_, name, _, _) => "field ." + name
 		Expr.EOptChain(_, name, _, _) => "optional chain ?." + name
+		Expr.EOptMethod(_, meth, _, _, _) => "optional method ?." + meth
 		Expr.ETry(_) => "try `?`"
 		Expr.EIndex(_, _) => "index"
 		Expr.EMethod(_, meth, _, _, _) => "method ." + meth
@@ -2736,6 +2751,7 @@ pub fn expr_parts(e: Expr) -> list[Expr] {
 		Expr.ENamedArg(_, x, _, _) => [x]
 		Expr.EField(x, _, _, _) => [x]
 		Expr.EOptChain(x, _, _, _) => [x]
+		Expr.EOptMethod(x, _, args, _, _) => expr_parts_cons(x, args)
 		Expr.ETry(x) => [x]
 		Expr.EIndex(x, i) => [x, i]
 		Expr.EMethod(x, _, args, _, _) => expr_parts_cons(x, args)
@@ -3047,6 +3063,7 @@ pub fn expr_stmts(e: Expr) -> list[Stmt] {
 		Expr.ENamedArg(_, _, _, _) => stmt_kids_none()
 		Expr.EField(_, _, _, _) => stmt_kids_none()
 		Expr.EOptChain(_, _, _, _) => stmt_kids_none()
+		Expr.EOptMethod(_, _, _, _, _) => stmt_kids_none()
 		Expr.ETry(_) => stmt_kids_none()
 		Expr.EIndex(_, _) => stmt_kids_none()
 		Expr.EMethod(_, _, _, _, _) => stmt_kids_none()
@@ -3129,6 +3146,7 @@ pub fn expr_binds(e: Expr) -> list[str] {
 		Expr.ENamedArg(_, _, _, _) => stmt_binds_none()
 		Expr.EField(_, _, _, _) => stmt_binds_none()
 		Expr.EOptChain(_, _, _, _) => stmt_binds_none()
+		Expr.EOptMethod(_, _, _, _, _) => stmt_binds_none()
 		Expr.ETry(_) => stmt_binds_none()
 		Expr.EIndex(_, _) => stmt_binds_none()
 		Expr.EMethod(_, _, _, _, _) => stmt_binds_none()

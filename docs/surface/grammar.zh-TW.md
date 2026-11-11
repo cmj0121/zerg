@@ -610,6 +610,7 @@ postfix       += '?' | '!' | '?.' identifier
 - **`a ?? b`**——**default**:`a` 有 `Left` 就用它,否則用 `b`;最鬆的二元、**右結合**、短路。右側也可改為**diverge**——
   `x ?? break`、`v ?? return nil`、`p ?? raise e`——因為 `break` / `continue` / `return` / `raise` 從不產值。
 - **`a?.b`**——**optional chain**（僅 `T?`）:`a` 存在時讀 `.b`,否則就地短路成 `nil`(不像 `?` 會從函式 return)。
+  接在後面的呼叫 `a?.m(…)` 以同樣方式在那個值上呼叫 `m`,引數只在 `a` 存在時才求值。
 - **`x!`**——**force-unwrap**:取出 `Left`,否則 **raise `UnwrapError`**（value→abort 的逃生口）。邏輯否定是關鍵字
   `not`,所以 postfix `!` 空著可用。
 - **`raise e`**——攜帶 `Err` 的 **abort**(value→abort);**`raise e from c`** 把 `c` 記為 `e` 的 cause。
@@ -774,7 +775,6 @@ asm-operand ::= 'in' '(' str-lit ')' expr | 'out' '(' str-lit ')' lvalue
 
 | Group | Code    | 形式                                                                                     |
 | ----- | ------- | ---------------------------------------------------------------------------------------- |
-| 4     | `E9009` | optional 上的方法呼叫 —— `p?.m(…)`                                                       |
 | 4     | `E2071` | 沒有**下界**的 range —— `xs[..n]`                                                        |
 | 4     | `E9050` | 需要界限處的**開放** range —— `xs[a..]`、`for i in n..`                                  |
 | 4     | `E9077` | 把**邊界無法比較的** range 當值 —— `"a".."z"`                                            |

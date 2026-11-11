@@ -580,7 +580,6 @@ pub enum Rule {
 	# keeping that churn out of the five stage ranges is what keeps them dense
 	NotYetParameterizedSpec = 9001
 	NotYetDecoratorLayout = 9005
-	NotYetCallee = 9009
 	NotYetImplAssocType = 9015
 	NotYetAssocTypeProjection = 9028
 	NotYetValueGenericParam = 9029

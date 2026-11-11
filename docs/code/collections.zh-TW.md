@@ -145,9 +145,11 @@ semantics，而唯讀情況維持**零拷貝**；COW 是與 copy-elision、move 
 > 元素有所不同。**slice**、**呼叫結果**與**字面量**則不在等任何東西，因為子範圍是唯讀值，而寫下來的值根本
 > 沒有儲存空間：_E4081 `append` MUTATES its list, and `a slice` is a value rather than a place — bind it to
 > a name first_。賦值對它的目標問同一個問題：`m["a"].n = 2` 與 `xs[0..1] = [3]` 是 _E3012 cannot store
-> through a map index_ 與 _… a slice_——改成設定整個元素（`m["a"] = v`）。而 map 用字面量建、不是
-> 呼叫它的型別：`map[str, int](…)` 是 _E9067 NotImplemented: `map[…](…)` as a constructor — this compiler
-> builds an empty map with the literal `{:}`_。
+> through a map index_ 與 _… a slice_——改成設定整個元素（`m["a"] = v`）。
+
+map 用字面量建、不是呼叫它的型別：後綴的 `[ … ]` 是索引，所以 GRAMMAR 不推導對 `map[str, int]` 的呼叫，而
+`map[str, int](…)` 是 _E2094 `map[…](…)` is not a constructor — … an empty map is the literal `{:}`_,型別取自它
+綁定的對象。
 
 ## 順序與相等性
 

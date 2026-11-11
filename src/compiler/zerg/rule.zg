@@ -134,6 +134,11 @@ pub enum Rule {
 	# be its bound or a statement of its own, and nothing tells which.
 	RangeEndsLine = 2093
 
+	# GRAMMAR#postfix: a `[ … ]` after a name is an index, so `map[K, V](…)` calls nothing a program
+	# can name — a map's type comes from what it is bound to, and an empty one is `{:}`. It was
+	# `E9067`, a constructor waiting to be built; GRAMMAR derives none.
+	MapTypeCalled = 2094
+
 	# checking — a form whose meaning does not hold together — reported against the tree, all at once
 	NotPublicMember = 3001
 	AssignTargetNotAPlace = 3002
@@ -594,7 +599,6 @@ pub enum Rule {
 	NotYetInOverType = 9062
 	NotYetFixedWidthLadder = 9063
 	NotYetDelChannel = 9066
-	NotYetGenericConstructor = 9067
 	NotYetValueUnnameableType = 9069
 	NotYetRebindMatchBinding = 9070
 	NotYetDefaultReadsField = 9071

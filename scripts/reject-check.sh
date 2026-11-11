@@ -6268,6 +6268,27 @@ fn main() {
 }
 EOF
 
+# --- a type is not called ------------------------------------------------------------
+#
+# GRAMMAR#postfix: a `[ … ]` after a name is an index, so `map[str, int](…)` calls nothing. It
+# was refused as a constructor not yet built (`E9067`); GRAMMAR derives none, and an empty map
+# is the literal `{:}`. A built-in container's type arguments are not a genericity it lacks —
+# `map` takes exactly two — so "`map` is not generic" would be false; the sentence names the
+# literal instead.
+reject a-map-type-called-as-a-constructor E2094 'an empty map is the literal `{:}`' <<'EOF'
+fn main() {
+	m := map[str, int]()
+	print m.len()
+}
+EOF
+
+reject a-map-type-called-into-a-typed-binding E2094 'is not a constructor' <<'EOF'
+fn main() {
+	m: map[str, int] = map[str, int]()
+	print m.len()
+}
+EOF
+
 # --- a range operator does not end a line ---------------------------------------
 #
 # GRAMMAR#range-expr: `b := x in 1..` over a line holding `10` reads two ways — the open range

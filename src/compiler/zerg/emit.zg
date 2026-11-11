@@ -13635,16 +13635,16 @@ fn c_call_written(mut &em: Emitter, name: str, args: list[ast.Expr], ts: list[as
 		c_nx_use(em, l, c, c_tpl_written(name), c_nx_template(em, name))
 	}
 
-	# A BUILT-IN TYPE CONSTRUCTOR IS NOT A GENERIC FUNCTION, and the rule below says the
-	# opposite: "`map` is not generic" is a false statement about `map[str, int]()`, which
-	# names exactly the two type arguments `map` takes. What it has not got is a no-argument
-	# constructor — an empty map is a literal — so that is what is named instead.
+	# A BUILT-IN TYPE IS NOT CALLED, and the rule below would say the wrong thing about it:
+	# "`map` is not generic" is false of `map[str, int]()`, which names exactly the two type
+	# arguments `map` takes. GRAMMAR#postfix derives no call of a type — its `[ … ]` is an index —
+	# and an empty map is the literal `{:}`, typed by what it is bound to, so that is what is named.
 	#
 	# c_builtin_check goes FIRST, because it owns every built-in name this compiler has not
 	# got: `set[str]()` would otherwise be told how to write an empty one, and there is no
 	# `set` here to write.
 	c_builtin_check(em, name)
-	raise c_diag(em, rule.Rule.NotYetGenericConstructor, f"NotImplemented: `{name}[…](…)` as a constructor — this compiler builds an empty map with the literal `{{:}}` and an empty list with `[]`, so a built-in container's type arguments come from what it is bound to (GRAMMAR#type-args)") if name == "map"
+	raise c_diag(em, rule.Rule.MapTypeCalled, f"`{name}[…](…)` is not a constructor — a postfix `[ … ]` is an index, so a type is never called; an empty map is the literal `{{:}}` and an empty list is `[]`, typed by what they are bound to (GRAMMAR#postfix)") if name == "map"
 
 	return c_call(em, c_instantiate_at(em, name, ts), args, 0, 0, sb, true)
 }

@@ -3389,16 +3389,6 @@ fn main() {
 }
 EOF
 
-# A built-in container's type arguments are not a genericity it lacks: `map` takes exactly
-# two. What it has not got is a no-argument constructor, and saying "`map` is not generic"
-# was a false statement about the program.
-expect "$ZERG" map-as-a-constructor E9067 <<'EOF'
-fn main() {
-	m := map[str, int]()
-	print 1
-}
-EOF
-
 # GRAMMAR#postfix puts type arguments in the postfix chain, so `f[A, B]` with no call is
 # grammatical. This compiler instantiates a generic at the call and has nothing for a bare
 # one to be.

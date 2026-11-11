@@ -163,9 +163,11 @@ and `xs[xs.len()..]` is the empty one.
 > waiting for anything, because a subrange is a read-only value and a written value has no storage at all:
 > _E4081 `append` MUTATES its list, and `a slice` is a value rather than a place — bind it to a name
 > first_. A store asks the same question of its target: `m["a"].n = 2` and `xs[0..1] = [3]` are _E3012
-> cannot store through a map index_ and _… a slice_ — set the whole element (`m["a"] = v`) instead. And a map
-> is built with the literal and not by calling its type: `map[str, int](…)` is _E9067 NotImplemented:
-> `map[…](…)` as a constructor — this compiler builds an empty map with the literal `{:}`_.
+> cannot store through a map index_ and _… a slice_ — set the whole element (`m["a"] = v`) instead.
+
+A map is built with the literal and not by calling its type: a postfix `[ … ]` is an index, so GRAMMAR derives
+no call of `map[str, int]`, and `map[str, int](…)` is _E2094 `map[…](…)` is not a constructor — … an empty map
+is the literal `{:}`_, typed by what it is bound to.
 
 ## Order & equality
 

@@ -913,7 +913,6 @@ production, not the one that first mentions it.
 | 4     | `E2071` | a range with no **lower** bound — `xs[..n]`                                             |
 | 4     | `E9077` | a range **of a non-integer or unsigned type** as a value — `"a".."z"`, `1.5..2.5`       |
 | 4     | `E2035` | postfix type arguments with no call after them — `map[str, int]`, `f[int]`              |
-| 4     | `E9067` | `map[K, V](…)` as a constructor — an empty map is the literal `{:}`                     |
 | 7     | `E9075` | a generic `type X[T] = …` alias                                                         |
 | 7     | `E9038` | an `impl` on a built-in type                                                            |
 | 7     | `E9046` | `alignof[T]`                                                                            |

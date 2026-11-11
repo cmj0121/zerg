@@ -205,6 +205,7 @@ shipping compiler rather than a part of it (the line
 | `E2091` | `fn This.…` whose body reads `this`                                                                   |
 | `E2092` | … is a statement, and a match arm's body is an expression                                             |
 | `E2093` | `…` ends the line, so whether the next line is its upper bound cannot be told                         |
+| `E2094` | `map[…](…)` is not a constructor — an empty map is the literal `{:}`                                  |
 | `E3001` | `…` is not a public member of module `…`                                                              |
 | `E3002` | `…` is not a place, and an assignment needs one                                                       |
 | `E3003` | cannot assign to `…`: it is a module `const`, and a constant is never written                         |
@@ -513,7 +514,6 @@ shipping compiler rather than a part of it (the line
 | `E9062` | `in` over … — a range's members are found by comparing its bounds                                     |
 | `E9063` | `…` is part of the fixed-width ladder                                                                 |
 | `E9066` | `del …` on a CHANNEL                                                                                  |
-| `E9067` | `…[…](…)` as a constructor                                                                            |
 | `E9069` | … whose value has no type this compiler can name                                                      |
 | `E9070` | `…` re-binds a name a `match` arm's pattern already binds                                             |
 | `E9071` | the default on field `…` reads the field `…`                                                          |
@@ -686,6 +686,10 @@ or `E3022`, as it is on `p!`.
 places an open range needs a bound. A slice now runs to the list's length and a loop counts up until it is
 left; a range VALUE stays bounded, and that is `E4110`.
 
+**One left E9xxx because GRAMMAR derives no such form (#439).** `E9067` refused `map[str, int](…)` as a
+constructor this compiler had not built. GRAMMAR#postfix makes a `[ … ]` after a name an index, so no
+program calls a type, and an empty map is the literal `{:}`; the refusal is a rule now, `E2094`.
+
 **One retired with its rule rather than to another range.** `E2060` refused a declared type whose
 name did not begin with a capital, and that rule was the whole of how the language separated its
 two namespaces — a capitalised name was a type, a lower-case one a value. The rule is gone: a name
@@ -805,6 +809,7 @@ name now is the prelude rule (`E2061`), which is about the name rather than abou
 | `E9050` | —       | the form was built: `xs[a..]` ends at the length, `for i in n..` runs  |
 | `E4011` | —       | not a rule: a list renders in `str(…)` as it does in `print`           |
 | `E9036` | `E4111` | not an unbuilt form: a `spec` member is never `unsafe`                 |
+| `E9067` | `E2094` | not an unbuilt form: GRAMMAR derives no call of a type                 |
 
 **One of them moved nowhere**, and it is the only row whose second column is empty. `E3047`
 reported a prefix operator on a `type X = Y` — _operator `not` has no meaning on `Flag`_ — on

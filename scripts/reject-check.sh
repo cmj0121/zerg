@@ -4188,6 +4188,386 @@ fn main() {
 }
 EOF
 
+# --- an optional is not its payload, at any slot ----------------------------------
+#
+# chk_fits answered yes to every `T?` handed to a value slot, on the promise that emit had a
+# better sentence. Only the annotated binding did (E4021), so the other slots reached cc with a
+# carrier struct where a scalar goes. Each slot now says it in its own words.
+
+reject an-optional-into-a-value-argument E3038 'argument 1 of `take` is int, and this gives int?' <<'EOF'
+fn pick(n: int) -> int? {
+	return n if n > 0
+	return nil
+}
+
+fn take(n: int) {
+	print n
+}
+
+fn main() {
+	take(pick(1))
+}
+EOF
+
+reject an-optional-returned-as-a-value E3032 "this function's answer is int, and this gives int?" <<'EOF'
+fn pick(n: int) -> int? {
+	return n if n > 0
+	return nil
+}
+
+fn f() -> int {
+	return pick(1)
+}
+
+fn main() {
+	print f()
+}
+EOF
+
+reject an-optional-assigned-to-a-value E3037 'cannot assign int? to `x`, which holds int' <<'EOF'
+fn pick(n: int) -> int? {
+	return n if n > 0
+	return nil
+}
+
+fn main() {
+	mut x := 1
+	x = pick(1)
+	print x
+}
+EOF
+
+reject an-optional-assigned-to-a-field E3037 'cannot assign int? to that part of `s`, which holds int' <<'EOF'
+fn pick(n: int) -> int? {
+	return n if n > 0
+	return nil
+}
+
+struct S {
+	pub a: int
+}
+
+fn main() {
+	mut s := S(1)
+	s.a = pick(1)
+	print s.a
+}
+EOF
+
+reject an-optional-assigned-to-an-element E3037 'cannot assign int? to that part of `xs`, which holds int' <<'EOF'
+fn pick(n: int) -> int? {
+	return n if n > 0
+	return nil
+}
+
+fn main() {
+	mut xs := [1, 2]
+	xs[0] = pick(1)
+	print xs[0]
+}
+EOF
+
+reject an-optional-written-into-a-map E3036 'the value written into this map is int, and this gives int?' <<'EOF'
+fn pick(n: int) -> int? {
+	return n if n > 0
+	return nil
+}
+
+fn main() {
+	mut m := {"a": 1}
+	m["b"] = pick(1)
+	print m["a"]
+}
+EOF
+
+reject an-optional-into-a-struct-field E3036 'the field `a` of `S` is int, and this gives int?' <<'EOF'
+fn pick(n: int) -> int? {
+	return n if n > 0
+	return nil
+}
+
+struct S {
+	pub a: int
+}
+
+fn main() {
+	s := S(pick(1))
+	print s.a
+}
+EOF
+
+reject an-optional-as-a-later-list-element E3036 'element 2 of this list literal is int, and this gives int?' <<'EOF'
+fn pick(n: int) -> int? {
+	return n if n > 0
+	return nil
+}
+
+fn main() {
+	xs := [2, pick(1)]
+	print xs[0]
+}
+EOF
+
+reject an-optional-as-a-later-map-value E3036 'a value of this map literal is int, and this gives int?' <<'EOF'
+fn pick(n: int) -> int? {
+	return n if n > 0
+	return nil
+}
+
+fn main() {
+	m := {"a": 2, "b": pick(1)}
+	print m["a"]
+}
+EOF
+
+reject an-optional-as-an-array-element E3028 'element 2 of this list literal is int, and this gives int?' <<'EOF'
+fn pick(n: int) -> int? {
+	return n if n > 0
+	return nil
+}
+
+fn main() {
+	a: [int; 2] = [2, pick(1)]
+	print a[0]
+}
+EOF
+
+reject an-optional-appended-to-a-value-list E3036 'the element `append` adds is int, and this gives int?' <<'EOF'
+fn pick(n: int) -> int? {
+	return n if n > 0
+	return nil
+}
+
+fn main() {
+	mut xs := [1]
+	xs.append(pick(1))
+	print xs[0]
+}
+EOF
+
+# the binding keeps its own sentence, which names the three unwraps: the slot rule above does
+# not speak for it.
+reject an-optional-bound-to-a-value E4021 'unwrap it with' <<'EOF'
+fn pick(n: int) -> int? {
+	return n if n > 0
+	return nil
+}
+
+fn main() {
+	x: int = pick(1)
+	print x
+}
+EOF
+
+# --- a `T` arm and a `T?` arm are two types (#437) -------------------------------
+#
+# chk_fits lets a bare value into a carrier SLOT, and the arm and branch rules asked it, so one
+# order of the pair passed — and the two lowered into one C conditional that cc refused. A
+# sibling arm is not a slot: the pair is refused in either order, under a `T?` context too.
+
+reject a-match-answering-a-value-then-an-optional E3021 'its arms give int and int?' <<'EOF'
+fn pick(n: int) -> int? {
+	return n if n > 0
+	return nil
+}
+
+fn main() {
+	x := 1
+	print match x {
+		0 => 1
+		_ => pick(x)
+	}
+}
+EOF
+
+reject a-match-answering-an-optional-then-a-value E3021 'its arms give int? and int' seed-gap <<'EOF'
+fn pick(n: int) -> int? {
+	return n if n > 0
+	return nil
+}
+
+fn main() {
+	x := 1
+	y := match x {
+		0 => pick(x)
+		_ => 1
+	}
+	print y!
+}
+EOF
+
+reject a-match-of-value-and-optional-arms-under-an-annotation E3021 'its arms give int and int?' <<'EOF'
+fn pick(n: int) -> int? {
+	return n if n > 0
+	return nil
+}
+
+fn main() {
+	x := 1
+	y: int? = match x {
+		0 => 1
+		_ => pick(x)
+	}
+	print y ?? 0
+}
+EOF
+
+reject an-if-answering-a-value-then-an-optional E3020 'its branches give int and int?' <<'EOF'
+fn pick(n: int) -> int? {
+	return n if n > 0
+	return nil
+}
+
+fn main() {
+	x := 1
+	y := if x > 0 { 2 } else { pick(x) }
+	print y
+}
+EOF
+
+reject an-if-answering-an-optional-then-a-value E3020 'its branches give int? and int' <<'EOF'
+fn pick(n: int) -> int? {
+	return n if n > 0
+	return nil
+}
+
+fn main() {
+	x := 1
+	y := if x > 0 { pick(x) } else { 2 }
+	print y ?? 0
+}
+EOF
+
+reject an-if-of-value-and-optional-branches-returned-as-optional E3020 'its branches give int and int?' <<'EOF'
+fn pick(n: int) -> int? {
+	return n if n > 0
+	return nil
+}
+
+fn f(x: int) -> int? {
+	return if x > 0 { 2 } else { pick(x) }
+}
+
+fn main() {
+	print f(1) ?? 0
+}
+EOF
+
+reject an-if-of-a-result-and-a-value E3020 'its branches give Result[int] and int' <<'EOF'
+fn r(n: int) -> Result[int] {
+	return n
+}
+
+fn main() {
+	x := 1
+	y := if x > 0 { r(0) } else { 2 }
+	print y ?? 0
+}
+EOF
+
+# a `nil` branch fits a slot that holds absence, and a sibling branch is no slot. Beside a `T?`
+# it is the optional's absent side; beside anything else, with no `T?` slot around the `if`,
+# the `if` took the other branch's type and the `nil` read back as a zero — and beside a
+# `Result[T]`, which takes no `nil`, it reached cc.
+reject an-if-of-a-value-and-nil-with-no-slot E3020 'its branches give int and nil' <<'EOF'
+fn main() {
+	x := 0
+	y := if x > 0 { 3 } else { nil }
+	print y
+}
+EOF
+
+reject an-if-of-a-str-and-nil-with-no-slot E3020 'its branches give str and nil' <<'EOF'
+fn main() {
+	x := 0
+	y := if x > 0 { "s" } else { nil }
+	print y
+}
+EOF
+
+reject an-if-of-a-result-and-nil E3020 'its branches give Result[int] and nil' <<'EOF'
+fn r(n: int) -> Result[int] {
+	return n
+}
+
+fn main() {
+	x := 1
+	y := if x > 0 { r(0) } else { nil }
+	print y ?? 9
+}
+EOF
+
+reject a-match-of-a-result-and-nil E3021 'its arms give Result[int] and nil' <<'EOF'
+fn r(n: int) -> Result[int] {
+	return n
+}
+
+fn main() {
+	x := 1
+	y := match x {
+		0 => r(0)
+		_ => nil
+	}
+	print y ?? 9
+}
+EOF
+
+# --- a container's elements are its own type ---------------------------------------
+#
+# A bare value is injected into a carrier when it is WRITTEN. A `list[int]` that already exists
+# has no carrier around its elements, so read as a `list[int?]` each int was a tag: `ys[0] ?? 9`
+# answered 9 for a list holding 7. Its elements must match exactly, wherever it lands.
+
+reject a-value-list-bound-as-an-optional-list E3033 'cannot bind list[int] to a list[int?] binding' <<'EOF'
+fn main() {
+	b := [7, 8]
+	ys: list[int?] = b
+	print ys[0] ?? 9
+}
+EOF
+
+reject a-value-list-passed-as-an-optional-list E3038 'argument 1 of `f` is list[int?], and this gives list[int]' <<'EOF'
+fn f(ys: list[int?]) {
+	print ys[0] ?? 9
+}
+
+fn main() {
+	b := [7, 8]
+	f(b)
+}
+EOF
+
+reject a-value-map-bound-as-an-optional-map E3033 'cannot bind map[str, int] to a map[str, int?] binding' <<'EOF'
+fn main() {
+	b := {"a": 7}
+	m: map[str, int?] = b
+	print m["a"] ?? 9
+}
+EOF
+
+reject a-match-of-an-optional-list-and-a-value-list E3021 'its arms give list[int?] and list[int]' <<'EOF'
+fn main() {
+	x := 2
+	a: list[int?] = [nil, 5]
+	b := [7, 8]
+	ys := match x {
+		1 => a
+		_ => b
+	}
+	print ys[0] ?? 9
+}
+EOF
+
+reject an-if-of-a-value-list-and-an-optional-list E3020 'its branches give list[int] and list[int?]' <<'EOF'
+fn main() {
+	x := 2
+	b := [7, 8]
+	a: list[int?] = [nil, 5]
+	ys := if x > 1 { b } else { a }
+	print ys[0]
+}
+EOF
+
 # --- `this` is a method's receiver, and nothing else -----------------------------
 #
 # GRAMMAR#keyword makes `this` a reserved word, and GRAMMAR#param says it is NOT a parameter,

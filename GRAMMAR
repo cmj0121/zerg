@@ -278,6 +278,9 @@ cmp-expr     ::= range-expr ( ( cmp-op range-expr ) | ( 'is' type-name ) | ( 'in
 range-expr   ::= add-expr ( '..' add-expr? | '..=' add-expr )?
              # 'x..y' → range(x, y); 'x..=y' → range(x, y+1); 'x..' → an open range. 'v in r'
              # → r.contains(v). Both are SUGAR (the Range/contains machinery is stdlib).
+             # A '..' or '..=' may not END A LINE outside an unclosed '(' or '[': the next
+             # line could be its bound or a statement of its own, so it is refused (E2093) —
+             # unless that line opens with '}', which can begin no bound.
 add-expr     ::= mul-expr   ( add-op mul-expr )*
 mul-expr     ::= unary-expr ( mul-op unary-expr )*
 unary-expr   ::= unary-op unary-expr | postfix-expr

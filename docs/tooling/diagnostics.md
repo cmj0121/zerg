@@ -204,6 +204,7 @@ shipping compiler rather than a part of it (the line
 | `E2090` | `mut fn This.…` — an associated fn has no receiver to mutate                                          |
 | `E2091` | `fn This.…` whose body reads `this`                                                                   |
 | `E2092` | … is a statement, and a match arm's body is an expression                                             |
+| `E2093` | `…` ends the line, so whether the next line is its upper bound cannot be told                         |
 | `E3001` | `…` is not a public member of module `…`                                                              |
 | `E3002` | `…` is not a place, and an assignment needs one                                                       |
 | `E3003` | cannot assign to `…`: it is a module `const`, and a constant is never written                         |

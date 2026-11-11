@@ -180,6 +180,7 @@ seed 全程維持句子比對:代碼是語言的契約,而 seed 是建置正式�
 | `E2090` | `mut fn This.…`——associated fn 沒有 receiver 可改                                                     |
 | `E2091` | `fn This.…` 的 body 讀了 `this`                                                                       |
 | `E2092` | … 是 statement,而 match arm 的 body 是 expression                                                     |
+| `E2093` | `…` 結束了這一行，所以分不出下一行是不是它的上界                                                      |
 | `E3001` | `…` 不是 module `…` 的公開成員                                                                        |
 | `E3002` | `…` 不是一個位置,而賦值需要一個                                                                       |
 | `E3003` | 不能對 `…` 賦值:它是 module `const`,而常數永遠不被寫入                                                |

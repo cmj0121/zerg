@@ -6268,6 +6268,59 @@ fn main() {
 }
 EOF
 
+# --- a range operator does not end a line ---------------------------------------
+#
+# GRAMMAR#range-expr: `b := x in 1..` over a line holding `10` reads two ways — the open range
+# and a statement, or `1..10` — and whichever one is taken drops what the other meant. Both
+# compilers took one silently, and not the same one, so the seed is no oracle here. Inside `(`
+# or `[` a range spans lines like any expression, and `x in 1..; f()` on one line is the open
+# range; neither is refused.
+reject range-ends-a-line-in-membership E2093 '`..` ends the line' seed-gap <<'EOF'
+fn main() {
+	x := 50
+	b := x in 1..
+		10
+	print b
+}
+EOF
+
+reject range-ends-a-line-as-a-value E2093 '`..` ends the line' <<'EOF'
+fn main() {
+	x := 1..
+	print 3
+}
+EOF
+
+reject range-ends-a-line-in-a-postfix-guard E2093 '`..` ends the line' seed-gap <<'EOF'
+fn lim() -> int {
+	return 10
+}
+
+fn main() {
+	x := 50
+	raise "no" if x in 0..
+		lim()
+}
+EOF
+
+reject range-ends-a-line-in-a-for-header E2093 '`..` ends the line' <<'EOF'
+fn main() {
+	for i in 1..
+	{
+		break
+	}
+}
+EOF
+
+reject inclusive-range-ends-a-line E2093 '`..=` ends the line' seed-gap <<'EOF'
+fn main() {
+	x := 50
+	b := x in 1..=
+		10
+	print b
+}
+EOF
+
 # --- a byte converts; a LIST of them does not ------------------------------------
 #
 # `Into` carries a `byte` into an `int` slot one value at a time. A `list[byte]` does not

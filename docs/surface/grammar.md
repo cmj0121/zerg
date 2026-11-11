@@ -273,7 +273,10 @@ names itself and everything below it** in the taxonomy ([Errors](../code/errors.
 an operator, not part of a literal. A **range** binds one notch tighter than comparison so `v in 0..10`
 reads `v in (0..10)`: `x..y` is **sugar** for `range(x, y)`, `x..=y` for `range(x, y + 1)`, `x..` for an
 open range, and `v in r` for `r.contains(v)` — the `Range` / `contains` machinery is stdlib. (`??` from
-group 8 remains the single loosest binary, looser than `or`.)
+group 8 remains the single loosest binary, looser than `or`.) A `..` or `..=` may not **end a line** outside
+an unclosed `(` or `[`: the next line could be its bound or a statement of its own, so `x in 1..` at a
+line's end is _E2093_ — put the bound on the same line, or write `(1..)`. A next line that opens with `}`
+begins no bound, so `return v in 1..` closing a block is not refused.
 
 The null-safety and error operators (`?` `??` `?.` `!`) live in group 8; the postfix ones (`?` `!` `?.`)
 join `postfix` above, and `??` ([`GRAMMAR#coalesce-expr`](../../GRAMMAR), whose right arm is a

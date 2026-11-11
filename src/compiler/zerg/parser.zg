@@ -4383,7 +4383,18 @@ fn parse_range(mut &p: Parser) -> ast.Expr {
 	lo := parse_add(p)
 	k := cur_kind(p)
 	return lo if k != token.Kind.DotDot and k != token.Kind.DotDotEq
+	op := cur(p)
 	p_advance(p)
+
+	# A RANGE OPERATOR MAY NOT END A LINE where a line break ends a statement. Both readings of
+	# `b := x in 1..` over a line holding `10` are plausible — the open range followed by a
+	# statement, or `1..10` — and either one taken silently drops what the other meant. The
+	# lexer marks such an operator (range_op), so `x in 1..; f()` on one line is still the open
+	# range, and inside `(` or `[` a range spans lines as any expression does. A `}` on the next
+	# line can begin no bound, so `return v in 1..` closing a block is not refused; a `{` can,
+	# and stays refused.
+	ends := op.value == token.RANGE_ENDS_LINE and not p_at(p, token.Kind.RBrace)
+	raise p_diag_at(p, op.line, op.col, rule.Rule.RangeEndsLine, f"`{op.lexeme}` ends the line, so whether the next line is its upper bound cannot be told — put the bound on the same line, or wrap the range in parentheses: `(lo..)`") if ends
 
 	# `500..` — GRAMMAR makes the upper bound optional after `..`, and what tells "there is no
 	# bound" from "the bound follows" is whether the next token could begin one. Without this

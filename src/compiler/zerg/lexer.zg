@@ -729,6 +729,29 @@ fn scan_cmd(mut &l: Lex, sline: int, scol: int, soff: int) -> token.Token {
 
 # --- operators and punctuation -------------------------------------------------
 
+# range_op marks a `..` or `..=` that ENDS ITS LINE where a line break ends a statement — outside
+# an unclosed `(` or `[`, with nothing after it but blanks and a comment. The parser refuses a
+# range written that way (E2093): the next line could be its bound or a statement, and nothing
+# tells which. It is a mark on the token and not an inserted `;`, because the struct pattern's
+# rest `..` sits inside `{ }` on a line of its own, and a `;` there splits the pattern in two.
+#
+# "Blanks and a comment" are next()'s classes, and the look-ahead has to match them: a space or
+# a tab is skipped, a CR counts only as the first half of a CRLF, and a `#` opens a comment
+# unless it is `#[`, which opens a decorator instead.
+fn range_op(mut &l: Lex, t: token.Token) -> token.Token {
+	return t if l.depth != 0
+
+	mut i := 0
+	for at(l, i) == b' ' or at(l, i) == byte(9) {
+		i = i + 1
+	}
+	c := at(l, i)
+	ends := c == byte(10) or (c == byte(13) and at(l, i + 1) == byte(10)) or (c == b'#' and at(l, i + 1) != b'[')
+	return t if not ends
+
+	return token.Token(t.kind, t.lexeme, token.RANGE_ENDS_LINE, t.line, t.col)
+}
+
 # op advances `extra` further bytes past the already-consumed first, then emits.
 fn op(mut &l: Lex, k: token.Kind, sline: int, scol: int, soff: int, extra: int) -> token.Token {
 	mut i := 0
@@ -804,8 +827,8 @@ fn scan_operator(mut &l: Lex, sline: int, scol: int, soff: int) -> token.Token {
 	}
 	if c == b'.' {
 		if two == b'.' {
-			return op(l, token.Kind.DotDotEq, sline, scol, soff, 2) if at(l, 1) == b'='
-			return op(l, token.Kind.DotDot, sline, scol, soff, 1)
+			return range_op(l, op(l, token.Kind.DotDotEq, sline, scol, soff, 2)) if at(l, 1) == b'='
+			return range_op(l, op(l, token.Kind.DotDot, sline, scol, soff, 1))
 		}
 		return op(l, token.Kind.Dot, sline, scol, soff, 0)
 	}

@@ -250,7 +250,9 @@ expression 是一條優先序 cascade，每一層一條 production：[`GRAMMAR#o
 員,而一個 **error kind 指涉它自己加上它在分類樹底下的一切**（見[錯誤處理](../code/errors.zh-TW.md)）。正負號是運算子,不屬 literal。**range** 比比較緊一級,所以
 `v in 0..10` 讀作 `v in (0..10)`:`x..y` 是 `range(x, y)`、`x..=y` 是 `range(x, y + 1)`、`x..` 是開放 range、
 `v in r` 是 `r.contains(v)` 的**語法糖**——`Range` / `contains` 機制在 stdlib。（group 8 的 `??` 仍是唯一最鬆的二元
-運算子,比 `or` 更鬆。）
+運算子,比 `or` 更鬆。）`..` 或 `..=` 不可在未閉合的 `(` 或 `[` 之外**結束一行**：下一行可能是它的上界，也可能
+是一個獨立的 statement,所以行尾的 `x in 1..` 是 _E2093_——把上界寫在同一行，或寫成 `(1..)`。下一行以 `}` 開頭時
+不可能是上界，所以結束一個 block 的 `return v in 1..` 不會被拒絕。
 
 null-safety 與 error 運算子（`?` `??` `?.` `!`）在 group 8;postfix 三個（`?` `!` `?.`）併入上面的
 `postfix`,而 `??`（[`GRAMMAR#coalesce-expr`](../../GRAMMAR)，其右臂是

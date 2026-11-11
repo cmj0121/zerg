@@ -130,6 +130,10 @@ pub enum Rule {
 	# is a statement, and a block body is how an arm holds one.
 	ArmBodyStatement = 2092
 
+	# GRAMMAR#range-expr: a `..` or `..=` that ends a line outside `(` / `[` — the next line could
+	# be its bound or a statement of its own, and nothing tells which.
+	RangeEndsLine = 2093
+
 	# checking — a form whose meaning does not hold together — reported against the tree, all at once
 	NotPublicMember = 3001
 	AssignTargetNotAPlace = 3002

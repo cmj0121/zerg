@@ -12099,7 +12099,7 @@ fn c_index(mut &em: Emitter, target: ast.Expr, idx: ast.Expr, sb: Subst) -> str 
 
 	# a value read out of a map this expression owned is TAKEN out of it (c_map_index), so it is
 	# this expression's like any other rvalue and not the borrow described below
-	borrowed := c_is_map_index(em, target) and not c_map_owned(em, target)
+	borrowed := c_borrows_map_element(em, target)
 
 	# THE LIST IS HELD ACROSS THE READ (c_hold) when it is this expression's to give back: the
 	# index is evaluated after it is bound, and the read itself aborts on an index out of range.
@@ -21799,8 +21799,13 @@ fn c_slice(mut &em: Emitter, target: ast.Expr, idx: ast.Expr, tty: ast.Ty, sb: S
 
 	# a source that is given back below is held across the bounds and the slice itself
 	# (c_hold): either bound can run code, and a range outside the list aborts in the runtime
+	#
+	# A MAP'S ELEMENT IS NOT A PLACE AND NOT THE SLICE'S EITHER, the exception c_index makes for
+	# the same shape: `m["k"]` hands over a bit copy of a list the entry still holds, so giving
+	# it back freed the entry's buffer under the map — `m["k"][2..3]` was a use-after-free. One
+	# read out of a map this expression made is taken out of it, and is the slice's to give back.
 	keep := em.rel_cnames.len()
-	owned := not c_is_place(em, target)
+	owned := not c_is_place(em, target) and not c_borrows_map_element(em, target)
 	mut hold := ""
 	if owned {
 		hold = " " + c_hold(em, tty, "zgt_ss")
@@ -21912,6 +21917,13 @@ fn c_map_index(mut &em: Emitter, target: ast.Expr, idx: ast.Expr, tty: ast.Ty, s
 		mgive = c_drop_stmt(em, tty, "zgt_mx") + " "
 	}
 	return f"({{ {bind}{vc} zgt_mv = {val}; {c_unhold(em, keep)}{kgive}{mgive}zgt_mv; }})"
+}
+
+# c_borrows_map_element is a value read out of a map that is NOT this expression's: a bit copy
+# of an element the entry still holds, which a reader may look at and must not give back. One
+# read out of a map this expression made is taken out of it (c_map_index) and is its own.
+fn c_borrows_map_element(mut &em: Emitter, e: ast.Expr) -> bool {
+	return c_is_map_index(em, e) and not c_map_owned(em, e)
 }
 
 # c_map_owned is whether what an expression hands over is its own to give back: not a place,

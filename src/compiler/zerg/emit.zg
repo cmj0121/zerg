@@ -16374,12 +16374,24 @@ fn c_is_bool_lit(e: ast.Expr, v: bool) -> bool {
 
 fn c_arms(mut &em: Emitter, arms: list[ast.Arm], i: int, s: str, st: ast.Ty, sb: Subst) -> str {
 	a := arms[i]
-	return c_arm_body(em, a, s, st, sb) if i == arms.len() - 1
+	return c_arm_value(em, arms, i, s, st, sb) if i == arms.len() - 1
 
 	cond := c_arm_cond(em, a, s, st, sb)
-	body := c_arm_body(em, a, s, st, sb)
+	body := c_arm_value(em, arms, i, s, st, sb)
 	rest := c_arms(em, arms, i + 1, s, st, sb)
 	return f"({cond} ? {body} : {rest})"
+}
+
+# c_arm_value is arm i's answer in the match's own type. A `nil` arm has no type of its own, so
+# beside a `T?` first arm it is that optional's ABSENT side (c_opt_wrap): rendered bare it
+# lowered to a `0` in a conditional whose other side is a carrier struct, and cc refused the pair.
+fn c_arm_value(mut &em: Emitter, arms: list[ast.Arm], i: int, s: str, st: ast.Ty, sb: Subst) -> str {
+	a := arms[i]
+	if i > 0 and c_is_nil_lit(a.body) {
+		t := c_infer_arm_body(em, arms[0], st)
+		return c_opt_wrap(em, "", c_opt_elem(t), a.body, sb) if ast.ty_is_opt(t)
+	}
+	return c_arm_body(em, a, s, st, sb)
 }
 
 # c_either_side is the side of an Either that a constructor pattern names, or "" for a name
@@ -24547,7 +24559,10 @@ fn c_iflet_match(mut &em: Emitter, name: str, value: ast.Expr, then_e: ast.Expr,
 
 fn c_ternary(mut &em: Emitter, cond: ast.Expr, then_e: ast.Expr, else_e: ast.Expr, sb: Subst) -> str {
 	check.chk_condition(em, cond, "an `if` expression")
-	check.chk_branch_types(em, then_e, else_e)
+	t := c_infer(em, then_e)
+	u := c_infer(em, else_e)
+	check.chk_branch_tys(em, t, u)
+	check.chk_branch_nil(em, t, u)
 
 	# AN `if` HANDS OVER A VALUE OF ITS OWN, whichever branch ran. It names no storage, so every
 	# consumer — a binding, a print, a concat, a match — takes it as owned and gives it back;
@@ -24561,8 +24576,11 @@ fn c_ternary(mut &em: Emitter, cond: ast.Expr, then_e: ast.Expr, else_e: ast.Exp
 	# counts it the way it counts a name. Taking one here left a count only a binding, a return
 	# and a call argument gave back — a spawn captured a second one, and a method argument, a
 	# literal and a `defer` none, so the stream never ended.
-	t := c_infer(em, then_e)
 	return f"({c_expr(em, cond, sb)} ? {c_expr(em, then_e, sb)} : {c_expr(em, else_e, sb)})" if ast.ty_is_chan(t) and not (c_chan_hands(then_e) or c_chan_hands(else_e))
+
+	# A `nil` ELSE BESIDE A `T?` THEN is that optional's absent side, as a `nil` arm is in
+	# c_arm_value — rendered bare it was a `0` against a carrier struct, and cc refused the pair.
+	return f"({c_expr(em, cond, sb)} ? {c_owned_branch(em, t, then_e, sb)} : {c_opt_wrap(em, "", c_opt_elem(t), else_e, sb)})" if ast.ty_is_opt(t) and c_is_nil_lit(else_e)
 	return f"({c_expr(em, cond, sb)} ? {c_owned_branch(em, t, then_e, sb)} : {c_owned_branch(em, t, else_e, sb)})"
 }
 

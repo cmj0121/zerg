@@ -1697,7 +1697,12 @@ pub fn chk_branch_types(mut &em: emit.Emitter, then_e: ast.Expr, else_e: ast.Exp
 # whether it reported. It takes types because an if-let expression's then-branch is typed with
 # its binding in scope, which only the caller holding it can do.
 pub fn chk_branch_tys(mut &em: emit.Emitter, want: ast.Ty, got: ast.Ty) -> bool {
-	msg := chk_branch_clash(em, want, got)
+	return chk_branch_say(em, chk_branch_clash(em, want, got))
+}
+
+# chk_branch_say is the one place E3020 is reported from, whichever of its two questions found
+# the clash, and it answers whether it reported.
+fn chk_branch_say(mut &em: emit.Emitter, msg: str) -> bool {
 	return false if msg == ""
 
 	chk_at(em, rule.Rule.IfBranchTypes, msg)
@@ -1714,9 +1719,42 @@ fn chk_branch_clash(mut &em: emit.Emitter, want: ast.Ty, got: ast.Ty) -> str {
 	# bring its type, a literal included: a branch is not a typed position for its sibling, the
 	# same way one match arm is not one for the next.
 	return "" if ast.ty_eq(want, ast.Ty.TNil) or ast.ty_eq(got, ast.Ty.TNil)
-	return "" if chk_fits(em, want, got) or chk_fits(em, got, want)
+	return "" if not chk_carrier_mix(want, got) and (chk_fits(em, want, got) or chk_fits(em, got, want))
 
 	return f"an `if` expression answers ONE type, and its branches give {ast.ty_name(want)} and {ast.ty_name(got)}"
+}
+
+# chk_carrier_mix is whether two arms or branches are a carrier and a bare value — `int?` and
+# `int`, `Result[int]` and `int` — in either order. chk_fits answers yes to that pair one way,
+# because a carrier SLOT injects a bare value, but a sibling arm is not a slot: the arms lowered
+# into one conditional and cc refused the two C types. `nil` is not a bare value; it is absence
+# and is asked before this.
+fn chk_carrier_mix(want: ast.Ty, got: ast.Ty) -> bool {
+	return false if ast.ty_eq(want, ast.Ty.TNil) or ast.ty_eq(got, ast.Ty.TNil)
+
+	return emit.c_is_carrier(want) != emit.c_is_carrier(got)
+}
+
+# chk_nil_unheld is whether `got` is a `nil` arm beside a `want` that cannot be absent. `nil` is
+# typeless and fits only a slot that holds absence, and a sibling arm is no slot: beside a `T?`
+# it is that optional's absent side, beside anything else it has no value to be. A `Result[T]`
+# is not one either — it takes a `T` or an `Err`, never a `nil`.
+fn chk_nil_unheld(want: ast.Ty, got: ast.Ty) -> bool {
+	return false if not ast.ty_eq(got, ast.Ty.TNil)
+	return false if emit.c_is_unknown(want) or ast.ty_eq(want, ast.Ty.TVoid) or ast.ty_eq(want, ast.Ty.TNil)
+
+	return not ast.ty_is_opt(want)
+}
+
+# chk_branch_nil raises when an `if` expression that NO carrier slot fitted has a `nil` branch
+# beside one that cannot be absent. Under a `T?` slot the fit is distributed over the branches
+# (c_carrier_fit) and the `nil` is the slot's absence; with no slot the `if` takes the other
+# branch's type, so `y := if c { 3 } else { nil }` bound an `int` and the `nil` printed `0`.
+# chk_branch_clash cannot ask it: it also judges the branches of the distributed fit.
+pub fn chk_branch_nil(mut &em: emit.Emitter, a: ast.Ty, b: ast.Ty) {
+	return if not chk_nil_unheld(a, b) and not chk_nil_unheld(b, a)
+
+	chk_branch_say(em, f"an `if` expression answers ONE type, and its branches give {ast.ty_name(a)} and {ast.ty_name(b)}")
 }
 
 pub fn chk_arm_types(mut &em: emit.Emitter, arms: list[ast.Arm], st: ast.Ty) {
@@ -1728,7 +1766,7 @@ pub fn chk_arm_types(mut &em: emit.Emitter, arms: list[ast.Arm], st: ast.Ty) {
 	mut i := 1
 	for i < arms.len() {
 		got := emit.c_infer_arm_body(em, arms[i], st)
-		if not emit.c_is_unknown(got) and not ast.ty_eq(got, ast.Ty.TVoid) and not chk_fits(em, want, got) {
+		if not emit.c_is_unknown(got) and not ast.ty_eq(got, ast.Ty.TVoid) and (chk_carrier_mix(want, got) or chk_nil_unheld(want, got) or not chk_fits(em, want, got)) {
 			chk_at(em, rule.Rule.MatchArmTypes, f"a `match` answers ONE type, and its arms give {ast.ty_name(want)} and {ast.ty_name(got)}")
 			return
 		}
@@ -3075,17 +3113,13 @@ fn chk_fits(mut &em: emit.Emitter, want: ast.Ty, got: ast.Ty) -> bool {
 		# longer string read past the end.
 		#
 		# Both orderings now fall out of the recursion below as well, since a byte no longer
-		# widens — but this stays ahead of it, because the escapes further down (an unknown
-		# element, an optional one) would let a mismatched stride through on their way to a
-		# better sentence about something else.
+		# widens — but this stays ahead of it, because the escape further down (an unknown
+		# element) would let a mismatched stride through on its way to a better sentence
+		# about something else.
 		return false if emit.c_is_byte(we) != emit.c_is_byte(ge)
 
-		return chk_fits(em, we, ge)
+		return chk_elem_fits(em, we, ge)
 	}
-
-	# an optional handed to a value slot is a real mistake, and emit already has a better
-	# sentence for it than this rule can write — it names the three ways to unwrap one
-	return true if ast.ty_is_opt(got)
 
 	return ast.ty_eq(want, got)
 }
@@ -3149,7 +3183,17 @@ fn chk_chan_fits(mut &em: emit.Emitter, want: ast.Ty, got: ast.Ty) -> bool {
 fn chk_map_fits(mut &em: emit.Emitter, want: ast.Ty, got: ast.Ty) -> bool {
 	return false if not emit.c_is_map(got)
 
-	return chk_fits(em, emit.c_map_key_ty(want), emit.c_map_key_ty(got)) and chk_fits(em, emit.c_map_val_ty(want), emit.c_map_val_ty(got))
+	return chk_elem_fits(em, emit.c_map_key_ty(want), emit.c_map_key_ty(got)) and chk_elem_fits(em, emit.c_map_val_ty(want), emit.c_map_val_ty(got))
+}
+
+# chk_elem_fits is whether a container that already EXISTS holds elements a slot's container
+# may be read as. It is chk_fits less the one reshape an element cannot take: a bare value is
+# injected into a carrier when it is WRITTEN, and a `list[int]` already written has no carrier
+# around its elements — read as a `list[int?]` its ints were tags, and `ys[0] ?? 9` answered 9.
+fn chk_elem_fits(mut &em: emit.Emitter, want: ast.Ty, got: ast.Ty) -> bool {
+	return false if chk_carrier_mix(want, got)
+
+	return chk_fits(em, want, got)
 }
 
 # --- returned value ---------------------------------------------------------------

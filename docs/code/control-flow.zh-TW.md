@@ -70,7 +70,8 @@ its own_(或 _the empty map `{:}`_)——先把它綁到一個寫了型別的名
 （[集合](collections.zh-TW.md#迭代與變動)）。用
 **`v in range`** 測試成員關係（`x in 0..n` → `bool`）可用。把 **range 當成值**用在別處則是 **[not yet]**——這個形式
 會被指名拒絕、帶位置（`E9077`）；range 今天只存在於「`for` 走訪的東西」、「`match` arm 包含的東西」與「`in`
-拿來測的東西」裡。
+拿來測的東西」裡。range 的上界從來不是 `nil`:`1..nil` 與 `1..=nil` 不論寫在哪裡都是 _E3136 `nil` is not an
+upper bound_——開放 range 寫成 `1..`,`..` 後面什麼都沒有，而 `..=` 一定要有界限。
 
 > **[not yet]** 成員關係只對這個編譯器交得進 C 的 `>=` 的上下界成立，也就是 `str` 以外的每一種純量。上下界是別
 > 的東西的 range 則是 _E9062 NotImplemented: `in` over a range of str — a range's members are found by

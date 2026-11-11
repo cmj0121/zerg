@@ -288,7 +288,7 @@ pub enum Rule {
 	MainResult = 3133
 	MapMethodUnknown = 3134
 	ErrFieldUnknown = 3135
-	OpenRangeInclusive = 3136
+	RangeUpperBoundNil = 3136
 
 	# THE SPLIT #74 WALKED PAST. `MapMethodUnknown` came out of `E9100` because a map's
 	# fallback answered two questions at one raise; `E9056` is the LIST's fallback and it

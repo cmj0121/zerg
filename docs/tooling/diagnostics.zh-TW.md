@@ -315,7 +315,7 @@ seed 全程維持句子比對:代碼是語言的契約,而 seed 是建置正式�
 | `E3133` | `fn main() -> …` — 進入點的形狀是 `fn main()`、`-> int` 與 `-> Result[nil]`                           |
 | `E3134` | keyed container 上的方法 `…` — 它只回答 `len` 與 `has`,並且用 `m[k]` 讀                               |
 | `E3135` | Err 上的欄位 `…` — 它只有 `kind`,訊息要用 `message()`                                                 |
-| `E3136` | 沒有上界的 `..=` 不是 range                                                                           |
+| `E3136` | 上界是 `nil` 的 range                                                                                 |
 | `E3137` | list 的方法 `…` — 一個 list 只回答 `len` 與 `append`,並且用 `xs[i]` 讀                                |
 | `E3138` | `….…` 讀了 `this.…`,而 spec 是 field-blind                                                            |
 | `E3139` | 一個 `[T; N]` 槽要 `…` 個元素,而這個 literal 有 `…`                                                   |

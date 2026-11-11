@@ -4401,7 +4401,22 @@ fn parse_range(mut &p: Parser) -> ast.Expr {
 	# the guard of `500.. if c =>` was read AS the bound, since an if-expression is a legal
 	# bound expression, and the arm silently tested `n < (c ? … : …)`.
 	return ast.Expr.ERange(lo, ast.Expr.ENil, false) if k == token.Kind.DotDot and token.no_bound_follows(cur_kind(p))
-	return ast.Expr.ERange(lo, parse_add(p), k == token.Kind.DotDotEq)
+
+	# A WRITTEN `nil` IS NO UPPER BOUND, and it is refused here because nothing downstream can
+	# tell it from the absent one: both are ENil on the node. `1..nil` was read as the open range
+	# `1..`, a spelling GRAMMAR does not derive, and `1..=nil` as a `..=` with its mandatory bound
+	# missing — which `3 in 1..=nil` answered `true` for. The arm was the one position that said
+	# so, from the emitter, and the slice, the loop and the test did not.
+	bt := cur(p)
+	hi := parse_add(p)
+	why := if k == token.Kind.DotDotEq {
+		"`nil` is not an upper bound — `..=` always takes one, and an open range is written `500..`"
+	} else {
+		"`nil` is not an upper bound — an open range is written `500..`, with nothing after the `..`"
+	}
+	raise p_diag_at(p, bt.line, bt.col, rule.Rule.RangeUpperBoundNil, why) if ast.is_nil_lit(hi)
+
+	return ast.Expr.ERange(lo, hi, k == token.Kind.DotDotEq)
 }
 
 fn parse_add(mut &p: Parser) -> ast.Expr {

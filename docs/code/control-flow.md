@@ -85,7 +85,9 @@ the bytes; walk `bytearray(s)` when you want those. **`for mut x`** binds each e
 `list` or an array ([Collections](collections.md#iterating--mutation)). Testing membership with **`v in range`**
 (`x in 0..n` → `bool`) works. Treating a **range as a value** anywhere else is **[not yet]** — the form is
 refused by name and with a place (`E9077`); a range exists only as the thing a `for` walks, a `match` arm
-contains, and an `in` tests against.
+contains, and an `in` tests against. A range's upper bound is never `nil`: `1..nil` and `1..=nil` are
+_E3136 `nil` is not an upper bound_ wherever they are written — an open range is `1..`, with nothing after the
+`..`, and `..=` always takes a bound.
 
 > **[not yet]** Membership holds for the bounds this compiler can hand to C's `>=`, which is every scalar
 > but a `str`. A range bounded by anything else is _E9062 NotImplemented: `in` over a range of str — a

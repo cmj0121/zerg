@@ -991,7 +991,7 @@ fn c_opt_name(mut &em: Emitter, elem: ast.Ty) -> str {
 # the same value and no diagnostic stood between them.
 fn c_opt_wrap(mut &em: Emitter, where: str, elem: ast.Ty, e: ast.Expr, sb: Subst) -> str {
 	cn := c_opt_name(em, elem)
-	return "(" + cn + "){ .tag = 1 }" if c_is_nil_lit(e)
+	return "(" + cn + "){ .tag = 1 }" if ast.is_nil_lit(e)
 
 	# A BLOCK WHOSE VALUE IS `nil` IS THE ABSENT ONE TOO. GRAMMAR (group 2) gives a block
 	# ending in anything but an expression the value `nil`, so `x: int? = { … nop }` is the
@@ -1019,13 +1019,6 @@ fn c_is_block_expr(e: ast.Expr) -> bool {
 		Expr.EBlock(_) => true
 		Expr.EUnsafe(_) => true
 		_ => false
-	}
-}
-
-fn c_is_nil_lit(e: ast.Expr) -> bool {
-	return match e {
-		Expr.ENil => true
-		_         => false
 	}
 }
 
@@ -11242,7 +11235,7 @@ fn c_set_says(mut &em: Emitter, set: ast.Expr) -> str {
 fn c_in_range(mut &em: Emitter, x: ast.Expr, set: ast.Expr, sb: Subst) -> str {
 	lo := c_range_lo(set)
 	hi := c_range_hi(set)
-	open := c_is_nil_lit(hi)
+	open := ast.is_nil_lit(hi)
 
 	# THE RUN IS THE SUBJECT AND ITS BOUNDS, in the order they are written. An absent upper
 	# bound is an open range and is not part of it at all — there is nothing to compare
@@ -16615,7 +16608,7 @@ fn c_arm_covers_nil(arms: list[ast.Arm]) -> bool {
 	for a in arms {
 		continue if a.has_guard
 		return true if c_pat_is_wild(a.pat)
-		return true if c_pat_is_lit(a.pat) and c_is_nil_lit(c_pat_lit(a.pat))
+		return true if c_pat_is_lit(a.pat) and ast.is_nil_lit(c_pat_lit(a.pat))
 	}
 	return false
 }
@@ -16690,7 +16683,7 @@ fn c_arms(mut &em: Emitter, arms: list[ast.Arm], i: int, s: str, st: ast.Ty, sb:
 # lowered to a `0` in a conditional whose other side is a carrier struct, and cc refused the pair.
 fn c_arm_value(mut &em: Emitter, arms: list[ast.Arm], i: int, s: str, st: ast.Ty, sb: Subst) -> str {
 	a := arms[i]
-	if i > 0 and c_is_nil_lit(a.body) {
+	if i > 0 and ast.is_nil_lit(a.body) {
 		t := c_infer_arm_body(em, arms[0], st)
 		return c_opt_wrap(em, "", c_opt_elem(t), a.body, sb) if ast.ty_is_opt(t)
 	}
@@ -17026,12 +17019,12 @@ fn c_pat_cond(mut &em: Emitter, pt: ast.Pat, s: str, st: ast.Ty, sb: Subst) -> s
 		# unwrapped, so comparing one against a literal is the thing chk_binary refuses in
 		# every other position. The arm beside it binds the payload — see c_pat_subst — which
 		# is what makes the pair exhaustive and what `nil` is written for.
-		return c_res_is_right(s) if c_is_nil_lit(lit) and c_is_carrier(st)
+		return c_res_is_right(s) if ast.is_nil_lit(lit) and c_is_carrier(st)
 
 		# ELSEWHERE IT IS STILL REFUSED. `nil` against anything that is not a carrier has no
 		# absent side to name, and comparing it as a literal is the silent wrong answer this
 		# rule was raised to stop.
-		raise c_diag(em, rule.Rule.NilPatternNeedsCarrier, f"`nil` names the absent side of an optional, and this matches a {ast.ty_name(st)} — there is no absence to name (GRAMMAR#literal-pat)") if c_is_nil_lit(lit)
+		raise c_diag(em, rule.Rule.NilPatternNeedsCarrier, f"`nil` names the absent side of an optional, and this matches a {ast.ty_name(st)} — there is no absence to name (GRAMMAR#literal-pat)") if ast.is_nil_lit(lit)
 
 		# the PATTERN is handed as both operands: this comparison is a scrutinee against a
 		# literal, and a literal pattern is always the one adopting the scrutinee's type, so
@@ -17463,7 +17456,7 @@ fn c_pat_tuple_elems(pt: ast.Pat) -> list[ast.Pat] {
 # or the slice silently ran zero times — the shape the arm path now handles deliberately, and
 # these two do not handle at all.
 fn c_range_needs_hi(mut &em: Emitter, e: ast.Expr, what: str) {
-	raise c_diag(em, rule.Rule.NotYetOpenRangeHere, f"NotImplemented: an open-ended range has no upper bound here — {what} (GRAMMAR#range-expr)") if c_is_range(e) and c_is_nil_lit(c_range_hi(e))
+	raise c_diag(em, rule.Rule.NotYetOpenRangeHere, f"NotImplemented: an open-ended range has no upper bound here — {what} (GRAMMAR#range-expr)") if c_is_range(e) and ast.is_nil_lit(c_range_hi(e))
 }
 
 # c_arm_eq is the scrutinee against a literal pattern. A `str` is not a native C operand, so the
@@ -17495,23 +17488,13 @@ fn c_arm_range(mut &em: Emitter, lit: ast.Expr, s: str, st: ast.Ty, sb: Subst) -
 	check.chk_binary(em, ">=", st, c_infer(em, c_range_lo(lit)), lit, lit)
 	lo := c_arm_bound(em, c_range_lo(lit), sb)
 	mut base := f"({s} >= {lo})"
-	if not c_is_nil_lit(c_range_hi(lit)) {
+	if not ast.is_nil_lit(c_range_hi(lit)) {
 		hi := c_arm_bound(em, c_range_hi(lit), sb)
 		mut cmp := " < "
 		if c_range_incl(lit) {
 			cmp = " <= "
 		}
 		base = f"(({s} >= {lo}) && ({s}{cmp}{hi}))"
-	} else if c_range_incl(lit) {
-		# `500..=` is not a range: GRAMMAR gives '..=' a mandatory bound, and the parser reads
-		# the missing one as nil rather than saying so.
-		#
-		# IT WAS BRIEFLY AN ICE HERE, on the reasoning that `..=` now demands an expression
-		# after it so the nil could not be built. What that missed is that `nil` IS an
-		# expression: `parse_add` accepts the literal, so `1..=nil` parses to exactly the
-		# shape the bare `1..=` used to make. The refusal is about the RANGE having no upper
-		# bound, whatever the reader wrote to leave it without one.
-		raise c_diag(em, rule.Rule.OpenRangeInclusive, "`..=` with no upper bound is not a range — write `500..` for open-ended")
 	}
 
 	# THE GUARD IS NO LONGER THIS FUNCTION'S. Every shape used to add it for itself — the
@@ -21771,7 +21754,7 @@ fn c_set_elem_check(mut &em: Emitter, et: ast.Ty) {
 # c_slice_bound is one end of a slice range. A `nil` bound is the open form, which
 # c_range_needs_hi has already had its say about.
 fn c_slice_bound(mut &em: Emitter, e: ast.Expr) {
-	return if c_is_nil_lit(e)
+	return if ast.is_nil_lit(e)
 
 	t := c_infer(em, e)
 	return if c_is_unknown(t) or c_is_int(t)
@@ -23592,7 +23575,7 @@ fn c_tuple_tys(t: ast.Ty) -> list[ast.Ty] {
 # THE BOUNDS ARE EVALUATED IN SOURCE ORDER, which is the same rule the membership test makes:
 # two operands of one run, and `(f()..g())` has to call `f` first.
 fn c_range_value(mut &em: Emitter, lo: ast.Expr, hi: ast.Expr, incl: bool, sb: Subst) -> str {
-	raise c_diag(em, rule.Rule.RangeValueIsBounded, "an open-ended range is not a value — `lo..` has no upper bound to carry, and a value that could be unbounded would make every walk and every test ask about it; write the loop, or give the range a bound (GRAMMAR#range-expr)") if c_is_nil_lit(hi)
+	raise c_diag(em, rule.Rule.RangeValueIsBounded, "an open-ended range is not a value — `lo..` has no upper bound to carry, and a value that could be unbounded would make every walk and every test ask about it; write the loop, or give the range a bound (GRAMMAR#range-expr)") if ast.is_nil_lit(hi)
 
 	# WHAT C CAN COMPARE, and nothing wider — the same offender rule the membership test
 	# applies, asked of the bounds alone because a value has no subject yet.
@@ -24581,11 +24564,11 @@ fn c_return(mut &em: Emitter, has_val: bool, e: ast.Expr, ind: str) -> str {
 	# `return nil` is a RETURN WITH NO VALUE everywhere except where the declared result is
 	# a carrier: `-> Result[nil]` wants a Left holding nil, and `-> int?` an absent one, so
 	# the nil is a value there and has to travel the value path below.
-	if has_val and c_is_nil_lit(e) and c_is_carrier(em.fn_ret) {
+	if has_val and ast.is_nil_lit(e) and c_is_carrier(em.fn_ret) {
 		nv := c_carrier_fit(em, check.CHK_ANSWER, em.fn_ret, e, c_nosub())
 		return f"{pre}{ind}return {nv};\n"
 	}
-	if has_val and not c_is_nil_lit(e) {
+	if has_val and not ast.is_nil_lit(e) {
 		# the returned expression's type is wanted twice — once to check it against the
 		# signature, and again on the two conditions that rarely coincide, a channel return
 		# type and a defer to unwind past. chk_returned answers with what it inferred, so
@@ -24917,7 +24900,7 @@ fn c_ternary(mut &em: Emitter, cond: ast.Expr, then_e: ast.Expr, else_e: ast.Exp
 
 	# A `nil` ELSE BESIDE A `T?` THEN is that optional's absent side, as a `nil` arm is in
 	# c_arm_value — rendered bare it was a `0` against a carrier struct, and cc refused the pair.
-	return f"({c_expr(em, cond, sb)} ? {c_owned_branch(em, t, then_e, sb)} : {c_opt_wrap(em, "", c_opt_elem(t), else_e, sb)})" if ast.ty_is_opt(t) and c_is_nil_lit(else_e)
+	return f"({c_expr(em, cond, sb)} ? {c_owned_branch(em, t, then_e, sb)} : {c_opt_wrap(em, "", c_opt_elem(t), else_e, sb)})" if ast.ty_is_opt(t) and ast.is_nil_lit(else_e)
 	return f"({c_expr(em, cond, sb)} ? {c_owned_branch(em, t, then_e, sb)} : {c_owned_branch(em, t, else_e, sb)})"
 }
 

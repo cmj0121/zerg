@@ -2644,6 +2644,15 @@ fn dump_if(cond: Expr, then_b: list[Stmt], else_b: list[Stmt], ind: str) -> str 
 }
 
 # expr_kind names an expression's shape, with the leaf's own text where it has one.
+# is_nil_lit is the `nil` literal — which is also what the parser leaves where an open range's
+# upper bound is missing.
+pub fn is_nil_lit(e: Expr) -> bool {
+	return match e {
+		Expr.ENil => true
+		_         => false
+	}
+}
+
 pub fn expr_kind(e: Expr) -> str {
 	return match e {
 		Expr.EInt(lex, _, _) => "int " + lex

@@ -42,6 +42,10 @@ its own_(或 _the empty map `{:}`_)——先把它綁到一個寫了型別的名
 起來,`nil` 於是變成 present carrier 裡的一個零,缺席就這樣不見了、而且任何階段都沒有回報;鏡像的寫法(`nil` 在
 **then** 分支)則是直接被拒絕——一種拼法會抱怨,另一種靜默答錯。
 
+`if` 外面沒有 `T?` 位置時,`nil` 分支只有在另一個分支本身就是 optional 時才是那份缺席:
+`y := if c { pick() } else { nil }` 是一個 `T?`。在其他任何型別旁邊(`Result[T]` 也一樣),它沒有型別可當,所以
+`y := if c { 3 } else { nil }` 是 _E3020 … its branches give int and nil_,`match` 的 `nil` arm 也同樣是 _E3021_。
+
 ---
 
 綁定形式在**運算式位置**也已建置:`return if x := opt { use(x) } else { fallback }` 在 `opt` 存在時產出

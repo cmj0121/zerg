@@ -69,9 +69,14 @@ its own_(或 _the empty map `{:}`_)——先把它綁到一個寫了型別的名
 要走 byte 就用 `bytearray(s)`。**開放** range 會無止盡地往上數:`for i in n..` 靠 `break`、`return` 或
 raise 離開，而跨過最大 `int` 的那一步會 raise `OverflowError`。**`for mut x`** 在 `list` 或陣列上把每個元素
 **就地**綁定（[集合](collections.zh-TW.md#迭代與變動)）。用
-**`v in range`** 測試成員關係（`x in 0..n` → `bool`）可用。把 **range 當成值**用在別處則是 **[not yet]**——這個形式
-會被指名拒絕、帶位置（`E9077`）；range 今天只存在於「`for` 走訪的東西」、「`match` arm 包含的東西」與「`in`
-拿來測的東西」裡。range 的上界從來不是 `nil`:`1..nil` 與 `1..=nil` 不論寫在哪裡都是 _E3136 `nil` is not an
+**`v in range`** 測試成員關係（`x in 0..n` → `bool`）可用，而有號整數的 range 也是一個**值**——可以綁定、傳遞、
+回傳，並像寫在原地的那個一樣被走訪與測試。
+
+> **[not yet]** range 值以有號整數保存它的上下界，所以其他型別的 range 是 _E9077 NotImplemented: a range of float
+> as a value — a range value holds its bounds as signed integers_——`1.5..2.5`、`uint` 的 range 與 `"a".."z"` 都是，
+> 雖然寫在原地的成員測試接受除了最後一個以外的全部。
+
+range 的上界從來不是 `nil`:`1..nil` 與 `1..=nil` 不論寫在哪裡都是 _E3136 `nil` is not an
 upper bound_——開放 range 寫成 `1..`,`..` 後面什麼都沒有，而 `..=` 一定要有界限。
 
 > **[not yet]** 成員關係只對這個編譯器交得進 C 的 `>=` 的上下界成立，也就是 `str` 以外的每一種純量。上下界是別

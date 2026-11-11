@@ -518,7 +518,7 @@ shipping compiler rather than a part of it (the line
 | `E9070` | `…` re-binds a name a `match` arm's pattern already binds                                             |
 | `E9071` | the default on field `…` reads the field `…`                                                          |
 | `E9075` | a generic `type …[…] = …`                                                                             |
-| `E9077` | a range of a kind this compiler cannot compare, as a value                                            |
+| `E9077` | a range of a non-integer or unsigned type, as a value                                                 |
 | `E9078` | `is …` names no type to compare against                                                               |
 | `E9079` | the decorator `#[sealed]` — reserved                                                                  |
 | `E9097` | main(args) in a program that uses concurrency                                                         |

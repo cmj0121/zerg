@@ -3772,10 +3772,31 @@ EOF
 # What is left of `E9077` is a range whose BOUNDS this compiler cannot compare, which is the
 # same clause `in` has always had: the comparison is C's own, and a `str` bound would compare
 # two pointers.
-expect "$ZERG" a-range-of-str-as-a-value E9077 'is not a type this compiler compares' <<'EOF'
+expect "$ZERG" a-range-of-str-as-a-value E9077 'a range of str as a value' <<'EOF'
 fn main() {
 	r := "a".."z"
 	print 1
+}
+EOF
+
+# A FLOAT RANGE AS A VALUE is the same form, and was not refused: `>=` compares two floats, so
+# the membership rule let it past, and the value's `int64_t` bounds truncated it — `1.5..2.5` was
+# held as `1..2`, and `2.2 in r` answered false.
+expect "$ZERG" a-range-of-float-as-a-value E9077 'a range of float as a value' <<'EOF'
+fn main() {
+	r := 1.5..2.5
+	print 2.2 in r
+}
+EOF
+
+# AND A UINT ONE: its upper half is negative in an `int64_t`, so `0..u` for the largest `u` held
+# `0..-1` and every member test answered false, though the test written in place is right.
+expect "$ZERG" a-range-of-uint-as-a-value E9077 'a range of uint as a value — a range value holds its bounds as signed integers' <<'EOF'
+fn main() {
+	z: uint = 0
+	u: uint = 18446744073709551615
+	r := z..u
+	print uint(5) in r
 }
 EOF
 

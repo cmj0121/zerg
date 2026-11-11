@@ -23680,10 +23680,13 @@ fn c_tuple_tys(t: ast.Ty) -> list[ast.Ty] {
 fn c_range_value(mut &em: Emitter, lo: ast.Expr, hi: ast.Expr, incl: bool, sb: Subst) -> str {
 	raise c_diag(em, rule.Rule.RangeValueIsBounded, "an open-ended range is not a value — `lo..` has no upper bound to carry, and a value that could be unbounded would make every walk and every test ask about it; write the loop, or give the range a bound (GRAMMAR#range-expr)") if ast.is_nil_lit(hi)
 
-	# WHAT C CAN COMPARE, and nothing wider — the same offender rule the membership test
-	# applies, asked of the bounds alone because a value has no subject yet.
-	off := c_in_range_offender(em, [lo, hi])
-	raise c_diag(em, rule.Rule.NotYetRangeOfKind, f"NotImplemented: a range of {off} as a value — a range's bounds are compared, and {off} is not a type this compiler compares that way (GRAMMAR#range-expr)") if off != ""
+	# A SIGNED INTEGER RANGE, and nothing wider: the value is the struct c_range_typedef declares,
+	# whose bounds are `int64_t`. A `float` bound was stored through a cast, so `r := 1.5..2.5`
+	# held `1..2`, `2.2 in r` answered false and `for x in r` walked the integer 1 — silently. A
+	# `uint` bound past the signed range was held negative and compared signed, so `5 in 0..u`
+	# for the largest `u` answered false.
+	off := c_range_value_offender(em, [lo, hi])
+	raise c_diag(em, rule.Rule.NotYetRangeOfKind, f"NotImplemented: a range of {off} as a value — a range value holds its bounds as signed integers, and {off} is not one (GRAMMAR#range-expr)") if off != ""
 
 	check.chk_binary(em, ">=", c_infer(em, lo), c_infer(em, hi), lo, hi)
 
@@ -23693,6 +23696,20 @@ fn c_range_value(mut &em: Emitter, lo: ast.Expr, hi: ast.Expr, incl: bool, sb: S
 	slo := c_ordered(em, seq, c_expr(em, lo, sb))
 	shi := c_ordered(em, seq, c_expr(em, hi, sb))
 	return f"((zg_range){{ (int64_t)({slo}), (int64_t)({shi}), {c_bool_lit(incl)} }})"
+}
+
+# c_range_value_offender names the first bound a range VALUE cannot hold: the membership test's
+# offenders (c_in_range_offender), a `float`, which `>=` compares but `int64_t` truncates, and a
+# `uint`, whose upper half `int64_t` holds as negative. A `byte` fits, and is held as it is.
+fn c_range_value_offender(mut &em: Emitter, run: list[ast.Expr]) -> str {
+	off := c_in_range_offender(em, run)
+	return off if off != ""
+
+	for e in run {
+		t := c_infer(em, e)
+		return ast.ty_name(t) if c_is_float(t) or c_is_uint(t)
+	}
+	return ""
 }
 
 fn c_bool_lit(b: bool) -> str {

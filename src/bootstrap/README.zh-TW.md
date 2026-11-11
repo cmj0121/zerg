@@ -526,6 +526,11 @@ chan[int]() }`——或任何不是字面值、模組常數，或它們之間算
   不測試的 `else`。`zerg` 只在每個 payload 位置都比對一切時才把 arm 算進去（`E4019`）。這對 bootstrap 不花任何代價：
   編譯器自己的 payload 都是名字。`a-literal-payload-does-not-cover-its-variant` 帶著 `seed-gap` 標記。
 
+- **第一個 arm 是 `T?`、後面的 arm 是 `T` 的 `match` 會走到 cc。** 種子拒絕另一種順序，但它從 optional
+  那個 arm 取得 match 的型別，再讓單純的值進去，於是兩者降階成同一個條件式，被 clang 拒絕。`zerg` 不論順序
+  都拒絕這一對（`E3021`）。這對 bootstrap 不花任何代價：編譯器自己的 arm 型別都一致。
+  `a-match-answering-an-optional-then-a-value` 帶著 `seed-gap` 標記。
+
 ## 修改種子時
 
 讓一項改動可以放心進行的不變量：**自舉原始碼所產生的 C 不得變動**。若那是真正的死碼移除，前後產生的 C 會逐位元組

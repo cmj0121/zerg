@@ -683,6 +683,12 @@ byte(N)` and `byte(N * 3)` are compile errors. The seed folds the literal alone:
   position matches everything (`E4019`). It costs the bootstrap nothing: the compiler's own payloads
   are names. `a-literal-payload-does-not-cover-its-variant` carries the `seed-gap` marker.
 
+- **A `match` WHOSE FIRST ARM IS A `T?` AND A LATER ONE A `T` REACHES cc.** The seed refuses the
+  other order, but takes the match's type from the optional arm and lets the bare one into it, so
+  the two lower into one conditional that clang rejects. `zerg` refuses the pair in either order
+  (`E3021`). It costs the bootstrap nothing: the compiler's own arms agree on their types.
+  `a-match-answering-an-optional-then-a-value` carries the `seed-gap` marker.
+
 ## Changing the seed
 
 The invariant that makes a change safe to make: **the C emitted for the self-host source

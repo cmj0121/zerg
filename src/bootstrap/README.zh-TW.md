@@ -263,6 +263,9 @@ chan[int]() }`——或任何不是字面值、模組常數，或它們之間算
 - **會捕獲的 closure 會被拒絕。** `zerg` 把 lambda 的捕獲提升成一份 per-site 的環境 struct，並透過 fn 值
   自己的 env 欄位交給那次呼叫；種子則把會捕獲的 lambda 擋下來——「a closure used as a value is not yet
   supported」——在這一項上它是較窄的那個編譯器。
+- **把 closure 有預設值的參數留給預設值的呼叫會被拒絕。** 在以 `:=` 直接綁到該 literal 的名字上呼叫時，
+  `zerg` 會像具名 `fn` 的呼叫那樣把它補上；種子則拿引數去對 closure 的型別，回報 _function "closure"
+  expects 2 argument(s), got 1_。在這一項上它是較窄的那個編譯器。
 - **`#[derive(Hash)]` 會被拒絕，以宣告型別當 key 也是。** `zerg` 會 derive `Hash`，並以 struct 或 enum 自己的
   `Eq` 與 `Hash` 當 `map` 或 `set` 的 key;seed 的受祝福集合只有 `Eq` 與 `Ord`，key 也只接受 `int` 與 `str`。它唯一
   的輸入兩者都用不到，所以在這裡它是較窄的那個 compiler，而不是錯的那個。

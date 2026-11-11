@@ -53,6 +53,11 @@ spelling enters the carrier on its own and `x: int? = if c { 1 } else { nil }` w
 inside a present carrier and the absence was gone with nothing reported; the mirror image, `nil` in the
 **then** branch, was refused outright, so one spelling complained and the other miscompiled in silence.
 
+With no `T?` slot around the `if`, a `nil` branch is that absence only beside a branch that is already an
+optional: `y := if c { pick() } else { nil }` is a `T?`. Beside any other type, a `Result[T]` included, it has
+no type to be, so `y := if c { 3 } else { nil }` is _E3020 … its branches give int and nil_, and a `match`'s
+`nil` arm is _E3021_ the same way.
+
 ---
 
 The binding form is built in **expression position** too: `return if x := opt { use(x) } else { fallback }`

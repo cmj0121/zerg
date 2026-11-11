@@ -3640,26 +3640,12 @@ fn main() {
 }
 EOF
 
-# --- three productions GRAMMAR derives and this compiler does not build ------------
+# --- productions GRAMMAR derives that once had no parse path -------------------------
 #
 # Each of these had NO parse path at all, so the answer was whatever token the reader
 # tripped over — the message a TYPO gets, about a form the grammar plainly derives. That
 # breaks the contract in docs/conformance.md: a form is either lowered correctly or refused
 # BY NAME. The parser now READS each one to its end and refuses it as itself, with a place.
-
-# GRAMMAR#closure-param gives a closure parameter a default — `( '=' expr )?`, the same
-# tail GRAMMAR#param gives a named declaration's. A named `fn` has had defaults all along,
-# so this is the closure half of one feature; the reader stopped at the name and answered
-# "a parameter needs a name, and `=` is not one", which says the `=` is in the wrong place
-# rather than that the form is unbuilt.
-expect "$ZERG" closure-parameter-default E9034 <<'EOF'
-fn main() {
-	f := fn (x: int = 5) -> int {
-		return x
-	}
-	print f(1)
-}
-EOF
 
 # GRAMMAR#fn-sig opens a spec member with `'unsafe'? 'mut'? 'fn'`, so `unsafe fn f()` in a
 # spec IS a derivation. It used to be turned away by E2036 — the catch-all for a token that

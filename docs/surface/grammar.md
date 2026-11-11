@@ -898,8 +898,8 @@ Every form below is **[not yet]**: the grammar defines it, `zerg` refuses it **b
 name**, and no program that uses one compiles into something else. This list is not prose —
 `scripts/refuse-check.sh` holds a case for each row, and the **Code** column names the
 refusal each row is pinned by — `E9077` for a range used as a value, `E9075` for a generic
-`type X[T] = …` alias, `E9034` for a default on a closure parameter — so
-a form that quietly starts working, or quietly starts failing differently, fails the gate.
+`type X[T] = …` alias, `E9046` for `alignof[T]` — so a form that quietly starts working, or
+quietly starts failing differently, fails the gate.
 
 The **Group** column is this chapter's own numbering, above — the section that derives the
 production, not the one that first mentions it.
@@ -912,7 +912,6 @@ production, not the one that first mentions it.
 | 4     | `E9077` | a range **of a type this compiler cannot compare** as a value — `"a".."z"`              |
 | 4     | `E2035` | postfix type arguments with no call after them — `map[str, int]`, `f[int]`              |
 | 4     | `E9067` | `map[K, V](…)` as a constructor — an empty map is the literal `{:}`                     |
-| 5     | `E9034` | a default on a **closure** parameter                                                    |
 | 7     | `E9075` | a generic `type X[T] = …` alias                                                         |
 | 7     | `E9038` | an `impl` on a built-in type                                                            |
 | 7     | `E9046` | `alignof[T]`                                                                            |

@@ -502,7 +502,6 @@ shipping compiler rather than a part of it (the line
 | `E9015` | an associated type binding `type … = …` in an `impl`                                                  |
 | `E9028` | an associated type projection `….…`                                                                   |
 | `E9029` | a value generic parameter `…: …`                                                                      |
-| `E9034` | a default on a closure parameter                                                                      |
 | `E9038` | an `impl` on a built-in container target                                                              |
 | `E9042` | `type … = …` over a non-scalar                                                                        |
 | `E9043` | `…` leaving a `guard` block                                                                           |
@@ -674,6 +673,11 @@ Every composite has had one since the structural rendering was built, and `print
 used it; the two spellings that go through `str(…)` were left refusing. They render now, as
 `docs/runtime/format.md` says all four do, which is also what lets `assert xs == ys` report its two sides.
 
+**One retired the day a closure's default was built (#440).** `E9034` refused a default on a closure
+parameter, on the ground that a closure is reached through a value, which has no declaration to read a
+default from. One callee does have it in view, a name bound with `:=` straight to the literal, and a call
+by that name fills the default. Through any other value an omitted argument is the arity rule's `E3082`.
+
 **One retired with its rule rather than to another range.** `E2060` refused a declared type whose
 name did not begin with a capital, and that rule was the whole of how the language separated its
 two namespaces — a capitalised name was a type, a lower-case one a value. The rule is gone: a name
@@ -788,6 +792,7 @@ name now is the prelude rule (`E2061`), which is about the name rather than abou
 | `E9068` | —       | the form was built: `nil` names an optional's absent side              |
 | `E9057` | —       | the form was built: an unnamed form compares by its parts              |
 | `E9061` | —       | the form was built: `in` over a list asks its elements' `==`           |
+| `E9034` | —       | the form was built: a call by a closure's `:=` name fills its default  |
 | `E4011` | —       | not a rule: a list renders in `str(…)` as it does in `print`           |
 | `E9036` | `E4111` | not an unbuilt form: a `spec` member is never `unsafe`                 |
 

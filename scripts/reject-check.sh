@@ -7133,6 +7133,109 @@ fn main() {
 }
 EOF
 
+reject open-slice-with-a-str-bound E3070 <<'EOF'
+fn main() {
+	xs := [1, 2]
+	ys := xs["a"..]
+	print ys.len()
+}
+EOF
+
+# A `for … in` BOUND IS AN INT, because the loop variable is one. It was asked of nothing: a str
+# bound reached cc as a pointer initialising an `int64_t`, and a float one was truncated by a C
+# conversion. The open range would have sent `for i in "a"..` the same way, once it was built.
+reject for-range-with-a-str-bound E3036 'a bound of a `for … in` range is int, and this gives str' <<'EOF'
+fn main() {
+	for i in "a"..3 {
+		print i
+	}
+}
+EOF
+
+reject for-range-with-a-float-bound E3036 'a bound of a `for … in` range is int, and this gives float' <<'EOF'
+fn main() {
+	for i in 0..2.5 {
+		print i
+	}
+}
+EOF
+
+reject open-for-range-with-a-str-bound E3036 'a bound of a `for … in` range is int, and this gives str' <<'EOF'
+fn main() {
+	for i in "a".. {
+		print i
+		break
+	}
+}
+EOF
+
+# `..=` HAS A MANDATORY BOUND, and `nil` is an expression the parser accepts in its place —
+# so `1..=nil` is the range with no upper bound that `..=` cannot be, in every position. The
+# membership test read it as the open range and answered `true`.
+reject inclusive-range-with-no-bound-in-a-slice E3136 <<'EOF'
+fn main() {
+	xs := [1, 2]
+	print xs[1..=nil]
+}
+EOF
+
+reject inclusive-range-with-no-bound-in-a-for E3136 <<'EOF'
+fn main() {
+	for i in 1..=nil {
+		print i
+		break
+	}
+}
+EOF
+
+reject inclusive-range-with-no-bound-in-membership E3136 <<'EOF'
+fn main() {
+	print 3 in 1..=nil
+}
+EOF
+
+# AND `..nil` IS NOT THE OPEN RANGE. GRAMMAR derives `lo..` with nothing after it, and a written
+# `nil` was read as that absence — so `xs[1..nil]` sliced to the end and `for i in 1..nil` never
+# stopped, in a spelling no chapter gives. The sentence tells the two `nil`s apart.
+reject nil-upper-bound-in-a-slice E3136 'an open range is written `500..`, with nothing after the `..`' <<'EOF'
+fn main() {
+	xs := [1, 2]
+	print xs[1..nil]
+}
+EOF
+
+reject nil-upper-bound-in-a-for E3136 'with nothing after the `..`' <<'EOF'
+fn main() {
+	for i in 1..nil {
+		print i
+		break
+	}
+}
+EOF
+
+reject nil-upper-bound-in-membership E3136 'with nothing after the `..`' <<'EOF'
+fn main() {
+	print 3 in 1..nil
+}
+EOF
+
+reject nil-upper-bound-in-an-arm E3136 'with nothing after the `..`' <<'EOF'
+fn main() {
+	n := 3
+	print match n {
+		1..nil => "a"
+		_ => "b"
+	}
+}
+EOF
+
+reject nil-upper-bound-in-a-range-value E3136 'with nothing after the `..`' <<'EOF'
+fn main() {
+	r := 1..nil
+	print 3 in r
+}
+EOF
+
 # The message named the LOOP VARIABLE as undefined, which is the consequence: the loop gave it
 # no type because the thing being walked is not walkable, and `x` was blamed for it.
 reject for-over-a-non-iterable E3075 <<'EOF'
@@ -10598,6 +10701,71 @@ struct P {
 fn main() {
 	p: P? = P(1)
 	print p?.zz
+}
+EOF
+
+# THE OPTIONAL CHAIN'S CALL (#439) asks what `.` would ask of the payload, and one thing more:
+# the receiver is the payload COPIED out of the operand, a value rather than a place, so a method
+# that writes through its receiver is refused exactly as it is on `p!` — for the built-in
+# `append` and for a declared `mut fn`. Without it the write would land on the copy.
+reject an-optional-method-call-on-a-non-optional E4005 'and int is not one' <<'EOF'
+fn main() {
+	n := 3
+	print n?.display()
+}
+EOF
+
+reject an-optional-method-call-to-a-method-that-is-not-there E3131 'the method `zz` on a P' <<'EOF'
+struct P {
+	pub v: int
+}
+
+fn main() {
+	p: P? = P(1)
+	print p?.zz(2)
+}
+EOF
+
+reject an-optional-method-call-that-appends E4081 '`an unwrapped payload` is a value rather than a place — it is a copy of the payload' <<'EOF'
+fn main() {
+	mut xs: list[int]? = [1]
+	xs?.append(2)
+	print xs!.len()
+}
+EOF
+
+reject an-optional-method-call-to-a-mut-fn E3022 'borrows an unwrapped payload, which is a value rather than a place — it is a copy of the payload' <<'EOF'
+struct P {
+	pub v: int
+}
+
+impl P {
+	mut fn bump() {
+		this.v = this.v + 1
+	}
+}
+
+fn main() {
+	mut p: P? = P(1)
+	p?.bump()
+	print p!.v
+}
+EOF
+
+reject an-optional-method-call-answering-nothing-bound E3086 <<'EOF'
+struct P {
+	pub v: int
+}
+
+impl P {
+	fn show() {
+		print this.v
+	}
+}
+
+fn main() {
+	p: P? = P(1)
+	x := p?.show()
 }
 EOF
 

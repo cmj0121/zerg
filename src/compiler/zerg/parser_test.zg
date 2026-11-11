@@ -50,6 +50,7 @@ fn where(e: ast.Expr) -> str {
 		Expr.ENamedArg(n, _, l, c) => f"arg {n}@{l}:{c}"
 		Expr.EField(t, n, l, c) => f"{where(t)} .{n}@{l}:{c}"
 		Expr.EOptChain(t, n, l, c) => f"{where(t)} ?.{n}@{l}:{c}"
+		Expr.EOptMethod(t, n, _, l, c) => f"{where(t)} ?.{n}()@{l}:{c}"
 		Expr.EMethod(t, n, _, l, c) => f"{where(t)} .{n}()@{l}:{c}"
 		Expr.EBinary(_, a, b) => f"{where(a)} {where(b)}"
 		_ => "?"
@@ -179,6 +180,14 @@ fn test_method_call_chain() {
 fn test_optional_chain_member() {
 	ss := body_of("fn main() {\n\tr := p?.q\n}\n")
 	assert where(let_value(ss[0])) == "p@2:7 ?.q@2:10"
+}
+
+# a call after `?.` is the optional chain's own call, not a call of the optional the chain
+# answers — and a chain of them keeps going in both spellings
+#[test]
+fn test_optional_chain_call() {
+	ss := body_of("fn main() {\n\tr := p?.q(1)?.m().n\n}\n")
+	assert where(let_value(ss[0])) == "p@2:7 ?.q()@2:10 ?.m()@2:16 .n@2:20"
 }
 
 # a call's callee is a name like any other, and a named argument's name is one too — it

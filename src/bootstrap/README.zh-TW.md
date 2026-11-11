@@ -104,6 +104,8 @@ cc 對著產生的 C。
 | command literal `` `git status` ``                                    | 行程代換字面值           |
 | `for k in m` 走訪一張 map                                             | 那個迭代                 |
 | `e in ValueError`——錯誤 taxonomy 的**子樹**測試                       | docs/code/errors 的 `in` |
+| optional method call `p?.m(…)`                                        | `?.` 之後的呼叫          |
+| `for i in n..` 走訪開放 range                                         | 沒有上界的迴圈           |
 
 `e is ValueError` 種子建得起來，沒有讀法的是 `in`。這兩個是不同的關係（identity 與 subtree，見
 docs/code/errors.zh-TW.md），而只有其中一個在這裡。有五條 oracle skip 就架在這一個缺口上

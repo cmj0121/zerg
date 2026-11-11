@@ -117,6 +117,8 @@ Measured against `zerg0` on 2026-07-31.
 | command literals `` `git status` ``                                    | the process-substitution literal |
 | `for k in m` over a map                                                | the iteration                    |
 | `e in ValueError` — the error taxonomy's SUBTREE test                  | the `in` of docs/code/errors.md  |
+| an optional method call `p?.m(…)`                                      | the call after `?.`              |
+| `for i in n..` over an open range                                      | the loop with no upper bound     |
 
 `e is ValueError` the seed does build; it is `in` it has no reading for. The two are
 different relations (identity and subtree, docs/code/errors.md) and only one of them is

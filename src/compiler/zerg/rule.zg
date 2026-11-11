@@ -580,7 +580,6 @@ pub enum Rule {
 	NotYetImplAssocType = 9015
 	NotYetAssocTypeProjection = 9028
 	NotYetValueGenericParam = 9029
-	NotYetClosureParamDefault = 9034
 	NotYetImplTypeArgument = 9038
 	NotYetTypedefNonScalar = 9042
 	NotYetJumpOutOfGuard = 9043

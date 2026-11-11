@@ -9551,6 +9551,95 @@ fn main() {
 }
 EOF
 
+# A CLOSURE'S DEFAULT IS NOT IN ITS TYPE (docs/code/functions.md). A call by the name it was
+# bound to with `:=` fills one; a call through any other value has only the type to go by, so
+# leaving the argument off is the arity rule above — a parameter of fn type, a `mut` binding,
+# a copy and a capture each — and never a default filled from a declaration it cannot see.
+reject a-closure-default-through-a-parameter E3082 <<'EOF'
+fn apply(g: fn (int, int) -> int) -> int {
+	return g(1)
+}
+
+fn main() {
+	f := fn (x: int, y: int = 2) -> int {
+		return x + y
+	}
+	print apply(f)
+}
+EOF
+
+reject a-closure-default-through-a-mut-binding E3082 <<'EOF'
+fn main() {
+	mut f := fn (x: int, y: int = 2) -> int {
+		return x + y
+	}
+	print f(1)
+}
+EOF
+
+reject a-closure-default-through-a-copy E3082 <<'EOF'
+fn main() {
+	f := fn (x: int, y: int = 2) -> int {
+		return x + y
+	}
+	g := f
+	print g(1)
+}
+EOF
+
+reject a-closure-default-through-a-capture E3082 <<'EOF'
+fn main() {
+	f := fn (x: int, y: int = 2) -> int {
+		return x + y
+	}
+	h := fn () -> int {
+		return f(1)
+	}
+	print h()
+}
+EOF
+
+# and a call by the name is held to the rules a named call is: a name skipping a parameter that
+# has no default — before the last one written, since past it the call simply stops short, which
+# is the arity rule's — and the two rules a named declaration's default is judged by where it is
+# written
+reject a-closure-call-skipping-a-required-parameter E4109 <<'EOF'
+fn main() {
+	f := fn (x: int, y: int, z: int = 3) -> int {
+		return x + y + z
+	}
+	print f(x: 1, z: 2)
+}
+EOF
+
+reject a-closure-call-stopping-short-of-a-required-parameter E3082 <<'EOF'
+fn main() {
+	f := fn (x: int = 1, y: int) -> int {
+		return x + y
+	}
+	print f(x: 1)
+}
+EOF
+
+reject a-closure-default-that-does-not-fit E3009 <<'EOF'
+fn main() {
+	f := fn (x: int, y: str = 2) -> int {
+		return x
+	}
+	print f(1, "a")
+}
+EOF
+
+reject a-closure-mut-ref-with-a-default E3008 <<'EOF'
+fn main() {
+	f := fn (x: int, mut &y: int = 2) {
+		y = x
+	}
+	mut a := 1
+	f(1, a)
+}
+EOF
+
 # CARVE-OUT (c)'s second sentence. A closure's omitted parameter types come from the
 # function type it is checked against, so a closure that meets no such position has nowhere
 # to take them from — and the specification says that is an error rather than a guess. It

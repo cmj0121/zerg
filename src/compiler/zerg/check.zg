@@ -1073,46 +1073,52 @@ pub fn chk_recv_mut(mut &em: emit.Emitter, target: ast.Expr, meth: str) {
 # c_check_defaults judges every declared default in the program.
 pub fn c_check_defaults(mut &em: emit.Emitter, f: ast.File) {
 	for fn_d in f.fns {
-		key := emit.c_sig_key(fn_d.recv, fn_d.name)
-		mut i := 0
-		for i < fn_d.params.len() {
-			chk_param_default(em, key, fn_d, i)
-			i = i + 1
+		mut any := false
+		for pm in fn_d.params {
+			any = any or pm.has_def
+		}
+		if any {
+			chk_defaults(em, fn_d.path, fn_d.line, fn_d.col, fn_d.params, f"`{chk_call_name(emit.c_sig_key(fn_d.recv, fn_d.name))}`", true)
 		}
 	}
 }
 
-# chk_param_default raises on a default that could never be legal at any call. It reads the
-# declaration's PLACE rather than the marker: this runs before any statement is emitted, so
-# the SAt markers have said nothing and `em.at_*` still holds whatever the last unit left
-# there.
+# chk_defaults raises on a default that could never be legal at any call: a `mut &` takes the
+# ADDRESS of a caller's variable and a default has none to take, and a default meets its
+# parameter's type. `who` names the declaration in the sentence.
 #
-# The default is typed as a call types it (emit.c_default_enter_at): in its own file, with
-# nothing bound but the module and the parameters before it.
-fn chk_param_default(mut &em: emit.Emitter, key: str, fn_d: ast.FnDecl, idx: int) {
-	pm := fn_d.params[idx]
-	path := fn_d.path
-	line := fn_d.line
-	col := fn_d.col
-	return if not pm.has_def
-
-	# a `mut &` takes the ADDRESS of a caller's variable; a default has none to take
-	if pm.is_ref {
-		chk_at_place(em, path, line, col, rule.Rule.MutRefParamDefault, f"parameter `{pm.name}` of `{chk_call_name(key)}` is a `mut &` and cannot have a default — a reference needs a caller's variable to point at")
-		return
+# The view is entered once, and each parameter is bound as the walk passes it, so a default is
+# typed with the parameters before it in scope and no others — as a call types it. `fresh` is a
+# named declaration's view (emit.c_default_enter_at): its own file, with nothing bound but the
+# module. Otherwise it is the scopes open where a closure literal is written. A named
+# declaration's findings are placed at (line, col); a closure's (0, 0) at each parameter.
+pub fn chk_defaults(mut &em: emit.Emitter, path: str, line: int, col: int, ps: list[ast.Param], who: str, fresh: bool) {
+	mut saved := emit.c_default_stay(em)
+	if fresh {
+		saved = emit.c_default_enter_at(em, path, line, col)
+	} else {
+		emit.c_scope_open(em)
 	}
-
-	saved := emit.c_default_enter_at(em, path, line, col)
 	mut k := 0
-	for k < idx {
-		q := fn_d.params[k]
-		emit.c_default_bind(em, q.name, q.ty, q.is_ref, "zg_" + q.name)
+	for k < ps.len() {
+		mut l := line
+		mut c := col
+		if l == 0 {
+			l = ps[k].line
+			c = ps[k].col
+		}
+		if ps[k].has_def and ps[k].is_ref {
+			chk_at_place(em, path, l, c, rule.Rule.MutRefParamDefault, f"parameter `{ps[k].name}` of {who} is a `mut &` and cannot have a default — a reference needs a caller's variable to point at")
+		} else if ps[k].has_def and not emit.c_is_unknown(ps[k].ty) {
+			got := emit.c_infer(em, ps[k].def)
+			if not chk_fits_expr(em, ps[k].ty, got, ps[k].def) {
+				chk_at_place(em, path, l, c, rule.Rule.ParamDefaultType, f"the default for `{ps[k].name}` of {who} is {ast.ty_name(got)}, and the parameter is {ast.ty_name(ps[k].ty)}")
+			}
+		}
+		emit.c_default_bind(em, ps[k].name, ps[k].ty, ps[k].is_ref, "zg_" + ps[k].name)
 		k = k + 1
 	}
-	got := emit.c_infer(em, pm.def)
 	emit.c_default_leave(em, saved)
-	return if chk_fits_expr(em, pm.ty, got, pm.def)
-	chk_at_place(em, path, line, col, rule.Rule.ParamDefaultType, f"the default for `{pm.name}` of `{chk_call_name(key)}` is {ast.ty_name(got)}, and the parameter is {ast.ty_name(pm.ty)}")
 }
 
 # --- a pattern binds, and a construction gives, what the variant holds --------------
@@ -1893,16 +1899,27 @@ pub const CHK_ANSWER := "this function's answer"
 # borrow checker, and nothing was holding it: `two(k, k)` passed one address twice, so the
 # callee's two names were one variable and the second write landed on top of the first.
 pub fn chk_ref_alias(mut &em: emit.Emitter, key: str, args: list[ast.Expr]) {
+	mut refs: list[bool] = []
 	mut i := 0
 	for i < args.len() {
 		row := emit.c_param_row(em, key, i)
-		if row >= 0 and em.pr_ref[row] {
+		refs.append(row >= 0 and em.pr_ref[row])
+		i = i + 1
+	}
+	chk_ref_alias_in(em, chk_call_name(key), refs, args)
+}
+
+# chk_ref_alias_in is the rule over `refs`, which slot is a `mut &` — a named call's from its
+# parameter table, a call by a closure's name (emit.c_cl_call) from the type.
+pub fn chk_ref_alias_in(mut &em: emit.Emitter, who: str, mut &refs: list[bool], args: list[ast.Expr]) {
+	mut i := 0
+	for i < args.len() {
+		if i < refs.len() and refs[i] {
 			ni := chk_root_name(args[i])
 			mut j := i + 1
 			for j < args.len() {
-				rj := emit.c_param_row(em, key, j)
-				if ni != "" and rj >= 0 and em.pr_ref[rj] and chk_root_name(args[j]) == ni {
-					chk_at(em, rule.Rule.MutRefAliasInCall, f"`{ni}` is given to two `mut &` parameters of `{chk_call_name(key)}` in one call — a borrow may not alias, which is what keeps it safe without a borrow checker")
+				if ni != "" and j < refs.len() and refs[j] and chk_root_name(args[j]) == ni {
+					chk_at(em, rule.Rule.MutRefAliasInCall, f"`{ni}` is given to two `mut &` parameters of `{who}` in one call — a borrow may not alias, which is what keeps it safe without a borrow checker")
 					return
 				}
 				j = j + 1

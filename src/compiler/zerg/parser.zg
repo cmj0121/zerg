@@ -1886,23 +1886,17 @@ fn parse_fn_expr(mut &p: Parser) -> ast.Expr {
 		}
 
 		# The same production ends with `( '=' expr )?` — a DEFAULT, exactly the tail
-		# GRAMMAR#param gives a named declaration's parameter, and one a named `fn` has had
-		# since defaults were built. The closure half was never read: the loop went from the
-		# type straight to the comma, so the `=` was still sitting there when the next
-		# parameter's NAME was asked for, and the answer was `a parameter needs a name, and
-		# `=` is not one` — a complaint about the token, from a reader that had no idea a
-		# default was what it was looking at.
-		#
-		# The expression is read to its end before the refusal, so the sentence is about the
-		# form and not about wherever the reader stopped. Building it is more than parsing:
-		# a default is materialised AT THE CALL SITE out of the callee's DECLARATION, and a
-		# closure is reached through a value, which carries no declaration to read one from.
+		# GRAMMAR#param gives a named declaration's parameter. It is honoured where the callee
+		# is a name bound with `:=` straight to this literal (c_cl_call), the one place a value
+		# still has its declaration in view; through any other value the type carries none.
+		mut has_def := false
+		mut def := ast.Expr.ENil
 		if p_at(p, token.Kind.Assign) {
 			p_advance(p)
-			parse_expr(p)
-			raise p_diag_at(p, nt.line, nt.col, rule.Rule.NotYetClosureParamDefault, f"NotImplemented: a default on the closure parameter `{pname}` — GRAMMAR#closure-param derives `( '=' expr )?` and a named `fn` declaration honours it, but a default is filled in at the CALL SITE from the callee's declaration, and a closure is reached through a value that has not got one. Pass the argument at every call")
+			def = parse_expr(p)
+			has_def = true
 		}
-		params.append(ast.Param(pname, pty, is_ref, false, ast.Expr.ENil, nt.line, nt.col))
+		params.append(ast.Param(pname, pty, is_ref, has_def, def, nt.line, nt.col))
 		p_list_sep(p, token.Kind.RParen, ")", "a parameter list")
 	}
 	expect(p, token.Kind.RParen)

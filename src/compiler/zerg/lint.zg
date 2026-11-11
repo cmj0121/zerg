@@ -1266,6 +1266,13 @@ fn walk_defaults(ps: list[ast.Param], mut &ids: list[str], mut &calls: list[str]
 	}
 }
 
+# walk_fn_expr reaches a closure literal's parameter defaults as well as its body: a default is
+# an expression the enclosing function wrote, and what it calls is called.
+fn walk_fn_expr(ps: list[ast.Param], body: list[ast.Stmt], mut &ids: list[str], mut &calls: list[str], mut &ns: list[str]) {
+	walk_defaults(ps, ids, calls, ns)
+	walk_body(body, ids, calls, ns)
+}
+
 # walk_field_defaults is the same for a struct's fields. It is a second function and not a
 # generic one because `Param` and `FieldDef` are two structs, not one shape.
 fn walk_field_defaults(fields: list[ast.FieldDef], mut &ids: list[str], mut &calls: list[str], mut &ns: list[str]) {
@@ -1402,7 +1409,7 @@ fn walk_expr(e: ast.Expr, mut &ids: list[str], mut &calls: list[str], mut &ns: l
 		Expr.ERange(lo, hi, _) => walk_pair(lo, hi, ids, calls, ns)
 		Expr.ETuple(elems) => walk_all(elems, ids, calls, ns)
 		Expr.EMapLit(ks, vs) => walk_two_lists(ks, vs, ids, calls, ns)
-		Expr.EFn(_, _, _, body) => walk_body(body, ids, calls, ns)
+		Expr.EFn(ps, _, _, body) => walk_fn_expr(ps, body, ids, calls, ns)
 		Expr.EChanNew(_, cap) => walk_expr(cap, ids, calls, ns)
 		Expr.ERecv(ch) => walk_expr(ch, ids, calls, ns)
 		Expr.EForce(x) => walk_expr(x, ids, calls, ns)

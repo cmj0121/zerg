@@ -826,6 +826,18 @@ pub struct Emitter {
 	pub rs_thunks: list[str]
 	pub rs_drops: list[str]
 	pub rs_guard: str
+
+	# env_cl is an environment column like the rest, row for row: the cl_decls entry of a
+	# binding made with `:=` straight from a closure literal that declares a default, or -1. A
+	# call by that name reads the declaration back from it (c_cl_call); a capture or a copy is
+	# a row of its own and has none.
+	pub env_cl: list[int]
+	pub cl_decls: list[ClDecl]
+
+	# hide_lo / hide_hi are the rows a closure's default must not see — every one bound between
+	# its declaration and the call — while c_cl_default has it entered. c_in_scope skips them.
+	pub hide_lo: int
+	pub hide_hi: int
 }
 
 # Subst is an active set of identifier substitutions: an EIdent whose name appears in
@@ -2223,7 +2235,8 @@ fn c_args_after(mut &em: Emitter, fty: ast.Ty, args: list[ast.Expr], sb: Subst) 
 	# in the seed too. The two compilers must agree about which operands are sequenced or
 	# `make oracle` becomes a tripwire waiting for a program that can tell — so the boundary
 	# is drawn in the same place on both sides, and moving it is a change to both.
-	rendered := c_args_typed(em, c_fn_params(fty), args, sb, c_needs_order(args, 0))
+	mut cf := c_no_fill()
+	rendered := c_args_typed(em, c_fn_params(fty), args, sb, c_needs_order(args, 0), cf)
 	return "" if rendered == ""
 
 	return ", " + rendered
@@ -2328,6 +2341,12 @@ fn c_reset_env(mut &em: Emitter) {
 	em.env_const = []
 	em.env_cval = []
 	em.env_nx = []
+	em.env_cl = []
+
+	# and no row hidden: the window a closure's default opens (ClFill) is over THIS env's rows,
+	# and a body lifted inside one numbers its own from 0
+	em.hide_lo = 0
+	em.hide_hi = 0
 	em.frz_idxs = []
 	em.frz_paths = []
 	em.frz_roots = []
@@ -2437,6 +2456,7 @@ fn c_env_row(mut &em: Emitter, name: str, t: ast.Ty, cname: str, is_mut: bool, i
 	# declaration of that name was, silently, which is exactly the shape of bug a column
 	# parallel to env_names exists to prevent.
 	em.env_cval.append(check.Folded(false, 0))
+	em.env_cl.append(0 - 1)
 
 	# and where its name was written, which only some binders know here — the rest settle it
 	# through c_nx_bind once the statement that made the row has
@@ -3023,10 +3043,13 @@ struct EnvCols {
 	pub consts: list[bool]
 	pub cval: list[check.Folded]
 	pub nx: list[int]
+	pub cl: list[int]
+	pub hide_lo: int
+	pub hide_hi: int
 }
 
 fn c_env_save(mut &em: Emitter) -> EnvCols {
-	return EnvCols(em.env_names, em.env_tys, em.env_cnames, em.env_dead, em.env_mut, em.env_scope, em.env_const, em.env_cval, em.env_nx)
+	return EnvCols(em.env_names, em.env_tys, em.env_cnames, em.env_dead, em.env_mut, em.env_scope, em.env_const, em.env_cval, em.env_nx, em.env_cl, em.hide_lo, em.hide_hi)
 }
 
 fn c_env_restore(mut &em: Emitter, saved: EnvCols) {
@@ -3039,6 +3062,9 @@ fn c_env_restore(mut &em: Emitter, saved: EnvCols) {
 	em.env_const = saved.consts
 	em.env_cval = saved.cval
 	em.env_nx = saved.nx
+	em.env_cl = saved.cl
+	em.hide_lo = saved.hide_lo
+	em.hide_hi = saved.hide_hi
 }
 
 # c_no_shadow_sub refuses a binding that takes a name an ACTIVE substitution holds.
@@ -3092,7 +3118,7 @@ pub fn c_in_scope(mut &em: Emitter, idx: int) -> bool {
 			break
 		}
 	}
-	return open and c_k_in_view(em, idx)
+	return open and c_k_in_view(em, idx) and (idx < em.hide_lo or idx >= em.hide_hi)
 }
 
 # c_k_in_view is whether a module row is the one the reader means, where two or more files declare
@@ -13667,11 +13693,24 @@ fn c_call(mut &em: Emitter, name: str, args: list[ast.Expr], l: int, c: int, sb:
 
 	# calling a BINDING that holds a function: cast the stored generic pointer back to the
 	# signature its type carries, then call through it
-	bt := c_lookup_var(em, name)
-	if em.want_index and c_is_fn(bt) {
-		c_nx_use(em, l, c, name, em.env_nx[c_live_idx(em, name)])
+	row := c_live_idx(em, name)
+	mut bt := ast.Ty.TUnknown
+	if row >= 0 {
+		bt = em.env_tys[row]
 	}
-	return f"({c_fnptr_cast(bt)}({c_ident_val(em, name, 0, 0, sb)}).fn)({c_ident_val(em, name, 0, 0, sb)}.env{c_args_after(em, bt, args, sb)})" if c_is_fn(bt)
+	if c_is_fn(bt) {
+		if em.want_index {
+			c_nx_use(em, l, c, name, em.env_nx[row])
+		}
+
+		# a name bound straight to a closure literal that declares a default (c_cl_call)
+		cl := em.env_cl[row]
+		if cl >= 0 {
+			mut cd := em.cl_decls[cl]
+			return c_cl_call(em, name, bt, row, cd, args, sb) if c_cl_fills(cd.params.len(), args)
+		}
+		return f"({c_fnptr_cast(bt)}({c_ident_val(em, name, 0, 0, sb)}).fn)({c_ident_val(em, name, 0, 0, sb)}.env{c_args_after(em, bt, args, sb)})"
+	}
 
 	# A BINDING THAT IS NOT A FUNCTION SHADOWS ONE ALL THE SAME. The name is looked up as a
 	# binding first, because a binding holding a function is a call — and when it holds
@@ -14655,10 +14694,46 @@ fn c_args_named(mut &em: Emitter, key: str, base: int, args: list[ast.Expr]) -> 
 	}
 	return args if not any
 
-	# the written arguments, split: the positionals keep their order and the named ones are
-	# placed by the parameter each picks
+	# the parameters a written argument can bind to — every one from `base`, in order
+	mut names: list[str] = []
+	mut hasdef: list[bool] = []
+	mut nx: list[int] = []
+	mut defs: list[ast.Expr] = []
+	first := c_param_row(em, key, base)
+	if first >= 0 {
+		mut k := 0
+		for first + k < em.pr_fn.len() and c_param_same_fn(em, first, first + k) and em.pr_idx[first + k] == base + k {
+			row := first + k
+			names.append(em.pr_name[row])
+			hasdef.append(em.pr_hasdef[row])
+			defs.append(em.pr_def[row])
+			if em.want_index {
+				nx.append(em.pr_nx[row])
+			}
+			k = k + 1
+		}
+	}
+
+	place := c_place_args(em, names, hasdef, nx, args)
+	mut out: list[ast.Expr] = []
+	for at in place {
+		if at >= 0 {
+			out.append(c_named_arg_value(args[at]))
+		} else {
+			out.append(defs[out.len()])
+		}
+	}
+	return out
+}
+
+# c_place_args is the placement both a named call (c_args_named) and a call by a closure's name
+# (c_cl_call) make: `names` and `hasdef` are the parameters the written arguments bind to, in
+# order, and `nx` their declarations in the name index (empty when none was asked for). The
+# positionals keep their order and each named one goes to the parameter it picks; the answer
+# holds, per slot up to the highest one written, the index of the argument written there, or -1
+# where the slot's default fills it. The ordinary backfill finishes the tail.
+fn c_place_args(mut &em: Emitter, mut &names: list[str], mut &hasdef: list[bool], mut &nx: list[int], args: list[ast.Expr]) -> list[int] {
 	mut slot: list[int] = []
-	mut val: list[ast.Expr] = []
 	mut seen_named := false
 	mut i := 0
 	for i < args.len() {
@@ -14667,30 +14742,31 @@ fn c_args_named(mut &em: Emitter, key: str, base: int, args: list[ast.Expr]) -> 
 			if seen_named {
 				c_named_after_positional(em)
 			}
-			slot.append(base + i)
-			val.append(args[i])
+			slot.append(i)
 		} else {
 			seen_named = true
-			at := c_param_named(em, key, nm)
-			if em.want_index and at >= 0 {
-				c_nx_named_arg(em, args[i], em.pr_nx[c_param_row(em, key, at)])
+			mut at := 0 - 1
+			mut k := 0
+			for k < names.len() {
+				if names[k] == nm {
+					at = k
+				}
+				k = k + 1
 			}
-
+			if at >= 0 and nx.len() > at {
+				c_nx_named_arg(em, args[i], nx[at])
+			}
 			if at < 0 {
 				c_named_unknown(em, nm, "parameter of this call")
 			}
 			if c_slot_taken(slot, at) {
 				c_named_already(em, nm, "parameter")
 			}
-
 			slot.append(at)
-			val.append(c_named_arg_value(args[i]))
 		}
 		i = i + 1
 	}
 
-	# the highest parameter anything picked decides how long the applied list is; the ordinary
-	# backfill still finishes the tail
 	mut top := 0 - 1
 	for k in slot {
 		if k > top {
@@ -14698,8 +14774,8 @@ fn c_args_named(mut &em: Emitter, key: str, base: int, args: list[ast.Expr]) -> 
 		}
 	}
 
-	mut out: list[ast.Expr] = []
-	mut j := base
+	mut out: list[int] = []
+	mut j := 0
 	for j <= top {
 		mut found := 0 - 1
 		mut m := 0
@@ -14709,16 +14785,10 @@ fn c_args_named(mut &em: Emitter, key: str, base: int, args: list[ast.Expr]) -> 
 			}
 			m = m + 1
 		}
-		if found >= 0 {
-			out.append(val[found])
-		} else {
-			row := c_param_row(em, key, j)
-			if row < 0 or not em.pr_hasdef[row] {
-				c_named_skips(em, "a parameter")
-			}
-
-			out.append(em.pr_def[row])
+		if found < 0 and (j >= hasdef.len() or not hasdef[j]) {
+			c_named_skips(em, "a parameter")
 		}
+		out.append(found)
 		j = j + 1
 	}
 	return out
@@ -15147,6 +15217,8 @@ pub struct DefAt {
 	pub open: list[int]
 	pub cur: int
 	pub refs: list[int]
+	pub hide_lo: int
+	pub hide_hi: int
 }
 
 # c_default_enter enters the default of parameter idx of `key`, with `prior` the C values of
@@ -15191,8 +15263,8 @@ pub fn c_default_enter_at(mut &em: Emitter, path: str, line: int, col: int) -> D
 
 # c_default_stay is a DefAt of the state as it stands, so a c_default_leave of it changes
 # nothing — what a written argument takes where a default would have entered its own file.
-fn c_default_stay(mut &em: Emitter) -> DefAt {
-	return DefAt(em.at_path, em.at_line, em.at_col, em.at_end_line, em.at_end_col, em.sub, em.open_scopes, em.scope_cur, em.ref_rows)
+pub fn c_default_stay(mut &em: Emitter) -> DefAt {
+	return DefAt(em.at_path, em.at_line, em.at_col, em.at_end_line, em.at_end_col, em.sub, em.open_scopes, em.scope_cur, em.ref_rows, em.hide_lo, em.hide_hi)
 }
 
 pub fn c_default_leave(mut &em: Emitter, saved: DefAt) {
@@ -15202,6 +15274,8 @@ pub fn c_default_leave(mut &em: Emitter, saved: DefAt) {
 	em.open_scopes = saved.open
 	em.scope_cur = saved.cur
 	em.ref_rows = saved.refs
+	em.hide_lo = saved.hide_lo
+	em.hide_hi = saved.hide_hi
 }
 
 # c_default_arg renders `d`, the default of parameter i, which a call left off the end.
@@ -15215,6 +15289,217 @@ fn c_default_arg(mut &em: Emitter, fname: str, i: int, base: int, prior: list[st
 	out := c_fit_copied(em, f"the default for {slot}", pt, d, c_nosub())
 	c_default_leave(em, saved)
 	return out
+}
+
+# --- a closure's defaults ------------------------------------------------------------
+#
+# A default is filled in at the CALL out of the callee's DECLARATION, and a function value
+# carries no declaration: `docs/code/functions.md` keeps defaults out of the type. One callee
+# still has its declaration in view — a name bound with `:=` straight to the closure literal,
+# which nothing can rebind — so a call by that name fills a default as a named `fn`'s call
+# does. Through any other value (a parameter, a field, an element, a `mut` binding, a copy)
+# the type is all there is, and an omitted argument is the arity rule's (c_args_after).
+
+# ClView is where a closure's defaults resolve their names: the file, the substitution, the
+# open scopes and the `mut &` rows at the declaration.
+pub struct ClView {
+	pub path: str
+	pub sub: Subst
+	pub open: list[int]
+	pub refs: list[int]
+}
+
+# ClDecl is what such a binding keeps of its literal: the parameters (with their names and
+# whether each has a default, which is what a call's placement reads), and the view. `local`
+# is a binding inside a function, whose default must not see a row bound after it; a module
+# binding's view is the module, and hides nothing.
+pub struct ClDecl {
+	pub params: list[ast.Param]
+	pub names: list[str]
+	pub hasdef: list[bool]
+	pub view: ClView
+	pub local: bool
+}
+
+# ClFill is one call's filling of a closure's defaults, handed to c_args_typed: the
+# declaration, which slots its defaults fill, and whether a default reads an earlier parameter
+# (`need`), which binds every slot for it. A default is lowered in the declaration's view with
+# rows [lo, hi) hidden — everything bound from the binding itself to the call — inside one
+# scope of the call's own (`scope`), where the earlier slots are bound once each as the
+# defaults reach them: `prior` holds their C values, `bound` how many are bound, and `refs`
+# the `mut &` rows among them.
+pub struct ClFill {
+	pub decl: ClDecl
+	pub name: str
+	pub filled: list[bool]
+	pub need: bool
+	pub lo: int
+	pub hi: int
+	pub scope: int
+	pub prior: list[str]
+	pub bound: int
+	pub refs: list[int]
+}
+
+# c_no_fill is a ClFill for a call with nothing to fill — every call but c_cl_call's.
+fn c_no_fill() -> ClFill {
+	ps: list[ast.Param] = []
+	names: list[str] = []
+	flags: list[bool] = []
+	ints: list[int] = []
+	strs: list[str] = []
+	return ClFill(ClDecl(ps, names, flags, ClView("", c_nosub(), ints, ints), false), "", flags, false, 0, 0, 0, strs, 0, ints)
+}
+
+# c_cl_defaulted is a closure literal's parameters when one of them declares a default, and an
+# empty list for any other expression — the one shape a binding keeps a declaration for.
+fn c_cl_defaulted(e: ast.Expr) -> list[ast.Param] {
+	none: list[ast.Param] = []
+	ps := match e {
+		Expr.EFn(ps, _, _, _) => ps
+		_ => none
+	}
+	for pm in ps {
+		return ps if pm.has_def
+	}
+	return none
+}
+
+# c_cl_record keeps a binding's declaration and answers its cl_decls index.
+fn c_cl_record(mut &em: Emitter, ps: list[ast.Param], view: ClView, local: bool) -> int {
+	mut names: list[str] = []
+	mut hasdef: list[bool] = []
+	for pm in ps {
+		names.append(pm.name)
+		hasdef.append(pm.has_def)
+	}
+	em.cl_decls.append(ClDecl(ps, names, hasdef, view, local))
+	return em.cl_decls.len() - 1
+}
+
+# c_cl_module is the record for a module binding, whose view is its own file's module scope.
+fn c_cl_module(mut &em: Emitter, c: ast.ConstDecl) -> int {
+	return 0 - 1 if c.is_mut or c.has_ty
+
+	ps := c_cl_defaulted(c.value)
+	return 0 - 1 if ps.len() == 0
+
+	none: list[int] = []
+	return c_cl_record(em, ps, ClView(c.path, c_nosub(), [0], none), false)
+}
+
+# c_cl_fills is whether a call through such a binding needs its declaration: it names an
+# argument, or stops short of the `n` parameters. A call that gives every one positionally is
+# an ordinary call through the value, and one that gives too many is the arity rule's.
+fn c_cl_fills(n: int, args: list[ast.Expr]) -> bool {
+	for a in args {
+		return true if c_named_arg_name(a) != ""
+	}
+	return args.len() < n
+}
+
+# c_cl_default lowers the default of slot i in the declaration's view (ClFill), binding the
+# slots before it that are not bound yet.
+fn c_cl_default(mut &em: Emitter, mut &cf: ClFill, i: int, pt: ast.Ty, d: ast.Expr) -> str {
+	saved := c_default_enter_at(em, cf.decl.view.path, cf.decl.params[i].line, cf.decl.params[i].col)
+	em.sub = cf.decl.view.sub
+	em.open_scopes = cf.decl.view.open
+	em.open_scopes.append(cf.scope)
+	em.scope_cur = cf.scope
+	em.ref_rows = cf.refs
+	em.hide_lo = cf.lo
+	em.hide_hi = cf.hi
+	for cf.bound < i and cf.bound < cf.prior.len() {
+		k := cf.bound
+		c_default_bind(em, cf.decl.params[k].name, cf.decl.params[k].ty, cf.decl.params[k].is_ref, cf.prior[k])
+		cf.bound = k + 1
+	}
+	cf.refs = em.ref_rows
+	val := c_fit_copied(em, f"the default for argument {strconv.to_string(i + 1, 10)} of `{cf.name}`", pt, d, c_nosub())
+	c_default_leave(em, saved)
+	return val
+}
+
+# c_cl_call lowers a call by such a name that leaves a parameter to its default (c_cl_fills).
+# `bt` is the binding's type and `row` its row. The arguments are placed as a named call's are
+# (c_place_args), the tail a default fills is appended, and the run is c_args_typed's — the
+# sequencing and the holds (#326) of a call through any value, with each filled slot lowered by
+# c_cl_default.
+fn c_cl_call(mut &em: Emitter, name: str, bt: ast.Ty, row: int, mut &cd: ClDecl, args: list[ast.Expr], sb: Subst) -> str {
+	check.chk_unsafe_call_value(em, bt)
+
+	ftys := c_fn_params(bt)
+	n := ftys.len()
+
+	mut named := false
+	for a in args {
+		named = named or c_named_arg_name(a) != ""
+	}
+	mut place: list[int] = []
+	if named {
+		mut nx: list[int] = []
+		if em.want_index {
+			for pm in cd.params {
+				nx.append(c_nx_decl(em, cd.view.path, pm.line, pm.col, pm.name, ast.NK_PARAM))
+			}
+		}
+		mut names := cd.names
+		mut hasdef := cd.hasdef
+		place = c_place_args(em, names, hasdef, nx, args)
+	} else {
+		mut i := 0
+		for i < args.len() {
+			place.append(i)
+			i = i + 1
+		}
+	}
+
+	# the tail a default fills, as far as one has a default: a slot short of that is the arity
+	# rule's, as a named call's is (chk_call_arity)
+	for place.len() < n and place.len() < cd.hasdef.len() and cd.hasdef[place.len()] {
+		place.append(0 - 1)
+	}
+	if place.len() != n {
+		check.chk_fnval_arity(em, bt, args.len())
+		return "0"
+	}
+
+	mut es: list[ast.Expr] = []
+	mut filled: list[bool] = []
+	mut refs: list[bool] = []
+	mut need := false
+	mut earlier: list[str] = []
+	mut k := 0
+	for k < n {
+		if place[k] < 0 {
+			es.append(cd.params[k].def)
+			filled.append(true)
+			need = need or c_default_reads(earlier, cd.params[k].def) != ""
+		} else {
+			es.append(c_named_arg_value(args[place[k]]))
+			filled.append(false)
+		}
+		refs.append(c_ty_is_ref(ftys[k]))
+		earlier.append(cd.names[k])
+		k = k + 1
+	}
+	check.chk_ref_alias_in(em, name, refs, es)
+
+	mut lo := 0
+	mut hi := 0
+	if cd.local {
+		lo = row
+		hi = em.env_names.len()
+	}
+	outer := c_scope_open(em)
+	scope := em.scope_cur
+	c_scope_close(em, outer)
+
+	strs: list[str] = []
+	mut cf := ClFill(cd, name, filled, need, lo, hi, scope, strs, 0, cd.view.refs)
+
+	fv := c_ident_val(em, name, 0, 0, sb)
+	return f"({c_fnptr_cast(bt)}({fv}).fn)({fv}.env, {c_args_typed(em, ftys, es, sb, need or c_needs_order(es, 0), cf)})"
 }
 
 # c_variant_ctor builds `(zg_Enum){.tag = N, .u.Var = {.f0 = a, ...}}` (the payload part
@@ -15560,7 +15845,10 @@ fn c_fn_ty_of(mut &em: Emitter, n: str) -> ast.Ty {
 # A SEQUENCED ARGUMENT THE CALLEE OWNS IS HELD ACROSS THE ONES AFTER IT (c_hold, #326), as
 # c_args_held holds a named call's: the callee's frame gives a by-value parameter back, and
 # it is not entered when a later argument raises or leaves by a `?`.
-fn c_args_typed(mut &em: Emitter, ftys: list[ast.Ty], args: list[ast.Expr], sb: Subst, seq: bool) -> str {
+#
+# A SLOT A CLOSURE'S DEFAULT FILLS (`cf`, c_cl_call) is lowered in the declaration's view
+# (c_cl_default), and every slot is bound for it when a default reads an earlier one.
+fn c_args_typed(mut &em: Emitter, ftys: list[ast.Ty], args: list[ast.Expr], sb: Subst, seq: bool, mut &cf: ClFill) -> str {
 	keep := em.rel_cnames.len()
 	mut last := 0 - 1
 	if seq {
@@ -15573,22 +15861,10 @@ fn c_args_typed(mut &em: Emitter, ftys: list[ast.Ty], args: list[ast.Expr], sb: 
 			out = out + ", "
 		}
 		mut val := ""
-		if i < ftys.len() and c_ty_is_ref(ftys[i]) {
-			# A `mut &` SLOT IS THE CALLER'S OWN STORAGE, handed over to be written, so it is
-			# lowered like an assignment target rather than copied like every other argument.
-			# This is the same pair of steps `c_arg` takes for a call it has a name for; what
-			# differs is only where the convention was read from — the type, not the table.
-			check.chk_ref_arg(em, "", i + 1, args[i])
-			val = f"&({c_lvalue(em, args[i], sb)})"
-		} else if i < ftys.len() and ast.ty_is_chan(ftys[i]) {
-			# the same borrow c_arg makes for a named call. A function VALUE has no parameter
-			# table, and copying here would leak: the callee's channel parameter is not released.
-			where := f"argument {strconv.to_string(i + 1, 10)} of this call"
-			c_chan_check(em, c_infer(em, args[i]), ftys[i], where)
-			check.chk_slot_fits(em, where, ftys[i], args[i])
-			val = c_expr(em, args[i], sb)
+		if c_is_filled(cf.filled, i) {
+			val = c_cl_default(em, cf, i, ftys[i], args[i])
 		} else if i < ftys.len() {
-			val = c_fit_copied(em, f"argument {strconv.to_string(i + 1, 10)} of this call", ftys[i], args[i], sb)
+			val = c_arg_typed(em, i, ftys[i], args[i], sb)
 		} else {
 			val = c_expr(em, args[i], sb)
 		}
@@ -15599,11 +15875,37 @@ fn c_args_typed(mut &em: Emitter, ftys: list[ast.Ty], args: list[ast.Expr], sb: 
 		if i < last and i < ftys.len() and not c_ty_is_ref(ftys[i]) and not ast.ty_is_chan(ftys[i]) and c_part_owns(em, ftys[i], args[i]) {
 			em.seq_pre = em.seq_pre + c_hold(em, ftys[i], val)
 		}
+		if cf.need {
+			cf.prior.append(val)
+		}
 		out = out + val
 		i = i + 1
 	}
 	em.seq_pre = em.seq_pre + c_unhold(em, keep)
 	return out
+}
+
+# c_arg_typed lowers argument i of a call that reads its convention from the TYPE, `pt`.
+fn c_arg_typed(mut &em: Emitter, i: int, pt: ast.Ty, a: ast.Expr, sb: Subst) -> str {
+	# A `mut &` SLOT IS THE CALLER'S OWN STORAGE, handed over to be written, so it is lowered
+	# like an assignment target rather than copied like every other argument. This is the same
+	# pair of steps `c_arg` takes for a call it has a name for; what differs is only where the
+	# convention was read from — the type, not the table.
+	if c_ty_is_ref(pt) {
+		check.chk_ref_arg(em, "", i + 1, a)
+		return f"&({c_lvalue(em, a, sb)})"
+	}
+
+	where := f"argument {strconv.to_string(i + 1, 10)} of this call"
+
+	# the same borrow c_arg makes for a named call. A function VALUE has no parameter table,
+	# and copying here would leak: the callee's channel parameter is not released.
+	if ast.ty_is_chan(pt) {
+		c_chan_check(em, c_infer(em, a), pt, where)
+		check.chk_slot_fits(em, where, pt, a)
+		return c_expr(em, a, sb)
+	}
+	return c_fit_copied(em, where, pt, a, sb)
 }
 
 # c_fnfield_call lowers `this.action(c)` — a call through a FIELD holding a function. The
@@ -15912,7 +16214,8 @@ fn c_spec_disp_register(mut &em: Emitter, sp: str, meth: str) -> str {
 
 fn c_args(mut &em: Emitter, args: list[ast.Expr], sb: Subst) -> str {
 	mut none: list[ast.Ty] = []
-	return c_args_typed(em, none, args, sb, false)
+	mut cf := c_no_fill()
+	return c_args_typed(em, none, args, sb, false, cf)
 }
 
 # c_fn_params reads a function TYPE's parameter list, or an empty one from anything else.
@@ -18724,6 +19027,7 @@ fn c_const_bind(mut &em: Emitter, c: ast.ConstDecl, ty: ast.Ty) {
 	# row there rather than reading this column, so the constant has exactly one value and no
 	# way for two copies of it to drift.
 	em.env_cval.append(check.Folded(false, 0))
+	em.env_cl.append(c_cl_module(em, c))
 	if em.want_index {
 		em.env_nx.append(c_nx_decl(em, c.path, c.name_line, c.name_col, c.name, ast.NK_CONST))
 	}
@@ -20134,6 +20438,15 @@ fn c_lambda(mut &em: Emitter, ps: list[ast.Param], has_ret: bool, ret: ast.Ty, b
 		if c_is_unknown(pm.ty) {
 			check.chk_at(em, rule.Rule.ClosureParamNoType, f"the closure parameter `{pm.name}` has no type, and this position gives it none — a closure takes its parameter types from the function type it is checked against, so write `{pm.name}: T` or put the closure where one is declared")
 		}
+	}
+
+	# its defaults are judged where it is written, in the scopes open here (check.chk_defaults)
+	mut judged := false
+	for pm in ps {
+		judged = judged or pm.has_def
+	}
+	if judged {
+		check.chk_defaults(em, em.at_path, 0, 0, ps, "this closure", false)
 	}
 
 	caps := c_lambda_free_all(em, ps, body)
@@ -23834,6 +24147,17 @@ fn c_let(mut &em: Emitter, name: str, ty: ast.Ty, has_type: bool, is_mut: bool, 
 	# stored 44 instead of raising, which is the truncation `byte(300)` was written to refuse.
 	# `eff` is the INFERRED type when nothing was declared, and c_into is a no-op there
 	# because the value already has it.
+	#
+	# and what a closure's default will resolve its names in (c_cl_record): the view as it stands
+	# before the literal is lowered and before this binding exists, so the default sees neither
+	# the name it is bound to nor anything bound after it
+	mut cl := 0 - 1
+	if not is_mut and not has_type {
+		ps := c_cl_defaulted(ival)
+		if ps.len() != 0 {
+			cl = c_cl_record(em, ps, ClView(em.at_path, em.sub, em.open_scopes, em.ref_rows), true)
+		}
+	}
 	val := c_into(em, eff, ival, c_nosub())
 
 	# WHAT THIS BINDING IS WORTH AT COMPILE TIME, folded before the row exists so that
@@ -23848,6 +24172,7 @@ fn c_let(mut &em: Emitter, name: str, ty: ast.Ty, has_type: bool, is_mut: bool, 
 	cval := c_fold_initializer(em, is_mut, ival)
 	c_add_var(em, name, eff, is_mut, is_const)
 	em.env_cval[em.env_cval.len() - 1] = cval
+	em.env_cl[em.env_cl.len() - 1] = cl
 	cn := c_var_cname(em, name)
 
 	# A STRUCT holding a list, a map or a str owns those, and this is where it says so. The
@@ -24788,7 +25113,7 @@ fn c_err_constructible(name: str) -> bool {
 # match arm's binds all belong to their own construct, and leaving them in the enclosing
 # block made them outlive it — the same defect c_in_scope exists to fix, one construct
 # over — and made a later `i := …` collide with a `for i in …` that had already ended.
-fn c_scope_open(mut &em: Emitter) -> int {
+pub fn c_scope_open(mut &em: Emitter) -> int {
 	outer := em.scope_cur
 	em.scope_n = em.scope_n + 1
 	em.scope_cur = em.scope_n
@@ -28726,7 +29051,7 @@ fn c_emit_unit_as(prog0: ast.File, own0: ast.File, ft: FileTypes, ms: Mods, whol
 	# is what makes that invariant hold for a multi-unit program, at the place it already lives,
 	# and it is what lets the declaration passes below go back to reading the WHOLE program.
 	seen := diags.len()
-	mut em := Emitter([], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], false, false, false, false, [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], 0, [], 0, [], [], false, "", "", [], [], ast.Ty.TVoid, 0, "", 0, 0, 0, 0, "", diags, 0, 0, [], [], [], [], [], false, 0, false, "", 0, false, false, [], [], [], [], [], [], [], [], [], [], [], "", want_lints, [], [], [], [], [], [], [], [], [], [], [], [], false, 0, [], [], "", c_nosub(), [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], false, ast.no_index(), [], [], [], [], [], [], [], [], [], [], [], [], false, [], [], [], [], [], [], [], [], [], [], [], "")
+	mut em := Emitter([], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], false, false, false, false, [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], 0, [], 0, [], [], false, "", "", [], [], ast.Ty.TVoid, 0, "", 0, 0, 0, 0, "", diags, 0, 0, [], [], [], [], [], false, 0, false, "", 0, false, false, [], [], [], [], [], [], [], [], [], [], [], "", want_lints, [], [], [], [], [], [], [], [], [], [], [], [], false, 0, [], [], "", c_nosub(), [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], false, ast.no_index(), [], [], [], [], [], [], [], [], [], [], [], [], false, [], [], [], [], [], [], [], [], [], [], [], "", [], [], 0, 0)
 
 	# ASSIGNED, NOT PASSED. Every argument above is a zero value, and `layering` asserts that
 	# — it lines the call up with the fields by KIND, which only works while nothing in it

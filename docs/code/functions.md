@@ -141,12 +141,14 @@ greet("Sam", "Hi", true)     # all positional
   whatever `a` means where the call is written, and a caller's `beep := …` does not change what a default's
   `beep()` calls. The same holds for the defaults a `spawn` or a `defer` fills in, and for a struct field's.
 
-  > **[not yet]** A default on an **anonymous** function's parameter is not built. `GRAMMAR` derives it —
-  > `closure-param ::= ( 'mut' '&' )? identifier ( ':' type )? ( '=' expr )?`, the same `( '=' expr )?` tail a
-  > declaration's parameter has — and `f := fn (x: int = 5) -> int { … }` reports _E9034 NotImplemented: a
-  > default on the closure parameter `x`_, with the place. A default is materialised at the **call site** out
-  > of the callee's **declaration**, and a closure is reached through a **value**, which carries no
-  > declaration to read one from. Pass the argument at every call.
+  A default on an **anonymous** function's parameter follows the same rule wherever the call can see the
+  declaration: its callee is a name bound with immutable `:=` directly to the closure literal. Called as
+  `f(3)`, `f := fn (x: int, y: int = x * 2) -> int { … }` passes `y = 6`, and `f(3, y: 1)` names it. The
+  default's names mean what they mean where the closure is written, so a binding that shadows one between the
+  declaration and the call changes nothing. Through any other value — a parameter of `fn` type, a field, a
+  list element, a `mut` binding, a copy `g := f`, another closure's capture, a returned closure — there is
+  only the type, which carries no default, so an omitted argument is _E3082_, the arity of a call through a
+  function value.
 
 - A **named argument** passes a parameter by its name (`loud: true`) — which is what lets you **skip a
   defaulted parameter** in the middle. The rule is the usual one: positional arguments fill left-to-right,

@@ -911,7 +911,6 @@ production, not the one that first mentions it.
 | Group | Code    | Form                                                                                    |
 | ----- | ------- | --------------------------------------------------------------------------------------- |
 | 4     | `E2071` | a range with no **lower** bound — `xs[..n]`                                             |
-| 4     | `E9050` | an **open-ended** range where a bound is needed — `xs[a..]`, `for i in n..`             |
 | 4     | `E9077` | a range **of a type this compiler cannot compare** as a value — `"a".."z"`              |
 | 4     | `E2035` | postfix type arguments with no call after them — `map[str, int]`, `f[int]`              |
 | 4     | `E9067` | `map[K, V](…)` as a constructor — an empty map is the literal `{:}`                     |

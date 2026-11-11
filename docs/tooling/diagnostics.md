@@ -508,7 +508,6 @@ shipping compiler rather than a part of it (the line
 | `E9046` | the compile-time built-in `…[T]`                                                                      |
 | `E9047` | an `impl` on the built-in type `…`                                                                    |
 | `E9049` | `…` MUTATES its list, and `…` is a value rather than a place                                          |
-| `E9050` | an open-ended range has no upper bound here                                                           |
 | `E9052` | a map key of type …                                                                                   |
 | `E9056` | the list method `…`                                                                                   |
 | `E9062` | `in` over … — a range's members are found by comparing its bounds                                     |
@@ -683,6 +682,10 @@ an optional chain. The call is made only when `p` is present and answers an opti
 `?.` does; what a reader can still get wrong is a method that writes through its receiver, which is `E4081`
 or `E3022`, as it is on `p!`.
 
+**And one the day an open range got its end (#439).** `E9050` refused `xs[a..]` and `for i in n..`, the two
+places an open range needs a bound. A slice now runs to the list's length and a loop counts up until it is
+left; a range VALUE stays bounded, and that is `E4110`.
+
 **One retired with its rule rather than to another range.** `E2060` refused a declared type whose
 name did not begin with a capital, and that rule was the whole of how the language separated its
 two namespaces — a capitalised name was a type, a lower-case one a value. The rule is gone: a name
@@ -799,6 +802,7 @@ name now is the prelude rule (`E2061`), which is about the name rather than abou
 | `E9061` | —       | the form was built: `in` over a list asks its elements' `==`           |
 | `E9034` | —       | the form was built: a call by a closure's `:=` name fills its default  |
 | `E9009` | —       | the form was built: `p?.m(…)` calls `m` only when `p` is present       |
+| `E9050` | —       | the form was built: `xs[a..]` ends at the length, `for i in n..` runs  |
 | `E4011` | —       | not a rule: a list renders in `str(…)` as it does in `print`           |
 | `E9036` | `E4111` | not an unbuilt form: a `spec` member is never `unsafe`                 |
 

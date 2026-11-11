@@ -594,28 +594,6 @@ fn main() {
 }
 EOF
 
-# An open-ended range is a legal RANGE ARM (`20.. =>`), and nothing else yet. The missing bound
-# reads as nil, and `c_expr(ENil)` is "0" — so a `for` over one ran zero times and a slice came
-# back empty, both in silence. The sentence is pinned because it was assembled out of order:
-# the citation sat behind an empty dash and the caller's half was glued to it (#315).
-expect "$ZERG" open-range-in-a-for E9050 'no upper bound here — a `for … in` needs an upper bound (GRAMMAR#range-expr)' <<'EOF'
-fn main() {
-	mut n := 0
-	for i in 20.. {
-		n = n + i
-	}
-	print n
-}
-EOF
-
-expect "$ZERG" open-range-in-a-slice E9050 'no upper bound here — a slice needs an upper bound — `xs[a..xs.len()]` (GRAMMAR#range-expr)' <<'EOF'
-fn main() {
-	xs := [1, 2, 3]
-	ys := xs[1..]
-	print ys.len()
-}
-EOF
-
 # `Ref[T]` in the two TYPE positions. Both used to answer "no type named `Ref`" — the
 # misspelling message — because a type position asked only about the fixed-width ladder
 # while `Ref(v)` in a CALL had been named all along. They now go through the one built-in

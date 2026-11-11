@@ -143,21 +143,18 @@ alongside copy-elision and the move (Values & Memory), adding no visible sharing
 So a lexer scans by index (`xs[i]` is O(1)) and takes read-only `slice` windows at no copy cost,
 materializing a `str` only when it keeps a token.
 
+An **open-ended** slice runs to the end: `xs[2..]` is `xs[2..xs.len()]`, a fresh list like any other slice,
+and `xs[xs.len()..]` is the empty one.
+
 > **[not yet]** The **method** spelling is what is unbuilt: `xs.slice(a, b)` is _E9056 NotImplemented: the
 > list method `slice`_. The
 > **`x[a..b]`** slice-index sugar is built and correct — `xs[1..3]` yields a fresh two-element `list`,
 > `xs[0..=2]` a three-element one, each an independent value — so a subrange is written with the bracket
 > form until the method lands. The read-only, copy-on-write design above is the intended semantics of both.
 >
-> **[not yet]** An **open-ended** slice is not among them. `GRAMMAR#range-expr` derives `a..` and a `Range`
-> indexes a list, but `xs[2..]` is _E9050 NotImplemented: an open-ended range has no upper bound here — a
-> slice needs an upper bound — `xs[a..xs.len()]`_, which is the spelling to write meanwhile. Found by the
-> 0.2.0 re-measurement (#74).
->
-> The mirror shape is refused with its own sentence, and it is not the same kind of refusal: a lower bound
-> is MANDATORY in `GRAMMAR#range-expr`, so `xs[..2]` is not a form waiting to be built — it is _E2071 a range
-> with no lower bound — write `xs[0..n]`_, which also names the list PATTERN `[a, ..rest]` as a different
-> form this compiler does not have.
+> A slice with no **lower** bound is not a form at all: a lower bound is MANDATORY in `GRAMMAR#range-expr`,
+> so `xs[..2]` is not waiting to be built — it is _E2071 a range with no lower bound — write `xs[0..n]`_,
+> which also names the list PATTERN `[a, ..rest]` as a different form this compiler does not have.
 >
 > **[not yet]** A growth method needs a PLACE, and a MAP INDEX is one this compiler cannot take the
 > address of: `m["a"].append(3)` is _E9049 NotImplemented: `append` MUTATES its list, and `a map index` is

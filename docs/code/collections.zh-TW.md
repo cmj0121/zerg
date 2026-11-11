@@ -127,17 +127,16 @@ semantics，而唯讀情況維持**零拷貝**；COW 是與 copy-elision、move 
 
 於是 lexer 用索引掃描（`xs[i]` 為 O(1)）、用 `slice` 取唯讀窗格而零複製，只在保留一個 token 時才實體化成 `str`。
 
+**開放結尾**的切片一路取到尾端：`xs[2..]` 就是 `xs[2..xs.len()]`,和其他切片一樣是一個全新的 list,而
+`xs[xs.len()..]` 是空的那一個。
+
 > **[not yet]** 尚未建置的是 **method** 那個拼法：`xs.slice(a, b)` 是 _E9056 NotImplemented: the list method
 > `slice`_。**`x[a..b]`** slice-index 語法糖
 > 已建置且正確——`xs[1..3]` 產出一個全新的兩元素 `list`、`xs[0..=2]` 產出三元素的，各自都是獨立的值——所以在
 > method 落地前，子區間就用中括號那個形式寫。上面那個唯讀、copy-on-write 的設計是兩者共同的預期語意。
 >
-> **[not yet]** **開放結尾**的切片不在其中。`GRAMMAR#range-expr` 推導得出 `a..`,而 `Range` 也能索引一個 list,
-> 但 `xs[2..]` 會得到 _E9050 NotImplemented: an open-ended range has no upper bound here — a slice needs an
-> upper bound — `xs[a..xs.len()]`_,那也就是目前該寫的拼法。由 0.2.0 的重新量測掃出(#74)。
->
-> 反過來的形狀有自己的句子，而且不是同一種拒絕：`GRAMMAR#range-expr` 的下界是**必要的**，所以 `xs[..2]`
-> 不是一個等著被建的形式——它是 _E2071 a range with no lower bound — write `xs[0..n]`_，它同時指出 list
+> 沒有**下**界的切片根本不是一種形式：`GRAMMAR#range-expr` 的下界是**必要的**，所以 `xs[..2]` 不是一個等著被建
+> 的形式——它是 _E2071 a range with no lower bound — write `xs[0..n]`_，它同時指出 list
 > **pattern** `[a, ..rest]` 是這個編譯器也沒有的另一種形式。
 >
 > **[not yet]** 增長方法要的是一個**位置**，而 **map index** 正是一個這個編譯器取不到位址的位置：

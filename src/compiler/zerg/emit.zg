@@ -23632,8 +23632,13 @@ fn c_range_incl(e: ast.Expr) -> bool {
 # in scope for the body, which is what makes the bound expressions ordinary ints too. Both
 # bounds are read once into temps, so an expression bound is not re-evaluated on every
 # iteration the way a C `for` header would.
+#
+# A BOUND IS AN INT, because the loop variable is one: `for i in "a"..3` handed cc a string to
+# initialise an `int64_t` with, and `1.5..3` was truncated by a C conversion nobody wrote.
 fn c_forrange(mut &em: Emitter, var: str, iter: ast.Expr, body: list[ast.Stmt], ind: str) -> str {
 	c_range_needs_hi(em, iter, "a `for … in` needs an upper bound")
+	check.chk_slot_fits(em, "a bound of a `for … in` range", ast.Ty.TInt, c_range_lo(iter))
+	check.chk_slot_fits(em, "a bound of a `for … in` range", ast.Ty.TInt, c_range_hi(iter))
 
 	lo := c_expr(em, c_range_lo(iter), c_nosub())
 	hi := c_expr(em, c_range_hi(iter), c_nosub())

@@ -240,7 +240,7 @@ shipping compiler rather than a part of it (the line
 | `E3033` | cannot bind … to a … binding: `…`                                                                     |
 | `E3034` | the binding `…`, or this expression, gives …, which has no type of its own                            |
 | `E3035` | `type … = …` names no type                                                                            |
-| `E3036` | a struct field or an enum payload is …, and this gives …                                              |
+| `E3036` | a struct field, an enum payload or a bound of a `for … in` range is …, and this gives …               |
 | `E3037` | cannot assign … to …, which holds …                                                                   |
 | `E3038` | argument … of `…` is …, and this gives …                                                              |
 | `E3039` | an optional is not an operand of `…`                                                                  |

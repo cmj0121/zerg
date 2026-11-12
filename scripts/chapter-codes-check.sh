@@ -109,9 +109,10 @@ for gsrc in "$GRAMMAR_DOC" "$GRAMMAR_DOC_ZH"; do
 	# THE FLOOR IS A FLOOR UNDER THE EXTRACTION, not a count of the table. The table is MEANT to
 	# shrink — a row leaves the day its form is built — so the floor sits well under it and only
 	# says the awk still finds the table at all; a floor at the table's size fails the commit that
-	# builds the next form.
+	# builds the next form, or drops one from the language. One row is enough to prove the table
+	# was found: an extraction that stops matching reads none.
 	rows=$(grep -c . "$tmp/rows" || true)
-	if [ "$rows" -lt "${GRAMMAR_ROWS_MIN:-5}" ]; then
+	if [ "$rows" -lt "${GRAMMAR_ROWS_MIN:-1}" ]; then
 		echo "STALE     only $rows rows were read from $gsrc — the table moved and this stopped reading it" >&2
 		fail=1
 		continue

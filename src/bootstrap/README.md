@@ -119,6 +119,7 @@ Measured against `zerg0` on 2026-07-31.
 | `e in ValueError` — the error taxonomy's SUBTREE test                  | the `in` of docs/code/errors.md  |
 | an optional method call `p?.m(…)`                                      | the call after `?.`              |
 | `for i in n..` over an open range                                      | the loop with no upper bound     |
+| `#[sealed]` on a `struct`                                              | the module-private constructor   |
 
 `e is ValueError` the seed does build; it is `in` it has no reading for. The two are
 different relations (identity and subtree, docs/code/errors.md) and only one of them is
@@ -699,6 +700,23 @@ byte(N)` and `byte(N * 3)` are compile errors. The seed folds the literal alone:
   the two lower into one conditional that clang rejects. `zerg` refuses the pair in either order
   (`E3021`). It costs the bootstrap nothing: the compiler's own arms agree on their types.
   `a-match-answering-an-optional-then-a-value` carries the `seed-gap` marker.
+
+- **THE FIXED-WIDTH LADDER BUILDS HERE.** `i8`…`i64`, `u8`…`u64`, `f32` and `f64` are not Zerg types:
+  the five scalars are each a fixed C type at the boundary already, and `zerg` refuses a width by
+  name (`E3166`). The seed declares all ten and builds `i32(5)` and `fn f(x: i32)`, so here it is the
+  broader compiler. It costs the bootstrap nothing: the compiler's own sources name no width. The four
+  `fixed-width-*` cases carry the `seed-gap` marker.
+
+- **`sizeof[T]` AND `alignof[T]` BUILD HERE.** Neither is a Zerg built-in: a primitive's size is fixed
+  by the language and `p.offset(n)` counts pointees, and `zerg` refuses both by name (`E3167`). The
+  seed computes a layout and prints `8`. It costs the bootstrap nothing: the compiler's own sources ask
+  for no layout. `sizeof-builtin` and `alignof-builtin` carry the `seed-gap` marker.
+
+- **A DECORATOR AFTER `#[test]` IS DROPPED.** `#[test, derive(Eq)] fn t()` and `#[test, sealed] fn t()`
+  build here: the seed reads the list for its test marker and ignores the rest. `zerg` asks each item
+  whether it fits the declaration and refuses the first that does not (`E2066`). It costs the bootstrap
+  nothing: the compiler's own tests carry one decorator each. `derive-after-test-on-a-fn` and
+  `sealed-after-test-on-a-fn` carry the `seed-gap` marker.
 
 ## Changing the seed
 

@@ -106,6 +106,7 @@ cc 對著產生的 C。
 | `e in ValueError`——錯誤 taxonomy 的**子樹**測試                       | docs/code/errors 的 `in` |
 | optional method call `p?.m(…)`                                        | `?.` 之後的呼叫          |
 | `for i in n..` 走訪開放 range                                         | 沒有上界的迴圈           |
+| `struct` 上的 `#[sealed]`                                             | 模組私有的建構子         |
 
 `e is ValueError` 種子建得起來，沒有讀法的是 `in`。這兩個是不同的關係（identity 與 subtree，見
 docs/code/errors.zh-TW.md），而只有其中一個在這裡。有五條 oracle skip 就架在這一個缺口上
@@ -539,6 +540,20 @@ chan[int]() }`——或任何不是字面值、模組常數，或它們之間算
   那個 arm 取得 match 的型別，再讓單純的值進去，於是兩者降階成同一個條件式，被 clang 拒絕。`zerg` 不論順序
   都拒絕這一對（`E3021`）。這對 bootstrap 不花任何代價：編譯器自己的 arm 型別都一致。
   `a-match-answering-an-optional-then-a-value` 帶著 `seed-gap` 標記。
+
+- **固定寬度階梯在這裡建得起來。** `i8`…`i64`、`u8`…`u64`、`f32` 與 `f64` 不是 Zerg 型別：五個純量在邊界上
+  本來就各是一個固定的 C 型別,`zerg` 會具名拒絕寬度（`E3166`）。種子宣告了全部十個，建得起 `i32(5)` 與
+  `fn f(x: i32)`,所以在這裡它是比較寬的編譯器。這對 bootstrap 不花任何代價：編譯器自己的原始碼沒有指名任何
+  寬度。四個 `fixed-width-*` 案例帶著 `seed-gap` 標記。
+
+- **`sizeof[T]` 與 `alignof[T]` 在這裡建得起來。** 兩者都不是 Zerg 的 built-in:原始型別的大小由語言固定,
+  `p.offset(n)` 以指向的元素計數,`zerg` 會具名拒絕兩者（`E3167`）。種子計算佈局並印出 `8`。這對 bootstrap
+  不花任何代價：編譯器自己的原始碼不要求任何佈局。`sizeof-builtin` 與 `alignof-builtin` 帶著 `seed-gap` 標記。
+
+- **`#[test]` 之後的 decorator 會被丟掉。** `#[test, derive(Eq)] fn t()` 與 `#[test, sealed] fn t()` 在這裡
+  建得起來：種子在列表裡找 test 標記，其餘的不理。`zerg` 逐項問它是否適用於那個宣告，並拒絕第一個不適用的
+  （`E2066`）。這對 bootstrap 不花任何代價：編譯器自己的測試每個只帶一個 decorator。`derive-after-test-on-a-fn`
+  與 `sealed-after-test-on-a-fn` 帶著 `seed-gap` 標記。
 
 ## 修改種子時
 

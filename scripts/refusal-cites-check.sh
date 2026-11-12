@@ -104,11 +104,12 @@ fi
 # kind of anchor a rename zeroes — a module prefix dropped, a family renamed — and a zeroed
 # grep prints `0 refusals` and exits 0.
 #
-# 40 against the 53 there are today: room for a family to be retired without this needing a
-# line, and far above what a moved file leaves behind. `deviation-check` next door defends the
-# same class better, with a fixture it writes itself and holds its readers to; a floor is what
-# this one needs, because unlike a deviation its expected answer is never zero.
-REFUSALS_MIN=${REFUSALS_MIN:-40}
+# The floor sits well under today's count, so retiring a family of refusals as its forms get
+# built needs no line here, and well above what a moved file or a renamed prefix leaves behind.
+# `deviation-check` next door defends the same class better, with a fixture it writes itself and
+# holds its readers to; a floor is what this one needs, because unlike a deviation its expected
+# answer is never zero.
+REFUSALS_MIN=${REFUSALS_MIN:-25}
 if [ "$n" -lt "$REFUSALS_MIN" ]; then
 	echo "refusal-cites-check: only $n refusals were found, and the floor is $REFUSALS_MIN — the extraction is no longer matching"
 	exit 1

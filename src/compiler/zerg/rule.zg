@@ -366,6 +366,11 @@ pub enum Rule {
 	# `E9079`, a reserved decorator not built.
 	SealedConstructor = 3165
 
+	# `i8`…`i64`, `u8`…`u64`, `f32`, `f64` are not Zerg types: the scalars are `int`, `uint`, `byte`,
+	# `rune` and `float`, each already a fixed C type at the FFI boundary. It was `E9063`, a ladder
+	# waiting to be built; there is nothing to build.
+	FixedWidthNotAType = 3166
+
 	# emitting — a form this compiler will not lower
 	LoopKeywordOutsideLoop = 4001
 	FromCauseNotErr = 4002
@@ -608,7 +613,6 @@ pub enum Rule {
 	NotYetMapKeyType = 9052
 	NotYetListMethod = 9056
 	NotYetInOverType = 9062
-	NotYetFixedWidthLadder = 9063
 	NotYetDelChannel = 9066
 	NotYetValueUnnameableType = 9069
 	NotYetRebindMatchBinding = 9070

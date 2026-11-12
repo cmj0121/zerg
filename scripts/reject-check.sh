@@ -7943,6 +7943,39 @@ fn main() {
 }
 EOF
 
+# --- there is no fixed-width ladder ------------------------------------------------
+#
+# `i8`…`i64`, `u8`…`u64`, `f32` and `f64` are not Zerg types: the five scalars are each a fixed C
+# type at the boundary already (docs/runtime/ffi.md). They were refused as a ladder not yet
+# declared (`E9063`). A width is an ordinary identifier, so without the rule `i32(x)` would read
+# as a misspelled call. The SEED builds every one of these, which is its gap and not a form.
+reject fixed-width-conversion E3166 seed-gap <<'EOF'
+fn main() {
+	print i32(5)
+}
+EOF
+
+reject fixed-width-annotation E3166 seed-gap <<'EOF'
+fn main() {
+	x: u8 = 5
+	print int(x)
+}
+EOF
+
+reject fixed-width-float E3166 seed-gap <<'EOF'
+fn main() {
+	print f32(1.5)
+}
+EOF
+
+reject fixed-width-typedef E3166 seed-gap <<'EOF'
+type W = u8
+
+fn main() {
+	print 1
+}
+EOF
+
 reject a-module-private-type-named-outside-its-module E5008 <<'EOF'
 import "./lib"
 

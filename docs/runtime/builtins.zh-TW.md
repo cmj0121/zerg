@@ -39,20 +39,18 @@
 
 ## 原生型別轉換（Primitive conversions）
 
-`T(x)`，其中 `T` 為 `int` / `uint` / `float` / `bool` / `byte` / `rune`（以及固定寬度的 `i8`…`i64` /
-`u8`…`u64` / `f32` / `f64`）——把 `x` 的值**重新建構**成 `T`，絕非位元的 reinterpret。不合目標範圍的值會
-**abort**（`OverflowError`，如 `uint(-1)` 或會失去範圍的縮窄），所以轉換是被檢查的、不會無聲失真。見
-[型別](../core/types.zh-TW.md)。
+`T(x)`，其中 `T` 為 `int` / `uint` / `float` / `bool` / `byte` / `rune`——把 `x` 的值**重新建構**成 `T`，
+絕非位元的 reinterpret。不合目標範圍的值會 **abort**（`OverflowError`，如 `uint(-1)` 或會失去範圍的縮窄），
+所以轉換是被檢查的、不會無聲失真。見[型別](../core/types.zh-TW.md)。
 
 **`T(x)` 接受哪些配對是一張封閉的表**，而 `int` 是每一組配對都有一側是它的中樞。不在表上的配對就不是一個轉換
 ——`byte` 上的 `float(b)` 是 `E3091`，改寫成穿過中樞的那兩步。`float` 作為**來源**的缺席屬於決定、而非缺了一步：
 `float` 上的 `int(x)` 是 `E3090`，小數要由一個動詞丟掉。表與這兩個理由都在[型別](../core/types.zh-TW.md)。
 
-> **[not yet]** **固定寬度那一階**沒有建：`i8`…`i64`、`u8`…`u64`、`f32`、`f64` 既不是型別也不是轉換，而
-> 兩個位置都指名它:`i32(5)` 與 `fn f(x: i32)` 一樣回報 _E9063 NotImplemented: `i32` is part of the fixed-width
-> ladder — … the built-in widths are `int`, `uint`, `byte`, `rune` and `float`_。上面點名的六個都可用；編譯器看不見
-> 的負值確實以 _OverflowError: integer conversion out of range_ abort，與規格一致——它**看得見**的那種則改在編譯期
-> 被拒（`E3029`），依 [型別](../core/types.zh-TW.md) 的常數規則。
+**沒有固定寬度階梯**:`i8`…`i64`、`u8`…`u64`、`f32`、`f64` 既不是型別也不是轉換（[型別](../core/types.zh-TW.md)），
+而兩個位置都指名它:`i32(5)` 與 `fn f(x: i32)` 一樣回報 _E3166 `i32` is not a Zerg type_。上面點名的六個都可用；
+編譯器看不見的負值確實以 _OverflowError: integer conversion out of range_ abort，與規格一致——它**看得見**的那種則改在
+編譯期被拒（`E3029`），依 [型別](../core/types.zh-TW.md) 的常數規則。
 
 ## 解析字串（Parsing a string）
 

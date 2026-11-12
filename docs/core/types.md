@@ -6,10 +6,10 @@ how one type converts to another. Part of the [Language Reference](../language.m
 
 ## Primitive Types
 
-A small, fixed set — three integer widths (signed `int`, unsigned `uint`, and the `byte` octet). The
-**fixed-width ladder** beyond them (`i8`, `i16`, `u32`, `f64`, …) is a set of **stdlib types, not new
-syntax** — a type name is just an identifier, so a width like `u32` adds a stdlib type without touching
-the grammar:
+A small, fixed set — three integer widths (signed `int`, unsigned `uint`, and the `byte` octet), the code
+point `rune` and the double `float`. There is **no fixed-width ladder** beside them: each already maps to a
+fixed C type at the boundary ([FFI](../runtime/ffi.md)), so `i32` or `u8` would add nothing, and C's
+platform widths are the boundary-only aliases (`c_int`, `c_size`, …), not language types:
 
 | Type    | Description                              |
 | ------- | ---------------------------------------- |
@@ -34,12 +34,10 @@ are storage too, one level down. The position that **does** take an absence is a
 `z: int? = { nop }` writes — a carrier moves the position in and wraps, exactly as
 [Type System](type-system.md) says a position may.
 
-> **[not yet]** `zerg` has no part of the fixed-width ladder: `i8` … `i64`, `u8` … `u64`, `f32` and `f64`
-> are specified as stdlib types and no stdlib declares one. It is refused **by name** — _E9063 NotImplemented:
-> `i32` is part of the fixed-width ladder_ — a width is an
-> ordinary identifier rather than a keyword, so the refusal used to be _undefined function `i32`_, the
-> message any misspelled call gets, and a reader was told their own name was unknown. The **seed** builds
-> and runs them, which makes this the one chapter where the seed is the broader of the two.
+`i8` … `i64`, `u8` … `u64`, `f32` and `f64` are therefore not types, and a program that names one is
+refused **by name** — _E3166 `i32` is not a Zerg type — the integers are `int`, `uint`, `byte` and `rune`
+and the float is `float`_. A width is an ordinary identifier rather than a keyword, so without the rule
+`i32(5)` would read as a misspelled call. The **seed** builds and runs them, a gap recorded as its own.
 
 - **Integer overflow and division by zero raise** (`OverflowError`, `DivideByZeroError`) — an
   **abort**, not a value (see [Null-safety & Errors](../code/errors.md)); `int`/`uint`/`byte`/`rune` never
@@ -55,8 +53,7 @@ are storage too, one level down. The position that **does** take an absence is a
   **predicate**: a code point is `0..=0x10FFFF` **minus** the UTF-16 surrogates `0xD800..=0xDFFF`, which
   are not characters. So `rune(0xD800)` raises `OverflowError` even though the number fits the type's
   32 bits comfortably, and `r: rune = 0xD800` is the compile error the same rule makes of a known
-  value. This is also why `rune` is not a width in the fixed-width ladder below: `i32` is a range and a
-  `rune` is not.
+  value. This is also why `rune` is not a 32-bit integer: `i32` would be a range and a `rune` is not.
 
 ### Integer operations
 

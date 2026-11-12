@@ -5784,13 +5784,8 @@ pub fn c_builtin_check(mut &em: Emitter, n0: str) {
 
 }
 
-# c_fixed_width_check names the fixed-width ladder rather than letting it read as a typo.
-#
-# `i8` … `i64`, `u8` … `u64`, `f32` and `f64` are types the specification has and this compiler
-# does not (docs/core/types.md). Because a width is an ordinary IDENTIFIER rather than a
-# keyword, `i32(x)` reported "undefined function `i32`" — the message any misspelled call gets —
-# so a reader was told the name is unknown and would go looking for their own typo. A `[not
-# yet]` is a legitimate state; an unnamed refusal is not (docs/conformance.md).
+# c_fixed_width_check names a fixed-width type rather than letting it read as a typo: `i32` is
+# not a Zerg type (docs/core/types.md), and the sentence names the five scalars instead.
 #
 # THE TEN NAMES ARE WRITTEN OUT, because being exact about which they are is the whole rule:
 # `i7` and `u128` are not the ladder and must stay ordinary unknown names, since a message
@@ -5802,7 +5797,7 @@ fn c_fixed_width_check(mut &em: Emitter, n: str) {
 	ladder := ["i8", "i16", "i32", "i64", "u8", "u16", "u32", "u64", "f32", "f64"]
 	return if not c_name_in(ladder, n)
 
-	raise c_diag(em, rule.Rule.NotYetFixedWidthLadder, f"NotImplemented: `{n}` is part of the fixed-width ladder — `i8`…`i64`, `u8`…`u64`, `f32` and `f64` are specified as stdlib types and none is declared yet; the built-in widths are `int`, `uint`, `byte`, `rune` and `float` (docs/runtime/stdlib.md)")
+	raise c_diag(em, rule.Rule.FixedWidthNotAType, f"`{n}` is not a Zerg type — the integers are `int`, `uint`, `byte` and `rune` and the float is `float`, each a fixed width at the C boundary already (docs/runtime/ffi.md), so there is no ladder of widths beside them")
 }
 
 # c_type_decls writes every type declaration a unit needs, IN DEPENDENCY ORDER: the enums,

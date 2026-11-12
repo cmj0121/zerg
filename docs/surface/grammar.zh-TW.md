@@ -509,7 +509,8 @@ deco-arg    ::= type-name | const-expr        # derive(Encode, Decode)、align(1
   （[`GRAMMAR#array-type`](../../GRAMMAR)）`[T; N]`（`;` 的另一用途）；一個**通道** `chan[T]`，帶 Go 式方向——`<-chan[T]`
   為 receive-only（receiver）、`chan[T]<-` 為 send-only（sender）；或一個**函式型別** `fn(P…) -> R`
   （group 5）。結尾的 **`?`** 使任何型別成為 **optional**——`str?`。型別名只是 identifier,所以內建**數值**型別集合
-  （`int`、`uint`、`float`,以及任何固定寬度 `i32`/`u8`/`f64`/…）是 **stdlib** 的決定,非文法。
+  （`int`、`uint`、`byte`、`rune`、`float`）是**語意**的決定,非文法——而它們旁邊沒有固定寬度的
+  `i32`/`u8`/`f64`/…(_E3166_)。
 - **`struct` / `enum`。** [`GRAMMAR#struct-decl`](../../GRAMMAR) 是具名、定型 field 的**乘積**（一個
   [`GRAMMAR#field-list`](../../GRAMMAR) 由 [`GRAMMAR#field`](../../GRAMMAR) 組成），
   [`GRAMMAR#enum-decl`](../../GRAMMAR) 則是每個 [`GRAMMAR#variant`](../../GRAMMAR) 帶選用 payload 的**和**
@@ -530,16 +531,17 @@ tags: str? }` → `Config(host: "x")` 得 `port = 8080`、`tags = nil`,而省略
   enum 建構——`Shape.Circle(3.0)`——與 pattern 寫的是同一個 (enum, variant) 配對;所以 variant 名永遠不是一個
   獨立的名字,兩個都宣告了 `Red` 的 enum 也就不會爭它。型別名與 function **共用 value 命名空間**,所以型別和
   function 不能同名（Zerg 無 overloading）。field-wise `T(...)` 是**公開且基元**;自訂 constructor
-  是具名關聯函式（inherent `impl`）,內部經 `T(...)` 建。**`#[sealed]`** *原意*是把 `T(...)` 降為模組私有(外部須改走
-  公開的自訂 constructor、模組內部仍以 `T(...)` 建),但這個階段是**被識別並拒絕、尚未實作**(見 [Decorators](../core/decorators.zh-TW.md))。
-- **`type X = Y`。** [`GRAMMAR#type-decl`](../../GRAMMAR) 是一個**強 typedef**——全新、獨立的型別,非透明別名,在 runtime 降低成
-  `Y`。`generics?` 槽會被
-  **解析**,但**泛型** alias `type X[T] = …` 這個階段**尚未實作**(在語意分析階段被拒絕)。
+  是具名關聯函式（inherent `impl`）,內部經 `T(...)` 建。`struct` 上的 **`#[sealed]`** 讓 `T(...)` 只屬於宣告它的
+  **檔案**(私有性的單位):那個檔案仍以它建構，其他地方的建構是 _E3165_,所以外部改走公開的自訂 constructor(見
+  [Decorators](../core/decorators.zh-TW.md))。
+- **`type X = Y`。** [`GRAMMAR#type-decl`](../../GRAMMAR) 是一個**強 typedef**——全新、獨立的型別,非透明別名,在
+  runtime 降低成 `Y`。`generics?` 槽會被**解析**,而**泛型** alias `type X[T] = …` 是 **[not yet]**,在 `[` 處被具名
+  拒絕(_E9075_)。
 - **編譯期常數（隱含）。** 編譯期摺疊是**隱含**的、與 `const` 關鍵字無關（`const` 只標記 shadow-proof 綁定，見
   group 4）。任何 RHS 是 `const-expr` 的綁定（`:=` 或 `const`）都會被**編譯期摺疊**，並可用於任何需要編譯期值之處：
   陣列長度 `[T; N]`、enum discriminant、decorator 引數。若某名字用在這類位置但其 RHS 不可摺疊 → 使用點
   編譯錯誤。`const-expr` 是編譯器**無求值引擎**下能摺疊的 `expr`——literal、其他可摺疊名字、discriminant 與運算子；
-  **無 function call**（故 `sizeof`/`len` 不是 const-expr）。
+  **無 function call**（故 `len` 不是 const-expr,而 `sizeof` 並不存在——_E3167_）。
 - **泛型與 bound。** 一個 [`GRAMMAR#generics`](../../GRAMMAR) 參數列 `[T, …]` 可對各
   [`GRAMMAR#type-param`](../../GRAMMAR) 加 spec 約束（[`GRAMMAR#bound`](../../GRAMMAR)）——`[T: Ord]`、`+` 合取 `[K: Hash + Eq,
 V]`。同一套
@@ -583,11 +585,9 @@ V]`。同一套
   逗號列表 `#[a(x), b(y)]`,把 `#[a(x)]` 疊在 `#[b(y)]` 上是編譯錯誤——一件事兩種寫法正是 `zerg fmt` 存在的理由,
   而兩種都合法之後它就無從移除。decorator 也**自成一行**:它是 statement list 的一個項目,所以有分隔符把它和它所領的
   項目分開。decorator 是**固定、compiler 擁有**的集合——使用者不可自訂(Zerg 無 macro);**未知或拼錯的 decorator
-  是編譯錯誤**(`E9005`),絕不被默默丟棄。今日已實作:`#[derive]`、`#[obj]`、`#[test]`、`#[fixture]` 與
-  `#[allow]`;`#[sealed]`
-  與 layout 指令(`#[repr]` / `#[packed]` / `#[align]`)是保留名稱,在實作前會被識別並拒絕——_E9079 … it is a
-  reserved decorator … and this compiler does not build it, so the constructor stays public rather than being
-  sealed in silence_。`#[` 是唯一不算註解的 `#`——lexer peek 一字元即分辨。
+  是編譯錯誤**(`E2076`),絕不被默默丟棄，而這是封閉集合的永久規則，不是等待實作的形式。今日已實作:`#[derive]`、
+  `#[obj]`、`#[sealed]`、`#[test]`、`#[fixture]` 與 `#[allow]`;layout 指令(`#[repr]` / `#[packed]` / `#[align]`)
+  是保留名稱，在實作前會被識別並拒絕——**[not yet]**,_E9005_。`#[` 是唯一不算註解的 `#`——lexer peek 一字元即分辨。
 
 ## Group 8 — Null-safety & Errors
 
@@ -770,19 +770,17 @@ asm-operand ::= 'in' '(' str-lit ')' expr | 'out' '(' str-lit ')' lvalue
 
 以下每個形式都是 **[not yet]**:文法定義了它,`zerg` **以它自己的名字**拒絕它,沒有任何用到它的程式會被編譯成
 別的東西。這份清單不是散文 —— `scripts/refuse-check.sh` 每一列都有對應案例,而 **Code** 欄就是該列被釘住的那個
-拒絕——把 range 當值是 `E9077`、泛型別名 `type X[T] = …` 是 `E9075`、`alignof[T]` 是 `E9046`——
+拒絕——把 range 當值是 `E9077`、泛型別名 `type X[T] = …` 是 `E9075`、layout decorator 是 `E9005`——
 所以一個形式若悄悄開始能動、或悄悄換了失敗方式,gate 就會擋下來。
 
 **Group** 欄用的是本章自己的編號（見上）——導出該 production 的那一節，而不是最早提到它的那一節。
 
-| Group | Code    | 形式                                                                                     |
-| ----- | ------- | ---------------------------------------------------------------------------------------- |
-| 4     | `E9077` | 把**非整數或無號型別的** range 當值 —— `"a".."z"`、`1.5..2.5`                            |
-| 7     | `E9075` | 泛型別名 `type X[T] = …`                                                                 |
-| 7     | `E9038` | 對內建型別的 `impl`                                                                      |
-| 7     | `E9046` | `alignof[T]`                                                                             |
-| 7     | `E9063` | 定寬階梯 `i8`…`f64`                                                                      |
-| 7     | `E2076` | 除 `#[derive(…)]`、`#[obj]`、`#[test]`、`#[fixture]`、`#[allow(…)]` 以外的每個 decorator |
+| Group | Code    | 形式                                                          |
+| ----- | ------- | ------------------------------------------------------------- |
+| 4     | `E9077` | 把**非整數或無號型別的** range 當值 —— `"a".."z"`、`1.5..2.5` |
+| 7     | `E9075` | 泛型別名 `type X[T] = …`                                      |
+| 7     | `E9038` | 對內建型別的 `impl`                                           |
+| 7     | `E9005` | layout decorator `#[repr]`、`#[packed]` 與 `#[align]`         |
 
 CODE 欄才是重點。這張表原本寫著「`scripts/refuse-check.sh` 每一列都有對應案例」卻沒有指名任何代碼,於是
 一列可以活得比它描述的形式更久:**十七個形式已經建好而它們的列還留著** —— command literal、雙向解構、

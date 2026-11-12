@@ -141,8 +141,8 @@ identifier ::= ( letter | '_' ) ( letter | digit | '_' )*
 # never what decided this', so a variant pattern is told from a binding by the '.' and
 # the payload parentheses — by the shape written down, which is all this file describes.
 # A USE is not constrained either (type-name, group 4): the built-in type names —
-# 'int', 'uint', 'float', 'str', 'list', 'map', the fixed-width members — are stdlib
-# names in lower case, and no declaration in a program introduces them.
+# 'int', 'uint', 'float', 'str', 'list', 'map' — are stdlib names in lower case, and no
+# declaration in a program introduces them.
 type-ident ::= identifier
 
 NEWLINE    ::= '\r'? '\n'          # a line break, LF or CRLF; terminates a statement (group 1)
@@ -549,9 +549,9 @@ pattern-list ::= pattern ( ',' pattern )*
 # variant, a function, a parameter, a field or a binding.
 
 # --- type expressions ---
-# A type-name is just an identifier, so the set of built-in NUMERIC types — 'int',
-# 'uint', 'float', and any fixed-width members ('i32', 'u8', 'f64', …) — is a STDLIB
-# decision, not surface grammar: adding one adds no production.
+# A type-name is just an identifier, so the set of built-in NUMERIC types — 'int', 'uint',
+# 'byte', 'rune', 'float' — is a SEMANTIC decision, not surface grammar: there is no
+# fixed-width ladder ('i32', 'u8', 'f64', …), and refusing one needs no production.
 type         ::= base-type '?'?                        # a trailing '?' makes it optional
 base-type    ::= type-name type-args? ( '.' identifier )*   # int, list[int]; 'text.Splitter' names
                | tuple-type | array-type | chan-type | fn-type | ptr-type   # a type through its import (group 10)
@@ -590,7 +590,7 @@ val-bind     ::= identifier ':=' const-expr   # 'SIZE := 4096' — a per-type co
 # A const-expr is an ordinary 'expr' (group 4) RESTRICTED to what the compiler folds with no
 # evaluation engine: literals, other const-foldable names, an enum's discriminant, and the
 # arithmetic / bitwise / comparison / logical operators. There are NO function calls and no
-# runtime values — so 'sizeof'/'len' (stdlib calls) are not const-exprs yet.
+# runtime values — so 'len' (a method call) is not a const-expr, and there is no 'sizeof' to be one.
 const-expr   ::= expr        # SEMANTIC restriction: compile-time-foldable (see above)
 
 # CONSTRUCTION. A type name is ALSO its constructor: 'struct' puts the name into the value
@@ -610,8 +610,8 @@ const-expr   ::= expr        # SEMANTIC restriction: compile-time-foldable (see 
 # 'nil' for a 'T?' field (its natural absent state). The field-wise 'T(...)' constructor
 # is public and PRIMITIVE (not overridable); a custom constructor is a named associated
 # function (an inherent 'impl', group 5) that builds via 'T(...)'. The '#[sealed]'
-# decorator demotes 'T(...)' to module-private, so external code must use a public custom
-# constructor — the module still builds with 'T(...)' internally.
+# decorator makes 'T(...)' private to its declaring FILE, the unit of privacy, so external
+# code must use a public custom constructor — that file still builds with 'T(...)'.
 
 # Decorators are a fixed, compiler-owned set of directives (users cannot define new
 # ones — Zerg has no macros). A decorator prefix leads any statement, declarations

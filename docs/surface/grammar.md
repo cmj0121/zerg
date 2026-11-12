@@ -579,7 +579,8 @@ deco-arg    ::= type-name | const-expr        # derive(Encode, Decode), align(16
   `chan[T]`, with Go-style direction — `<-chan[T]` is receive-only (a receiver) and `chan[T]<-` is
   send-only (a sender); or a **function type** `fn(P…) -> R` (group 5). A trailing **`?`** makes any type an
   **optional** — `str?`. A type name is just an identifier, so the set of built-in **numeric** types
-  (`int`, `uint`, `float`, and any fixed-width `i32`/`u8`/`f64`/…) is a **stdlib** decision, not grammar.
+  (`int`, `uint`, `byte`, `rune`, `float`) is a **semantic** decision, not grammar — and there is no
+  fixed-width `i32`/`u8`/`f64`/… beside them (_E3166_).
 - **`struct` / `enum`.** [`GRAMMAR#struct-decl`](../../GRAMMAR) is a **product** with named, typed fields
   (a [`GRAMMAR#field-list`](../../GRAMMAR) of [`GRAMMAR#field`](../../GRAMMAR)) and
   [`GRAMMAR#enum-decl`](../../GRAMMAR) a **sum** (a [`GRAMMAR#variant-list`](../../GRAMMAR) of
@@ -605,22 +606,22 @@ deco-arg    ::= type-name | const-expr        # derive(Encode, Decode), align(16
   pair a pattern writes — so a variant name is never a name on its own, and two enums that both declare a
   `Red` never compete for it. The type name **shares the value namespace** with functions, so a type and a
   function cannot share a name (Zerg has no overloading). The field-wise `T(...)` is **public and
-  primitive**; a custom constructor is a named
-  associated function (an inherent `impl`) that builds via `T(...)`. **`#[sealed]`** is _intended_ to demote
-  `T(...)` to module-private (external code must then use a public custom constructor, the module still
-  building with `T(...)` internally), but is **recognized-and-rejected, not yet implemented** this phase (see
+  primitive**; a custom constructor is a named associated function (an inherent `impl`) that builds via
+  `T(...)`. **`#[sealed]`** on a `struct` makes `T(...)` private to its declaring **file**, the unit of
+  privacy: that file still builds with it, and a construction anywhere else is _E3165_, so external code
+  uses a public custom constructor (see
   [Decorators](../core/decorators.md)).
 - **`type X = Y`.** [`GRAMMAR#type-decl`](../../GRAMMAR) is a **strong typedef** — a new, distinct type, not
-  a transparent alias, lowering to `Y` at runtime. The `generics?` slot is **parsed** but a **generic** alias `type
-X[T] = …` is **not yet
-  implemented** this phase (rejected in semantic analysis).
+  a transparent alias, lowering to `Y` at runtime. The `generics?` slot is **parsed**, and a **generic** alias
+  `type X[T] = …` is **[not yet]**, refused by name at the `[` (_E9075_).
 - **Compile-time constants (implicit).** Compile-time folding is **implicit** and independent of the `const`
   keyword (which only marks a shadow-proof binding — Group 4). Any binding — `:=` or `const` — whose
   initializer is a `const-expr` is **folded at compile time** and may be used where a compile-time value is
   required: an array length `[T; N]`, an enum discriminant, a decorator argument, a value-generic argument.
   Using such a name where its initializer is **not** const-foldable is a compile error at the use site. A
   `const-expr` is an `expr` the compiler folds with **no evaluation engine** — literals, other const-foldable
-  names, discriminants, and operators; **no function calls** (so `sizeof`/`len` are not const-exprs). A spec
+  names, discriminants, and operators; **no function calls** (so `len` is not a const-expr, and there is no
+  `sizeof` — _E3167_). A spec
   names, discriminants, and operators are what a const-expr is made of.
 - **Generics & bounds.** A [`GRAMMAR#generics`](../../GRAMMAR) list `[T, …]` may bound each
   [`GRAMMAR#type-param`](../../GRAMMAR) to specs — `[T: Ord]`, a `+` conjunction `[K: Hash + Eq, V]`. The
@@ -679,12 +680,11 @@ X[T] = …` is **not yet
   it cannot remove one once both are legal. A decorator also **stands on its own line**: it is an item of
   the statement list, so a separator divides it from what it leads. Decorators are a **fixed,
   compiler-owned set** — users cannot define new ones (Zerg has no macros); an **unknown or misspelled
-  decorator is a compile error** (`E9005`), never silently dropped. `#[derive]`, `#[obj]`, `#[test]`,
-  `#[fixture]` and `#[allow]` are the ones the compiler reads; `#[sealed]` and the layout directives
-  (`#[repr]` /
-  `#[packed]` / `#[align]`) are reserved names, recognized-and-rejected until built — _E9079 … it is a
-  reserved decorator … and this compiler does not build it, so the constructor stays public rather than
-  being sealed in silence_. `#[` is the one `#` that is not a comment — the lexer peeks one character.
+  decorator is a compile error** (`E2076`), never silently dropped, and that is a permanent rule of the closed
+  set rather than a form awaiting a build. `#[derive]`, `#[obj]`, `#[sealed]`, `#[test]`, `#[fixture]` and
+  `#[allow]` are the ones the compiler reads; the layout directives (`#[repr]` / `#[packed]` / `#[align]`) are
+  reserved names, recognized-and-rejected until built — **[not yet]**, _E9005_. `#[` is the one `#` that is
+  not a comment — the lexer peeks one character.
 
 ## Group 8 — Null-safety & Errors
 
@@ -905,20 +905,18 @@ Every form below is **[not yet]**: the grammar defines it, `zerg` refuses it **b
 name**, and no program that uses one compiles into something else. This list is not prose —
 `scripts/refuse-check.sh` holds a case for each row, and the **Code** column names the
 refusal each row is pinned by — `E9077` for a range used as a value, `E9075` for a generic
-`type X[T] = …` alias, `E9046` for `alignof[T]` — so a form that quietly starts working, or
+`type X[T] = …` alias, `E9005` for a layout decorator — so a form that quietly starts working, or
 quietly starts failing differently, fails the gate.
 
 The **Group** column is this chapter's own numbering, above — the section that derives the
 production, not the one that first mentions it.
 
-| Group | Code    | Form                                                                                    |
-| ----- | ------- | --------------------------------------------------------------------------------------- |
-| 4     | `E9077` | a range **of a non-integer or unsigned type** as a value — `"a".."z"`, `1.5..2.5`       |
-| 7     | `E9075` | a generic `type X[T] = …` alias                                                         |
-| 7     | `E9038` | an `impl` on a built-in type                                                            |
-| 7     | `E9046` | `alignof[T]`                                                                            |
-| 7     | `E9063` | the fixed-width ladder `i8`…`f64`                                                       |
-| 7     | `E2076` | every decorator but `#[derive(…)]`, `#[obj]`, `#[test]`, `#[fixture]` and `#[allow(…)]` |
+| Group | Code    | Form                                                                              |
+| ----- | ------- | --------------------------------------------------------------------------------- |
+| 4     | `E9077` | a range **of a non-integer or unsigned type** as a value — `"a".."z"`, `1.5..2.5` |
+| 7     | `E9075` | a generic `type X[T] = …` alias                                                   |
+| 7     | `E9038` | an `impl` on a built-in type                                                      |
+| 7     | `E9005` | the layout decorators `#[repr]`, `#[packed]` and `#[align]`                       |
 
 THE CODE COLUMN IS THE POINT. This table said "`scripts/refuse-check.sh` holds a case for
 each row" and named no code, so a row could outlive the form it described: seventeen forms

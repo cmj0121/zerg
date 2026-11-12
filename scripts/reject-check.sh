@@ -6289,6 +6289,35 @@ fn main() {
 }
 EOF
 
+# --- the decorator set is closed -----------------------------------------------
+#
+# A decorator is a compiler directive, and the set is compiler-owned (docs/core/decorators.md):
+# a name not on that page is not a directive in any Zerg, so it is rejected rather than
+# refused. `#[dyn]` is a name the seed reserves; `zerg` reads it as unknown.
+reject unknown-decorator E2076 'the decorator `#[dyn]`' <<'EOF'
+#[dyn]
+struct P {
+	pub x: int
+}
+
+fn main() { print 1 }
+EOF
+
+# GRAMMAR#decorator is a COMMA LIST of items, and this read the brackets as one item with a
+# bag of identifiers in it: every name that was not `derive` went on as a derive argument,
+# so `#[derive(Eq), frobnicate]` asked to derive `frobnicate`. Each item now gets its own
+# answer, and an unknown one alone has had one all along.
+reject second-decorator-in-a-comma-list E2076 'the decorator `#[frobnicate]`' <<'EOF'
+#[derive(Eq), frobnicate]
+struct P {
+	pub v: int
+}
+
+fn main() {
+	print 1
+}
+EOF
+
 # --- a range operator does not end a line ---------------------------------------
 #
 # GRAMMAR#range-expr: `b := x in 1..` over a line holding `10` reads two ways — the open range

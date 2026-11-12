@@ -130,6 +130,15 @@ pub enum Rule {
 	# is a statement, and a block body is how an arm holds one.
 	ArmBodyStatement = 2092
 
+	# GRAMMAR#range-expr: a `..` or `..=` that ends a line outside `(` / `[` — the next line could
+	# be its bound or a statement of its own, and nothing tells which.
+	RangeEndsLine = 2093
+
+	# GRAMMAR#postfix: a `[ … ]` after a name is an index, so `map[K, V](…)` calls nothing a program
+	# can name — a map's type comes from what it is bound to, and an empty one is `{:}`. It was
+	# `E9067`, a constructor waiting to be built; GRAMMAR derives none.
+	MapTypeCalled = 2094
+
 	# checking — a form whose meaning does not hold together — reported against the tree, all at once
 	NotPublicMember = 3001
 	AssignTargetNotAPlace = 3002
@@ -284,7 +293,7 @@ pub enum Rule {
 	MainResult = 3133
 	MapMethodUnknown = 3134
 	ErrFieldUnknown = 3135
-	OpenRangeInclusive = 3136
+	RangeUpperBoundNil = 3136
 
 	# THE SPLIT #74 WALKED PAST. `MapMethodUnknown` came out of `E9100` because a map's
 	# fallback answered two questions at one raise; `E9056` is the LIST's fallback and it
@@ -576,7 +585,6 @@ pub enum Rule {
 	# keeping that churn out of the five stage ranges is what keeps them dense
 	NotYetParameterizedSpec = 9001
 	NotYetDecoratorLayout = 9005
-	NotYetCallee = 9009
 	NotYetImplAssocType = 9015
 	NotYetAssocTypeProjection = 9028
 	NotYetValueGenericParam = 9029
@@ -586,13 +594,11 @@ pub enum Rule {
 	NotYetCompileTimeBuiltin = 9046
 	NotYetImplOnBuiltin = 9047
 	NotYetMutateListRvalue = 9049
-	NotYetOpenRangeHere = 9050
 	NotYetMapKeyType = 9052
 	NotYetListMethod = 9056
 	NotYetInOverType = 9062
 	NotYetFixedWidthLadder = 9063
 	NotYetDelChannel = 9066
-	NotYetGenericConstructor = 9067
 	NotYetValueUnnameableType = 9069
 	NotYetRebindMatchBinding = 9070
 	NotYetDefaultReadsField = 9071

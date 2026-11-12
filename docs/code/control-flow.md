@@ -81,11 +81,21 @@ re-raised — is [Iteration](../core/specs.md)), and **`for cond { … }`** the 
 (a `bool`) holds. There is **no `while` keyword** (bare `for cond` is the while loop) and **no C-style
 three-clause `for`**. The infinite form, the while form, and `for x in it` over a **range**, a **`list`**, a
 **`map`** (binding each **key**) all work. Over a **`str`** it binds each **`rune`** — the code points, not
-the bytes; walk `bytearray(s)` when you want those. **`for mut x`** binds each element **in place** over a
-`list` or an array ([Collections](collections.md#iterating--mutation)). Testing membership with **`v in range`**
-(`x in 0..n` → `bool`) works. Treating a **range as a value** anywhere else is **[not yet]** — the form is
-refused by name and with a place (`E9077`); a range exists only as the thing a `for` walks, a `match` arm
-contains, and an `in` tests against.
+the bytes; walk `bytearray(s)` when you want those. An **open** range counts up without end: `for i in n..`
+leaves by `break`, `return` or a raise, and a step past the largest `int` raises `OverflowError`.
+**`for mut x`** binds each element **in place** over a `list` or an array
+([Collections](collections.md#iterating--mutation)). Testing membership with **`v in range`** (`x in 0..n` →
+`bool`) works, and a range over signed integers is a **value** too — it binds, passes, returns, and is
+walked and tested like the written one.
+
+> **[not yet]** A range value holds its bounds as signed integers, so one over anything else is _E9077
+> NotImplemented: a range of float as a value — a range value holds its bounds as signed integers_ —
+> `1.5..2.5`, a `uint` range and `"a".."z"` alike, though the membership test written in place takes all
+> but the last.
+
+A range's upper bound is never `nil`: `1..nil` and `1..=nil` are
+_E3136 `nil` is not an upper bound_ wherever they are written — an open range is `1..`, with nothing after the
+`..`, and `..=` always takes a bound.
 
 > **[not yet]** Membership holds for the bounds this compiler can hand to C's `>=`, which is every scalar
 > but a `str`. A range bounded by anything else is _E9062 NotImplemented: `in` over a range of str — a

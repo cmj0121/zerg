@@ -4383,14 +4383,40 @@ fn parse_range(mut &p: Parser) -> ast.Expr {
 	lo := parse_add(p)
 	k := cur_kind(p)
 	return lo if k != token.Kind.DotDot and k != token.Kind.DotDotEq
+	op := cur(p)
 	p_advance(p)
+
+	# A RANGE OPERATOR MAY NOT END A LINE where a line break ends a statement. Both readings of
+	# `b := x in 1..` over a line holding `10` are plausible — the open range followed by a
+	# statement, or `1..10` — and either one taken silently drops what the other meant. The
+	# lexer marks such an operator (range_op), so `x in 1..; f()` on one line is still the open
+	# range, and inside `(` or `[` a range spans lines as any expression does. A `}` on the next
+	# line can begin no bound, so `return v in 1..` closing a block is not refused; a `{` can,
+	# and stays refused.
+	ends := op.value == token.RANGE_ENDS_LINE and not p_at(p, token.Kind.RBrace)
+	raise p_diag_at(p, op.line, op.col, rule.Rule.RangeEndsLine, f"`{op.lexeme}` ends the line, so whether the next line is its upper bound cannot be told — put the bound on the same line, or wrap the range in parentheses: `(lo..)`") if ends
 
 	# `500..` — GRAMMAR makes the upper bound optional after `..`, and what tells "there is no
 	# bound" from "the bound follows" is whether the next token could begin one. Without this
 	# the guard of `500.. if c =>` was read AS the bound, since an if-expression is a legal
 	# bound expression, and the arm silently tested `n < (c ? … : …)`.
 	return ast.Expr.ERange(lo, ast.Expr.ENil, false) if k == token.Kind.DotDot and token.no_bound_follows(cur_kind(p))
-	return ast.Expr.ERange(lo, parse_add(p), k == token.Kind.DotDotEq)
+
+	# A WRITTEN `nil` IS NO UPPER BOUND, and it is refused here because nothing downstream can
+	# tell it from the absent one: both are ENil on the node. `1..nil` was read as the open range
+	# `1..`, a spelling GRAMMAR does not derive, and `1..=nil` as a `..=` with its mandatory bound
+	# missing — which `3 in 1..=nil` answered `true` for. The arm was the one position that said
+	# so, from the emitter, and the slice, the loop and the test did not.
+	bt := cur(p)
+	hi := parse_add(p)
+	why := if k == token.Kind.DotDotEq {
+		"`nil` is not an upper bound — `..=` always takes one, and an open range is written `500..`"
+	} else {
+		"`nil` is not an upper bound — an open range is written `500..`, with nothing after the `..`"
+	}
+	raise p_diag_at(p, bt.line, bt.col, rule.Rule.RangeUpperBoundNil, why) if ast.is_nil_lit(hi)
+
+	return ast.Expr.ERange(lo, hi, k == token.Kind.DotDotEq)
 }
 
 fn parse_add(mut &p: Parser) -> ast.Expr {
@@ -4448,6 +4474,21 @@ fn parse_try(mut &p: Parser) -> ast.Expr {
 	return e
 }
 
+# p_opt_dot reads `?.name`, and the call after it when there is one. `a?.b` reads a field
+# through an optional; `a?.m(…)` calls a method through one, which is its own node because the
+# call is CONDITIONAL — `(` after an EOptChain would call the optional the chain answers.
+#
+# `a?.b` — the lexer has produced this token since it existed and no parser ever consumed it,
+# so `x := p?.n` bound `p` and the `.n` was simply dropped.
+fn p_opt_dot(mut &p: Parser, e: ast.Expr) -> ast.Expr {
+	p_advance(p)
+	ft := cur(p)
+	fld := p_field_name(p, "?.", false)
+	return ast.Expr.EOptMethod(e, fld, parse_call_args(p), ft.line, ft.col) if p_at(p, token.Kind.LParen)
+
+	return ast.Expr.EOptChain(e, fld, ft.line, ft.col)
+}
+
 # parse_chain_tail continues a postfix chain on an expression that is already built: a
 # field, a method call, an index. A bare `(` is deliberately not here — a free call needs
 # an identifier for its name, and the thing to the left of one of these is a value.
@@ -4455,10 +4496,7 @@ fn parse_chain_tail(mut &p: Parser, e0: ast.Expr) -> ast.Expr {
 	mut e := e0
 	for p_at(p, token.Kind.Dot) or p_at(p, token.Kind.LBrack) or p_at(p, token.Kind.OptDot) {
 		if p_at(p, token.Kind.OptDot) {
-			p_advance(p)
-			ft := cur(p)
-			fld := p_field_name(p, "?.", false)
-			e = ast.Expr.EOptChain(e, fld, ft.line, ft.col)
+			e = p_opt_dot(p, e)
 		} else if p_at(p, token.Kind.LBrack) {
 			p_advance(p) # '['
 			idx := parse_expr(p)
@@ -4512,22 +4550,12 @@ fn parse_unary(mut &p: Parser) -> ast.Expr {
 	return parse_postfix(p)
 }
 
-# is_opt_chain is whether a callee came from `?.` — the one callee shape that is still
-# refused, because what it needs is not a way to call an expression but a CONDITIONAL call
-# whose result is an optional (GRAMMAR group 8).
 # p_no_unsafe_fn is `unsafe fn` wherever it is written — at the top level and on an `impl`
 # item, which are the two positions GRAMMAR#fn-decl reaches. ONE raise site, because it is one
 # finding: a marker on a declaration, in a language whose only unsafe context for one is the
 # group.
 fn p_no_unsafe_fn(mut &p: Parser, u: token.Token) {
 	raise p_diag_at(p, u.line, u.col, rule.Rule.UnsafeFnRetired, "there is no `unsafe fn` — a declaration is unsafe by sitting inside a module-level `unsafe {{ … }}` group, which is the whole of the marker (GRAMMAR#fn-decl); wrap this declaration in one, or discharge what it needs with `unsafe {{ … }}` in the body and keep the safe signature")
-}
-
-fn is_opt_chain(e: ast.Expr) -> bool {
-	return match e {
-		Expr.EOptChain(_, _, _, _) => true
-		_ => false
-	}
 }
 
 # p_ty_of_name is a written type argument as a type. A scalar goes through the conversion
@@ -4588,12 +4616,7 @@ fn parse_postfix(mut &p: Parser) -> ast.Expr {
 	mut e := parse_primary(p)
 	for p_at(p, token.Kind.LParen) or p_at(p, token.Kind.Dot) or p_at(p, token.Kind.LBrack) or p_at(p, token.Kind.OptDot) {
 		if p_at(p, token.Kind.OptDot) {
-			# `a?.b` — the lexer has produced this token since it existed and no parser ever
-			# consumed it, so `x := p?.n` bound `p` and the `.n` was simply dropped.
-			p_advance(p)
-			ft := cur(p)
-			fld := p_field_name(p, "?.", false)
-			e = ast.Expr.EOptChain(e, fld, ft.line, ft.col)
+			e = p_opt_dot(p, e)
 		} else if p_at(p, token.Kind.LBrack) {
 			p_advance(p) # '['
 			idx := parse_expr(p)
@@ -4631,16 +4654,14 @@ fn parse_postfix(mut &p: Parser) -> ast.Expr {
 			# free call: name(args), or a scalar type conversion like int(x)
 			mut name := ident_name(e)
 
-			# A CALLEE THAT IS NOT A NAME. Three forms reach here and all three used to be
+			# A CALLEE THAT IS NOT A NAME. Three forms reached here and all three used to be
 			# built as `ECall("", args)`, which the emitter reported as ``undefined function
 			# ` ``` — an empty name, naming nothing, for a program with no typo in it:
 			#
 			#   f[T](x)    explicit type arguments (GRAMMAR#postfix, group 7)
 			#   fs[0](x)   a call through a function VALUE held in a container
-			#   p?.get()   an optional method call
+			#   p?.get()   an optional method call, which p_opt_dot now reads as its own node
 			#
-			# The shape is still in hand here, which is why the refusal belongs in the parser
-			# rather than downstream of the name it threw away.
 			# EXPLICIT TYPE ARGUMENTS ARE NOT A FORM, and this is not where that is said.
 			# `id[int](7)` reaches here as an INDEX of `id`, and so does `fs[i](1)`: the same
 			# tokens, and the only way to tell a subscript from a type argument is to know what
@@ -4656,15 +4677,7 @@ fn parse_postfix(mut &p: Parser) -> ast.Expr {
 			# A CALLEE THAT IS NOT A NAME IS AN EXPRESSION, and GRAMMAR#postfix already says
 			# so: `(` is a postfix operator on whatever precedes it. `fs[0](1)` calls the
 			# element, and a lambda called where it is written calls the lambda.
-			#
-			# `p?.m(…)` IS THE ONE THAT STAYS REFUSED, and it is not this shape wearing a
-			# different spelling: `?.` answers an OPTIONAL — nil in place when the operand is
-			# absent — so the call has to be conditional and its result has to be an optional
-			# too. That is group 8's rule and not a callee's, which is why `E9009` narrows to
-			# it rather than retiring.
-			return ast.Expr.ECallVal(e, parse_call_args(p)) if name == "" and not is_opt_chain(e)
-
-			raise p_diag(p, rule.Rule.NotYetCallee, f"NotImplemented: calling {ast.expr_kind(e)} — an optional method call answers an optional, and this compiler does not build one; `x?.m()` is unbuilt while `fs[0](…)` and a lambda called where it is written are not (GRAMMAR#postfix)") if name == ""
+			return ast.Expr.ECallVal(e, parse_call_args(p)) if name == ""
 
 			args := parse_call_args(p)
 			if is_conv(name) {

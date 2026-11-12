@@ -594,28 +594,6 @@ fn main() {
 }
 EOF
 
-# An open-ended range is a legal RANGE ARM (`20.. =>`), and nothing else yet. The missing bound
-# reads as nil, and `c_expr(ENil)` is "0" — so a `for` over one ran zero times and a slice came
-# back empty, both in silence. The sentence is pinned because it was assembled out of order:
-# the citation sat behind an empty dash and the caller's half was glued to it (#315).
-expect "$ZERG" open-range-in-a-for E9050 'no upper bound here — a `for … in` needs an upper bound (GRAMMAR#range-expr)' <<'EOF'
-fn main() {
-	mut n := 0
-	for i in 20.. {
-		n = n + i
-	}
-	print n
-}
-EOF
-
-expect "$ZERG" open-range-in-a-slice E9050 'no upper bound here — a slice needs an upper bound — `xs[a..xs.len()]` (GRAMMAR#range-expr)' <<'EOF'
-fn main() {
-	xs := [1, 2, 3]
-	ys := xs[1..]
-	print ys.len()
-}
-EOF
-
 # `Ref[T]` in the two TYPE positions. Both used to answer "no type named `Ref`" — the
 # misspelling message — because a type position asked only about the fixed-width ladder
 # while `Ref(v)` in a CALL had been named all along. They now go through the one built-in
@@ -1451,11 +1429,9 @@ EOF
 # reported as ``undefined function ` ``` — an empty name, naming nothing, for a program with
 # no typo in it. They were one root cause and three separate unbuilt features.
 #
-# TWO OF THE THREE ARE BUILT (#172): `fs[0](…)` calls the element and a lambda called where it
-# is written calls the lambda, so `call-a-fn-value-from-a-list` has left this file for the
-# corpus, where a form that WORKS is pinned. What is left under `E9009` is the optional method
-# call below, and it is not this shape wearing another spelling — `?.` answers an optional, so
-# the call has to be conditional and its result has to be one too.
+# ALL THREE ARE BUILT: `fs[0](…)` calls the element and a lambda called where it is written calls
+# the lambda (#172), and `p?.m(…)` calls `m` when `p` is present (#439), so the cases left this
+# file for the corpus, where a form that WORKS is pinned.
 #
 # WHAT A VALUE CALLEE CAN STILL GET WRONG is not being a function, and that is a wrong program
 # rather than an unbuilt form: there is nothing to look up, only a type that is not a `fn`.
@@ -1627,23 +1603,6 @@ fn main() {
 	mut xs := [1, 2]
 	xs.append(v: 3)
 	print xs.len()
-}
-EOF
-
-expect "$ZERG" optional-method-call E9009 <<'EOF'
-struct P {
-	pub x: int
-}
-
-impl P {
-	fn get() -> int {
-		return this.x
-	}
-}
-
-fn main() {
-	p: P? = P(3)
-	print p?.get() ?? 0
 }
 EOF
 
@@ -3430,16 +3389,6 @@ fn main() {
 }
 EOF
 
-# A built-in container's type arguments are not a genericity it lacks: `map` takes exactly
-# two. What it has not got is a no-argument constructor, and saying "`map` is not generic"
-# was a false statement about the program.
-expect "$ZERG" map-as-a-constructor E9067 <<'EOF'
-fn main() {
-	m := map[str, int]()
-	print 1
-}
-EOF
-
 # GRAMMAR#postfix puts type arguments in the postfix chain, so `f[A, B]` with no call is
 # grammatical. This compiler instantiates a generic at the call and has nothing for a bare
 # one to be.
@@ -3813,10 +3762,31 @@ EOF
 # What is left of `E9077` is a range whose BOUNDS this compiler cannot compare, which is the
 # same clause `in` has always had: the comparison is C's own, and a `str` bound would compare
 # two pointers.
-expect "$ZERG" a-range-of-str-as-a-value E9077 'is not a type this compiler compares' <<'EOF'
+expect "$ZERG" a-range-of-str-as-a-value E9077 'a range of str as a value' <<'EOF'
 fn main() {
 	r := "a".."z"
 	print 1
+}
+EOF
+
+# A FLOAT RANGE AS A VALUE is the same form, and was not refused: `>=` compares two floats, so
+# the membership rule let it past, and the value's `int64_t` bounds truncated it — `1.5..2.5` was
+# held as `1..2`, and `2.2 in r` answered false.
+expect "$ZERG" a-range-of-float-as-a-value E9077 'a range of float as a value' <<'EOF'
+fn main() {
+	r := 1.5..2.5
+	print 2.2 in r
+}
+EOF
+
+# AND A UINT ONE: its upper half is negative in an `int64_t`, so `0..u` for the largest `u` held
+# `0..-1` and every member test answered false, though the test written in place is right.
+expect "$ZERG" a-range-of-uint-as-a-value E9077 'a range of uint as a value — a range value holds its bounds as signed integers' <<'EOF'
+fn main() {
+	z: uint = 0
+	u: uint = 18446744073709551615
+	r := z..u
+	print uint(5) in r
 }
 EOF
 

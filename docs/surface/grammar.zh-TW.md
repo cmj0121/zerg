@@ -250,7 +250,10 @@ expression 是一條優先序 cascade，每一層一條 production：[`GRAMMAR#o
 員,而一個 **error kind 指涉它自己加上它在分類樹底下的一切**（見[錯誤處理](../code/errors.zh-TW.md)）。正負號是運算子,不屬 literal。**range** 比比較緊一級,所以
 `v in 0..10` 讀作 `v in (0..10)`:`x..y` 是 `range(x, y)`、`x..=y` 是 `range(x, y + 1)`、`x..` 是開放 range、
 `v in r` 是 `r.contains(v)` 的**語法糖**——`Range` / `contains` 機制在 stdlib。（group 8 的 `??` 仍是唯一最鬆的二元
-運算子,比 `or` 更鬆。）
+運算子,比 `or` 更鬆。）`..` 或 `..=` 不可在未閉合的 `(` 或 `[` 之外**結束一行**：下一行可能是它的上界，也可能
+是一個獨立的 statement,所以行尾的 `x in 1..` 是 _E2093_——把上界寫在同一行，或寫成 `(1..)`。下一行以 `}` 開頭時
+不可能是上界，所以結束一個 block 的 `return v in 1..` 不會被拒絕。**下**界是必要的——`range-expr` 以一個
+`add-expr` 開頭——所以 `xs[..n]` 不是一種形式，它是 _E2071_(寫 `xs[0..n]`)。
 
 null-safety 與 error 運算子（`?` `??` `?.` `!`）在 group 8;postfix 三個（`?` `!` `?.`）併入上面的
 `postfix`,而 `??`（[`GRAMMAR#coalesce-expr`](../../GRAMMAR)，其右臂是
@@ -258,8 +261,9 @@ null-safety 與 error 運算子（`?` `??` `?.` `!`）在 group 8;postfix 三個
 
 postfix 的 `[…]` **一律是索引**。型別引數只寫在**型別位置**（group 7），兩個表面不再共用一對中括號,這裡也就沒有
 任何東西需要先解析才能剖析——不需要 turbofish,也不需要符號表。泛型呼叫由引數型別**推斷**其型別引數;推斷不足時,
-以**帶型別的 binding** 引導（`xs: list[int] = empty()`）,而不是在呼叫端給一份引數清單。pattern 文法（group 6）
-context-free 的理由與規則形狀完全相同。
+以**帶型別的 binding** 引導（`xs: list[int] = empty()`）,而不是在呼叫端給一份引數清單。所以後面沒有呼叫的型別引數
+也不是一種形式：當成值的 `map[str, int]` 是 _E2072_,而 `id[int](7)` 是 _E2035_——`[int]` 會是一個索引。pattern
+文法（group 6）context-free 的理由與規則形狀完全相同。
 
 **不需要符號表**是一個關於編譯器的主張,所以它當成主張被檢查:`make layering` 讀兩側的 parser,斷言兩者都
 不越過自己的 token——seed 用它的 package import 與 parser 狀態,`zerg` 用它呼叫了哪些同模組檔案。這也正是
@@ -608,6 +612,7 @@ postfix       += '?' | '!' | '?.' identifier
 - **`a ?? b`**——**default**:`a` 有 `Left` 就用它,否則用 `b`;最鬆的二元、**右結合**、短路。右側也可改為**diverge**——
   `x ?? break`、`v ?? return nil`、`p ?? raise e`——因為 `break` / `continue` / `return` / `raise` 從不產值。
 - **`a?.b`**——**optional chain**（僅 `T?`）:`a` 存在時讀 `.b`,否則就地短路成 `nil`(不像 `?` 會從函式 return)。
+  接在後面的呼叫 `a?.m(…)` 以同樣方式在那個值上呼叫 `m`,引數只在 `a` 存在時才求值。
 - **`x!`**——**force-unwrap**:取出 `Left`,否則 **raise `UnwrapError`**（value→abort 的逃生口）。邏輯否定是關鍵字
   `not`,所以 postfix `!` 空著可用。
 - **`raise e`**——攜帶 `Err` 的 **abort**(value→abort);**`raise e from c`** 把 `c` 記為 `e` 的 cause。
@@ -772,12 +777,7 @@ asm-operand ::= 'in' '(' str-lit ')' expr | 'out' '(' str-lit ')' lvalue
 
 | Group | Code    | 形式                                                                                     |
 | ----- | ------- | ---------------------------------------------------------------------------------------- |
-| 4     | `E9009` | optional 上的方法呼叫 —— `p?.m(…)`                                                       |
-| 4     | `E2071` | 沒有**下界**的 range —— `xs[..n]`                                                        |
-| 4     | `E9050` | 需要界限處的**開放** range —— `xs[a..]`、`for i in n..`                                  |
-| 4     | `E9077` | 把**邊界無法比較的** range 當值 —— `"a".."z"`                                            |
-| 4     | `E2035` | 後面沒有呼叫的後綴型別引數 —— `map[str, int]`、`f[int]`                                  |
-| 4     | `E9067` | 用 `map[K, V](…)` 當建構子 —— 空 map 是字面值 `{:}`                                      |
+| 4     | `E9077` | 把**非整數或無號型別的** range 當值 —— `"a".."z"`、`1.5..2.5`                            |
 | 7     | `E9075` | 泛型別名 `type X[T] = …`                                                                 |
 | 7     | `E9038` | 對內建型別的 `impl`                                                                      |
 | 7     | `E9046` | `alignof[T]`                                                                             |

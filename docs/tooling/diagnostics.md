@@ -204,6 +204,8 @@ shipping compiler rather than a part of it (the line
 | `E2090` | `mut fn This.…` — an associated fn has no receiver to mutate                                          |
 | `E2091` | `fn This.…` whose body reads `this`                                                                   |
 | `E2092` | … is a statement, and a match arm's body is an expression                                             |
+| `E2093` | `…` ends the line, so whether the next line is its upper bound cannot be told                         |
+| `E2094` | `map[…](…)` is not a constructor — an empty map is the literal `{:}`                                  |
 | `E3001` | `…` is not a public member of module `…`                                                              |
 | `E3002` | `…` is not a place, and an assignment needs one                                                       |
 | `E3003` | cannot assign to `…`: it is a module `const`, and a constant is never written                         |
@@ -239,7 +241,7 @@ shipping compiler rather than a part of it (the line
 | `E3033` | cannot bind … to a … binding: `…`                                                                     |
 | `E3034` | the binding `…`, or this expression, gives …, which has no type of its own                            |
 | `E3035` | `type … = …` names no type                                                                            |
-| `E3036` | a struct field or an enum payload is …, and this gives …                                              |
+| `E3036` | a struct field, an enum payload or a bound of a `for … in` range is …, and this gives …               |
 | `E3037` | cannot assign … to …, which holds …                                                                   |
 | `E3038` | argument … of `…` is …, and this gives …                                                              |
 | `E3039` | an optional is not an operand of `…`                                                                  |
@@ -338,7 +340,7 @@ shipping compiler rather than a part of it (the line
 | `E3133` | `fn main() -> …` — the entry's shapes are `fn main()`, `-> int` and `-> Result[nil]`                  |
 | `E3134` | the method `…` on a keyed container — it answers `len` and `has`, and is read with `m[k]`             |
 | `E3135` | the field `…` on an Err — it has `kind`, and its message is `message()`                               |
-| `E3136` | `..=` with no upper bound is not a range                                                              |
+| `E3136` | a range whose upper bound is `nil`                                                                    |
 | `E3137` | the list method `…` — a list answers `len` and `append`, and is read with `xs[i]`                     |
 | `E3138` | `….…` reads `this.…`, and a spec is field-blind                                                       |
 | `E3139` | a `[T; N]` slot takes `…` element(s) and this literal has `…`                                         |
@@ -498,7 +500,6 @@ shipping compiler rather than a part of it (the line
 | `E5017` | an import reaches past a folder that declares a surface                                               |
 | `E9001` | a parameterized `…[…]` as …                                                                           |
 | `E9005` | the decorator `#[…]`                                                                                  |
-| `E9009` | calling an optional chain — `p?.m(…)`                                                                 |
 | `E9015` | an associated type binding `type … = …` in an `impl`                                                  |
 | `E9028` | an associated type projection `….…`                                                                   |
 | `E9029` | a value generic parameter `…: …`                                                                      |
@@ -508,18 +509,16 @@ shipping compiler rather than a part of it (the line
 | `E9046` | the compile-time built-in `…[T]`                                                                      |
 | `E9047` | an `impl` on the built-in type `…`                                                                    |
 | `E9049` | `…` MUTATES its list, and `…` is a value rather than a place                                          |
-| `E9050` | an open-ended range has no upper bound here                                                           |
 | `E9052` | a map key of type …                                                                                   |
 | `E9056` | the list method `…`                                                                                   |
 | `E9062` | `in` over … — a range's members are found by comparing its bounds                                     |
 | `E9063` | `…` is part of the fixed-width ladder                                                                 |
 | `E9066` | `del …` on a CHANNEL                                                                                  |
-| `E9067` | `…[…](…)` as a constructor                                                                            |
 | `E9069` | … whose value has no type this compiler can name                                                      |
 | `E9070` | `…` re-binds a name a `match` arm's pattern already binds                                             |
 | `E9071` | the default on field `…` reads the field `…`                                                          |
 | `E9075` | a generic `type …[…] = …`                                                                             |
-| `E9077` | a range of a kind this compiler cannot compare, as a value                                            |
+| `E9077` | a range of a non-integer or unsigned type, as a value                                                 |
 | `E9078` | `is …` names no type to compare against                                                               |
 | `E9079` | the decorator `#[sealed]` — reserved                                                                  |
 | `E9097` | main(args) in a program that uses concurrency                                                         |
@@ -678,6 +677,19 @@ parameter, on the ground that a closure is reached through a value, which has no
 default from. One callee does have it in view, a name bound with `:=` straight to the literal, and a call
 by that name fills the default. Through any other value an omitted argument is the arity rule's `E3082`.
 
+**One retired the day the optional method call was built (#439).** `E9009` refused `p?.m(…)`, a call after
+an optional chain. The call is made only when `p` is present and answers an optional, as a field read through
+`?.` does; what a reader can still get wrong is a method that writes through its receiver, which is `E4081`
+or `E3022`, as it is on `p!`.
+
+**And one the day an open range got its end (#439).** `E9050` refused `xs[a..]` and `for i in n..`, the two
+places an open range needs a bound. A slice now runs to the list's length and a loop counts up until it is
+left; a range VALUE stays bounded, and that is `E4110`.
+
+**One left E9xxx because GRAMMAR derives no such form (#439).** `E9067` refused `map[str, int](…)` as a
+constructor this compiler had not built. GRAMMAR#postfix makes a `[ … ]` after a name an index, so no
+program calls a type, and an empty map is the literal `{:}`; the refusal is a rule now, `E2094`.
+
 **One retired with its rule rather than to another range.** `E2060` refused a declared type whose
 name did not begin with a capital, and that rule was the whole of how the language separated its
 two namespaces — a capitalised name was a type, a lower-case one a value. The rule is gone: a name
@@ -793,8 +805,11 @@ name now is the prelude rule (`E2061`), which is about the name rather than abou
 | `E9057` | —       | the form was built: an unnamed form compares by its parts              |
 | `E9061` | —       | the form was built: `in` over a list asks its elements' `==`           |
 | `E9034` | —       | the form was built: a call by a closure's `:=` name fills its default  |
+| `E9009` | —       | the form was built: `p?.m(…)` calls `m` only when `p` is present       |
+| `E9050` | —       | the form was built: `xs[a..]` ends at the length, `for i in n..` runs  |
 | `E4011` | —       | not a rule: a list renders in `str(…)` as it does in `print`           |
 | `E9036` | `E4111` | not an unbuilt form: a `spec` member is never `unsafe`                 |
+| `E9067` | `E2094` | not an unbuilt form: GRAMMAR derives no call of a type                 |
 
 **One of them moved nowhere**, and it is the only row whose second column is empty. `E3047`
 reported a prefix operator on a `type X = Y` — _operator `not` has no meaning on `Flag`_ — on

@@ -117,6 +117,8 @@ Measured against `zerg0` on 2026-07-31.
 | command literals `` `git status` ``                                    | the process-substitution literal |
 | `for k in m` over a map                                                | the iteration                    |
 | `e in ValueError` — the error taxonomy's SUBTREE test                  | the `in` of docs/code/errors.md  |
+| an optional method call `p?.m(…)`                                      | the call after `?.`              |
+| `for i in n..` over an open range                                      | the loop with no upper bound     |
 
 `e is ValueError` the seed does build; it is `in` it has no reading for. The two are
 different relations (identity and subtree, docs/code/errors.md) and only one of them is
@@ -429,6 +431,11 @@ byte(N)` and `byte(N * 3)` are compile errors. The seed folds the literal alone:
   (`E3136`) wherever it arrives. The seed reads the absent bound as 0, so the arm is false for
   every value and the `match` falls through to its catch-all with nothing said. One case in
   `reject-check.sh` carries the marker.
+- **A RANGE OPERATOR AT THE END OF A LINE is accepted, and the next line is read as its bound.**
+  `b := x in 1..` over a line holding `10` reads two ways — the open range and a statement, or
+  `1..10` — so `zerg` refuses a `..` or `..=` that ends a line outside `(` / `[` (`E2093`). The
+  seed's lexer inserts no `;` after either, so it takes the second reading in silence. Three cases
+  in `reject-check.sh` carry the marker.
 - **`in` OVER SOMETHING THAT IS NO SET AT ALL is accepted, and cc answers.** `in` tests
   membership, and a set is a list's elements, a map's keys, a range's members or an error kind
   ([grammar](../../docs/surface/grammar.md)); `3 in 5` names none of them, so `zerg` refuses

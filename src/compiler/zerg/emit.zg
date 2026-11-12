@@ -991,7 +991,7 @@ fn c_opt_name(mut &em: Emitter, elem: ast.Ty) -> str {
 # the same value and no diagnostic stood between them.
 fn c_opt_wrap(mut &em: Emitter, where: str, elem: ast.Ty, e: ast.Expr, sb: Subst) -> str {
 	cn := c_opt_name(em, elem)
-	return "(" + cn + "){ .tag = 1 }" if c_is_nil_lit(e)
+	return "(" + cn + "){ .tag = 1 }" if ast.is_nil_lit(e)
 
 	# A BLOCK WHOSE VALUE IS `nil` IS THE ABSENT ONE TOO. GRAMMAR (group 2) gives a block
 	# ending in anything but an expression the value `nil`, so `x: int? = { … nop }` is the
@@ -1019,13 +1019,6 @@ fn c_is_block_expr(e: ast.Expr) -> bool {
 		Expr.EBlock(_) => true
 		Expr.EUnsafe(_) => true
 		_ => false
-	}
-}
-
-fn c_is_nil_lit(e: ast.Expr) -> bool {
-	return match e {
-		Expr.ENil => true
-		_         => false
 	}
 }
 
@@ -1470,8 +1463,7 @@ fn c_ctor_side_of(nm: str, n: int) -> int {
 # exactly as `??` does; and the branch is a statement rather than a ternary because the two
 # sides fill different fields of the answer.
 fn c_optchain(mut &em: Emitter, target: ast.Expr, fld: str, l: int, c: int, sb: Subst) -> str {
-	t := c_infer(em, target)
-	raise c_diag(em, rule.Rule.OptionalChainOnNonOptional, f"`?.` reads through an optional, and {ast.ty_name(t)} is not one — use `.` for a value that is always there") if not ast.ty_is_opt(t)
+	t := c_optchain_operand(em, target)
 	inner := c_opt_elem(t)
 	if em.want_index {
 		c_nx_field(em, inner, fld, l, c)
@@ -1518,6 +1510,100 @@ fn c_optchain(mut &em: Emitter, target: ast.Expr, fld: str, l: int, c: int, sb: 
 		out = out + f" {df}(&{tv});"
 	}
 	return out + " " + rv + "; })"
+}
+
+# c_optchain_operand is the type a chain reads through, and the one rule both links have: `?.`
+# is for an optional, whether a field or a call follows it.
+fn c_optchain_operand(mut &em: Emitter, target: ast.Expr) -> ast.Ty {
+	t := c_infer(em, target)
+	raise c_diag(em, rule.Rule.OptionalChainOnNonOptional, f"`?.` reads through an optional, and {ast.ty_name(t)} is not one — use `.` for a value that is always there") if not ast.ty_is_opt(t)
+
+	return t
+}
+
+# c_optmethod lowers `a?.m(…)`: call `m` on the payload when `a` is present, else nil in place.
+# It answers what c_optchain answers, for the same reason — an `R?` that a chain, a `??` or a
+# `!` reads on — and an `R?` result is not wrapped again, as an optional field is not.
+#
+# THE CALL IS AN ORDINARY METHOD CALL on `t!`, where `t` is the operand's temp: the receiver
+# is a value rather than a place, so a method that writes through its receiver is refused
+# exactly as `a!.m(…)` refuses it, and every read-only one is the method `.` would have
+# called. The ARGUMENTS ARE INSIDE THE BRANCH, which is the short-circuit — nothing to the
+# right of `?.` runs when `a` is absent (docs/core/memory.md).
+#
+# A method answering nothing makes the whole expression answer nothing: there is no value to
+# be absent, so it is the call made only when `a` is there.
+fn c_optmethod(mut &em: Emitter, target: ast.Expr, meth: str, args: list[ast.Expr], l: int, c: int, sb: Subst) -> str {
+	t := c_optchain_operand(em, target)
+	src := c_opt_name(em, c_opt_elem(t))
+	tag := strconv.to_string(em.op_n, 10)
+	em.op_n = em.op_n + 1
+
+	tv := "zgt_om" + tag
+	rv := "zgt_omr" + tag
+	head := f"({{ {src} {tv} = {c_expr(em, target, sb)};"
+
+	rt := c_optmethod_call_ty(em, t, tv, meth, args, l, c)
+	outer := c_scope_open(em)
+	body := c_expr(em, c_optmethod_call(em, t, tv, meth, args, l, c), sb)
+	c_scope_close(em, outer)
+
+	df := c_carrier_temp_drop(em, t, target)
+	mut give := ""
+	if df != "" {
+		give = f" {df}(&{tv});"
+	}
+	return f"{head} if ({c_res_is_left(tv)}) {{ {body}; }}{give} }})" if ast.ty_eq(rt, ast.Ty.TVoid)
+
+	ot := c_opt_once(rt)
+	mut take := f"{rv} = {body};"
+	if not ast.ty_is_opt(rt) {
+		take = f"{c_res_mark_left(rv)} {c_res_put(em, ot, rv, body)}"
+	}
+	out := f"{head} {c_opt_name(em, c_opt_elem(ot))} {rv}; if ({c_res_is_left(tv)}) {{ {take} }} else {{ {c_res_mark_right(rv)} }}"
+	return out + give + " " + rv + "; })"
+}
+
+# c_optmethod_call is the call `a?.m(…)` makes once its operand is bound: a binding under a name
+# no source can write, holding the operand's type in the C name `tv`, and the ordinary method
+# call on its payload. The caller opens the scope the binding lives in, because the call is
+# lowered inside it as well as typed.
+fn c_optmethod_call(mut &em: Emitter, t: ast.Ty, tv: str, meth: str, args: list[ast.Expr], l: int, c: int) -> ast.Expr {
+	nm := "?." + strconv.to_string(em.op_n, 10)
+	em.op_n = em.op_n + 1
+	c_add_var_named(em, nm, t, tv, false, false)
+
+	return ast.Expr.EMethod(ast.Expr.EForce(ast.Expr.EIdent(nm, 0, 0)), meth, args, l, c)
+}
+
+# c_optmethod_call_ty is the type that call answers, asked of the BOUND payload so the operand is
+# inferred once. Typing it through `target!` inferred the operand again at every link, which made
+# a chain of calls exponential in its length.
+fn c_optmethod_call_ty(mut &em: Emitter, t: ast.Ty, tv: str, meth: str, args: list[ast.Expr], l: int, c: int) -> ast.Ty {
+	outer := c_scope_open(em)
+	rt := c_infer(em, c_optmethod_call(em, t, tv, meth, args, l, c))
+	c_scope_close(em, outer)
+
+	return rt
+}
+
+# c_optmethod_ty is the type `a?.m(…)` answers: the method's own, made optional once.
+fn c_optmethod_ty(mut &em: Emitter, target: ast.Expr, meth: str, args: list[ast.Expr], l: int, c: int) -> ast.Ty {
+	t := c_infer(em, target)
+	return ast.Ty.TUnknown if not ast.ty_is_opt(t)
+
+	rt := c_optmethod_call_ty(em, t, "", meth, args, l, c)
+	return rt if c_is_unknown(rt) or ast.ty_eq(rt, ast.Ty.TVoid)
+
+	return c_opt_once(rt)
+}
+
+# c_opt_once makes a type optional unless it already is: `T??` is not a type, so an optional
+# read through a chain — a field or a method's answer — is not wrapped a second time.
+fn c_opt_once(rt: ast.Ty) -> ast.Ty {
+	return rt if ast.ty_is_opt(rt)
+
+	return ast.Ty.TOpt(rt)
 }
 
 # c_try lowers `x?` (GRAMMAR group 8): the payload, or an early return of the absent side
@@ -1597,9 +1683,8 @@ fn c_optchain_ty(mut &em: Emitter, target: ast.Expr, fld: str) -> ast.Ty {
 	ft := c_field_ty(em, c_named_of(c_opt_elem(t)), fld)
 
 	return ast.Ty.TUnknown if c_is_unknown(ft)
-	return ft if ast.ty_is_opt(ft)
 
-	return ast.Ty.TOpt(ft)
+	return c_opt_once(ft)
 }
 
 fn c_opt_elem(t: ast.Ty) -> ast.Ty {
@@ -9447,6 +9532,7 @@ fn c_expr_node(mut &em: Emitter, e: ast.Expr, sb: Subst) -> str {
 		Expr.ENamedArg(nm, _, _, _) => c_named_arg_misplaced(em, nm)
 		Expr.EField(target, fld, l, c) => c_fieldref(em, target, fld, l, c, sb)
 		Expr.EOptChain(target, fld, l, c) => c_optchain(em, target, fld, l, c, sb)
+		Expr.EOptMethod(target, meth, args, l, c) => c_optmethod(em, target, meth, args, l, c, sb)
 		Expr.ETry(x) => c_try(em, x, sb)
 		Expr.EIndex(target, idx) => c_index(em, target, idx, sb)
 		Expr.EMethod(target, meth, args, l, c) => c_method(em, target, meth, args, l, c, sb)
@@ -11242,7 +11328,7 @@ fn c_set_says(mut &em: Emitter, set: ast.Expr) -> str {
 fn c_in_range(mut &em: Emitter, x: ast.Expr, set: ast.Expr, sb: Subst) -> str {
 	lo := c_range_lo(set)
 	hi := c_range_hi(set)
-	open := c_is_nil_lit(hi)
+	open := ast.is_nil_lit(hi)
 
 	# THE RUN IS THE SUBJECT AND ITS BOUNDS, in the order they are written. An absent upper
 	# bound is an open range and is not part of it at all — there is nothing to compare
@@ -12099,7 +12185,7 @@ fn c_index(mut &em: Emitter, target: ast.Expr, idx: ast.Expr, sb: Subst) -> str 
 
 	# a value read out of a map this expression owned is TAKEN out of it (c_map_index), so it is
 	# this expression's like any other rvalue and not the borrow described below
-	borrowed := c_is_map_index(em, target) and not c_map_owned(em, target)
+	borrowed := c_borrows_map_element(em, target)
 
 	# THE LIST IS HELD ACROSS THE READ (c_hold) when it is this expression's to give back: the
 	# index is evaluated after it is bound, and the read itself aborts on an index out of range.
@@ -12218,12 +12304,25 @@ pub fn c_place_why(mut &em: Emitter, e: ast.Expr) -> str {
 	return "a map index" if c_is_map_index(em, e)
 	return "a slice" if c_is_slice(e)
 	return "a literal" if c_is_literal_expr(e)
+
+	# `p!`, and the receiver `p?.m(…)` calls on, are a payload copied out of the carrier
+	return "an unwrapped payload" if ast.is_force(e)
 	return "a call result" if c_ident_name(e) == "" and not c_is_lvalue(e)
 
 	# an lvalue by SHAPE whose path stops being storage further down — name where it stops
 	return c_place_why(em, check.chk_store_target(e)) if c_is_lvalue(e) and c_ident_name(e) == ""
 
 	return "a call result"
+}
+
+# c_place_hint is what to do about the value c_place_why names, and it is keyed off that answer
+# so the two cannot name different steps of a path. Binding it to a name is the remedy for a call
+# result, a literal, a slice; for an unwrapped payload it is not, since `p` already has a name
+# and the payload is a COPY of what `p` holds — a change reaches `p` only when it is stored back.
+pub fn c_place_hint(mut &em: Emitter, e: ast.Expr) -> str {
+	return "it is a copy of the payload, so unwrap it into a `mut` binding, change that, and store it back" if c_place_why(em, e) == "an unwrapped payload"
+
+	return "bind it to a name first"
 }
 
 # c_meth_mutates reports the list methods that write through their receiver.
@@ -12757,9 +12856,9 @@ fn c_list_method(mut &em: Emitter, target: ast.Expr, meth: str, args: list[ast.E
 		# calls a subrange "an ordinary read-only `list[T]` value" and a plain `xs` frozen, and a
 		# written value has no storage anywhere in the program — so there is no day a
 		# `NotImplemented:` on any of the three would have retired.
-		raise c_diag(em, rule.Rule.MutateAValueNotAPlace, f"`{meth}` MUTATES its list, and `{c_place_why(em, target)}` is a value rather than a place — bind it to a name first") if c_meth_mutates(meth) and not (c_is_index(target) and c_is_map(c_infer(em, c_index_target(target))))
+		raise c_diag(em, rule.Rule.MutateAValueNotAPlace, f"`{meth}` MUTATES its list, and `{c_place_why(em, target)}` is a value rather than a place — {c_place_hint(em, target)}") if c_meth_mutates(meth) and not c_is_map_index(em, target)
 
-		raise c_diag(em, rule.Rule.NotYetMutateListRvalue, f"NotImplemented: `{meth}` MUTATES its list, and `{c_place_why(em, target)}` is a value rather than a place — bind it to a name first (docs/core/memory.md)") if c_meth_mutates(meth)
+		raise c_diag(em, rule.Rule.NotYetMutateListRvalue, f"NotImplemented: `{meth}` MUTATES its list, and `{c_place_why(em, target)}` is a value rather than a place — {c_place_hint(em, target)} (docs/core/memory.md)") if c_meth_mutates(meth)
 
 		return c_list_method_rv(em, target, meth, args, tty, sb)
 	}
@@ -13536,16 +13635,16 @@ fn c_call_written(mut &em: Emitter, name: str, args: list[ast.Expr], ts: list[as
 		c_nx_use(em, l, c, c_tpl_written(name), c_nx_template(em, name))
 	}
 
-	# A BUILT-IN TYPE CONSTRUCTOR IS NOT A GENERIC FUNCTION, and the rule below says the
-	# opposite: "`map` is not generic" is a false statement about `map[str, int]()`, which
-	# names exactly the two type arguments `map` takes. What it has not got is a no-argument
-	# constructor — an empty map is a literal — so that is what is named instead.
+	# A BUILT-IN TYPE IS NOT CALLED, and the rule below would say the wrong thing about it:
+	# "`map` is not generic" is false of `map[str, int]()`, which names exactly the two type
+	# arguments `map` takes. GRAMMAR#postfix derives no call of a type — its `[ … ]` is an index —
+	# and an empty map is the literal `{:}`, typed by what it is bound to, so that is what is named.
 	#
 	# c_builtin_check goes FIRST, because it owns every built-in name this compiler has not
 	# got: `set[str]()` would otherwise be told how to write an empty one, and there is no
 	# `set` here to write.
 	c_builtin_check(em, name)
-	raise c_diag(em, rule.Rule.NotYetGenericConstructor, f"NotImplemented: `{name}[…](…)` as a constructor — this compiler builds an empty map with the literal `{{:}}` and an empty list with `[]`, so a built-in container's type arguments come from what it is bound to (GRAMMAR#type-args)") if name == "map"
+	raise c_diag(em, rule.Rule.MapTypeCalled, f"`{name}[…](…)` is not a constructor — a postfix `[ … ]` is an index, so a type is never called; an empty map is the literal `{{:}}` and an empty list is `[]`, typed by what they are bound to (GRAMMAR#postfix)") if name == "map"
 
 	return c_call(em, c_instantiate_at(em, name, ts), args, 0, 0, sb, true)
 }
@@ -16615,7 +16714,7 @@ fn c_arm_covers_nil(arms: list[ast.Arm]) -> bool {
 	for a in arms {
 		continue if a.has_guard
 		return true if c_pat_is_wild(a.pat)
-		return true if c_pat_is_lit(a.pat) and c_is_nil_lit(c_pat_lit(a.pat))
+		return true if c_pat_is_lit(a.pat) and ast.is_nil_lit(c_pat_lit(a.pat))
 	}
 	return false
 }
@@ -16690,7 +16789,7 @@ fn c_arms(mut &em: Emitter, arms: list[ast.Arm], i: int, s: str, st: ast.Ty, sb:
 # lowered to a `0` in a conditional whose other side is a carrier struct, and cc refused the pair.
 fn c_arm_value(mut &em: Emitter, arms: list[ast.Arm], i: int, s: str, st: ast.Ty, sb: Subst) -> str {
 	a := arms[i]
-	if i > 0 and c_is_nil_lit(a.body) {
+	if i > 0 and ast.is_nil_lit(a.body) {
 		t := c_infer_arm_body(em, arms[0], st)
 		return c_opt_wrap(em, "", c_opt_elem(t), a.body, sb) if ast.ty_is_opt(t)
 	}
@@ -17026,12 +17125,12 @@ fn c_pat_cond(mut &em: Emitter, pt: ast.Pat, s: str, st: ast.Ty, sb: Subst) -> s
 		# unwrapped, so comparing one against a literal is the thing chk_binary refuses in
 		# every other position. The arm beside it binds the payload — see c_pat_subst — which
 		# is what makes the pair exhaustive and what `nil` is written for.
-		return c_res_is_right(s) if c_is_nil_lit(lit) and c_is_carrier(st)
+		return c_res_is_right(s) if ast.is_nil_lit(lit) and c_is_carrier(st)
 
 		# ELSEWHERE IT IS STILL REFUSED. `nil` against anything that is not a carrier has no
 		# absent side to name, and comparing it as a literal is the silent wrong answer this
 		# rule was raised to stop.
-		raise c_diag(em, rule.Rule.NilPatternNeedsCarrier, f"`nil` names the absent side of an optional, and this matches a {ast.ty_name(st)} — there is no absence to name (GRAMMAR#literal-pat)") if c_is_nil_lit(lit)
+		raise c_diag(em, rule.Rule.NilPatternNeedsCarrier, f"`nil` names the absent side of an optional, and this matches a {ast.ty_name(st)} — there is no absence to name (GRAMMAR#literal-pat)") if ast.is_nil_lit(lit)
 
 		# the PATTERN is handed as both operands: this comparison is a scrutinee against a
 		# literal, and a literal pattern is always the one adopting the scrutinee's type, so
@@ -17458,14 +17557,6 @@ fn c_pat_tuple_elems(pt: ast.Pat) -> list[ast.Pat] {
 	}
 }
 
-# c_range_needs_hi refuses an OPEN-ENDED range where the lowering has no length to put in place
-# of the missing bound. `c_range_hi` answers nil there and `c_expr(ENil)` is `"0"`, so the loop
-# or the slice silently ran zero times — the shape the arm path now handles deliberately, and
-# these two do not handle at all.
-fn c_range_needs_hi(mut &em: Emitter, e: ast.Expr, what: str) {
-	raise c_diag(em, rule.Rule.NotYetOpenRangeHere, f"NotImplemented: an open-ended range has no upper bound here — {what} (GRAMMAR#range-expr)") if c_is_range(e) and c_is_nil_lit(c_range_hi(e))
-}
-
 # c_arm_eq is the scrutinee against a literal pattern. A `str` is not a native C operand, so the
 # comparison is strcmp's — the same answer c_binexpr gives `a == b`, and for the same reason:
 # C's `==` on two `const char *` compares the POINTERS.
@@ -17495,23 +17586,13 @@ fn c_arm_range(mut &em: Emitter, lit: ast.Expr, s: str, st: ast.Ty, sb: Subst) -
 	check.chk_binary(em, ">=", st, c_infer(em, c_range_lo(lit)), lit, lit)
 	lo := c_arm_bound(em, c_range_lo(lit), sb)
 	mut base := f"({s} >= {lo})"
-	if not c_is_nil_lit(c_range_hi(lit)) {
+	if not ast.is_nil_lit(c_range_hi(lit)) {
 		hi := c_arm_bound(em, c_range_hi(lit), sb)
 		mut cmp := " < "
 		if c_range_incl(lit) {
 			cmp = " <= "
 		}
 		base = f"(({s} >= {lo}) && ({s}{cmp}{hi}))"
-	} else if c_range_incl(lit) {
-		# `500..=` is not a range: GRAMMAR gives '..=' a mandatory bound, and the parser reads
-		# the missing one as nil rather than saying so.
-		#
-		# IT WAS BRIEFLY AN ICE HERE, on the reasoning that `..=` now demands an expression
-		# after it so the nil could not be built. What that missed is that `nil` IS an
-		# expression: `parse_add` accepts the literal, so `1..=nil` parses to exactly the
-		# shape the bare `1..=` used to make. The refusal is about the RANGE having no upper
-		# bound, whatever the reader wrote to leave it without one.
-		raise c_diag(em, rule.Rule.OpenRangeInclusive, "`..=` with no upper bound is not a range — write `500..` for open-ended")
 	}
 
 	# THE GUARD IS NO LONGER THIS FUNCTION'S. Every shape used to add it for itself — the
@@ -17626,6 +17707,7 @@ fn c_infer_node(mut &em: Emitter, e: ast.Expr) -> ast.Ty {
 		Expr.EMethod(target, meth, args, _, _) => c_infer_methcall(em, target, meth, args)
 		Expr.EField(target, fld, _, _) => c_field_ty_of(em, target, fld)
 		Expr.EOptChain(target, fld, _, _) => c_optchain_ty(em, target, fld)
+		Expr.EOptMethod(target, meth, args, l, c) => c_optmethod_ty(em, target, meth, args, l, c)
 		Expr.ETry(x) => c_carrier_elem(c_infer(em, x))
 		Expr.EIndex(target, idx) => c_elem_ty(em, target, idx)
 		Expr.EListLit(elems) => c_infer_listlit(em, elems)
@@ -21768,10 +21850,10 @@ fn c_set_elem_check(mut &em: Emitter, et: ast.Ty) {
 	c_hashed_check(em, et, "a set element")
 }
 
-# c_slice_bound is one end of a slice range. A `nil` bound is the open form, which
-# c_range_needs_hi has already had its say about.
+# c_slice_bound is one end of a slice range. A `nil` bound is the open form, which runs to the
+# end of the list.
 fn c_slice_bound(mut &em: Emitter, e: ast.Expr) {
-	return if c_is_nil_lit(e)
+	return if ast.is_nil_lit(e)
 
 	t := c_infer(em, e)
 	return if c_is_unknown(t) or c_is_int(t)
@@ -21786,9 +21868,10 @@ fn c_slice_bound(mut &em: Emitter, e: ast.Expr) {
 # a value in this language, so a slice that aliased its source would be the odd one out —
 # and the runtime has no slice primitive to alias with anyway. The source is materialised
 # into a temp first, so a call result is indexed once rather than per element.
+#
+# AN OPEN RANGE RUNS TO THE END: `xs[a..]` is `xs[a..xs.len()]`, with the length read off the
+# materialised source after the low bound, so the source is still evaluated once.
 fn c_slice(mut &em: Emitter, target: ast.Expr, idx: ast.Expr, tty: ast.Ty, sb: Subst) -> str {
-	c_range_needs_hi(em, idx, "a slice needs an upper bound — `xs[a..xs.len()]`")
-
 	# A BOUND IS AN INT, and nothing said so: `xs["a"..1]` was accepted and the runtime walked
 	# from a pointer read as a length. Silent, and on the one operation whose whole job is to
 	# stay inside the buffer.
@@ -21799,14 +21882,22 @@ fn c_slice(mut &em: Emitter, target: ast.Expr, idx: ast.Expr, tty: ast.Ty, sb: S
 
 	# a source that is given back below is held across the bounds and the slice itself
 	# (c_hold): either bound can run code, and a range outside the list aborts in the runtime
+	#
+	# A MAP'S ELEMENT IS NOT A PLACE AND NOT THE SLICE'S EITHER, the exception c_index makes for
+	# the same shape: `m["k"]` hands over a bit copy of a list the entry still holds, so giving
+	# it back freed the entry's buffer under the map — `m["k"][2..3]` was a use-after-free. One
+	# read out of a map this expression made is taken out of it, and is the slice's to give back.
 	keep := em.rel_cnames.len()
-	owned := not c_is_place(em, target)
+	owned := not c_is_place(em, target) and not c_borrows_map_element(em, target)
 	mut hold := ""
 	if owned {
 		hold = " " + c_hold(em, tty, "zgt_ss")
 	}
 	lo := c_expr(em, c_range_lo(idx), sb)
-	mut hi := c_expr(em, c_range_hi(idx), sb)
+	mut hi := "zrt_list_len(&zgt_ss)"
+	if not ast.is_nil_lit(c_range_hi(idx)) {
+		hi = c_expr(em, c_range_hi(idx), sb)
+	}
 	if c_range_incl(idx) {
 		hi = f"({hi}) + 1"
 	}
@@ -21912,6 +22003,13 @@ fn c_map_index(mut &em: Emitter, target: ast.Expr, idx: ast.Expr, tty: ast.Ty, s
 		mgive = c_drop_stmt(em, tty, "zgt_mx") + " "
 	}
 	return f"({{ {bind}{vc} zgt_mv = {val}; {c_unhold(em, keep)}{kgive}{mgive}zgt_mv; }})"
+}
+
+# c_borrows_map_element is a value read out of a map that is NOT this expression's: a bit copy
+# of an element the entry still holds, which a reader may look at and must not give back. One
+# read out of a map this expression made is taken out of it (c_map_index) and is its own.
+fn c_borrows_map_element(mut &em: Emitter, e: ast.Expr) -> bool {
+	return c_is_map_index(em, e) and not c_map_owned(em, e)
 }
 
 # c_map_owned is whether what an expression hands over is its own to give back: not a place,
@@ -23580,12 +23678,15 @@ fn c_tuple_tys(t: ast.Ty) -> list[ast.Ty] {
 # THE BOUNDS ARE EVALUATED IN SOURCE ORDER, which is the same rule the membership test makes:
 # two operands of one run, and `(f()..g())` has to call `f` first.
 fn c_range_value(mut &em: Emitter, lo: ast.Expr, hi: ast.Expr, incl: bool, sb: Subst) -> str {
-	raise c_diag(em, rule.Rule.RangeValueIsBounded, "an open-ended range is not a value — `lo..` has no upper bound to carry, and a value that could be unbounded would make every walk and every test ask about it; write the loop, or give the range a bound (GRAMMAR#range-expr)") if c_is_nil_lit(hi)
+	raise c_diag(em, rule.Rule.RangeValueIsBounded, "an open-ended range is not a value — `lo..` has no upper bound to carry, and a value that could be unbounded would make every walk and every test ask about it; write the loop, or give the range a bound (GRAMMAR#range-expr)") if ast.is_nil_lit(hi)
 
-	# WHAT C CAN COMPARE, and nothing wider — the same offender rule the membership test
-	# applies, asked of the bounds alone because a value has no subject yet.
-	off := c_in_range_offender(em, [lo, hi])
-	raise c_diag(em, rule.Rule.NotYetRangeOfKind, f"NotImplemented: a range of {off} as a value — a range's bounds are compared, and {off} is not a type this compiler compares that way (GRAMMAR#range-expr)") if off != ""
+	# A SIGNED INTEGER RANGE, and nothing wider: the value is the struct c_range_typedef declares,
+	# whose bounds are `int64_t`. A `float` bound was stored through a cast, so `r := 1.5..2.5`
+	# held `1..2`, `2.2 in r` answered false and `for x in r` walked the integer 1 — silently. A
+	# `uint` bound past the signed range was held negative and compared signed, so `5 in 0..u`
+	# for the largest `u` answered false.
+	off := c_range_value_offender(em, [lo, hi])
+	raise c_diag(em, rule.Rule.NotYetRangeOfKind, f"NotImplemented: a range of {off} as a value — a range value holds its bounds as signed integers, and {off} is not one (GRAMMAR#range-expr)") if off != ""
 
 	check.chk_binary(em, ">=", c_infer(em, lo), c_infer(em, hi), lo, hi)
 
@@ -23595,6 +23696,20 @@ fn c_range_value(mut &em: Emitter, lo: ast.Expr, hi: ast.Expr, incl: bool, sb: S
 	slo := c_ordered(em, seq, c_expr(em, lo, sb))
 	shi := c_ordered(em, seq, c_expr(em, hi, sb))
 	return f"((zg_range){{ (int64_t)({slo}), (int64_t)({shi}), {c_bool_lit(incl)} }})"
+}
+
+# c_range_value_offender names the first bound a range VALUE cannot hold: the membership test's
+# offenders (c_in_range_offender), a `float`, which `>=` compares but `int64_t` truncates, and a
+# `uint`, whose upper half `int64_t` holds as negative. A `byte` fits, and is held as it is.
+fn c_range_value_offender(mut &em: Emitter, run: list[ast.Expr]) -> str {
+	off := c_in_range_offender(em, run)
+	return off if off != ""
+
+	for e in run {
+		t := c_infer(em, e)
+		return ast.ty_name(t) if c_is_float(t) or c_is_uint(t)
+	}
+	return ""
 }
 
 fn c_bool_lit(b: bool) -> str {
@@ -23637,24 +23752,37 @@ fn c_range_incl(e: ast.Expr) -> bool {
 # in scope for the body, which is what makes the bound expressions ordinary ints too. Both
 # bounds are read once into temps, so an expression bound is not re-evaluated on every
 # iteration the way a C `for` header would.
+#
+# A BOUND IS AN INT, because the loop variable is one: `for i in "a"..3` handed cc a string to
+# initialise an `int64_t` with, and `1.5..3` was truncated by a C conversion nobody wrote.
+#
+# AN OPEN RANGE COUNTS UP WITHOUT BOUND (GRAMMAR#range-expr), and leaves by `break`, `return` or
+# a raise. Its step is the checked `+`, so a loop that walks past the largest int raises
+# `OverflowError` as `i + 1` would (docs/core/types.md) instead of wrapping to the smallest.
 fn c_forrange(mut &em: Emitter, var: str, iter: ast.Expr, body: list[ast.Stmt], ind: str) -> str {
-	c_range_needs_hi(em, iter, "a `for … in` needs an upper bound")
+	open := ast.is_nil_lit(c_range_hi(iter))
+	c_for_bound(em, c_range_lo(iter))
+	c_for_bound(em, c_range_hi(iter))
 
+	# both bounds are lowered before the loop variable exists, so neither can name it
+	in2 := ind + "    "
 	lo := c_expr(em, c_range_lo(iter), c_nosub())
-	hi := c_expr(em, c_range_hi(iter), c_nosub())
+	mut hi_decl := ""
+	if not open {
+		hi_decl = f"{in2}int64_t zgt_hi = {c_expr(em, c_range_hi(iter), c_nosub())};\n"
+	}
 	outer_scope := c_scope_open(em)
 	c_add_var(em, var, ast.Ty.TInt, false, false)
 
 	# the C name the binding actually took: a second loop over the same source name is a
 	# SHADOWING binding, and c_add_var gives it `zg_v__1` rather than `zgt_v`
 	cv := c_var_cname(em, var)
-	in2 := ind + "    "
 
 	# LOW FIRST. Only the high bound used to be materialised and the low one stayed in the
 	# `for` initialiser, which C runs after the declaration above it — so `for i in a()..b()`
 	# called `b` and then `a`, while the same two calls written `a() + b()` in the same
 	# program ran left to right, as every other operand pair in the language does.
-	mut out := ind + "{\n" + in2 + "int64_t zgt_lo = " + lo + ";\n" + in2 + "int64_t zgt_hi = " + hi + ";\n"
+	mut out := ind + "{\n" + in2 + "int64_t zgt_lo = " + lo + ";\n" + hi_decl
 
 	# An INCLUSIVE range whose high end is the type's maximum has no value to step to after
 	# it: `v++` there overflows, which is undefined in C and in practice loops forever. The
@@ -23663,7 +23791,10 @@ fn c_forrange(mut &em: Emitter, var: str, iter: ast.Expr, body: list[ast.Stmt], 
 	#
 	# Testing `!=` rather than `<` is safe because the loop variable is IMMUTABLE — the
 	# body cannot move it off the sequence, so the only way to reach `hi` is to step to it.
-	if c_range_incl(iter) {
+	if open {
+		em.used_rt = true
+		out = out + in2 + f"for (int64_t {cv} = zgt_lo; ; {cv} = zrt_add_i64({cv}, 1)) {{\n"
+	} else if c_range_incl(iter) {
 		head := f"for (int64_t {cv} = zgt_lo, zgt_more = ({cv} <= zgt_hi); zgt_more; "
 		out = out + in2 + head + "zgt_more = (" + cv + " != zgt_hi), " + cv + " += zgt_more) {\n"
 	} else {
@@ -23673,6 +23804,14 @@ fn c_forrange(mut &em: Emitter, var: str, iter: ast.Expr, body: list[ast.Stmt], 
 	out = out + in2 + "}\n"
 	c_scope_close(em, outer_scope)
 	return out + ind + "}\n"
+}
+
+# c_for_bound holds one bound of a `for … in` range to an int. The missing upper bound of an
+# open range is nothing to hold, as c_slice_bound reads it for a slice.
+fn c_for_bound(mut &em: Emitter, e: ast.Expr) {
+	return if ast.is_nil_lit(e)
+
+	check.chk_slot_fits(em, "a bound of a `for … in` range", ast.Ty.TInt, e)
 }
 
 # c_frz_push freezes the collection a `for … in` walks for the length of its body, and
@@ -24569,11 +24708,11 @@ fn c_return(mut &em: Emitter, has_val: bool, e: ast.Expr, ind: str) -> str {
 	# `return nil` is a RETURN WITH NO VALUE everywhere except where the declared result is
 	# a carrier: `-> Result[nil]` wants a Left holding nil, and `-> int?` an absent one, so
 	# the nil is a value there and has to travel the value path below.
-	if has_val and c_is_nil_lit(e) and c_is_carrier(em.fn_ret) {
+	if has_val and ast.is_nil_lit(e) and c_is_carrier(em.fn_ret) {
 		nv := c_carrier_fit(em, check.CHK_ANSWER, em.fn_ret, e, c_nosub())
 		return f"{pre}{ind}return {nv};\n"
 	}
-	if has_val and not c_is_nil_lit(e) {
+	if has_val and not ast.is_nil_lit(e) {
 		# the returned expression's type is wanted twice — once to check it against the
 		# signature, and again on the two conditions that rarely coincide, a channel return
 		# type and a defer to unwind past. chk_returned answers with what it inferred, so
@@ -24905,7 +25044,7 @@ fn c_ternary(mut &em: Emitter, cond: ast.Expr, then_e: ast.Expr, else_e: ast.Exp
 
 	# A `nil` ELSE BESIDE A `T?` THEN is that optional's absent side, as a `nil` arm is in
 	# c_arm_value — rendered bare it was a `0` against a carrier struct, and cc refused the pair.
-	return f"({c_expr(em, cond, sb)} ? {c_owned_branch(em, t, then_e, sb)} : {c_opt_wrap(em, "", c_opt_elem(t), else_e, sb)})" if ast.ty_is_opt(t) and c_is_nil_lit(else_e)
+	return f"({c_expr(em, cond, sb)} ? {c_owned_branch(em, t, then_e, sb)} : {c_opt_wrap(em, "", c_opt_elem(t), else_e, sb)})" if ast.ty_is_opt(t) and ast.is_nil_lit(else_e)
 	return f"({c_expr(em, cond, sb)} ? {c_owned_branch(em, t, then_e, sb)} : {c_owned_branch(em, t, else_e, sb)})"
 }
 
@@ -28846,6 +28985,7 @@ fn c_ren_expr(r: TyRen, e: ast.Expr) -> ast.Expr {
 		Expr.ENamedArg(nm, x, l, c) => ast.Expr.ENamedArg(nm, c_ren_expr(r, x), l, c)
 		Expr.EField(x, f, l, c) => ast.Expr.EField(c_ren_expr(r, x), f, l, c)
 		Expr.EOptChain(x, f, l, c) => ast.Expr.EOptChain(c_ren_expr(r, x), f, l, c)
+		Expr.EOptMethod(x, m, xs, l, c) => ast.Expr.EOptMethod(c_ren_expr(r, x), m, c_ren_exprs(r, xs), l, c)
 		Expr.ETry(x) => ast.Expr.ETry(c_ren_expr(r, x))
 		Expr.EIndex(x, i) => ast.Expr.EIndex(c_ren_expr(r, x), c_ren_expr(r, i))
 		Expr.EMethod(x, m, xs, l, c) => ast.Expr.EMethod(c_ren_expr(r, x), m, c_ren_exprs(r, xs), l, c)

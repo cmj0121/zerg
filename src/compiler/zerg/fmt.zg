@@ -2350,7 +2350,11 @@ fn fmt_print(mut &toks: list[token.Token], no_close: bool) -> Printed {
 		# `{` RESETS the depth (lexer.zg's brace_push) because a block inside a call's
 		# parens is a statement list again, and ASI resumes there. Asking `psp > 0` alone
 		# printed the inserted `;` of every closure body written inside a call.
-		if is_semi(t.kind) and psp > bsave {
+		#
+		# AND A `;` RIGHT AFTER A RANGE OPERATOR stays on its line: it is what lets `x in 1..; f()`
+		# end an open range, and breaking there would leave the `..` ending a line, which the
+		# parser refuses (E2093).
+		if is_semi(t.kind) and (psp > bsave or prev == token.Kind.DotDot or prev == token.Kind.DotDotEq) {
 			fmt_write(out, fmt_text(t))
 			col = col + 1
 			prev2 = prev

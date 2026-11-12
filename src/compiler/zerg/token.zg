@@ -144,6 +144,11 @@ pub enum Kind {
 	Comment
 }
 
+# RANGE_ENDS_LINE is the value the lexer gives a `..` or `..=` that ends its line outside `(` and
+# `[` (lexer.range_op), which parse_range refuses. An operator has no value of its own, so the
+# field is free to carry it.
+pub const RANGE_ENDS_LINE := "eol"
+
 # Token is a single lexical unit: its kind, the exact source lexeme, the decoded
 # value for string-like literals, and the 1-based line/column where it starts.
 pub struct Token {

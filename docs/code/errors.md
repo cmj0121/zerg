@@ -57,6 +57,14 @@ is a compile error. A field that is **itself optional flattens** — the chain a
 type rather than a nested `T??`, which is not a type the language can write. This holds in
 both compilers.
 
+`a?.m(…)` calls a method the same way: `m` runs on `a`'s value when there is one, its arguments are
+evaluated only then, and the call answers `R?` — flattened like a field when `m` already answers one, so
+`p?.next()?.name()` keeps going link by link. A method that answers nothing makes the call a statement
+that runs only for a present `a`. The receiver is the value copied out of `a`, not a place, so a method
+that writes through its receiver is refused as it is on `a!` — _E4081 `append` MUTATES its list, and `an
+unwrapped payload` is a value rather than a place_: the change would reach only the copy. Unwrap into a `mut`
+binding, change that, and store it back into `a`.
+
 **`!` — force-unwrap (value → abort).** `x!` unwraps the left value or **raises** on an absent optional —
 the deliberate "I know it's set" hatch, a crossing from the value tier into an abort. (Logical negation is
 the keyword `not`, so postfix `!` is free.)

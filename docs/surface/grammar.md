@@ -273,7 +273,11 @@ names itself and everything below it** in the taxonomy ([Errors](../code/errors.
 an operator, not part of a literal. A **range** binds one notch tighter than comparison so `v in 0..10`
 reads `v in (0..10)`: `x..y` is **sugar** for `range(x, y)`, `x..=y` for `range(x, y + 1)`, `x..` for an
 open range, and `v in r` for `r.contains(v)` — the `Range` / `contains` machinery is stdlib. (`??` from
-group 8 remains the single loosest binary, looser than `or`.)
+group 8 remains the single loosest binary, looser than `or`.) A `..` or `..=` may not **end a line** outside
+an unclosed `(` or `[`: the next line could be its bound or a statement of its own, so `x in 1..` at a
+line's end is _E2093_ — put the bound on the same line, or write `(1..)`. A next line that opens with `}`
+begins no bound, so `return v in 1..` closing a block is not refused. The **lower** bound is mandatory —
+`range-expr` begins with an `add-expr` — so `xs[..n]` is not a form, and it is _E2071_ (write `xs[0..n]`).
 
 The null-safety and error operators (`?` `??` `?.` `!`) live in group 8; the postfix ones (`?` `!` `?.`)
 join `postfix` above, and `??` ([`GRAMMAR#coalesce-expr`](../../GRAMMAR), whose right arm is a
@@ -282,8 +286,10 @@ join `postfix` above, and `??` ([`GRAMMAR#coalesce-expr`](../../GRAMMAR), whose 
 A postfix `[…]` is **always an index**. Type arguments are written only in **type position** (group 7), so
 the two surfaces no longer share a bracket and nothing here has to be resolved to be parsed — no turbofish,
 and no symbol table. A generic call **infers** its type arguments from the argument types; where inference is
-not enough, a **typed binding** steers it (`xs: list[int] = empty()`) instead of a call-site list. The pattern
-grammar (group 6) is context-free for the same reason and by the same kind of rule.
+not enough, a **typed binding** steers it (`xs: list[int] = empty()`) instead of a call-site list. So type
+arguments with no call after them are no form either: `map[str, int]` as a value is _E2072_, and `id[int](7)`
+is _E2035_ — `[int]` would be an index. The pattern grammar (group 6) is context-free for the same reason and by
+the same kind of rule.
 
 **No symbol table** is a claim about the compiler, so it is checked as one: `make layering` reads both
 parsers and asserts that neither reaches past its tokens — the seed by its package imports and its parser
@@ -705,7 +711,8 @@ postfix       += '?' | '!' | '?.' identifier
   short-circuits. The right side may instead **diverge** — `x ?? break`, `v ?? return nil`, `p ?? raise e` —
   since `break` / `continue` / `return` / `raise` never yield a value.
 - **`a?.b`** — **optional chain** (`T?` only): read `.b` when `a` is present, else short-circuit to `nil` in
-  place (it never returns from the function, unlike `?`).
+  place (it never returns from the function, unlike `?`). A call after it, `a?.m(…)`, calls `m` on the value
+  the same way, its arguments evaluated only when `a` is present.
 - **`x!`** — **force-unwrap**: unwrap the `Left`, or **raise `UnwrapError`** (a value→abort hatch). Logical
   negation is the keyword `not`, so postfix `!` is free.
 - **`raise e`** — **abort** carrying an `Err` (value→abort); **`raise e from c`** records `c` as `e`'s cause.
@@ -906,12 +913,7 @@ production, not the one that first mentions it.
 
 | Group | Code    | Form                                                                                    |
 | ----- | ------- | --------------------------------------------------------------------------------------- |
-| 4     | `E9009` | an optional method call — `p?.m(…)`                                                     |
-| 4     | `E2071` | a range with no **lower** bound — `xs[..n]`                                             |
-| 4     | `E9050` | an **open-ended** range where a bound is needed — `xs[a..]`, `for i in n..`             |
-| 4     | `E9077` | a range **of a type this compiler cannot compare** as a value — `"a".."z"`              |
-| 4     | `E2035` | postfix type arguments with no call after them — `map[str, int]`, `f[int]`              |
-| 4     | `E9067` | `map[K, V](…)` as a constructor — an empty map is the literal `{:}`                     |
+| 4     | `E9077` | a range **of a non-integer or unsigned type** as a value — `"a".."z"`, `1.5..2.5`       |
 | 7     | `E9075` | a generic `type X[T] = …` alias                                                         |
 | 7     | `E9038` | an `impl` on a built-in type                                                            |
 | 7     | `E9046` | `alignof[T]`                                                                            |

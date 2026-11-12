@@ -369,6 +369,7 @@ shipping compiler rather than a part of it (the line
 | `E3162` | `#[obj]` on a spec that declares an associated fn                                                     |
 | `E3163` | `for mut` binds each element in place, and a … has no slots to bind                                   |
 | `E3164` | `for mut` walks a place spelled by names, fields and literal indexes, and this `…` is not one         |
+| `E3165` | `…(…)` is sealed — `#[sealed]` makes the field-wise constructor private to `…`                        |
 | `E4001` | `…` outside of a loop: it belongs to a `for`, and a `select` arm is not one                           |
 | `E4002` | a `from` cause is an `Err`, and … is not one                                                          |
 | `E4004` | `…(…)` names one side of an `Either`, which holds exactly one value                                   |
@@ -520,7 +521,6 @@ shipping compiler rather than a part of it (the line
 | `E9075` | a generic `type …[…] = …`                                                                             |
 | `E9077` | a range of a non-integer or unsigned type, as a value                                                 |
 | `E9078` | `is …` names no type to compare against                                                               |
-| `E9079` | the decorator `#[sealed]` — reserved                                                                  |
 | `E9097` | main(args) in a program that uses concurrency                                                         |
 | `E9099` | … of the method `…` on a built-in receiver, which a thunk does not reach                              |
 | `E9100` | the container method `…` on a map or a set                                                            |
@@ -690,6 +690,10 @@ left; a range VALUE stays bounded, and that is `E4110`.
 constructor this compiler had not built. GRAMMAR#postfix makes a `[ … ]` after a name an index, so no
 program calls a type, and an empty map is the literal `{:}`; the refusal is a rule now, `E2094`.
 
+**One retired the day `#[sealed]` was built (#442).** `E9079` refused the decorator as reserved and unbuilt.
+It now makes a struct's field-wise `T(…)` constructor private to the declaring file; a construction from
+anywhere else is `E3165`, and a public associated fn is how a dependent builds one.
+
 **One retired with its rule rather than to another range.** `E2060` refused a declared type whose
 name did not begin with a capital, and that rule was the whole of how the language separated its
 two namespaces — a capitalised name was a type, a lower-case one a value. The rule is gone: a name
@@ -810,6 +814,7 @@ name now is the prelude rule (`E2061`), which is about the name rather than abou
 | `E4011` | —       | not a rule: a list renders in `str(…)` as it does in `print`           |
 | `E9036` | `E4111` | not an unbuilt form: a `spec` member is never `unsafe`                 |
 | `E9067` | `E2094` | not an unbuilt form: GRAMMAR derives no call of a type                 |
+| `E9079` | —       | the form was built: `#[sealed]`; a construction outside is E3165       |
 
 **One of them moved nowhere**, and it is the only row whose second column is empty. `E3047`
 reported a prefix operator on a `type X = Y` — _operator `not` has no meaning on `Flag`_ — on

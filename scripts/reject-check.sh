@@ -7892,6 +7892,30 @@ EOF
 # `zerg` LOST rather than a rule invented. The other three are seed gaps, recorded by name in
 # src/bootstrap/README.md.
 
+# `#[sealed]` makes the field-wise `T(…)` constructor module-private (GRAMMAR group 7): the
+# type and its field are `pub`, so the only thing refused is the construction outside the
+# declaring file. The public associated fn beside it is how a dependent builds one, and the
+# declaring file still writes `Cents(…)` inside it.
+reject a-sealed-constructor-called-outside-its-module E3165 at=4:2 <<'EOF'
+import "./money"
+
+fn main() {
+	c := money.Cents(5)
+	print money.Cents.of(5).n + c.n
+}
+--- money/mod.zg
+#[sealed]
+pub struct Cents {
+	pub n: int
+}
+
+impl Cents {
+	pub fn of(n: int) -> Cents {
+		return Cents(n * 100)
+	}
+}
+EOF
+
 reject a-module-private-type-named-outside-its-module E5008 <<'EOF'
 import "./lib"
 

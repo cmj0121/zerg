@@ -26,13 +26,14 @@ Four rules hold for every decorator, whatever it names.
   [`GRAMMAR`](../../GRAMMAR) group 7), so a token that is not one is refused as a **name** and not as an
   unknown decorator — `#[42]` is _E2054 a decorator needs a name, and `42` is not one_, and `#[mut]` is
   _E2013 `mut` is a reserved word and cannot name a decorator_. The two answers are different on purpose:
-  the unknown-decorator arm below reports **NotImplemented**, and telling a reader who wrote `#[+]` that
-  this compiler does not build that decorator names a form no Zerg has.
+  the unknown-decorator arm below answers for a **name** no Zerg reads, and telling a reader who wrote `#[+]`
+  that the set holds no such decorator names a decorator they never wrote.
 
 ## The set
 
-`#[derive]`, `#[obj]`, `#[test]`, `#[fixture]` and `#[allow]` are the decorators the compiler reads. Every
-other one — `#[sealed]`, the layout directives — is **[not yet]** and refused by name (Reserved, below).
+`#[derive]`, `#[obj]`, `#[sealed]`, `#[test]`, `#[fixture]` and `#[allow]` are the decorators the compiler
+reads. The layout directives are **[not yet]** and refused by name (Reserved, below), and any other name is
+_E2076_: a permanent rule of the closed set, not a form waiting to be built.
 
 - **`#[derive(Spec, …)]`** — on a `struct` / `enum`. Generates the canonical impl of each named blessed spec
   from the type's **structure**. The blessed set is **`Eq`** — built, generating a correct `==` / `!=` on a
@@ -79,12 +80,14 @@ other one — `#[sealed]`, the layout directives — is **[not yet]** and refuse
 
 ## Reserved, and what a reserved name actually gets
 
-Four names are **specified and unbuilt**, and only one of them is a name the compiler knows:
+Three names are **specified and unbuilt**. A fourth, `#[sealed]`, used to be reserved here and is built:
 
-- **`#[sealed]`** — on a `struct`. _Intended_ to demote the default field-wise `T(…)` constructor to
-  **module-private**, so external code must build through a public custom constructor (a named associated
-  `fn`) while the module still builds with `T(…)` internally — pairing with private, defaulted fields to
-  enforce an invariant. **[not yet]**, with a code of its own: `E9079`.
+- **`#[sealed]`** — on a `struct`. Demotes the default field-wise `T(…)` constructor to **module-private**,
+  so external code must build through a public custom constructor (a named associated `fn`) while the
+  declaring file still builds with `T(…)` — pairing with private, defaulted fields to enforce an invariant.
+  The type and its fields keep their own visibility; what a construction outside the file gets is _E3165
+  `Cents(…)` is sealed — `#[sealed]` makes the field-wise constructor private to `money/mod.zg`, so build one
+  through a public associated fn of `Cents`_. On anything but a `struct` it is _E2066_.
 - **`#[repr]`** / **`#[packed]`** / **`#[align]`** — the memory-**layout** decorators, for in-memory
   width, padding and alignment against an external ABI (see _Kept rare_ and
   [Values & Memory](memory.md)). **[not yet]**, under `E9005`, which is now theirs alone (below).
@@ -94,7 +97,7 @@ Four names are **specified and unbuilt**, and only one of them is a name the com
 > width, padding and alignment against an external ABI) and this compiler does not build it, so the type is
 > laid out as it would be without it_. They used to share the unknown-decorator arm with a misspelled
 > `#[frobnicate]`, which lost the distinction between a name awaiting implementation and a typo — the same
-> distinction `#[sealed]`'s `E9079` bought back one bullet above. A typo now carries a code that promises
+> distinction `#[sealed]` had its own code for while it was reserved. A typo now carries a code that promises
 > nothing: _E2076 the decorator `#[frobnicate]` — the set is closed and compiler-owned, so an unknown name
 > is not a directive this compiler has yet to build_.
 

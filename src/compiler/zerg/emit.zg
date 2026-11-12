@@ -838,6 +838,10 @@ pub struct Emitter {
 	# its declaration and the call — while c_cl_default has it entered. c_in_scope skips them.
 	pub hide_lo: int
 	pub hide_hi: int
+
+	# tk_sealed is tk_pub's twin for a struct's `#[sealed]` (check.chk_ctor_sealed); false for
+	# every other kind
+	pub tk_sealed: list[bool]
 }
 
 # Subst is an active set of identifier substitutions: an EIdent whose name appears in
@@ -4548,7 +4552,7 @@ fn c_type_inst(mut &em: Emitter, f: ast.File, tpl: ast.StructDecl, a: ast.TyApp)
 	# else. The loop above sees the new row on its next pass and builds it.
 	c_subst_apps(em, su)
 
-	return ast.StructDecl(a.name, generic.subst_fields(su, tpl.fields), tpl.is_pub, tpl.path, tpl.line, tpl.col, [], tpl.name_line, tpl.name_col, tpl.end_line, tpl.end_col)
+	return ast.StructDecl(a.name, generic.subst_fields(su, tpl.fields), tpl.is_pub, tpl.path, tpl.line, tpl.col, [], tpl.name_line, tpl.name_col, tpl.end_line, tpl.end_col, tpl.sealed)
 }
 
 # c_type_arity is the one place a type application's argument count is judged, whether the
@@ -4607,7 +4611,7 @@ fn c_tys_name_undeclared(f: ast.File, ts: list[ast.Ty]) -> bool {
 # c_no_inst is the StructDecl an open application does not produce — a declaration with no
 # name, which the caller drops. It is a function so the reason has somewhere to live.
 fn c_no_inst() -> ast.StructDecl {
-	return ast.StructDecl("", [], false, "", 0, 0, [], 0, 0, 0, 0)
+	return ast.StructDecl("", [], false, "", 0, 0, [], 0, 0, 0, 0, false)
 }
 
 # c_file_declares_ty asks the PROGRAM rather than the type table, because this runs before the
@@ -6746,7 +6750,7 @@ const TK_TYPEDEF := 4
 # duplicate reported against it, and not a spec that no longer constructs.
 #
 # `line` / `col` are where the declaration's NAME was written, for the name index.
-fn c_ty_register(mut &em: Emitter, nm: str, kind: int, under: ast.Ty, path: str, is_pub: bool, line: int, col: int) {
+fn c_ty_register(mut &em: Emitter, nm: str, kind: int, under: ast.Ty, path: str, is_pub: bool, sealed: bool, line: int, col: int) {
 	return if c_ty_row(em, nm) >= 0
 
 	em.tk_names.append(nm)
@@ -6757,6 +6761,7 @@ fn c_ty_register(mut &em: Emitter, nm: str, kind: int, under: ast.Ty, path: str,
 	em.tk_unders.append(under)
 	em.tk_mod.append(check.c_mod_of(em, path))
 	em.tk_pub.append(is_pub)
+	em.tk_sealed.append(sealed)
 	em.tk_path.append(path)
 }
 
@@ -6832,6 +6837,18 @@ pub fn c_ty_pub(mut &em: Emitter, nm: str) -> bool {
 	return c_gen_struct_pub(em, nm) if r < 0
 
 	return em.tk_pub[r]
+}
+
+# c_ty_sealed is c_ty_pub's twin, and a TEMPLATE answers from its own declaration for
+# c_gen_struct_pub's reason.
+pub fn c_ty_sealed(mut &em: Emitter, nm: str) -> bool {
+	r := c_ty_row(em, nm)
+	if r < 0 {
+		g := c_gen_struct_row(em, nm)
+		return g >= 0 and em.gen_structs[g].sealed
+	}
+
+	return em.tk_sealed[r]
 }
 
 fn c_ty_row(mut &em: Emitter, nm: str) -> int {
@@ -7303,7 +7320,7 @@ fn c_dup_report(mut &em: Emitter, name: str, prev: str, what: str, path: str, li
 # answer the constructor path needs: `struct A` beside `spec A` still constructs.
 fn c_build_specs(mut &em: Emitter, f: ast.File) {
 	for sp in f.specs {
-		c_ty_register(em, sp.name, TK_SPEC, ast.Ty.TUnknown, sp.path, sp.is_pub, sp.name_line, sp.name_col)
+		c_ty_register(em, sp.name, TK_SPEC, ast.Ty.TUnknown, sp.path, sp.is_pub, false, sp.name_line, sp.name_col)
 	}
 }
 
@@ -7312,7 +7329,7 @@ fn c_build_typedefs(mut &em: Emitter, f: ast.File) {
 		# chk_typedef ANSWERS the underlying type it validated, so the registry does not
 		# recompute it: a typedef whose underlying type nothing declares is registered as
 		# UNKNOWN, which keeps every USE quiet while the declaration carries the diagnostic.
-		c_ty_register(em, td.name, TK_TYPEDEF, check.chk_typedef(em, td, f), td.path, td.is_pub, td.name_line, td.name_col)
+		c_ty_register(em, td.name, TK_TYPEDEF, check.chk_typedef(em, td, f), td.path, td.is_pub, false, td.name_line, td.name_col)
 	}
 }
 
@@ -7326,7 +7343,7 @@ fn c_build_structs(mut &em: Emitter, f: ast.File) {
 # specialization minted on demand has to enter them the same way a declared type does — two
 # spellings of this walk would be two answers to "what does the program declare".
 fn c_register_struct(mut &em: Emitter, sd: ast.StructDecl) {
-	c_ty_register(em, sd.name, TK_STRUCT, ast.Ty.TUnknown, sd.path, sd.is_pub, sd.name_line, sd.name_col)
+	c_ty_register(em, sd.name, TK_STRUCT, ast.Ty.TUnknown, sd.path, sd.is_pub, sd.sealed, sd.name_line, sd.name_col)
 	for fd in sd.fields {
 		em.fld_struct.append(sd.name)
 		em.fld_name.append(fd.name)
@@ -8046,7 +8063,7 @@ fn c_build_enums(mut &em: Emitter, f: ast.File) {
 # inline in the sweep above, an on-demand `Box[int]` had no variants, no tags and no payload
 # types — and `Full(42)` came out as `undefined function`.
 fn c_register_enum(mut &em: Emitter, ed: ast.EnumDecl) {
-	c_ty_register(em, ed.name, TK_ENUM, ast.Ty.TUnknown, ed.path, ed.is_pub, ed.name_line, ed.name_col)
+	c_ty_register(em, ed.name, TK_ENUM, ast.Ty.TUnknown, ed.path, ed.is_pub, false, ed.name_line, ed.name_col)
 
 	mut next := 0
 	mut taken: list[int] = []
@@ -13885,12 +13902,7 @@ fn c_call(mut &em: Emitter, name: str, args: list[ast.Expr], l: int, c: int, sb:
 			raise c_diag(em, rule.Rule.NoSuchTypeToConstruct, f"`{name}` is {c_ty_kind_word(em, name)} and a call does not construct one — a construction names a `struct`")
 		}
 
-		# A CONSTRUCTION NAMES THE TYPE, which is the value position the declaration walk
-		# cannot see: c_decl_sites lists what DECLARATIONS spell, and `Secret("s")` in a body
-		# spells the same name with none of them involved.
-		check.chk_ty_visible(em, name)
-
-		return "(" + c_ty_cname(name) + "){" + c_struct_args(em, name, args, sb) + "}"
+		return c_construct(em, name, args, sb)
 	}
 
 	# A GENERIC CALL. The template is not a function and has no C symbol; the SPECIALIZATION
@@ -14068,12 +14080,22 @@ fn c_k_row(mut &em: Emitter, c: ast.ConstDecl) -> int {
 # because a body constructed it has no written application to be found by, so it registers on
 # demand — which is the path a tuple and a carrier already take (c_spelled_register).
 fn c_gen_construct(mut &em: Emitter, base: str, args: list[ast.Expr], sb: Subst) -> str {
-	# A CONSTRUCTION NAMES THE TYPE, which is the question the ordinary struct path asks here
-	# too — and a template reaching this one had never been asked it.
-	check.chk_ty_visible(em, base)
+	return c_construct(em, c_gen_applied(em, base, args), args, sb)
+}
 
-	applied := c_gen_applied(em, base, args)
-	return "(" + c_ty_cname(applied) + "){" + c_struct_args(em, applied, args, sb) + "}"
+# c_construct is the ONE place a field-wise `T(…)` is emitted, from the plain path and the
+# generic one alike, so the two rules about who may write one are asked once.
+#
+# A CONSTRUCTION NAMES THE TYPE, which is the value position the declaration walk cannot see:
+# c_decl_sites lists what DECLARATIONS spell, and `Secret("s")` in a body spells the same name
+# with none of them involved. Both rules are asked of the BASE, so a specialization answers
+# for the template it came from (`Box[int]` is `Box`'s to export and to seal).
+fn c_construct(mut &em: Emitter, name: str, args: list[ast.Expr], sb: Subst) -> str {
+	base := c_app_base(name)
+	check.chk_ty_visible(em, base)
+	check.chk_ctor_sealed(em, base)
+
+	return "(" + c_ty_cname(name) + "){" + c_struct_args(em, name, args, sb) + "}"
 }
 
 # c_gen_applied is the specialization a construction NAMES, solved and registered — the half
@@ -14200,7 +14222,7 @@ fn c_gen_type_on_demand(mut &em: Emitter, tpl: ast.StructDecl, applied: str, sol
 	mut nokeys: list[str] = []
 	mut novals: list[str] = []
 	su := generic.TySubst(tpl.tparams, sol, nokeys, novals, em.ty_apps, c_place(em))
-	sd := ast.StructDecl(applied, generic.subst_fields(su, tpl.fields), tpl.is_pub, tpl.path, tpl.line, tpl.col, [], tpl.name_line, tpl.name_col, tpl.end_line, tpl.end_col)
+	sd := ast.StructDecl(applied, generic.subst_fields(su, tpl.fields), tpl.is_pub, tpl.path, tpl.line, tpl.col, [], tpl.name_line, tpl.name_col, tpl.end_line, tpl.end_col, tpl.sealed)
 
 	c_register_struct(em, sd)
 	c_tpl_methods_late(em, applied)
@@ -29191,7 +29213,7 @@ fn c_emit_unit_as(prog0: ast.File, own0: ast.File, ft: FileTypes, ms: Mods, whol
 	# is what makes that invariant hold for a multi-unit program, at the place it already lives,
 	# and it is what lets the declaration passes below go back to reading the WHOLE program.
 	seen := diags.len()
-	mut em := Emitter([], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], false, false, false, false, [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], 0, [], 0, [], [], false, "", "", [], [], ast.Ty.TVoid, 0, "", 0, 0, 0, 0, "", diags, 0, 0, [], [], [], [], [], false, 0, false, "", 0, false, false, [], [], [], [], [], [], [], [], [], [], [], "", want_lints, [], [], [], [], [], [], [], [], [], [], [], [], false, 0, [], [], "", c_nosub(), [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], false, ast.no_index(), [], [], [], [], [], [], [], [], [], [], [], [], false, [], [], [], [], [], [], [], [], [], [], [], "", [], [], 0, 0)
+	mut em := Emitter([], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], false, false, false, false, [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], 0, [], 0, [], [], false, "", "", [], [], ast.Ty.TVoid, 0, "", 0, 0, 0, 0, "", diags, 0, 0, [], [], [], [], [], false, 0, false, "", 0, false, false, [], [], [], [], [], [], [], [], [], [], [], "", want_lints, [], [], [], [], [], [], [], [], [], [], [], [], false, 0, [], [], "", c_nosub(), [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], false, ast.no_index(), [], [], [], [], [], [], [], [], [], [], [], [], false, [], [], [], [], [], [], [], [], [], [], [], "", [], [], 0, 0, [])
 
 	# ASSIGNED, NOT PASSED. Every argument above is a zero value, and `layering` asserts that
 	# — it lines the call up with the fields by KIND, which only works while nothing in it

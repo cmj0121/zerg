@@ -355,6 +355,10 @@ pub enum Rule {
 	ForMutNoSlots = 3163
 	ForMutNotAPath = 3164
 
+	# `#[sealed]` makes the field-wise `T(…)` constructor module-private (GRAMMAR group 7). It was
+	# `E9079`, a reserved decorator not built.
+	SealedConstructor = 3165
+
 	# emitting — a form this compiler will not lower
 	LoopKeywordOutsideLoop = 4001
 	FromCauseNotErr = 4002
@@ -610,7 +614,6 @@ pub enum Rule {
 	# share `E9077` with "a range as a value", which is built now and is a different finding.
 	NotYetArraySlice = 9117
 	NotYetIsErrorKind = 9078
-	NotYetSealed = 9079
 	NotYetMainArgsWithConcurrency = 9097
 	NotYetSpawnOfUnknownName = 9099
 	NotYetMapMethod = 9100

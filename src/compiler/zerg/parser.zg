@@ -1468,8 +1468,8 @@ pub fn parse_at(src: str, path: str) -> ast.File {
 			# a pending `#[test]` is TAKEN here and the list emptied, the way the three type arms
 			# take a derive: a marker left on the list would be reported at `Eof` as a decorator
 			# with no declaration under it, about the declaration it had just been given
-			is_test := p_deco_is_test(pending)
-			is_fixture := p_deco_is_fixture(pending)
+			is_test := p_deco_has(pending, "#test")
+			is_fixture := p_deco_has(pending, "#fixture")
 			pending = []
 			fns.append(parse_fn_at(p, t, is_pub, "", false, in_unsafe, is_test, is_fixture, false, ""))
 		} else if p_at(p, token.Kind.Struct) {
@@ -1477,7 +1477,14 @@ pub fn parse_at(src: str, path: str) -> ast.File {
 			# It used to be read and dropped, because type visibility was not enforced and a
 			# flag nothing reads is a lie the next reader believes; now the type registry
 			# records it and chk_ty_visible asks it.
-			sd := parse_struct(p, t, is_pub)
+			mut sd := parse_struct(p, t, is_pub)
+
+			# a pending `#[sealed]` is the declaration's own flag rather than a derive, so it
+			# comes off the list before the derives are taken
+			sd.sealed = p_deco_has(pending, "#sealed")
+			if sd.sealed {
+				pending = p_deco_without(pending, "#sealed")
+			}
 			p_take_derives(sd.name, p.path, pending, derive_on, derive_spec, derive_at)
 			structs.append(sd)
 		} else if p_at(p, token.Kind.Enum) {
@@ -1710,6 +1717,9 @@ fn p_not_a_binding() -> ast.ConstDecl {
 fn p_deco_may_lead(mut &p: Parser, pending: list[str]) -> bool {
 	return p_at(p, token.Kind.Fn) if p_deco_on_fn(pending)
 
+	# `#[sealed]` is about a field-wise constructor, which only a `struct` has
+	return p_at(p, token.Kind.Struct) if p_deco_has(pending, "#sealed")
+
 	return p_at(p, token.Kind.Struct) or p_at(p, token.Kind.Enum) or p_at(p, token.Kind.Spec)
 }
 
@@ -1718,7 +1728,7 @@ fn p_deco_may_lead(mut &p: Parser, pending: list[str]) -> bool {
 # has about them is the same one: which declaration may they lead, and what to say when what
 # follows is not it.
 fn p_deco_on_fn(pending: list[str]) -> bool {
-	return p_deco_is_test(pending) or p_deco_is_fixture(pending)
+	return p_deco_has(pending, "#test") or p_deco_has(pending, "#fixture")
 }
 
 # p_deco_stacked is the ONE decorator-per-item refusal, written once and raised from the two
@@ -1729,20 +1739,22 @@ fn p_deco_stacked(mut &p: Parser, line: int, col: int) -> str {
 	return p_diag_at(p, line, col, rule.Rule.SecondDecorator, "a second decorator on one item — an item takes ONE decorator, so merge them into its comma list: `#[a(x), b(y)]`")
 }
 
-# p_deco_is_test reports whether a pending list holds a `#[test]`.
-fn p_deco_is_test(pending: list[str]) -> bool {
+# p_deco_has reports whether a pending list holds `marker` — `#test`, `#fixture`, `#sealed`.
+fn p_deco_has(pending: list[str], marker: str) -> bool {
 	for nm in pending {
-		return true if nm == "#test"
+		return true if nm == marker
 	}
 	return false
 }
 
-# p_deco_is_fixture reports whether a pending list holds a `#[fixture]`.
-fn p_deco_is_fixture(pending: list[str]) -> bool {
+# p_deco_without is the pending list with every `marker` taken off it.
+fn p_deco_without(pending: list[str], marker: str) -> list[str] {
+	mut out: list[str] = []
 	for nm in pending {
-		return true if nm == "#fixture"
+		continue if nm == marker
+		out.append(nm)
 	}
-	return false
+	return out
 }
 
 # p_deco_leads spells the declarations the pending list may lead, for the sentence that turns
@@ -1751,6 +1763,7 @@ fn p_deco_is_fixture(pending: list[str]) -> bool {
 # decorator.
 fn p_deco_leads(pending: list[str]) -> str {
 	return "`fn`" if p_deco_on_fn(pending)
+	return "`struct`" if p_deco_has(pending, "#sealed")
 
 	return "`struct`, `enum` or `spec`"
 }
@@ -1764,6 +1777,7 @@ fn p_deco_says(nm: str) -> str {
 	return "#[obj]" if nm == "#obj"
 	return "#[test]" if nm == "#test"
 	return "#[fixture]" if nm == "#fixture"
+	return "#[sealed]" if nm == "#sealed"
 
 	return f"#[derive({nm})]"
 }
@@ -2695,7 +2709,7 @@ fn parse_struct(mut &p: Parser, start: token.Token, is_pub: bool) -> ast.StructD
 	expect(p, token.Kind.RBrace)
 	e := p_ended(p)
 	p_tp_scope(p, start, tparams.len())
-	return ast.StructDecl(name, fields, is_pub, p.path, start.line, start.col, tparams, nt.line, nt.col, e.line, e.col)
+	return ast.StructDecl(name, fields, is_pub, p.path, start.line, start.col, tparams, nt.line, nt.col, e.line, e.col, false)
 }
 
 # parse_decorator reads `#[ … ]` (GRAMMAR#decorator). It used to reach the top-level fallback,
@@ -2816,13 +2830,13 @@ fn parse_deco_item(mut &p: Parser, mut &pending: list[str]) {
 		return
 	}
 
-	# `#[sealed]` IS RESERVED, and it is a different sentence from an unknown name. GRAMMAR's
-	# construction note gives it a meaning — it demotes the field-wise `T(…)` constructor to
-	# module-private — so a reader who writes it has not made a typo, and telling them the
-	# compiler "reads `#[derive(…)]` and `#[obj]`, and no other" answers a question they did
-	# not ask. What they need to know is that the word is the right one and the behaviour is
-	# not built, so nothing is protecting the constructor they thought they had sealed.
-	raise p_diag_at(p, nt.line, nt.col, rule.Rule.NotYetSealed, f"NotImplemented: the decorator `#[sealed]` — it is a reserved decorator (GRAMMAR group 7 gives it a meaning: the field-wise `T(…)` constructor becomes module-private) and this compiler does not build it, so the constructor stays public rather than being sealed in silence (GRAMMAR#deco-item)") if name == "sealed"
+	# `#[sealed]` takes no arguments and goes on a `struct` (check.chk_ctor_sealed). It rides the
+	# pending list under a marker, the way `#[obj]` does, and the struct arm takes it off as the
+	# declaration's own flag rather than a derive.
+	if name == "sealed" {
+		pending.append("#sealed")
+		return
+	}
 
 	# THE LAYOUT THREE ARE RESERVED, and that is a different sentence from a typo.
 	# `docs/core/decorators.md` gives `#[repr]`, `#[packed]` and `#[align]` a meaning — in-memory
@@ -2834,7 +2848,7 @@ fn parse_deco_item(mut &p: Parser, mut &pending: list[str]) {
 	# own code had already bought back one bullet above (#87).
 	raise p_diag_at(p, nt.line, nt.col, rule.Rule.NotYetDecoratorLayout, f"NotImplemented: the decorator `#[{name}]` — it is a reserved LAYOUT decorator (in-memory width, padding and alignment against an external ABI) and this compiler does not build it, so the type is laid out as it would be without it (GRAMMAR#deco-item)") if name == "repr" or name == "packed" or name == "align"
 
-	raise p_diag_at(p, nt.line, nt.col, rule.Rule.DecoratorUnknown, f"the decorator `#[{name}]` — the set is closed and compiler-owned, so an unknown name is not a directive this compiler has yet to build; it reads `#[derive(…)]`, `#[obj]`, `#[test]`, `#[fixture]` and `#[allow(…)]`, and no other") if name != "derive"
+	raise p_diag_at(p, nt.line, nt.col, rule.Rule.DecoratorUnknown, f"the decorator `#[{name}]` — the set is closed and compiler-owned, so an unknown name is not a directive this compiler has yet to build; it reads `#[derive(…)]`, `#[obj]`, `#[sealed]`, `#[test]`, `#[fixture]` and `#[allow(…)]`, and no other") if name != "derive"
 
 	# `#[derive]` AND `#[derive()]` ASK FOR NOTHING, and were given it: the arguments are what
 	# a derive IS — the specs to generate — so a bare one was read, dropped, and the type went

@@ -4221,20 +4221,6 @@ fn main() {
 }
 EOF
 
-# `#[sealed]` is RESERVED — GRAMMAR group 7 gives it a meaning — so it is not the sentence an
-# unknown decorator gets. The word is right and the behaviour is not built, which is what a
-# reader who wrote it needs to know: nothing is protecting the constructor they sealed.
-expect "$ZERG" the-reserved-sealed-decorator E9079 <<'EOF'
-#[sealed]
-struct R {
-	pub x: int
-}
-
-fn main() {
-	print R(3).x
-}
-EOF
-
 # The arguments are what a derive IS. A bare `#[derive]` or `#[derive()]` was read and dropped,
 # so the type went on with no impls while the line above it said it had some.
 expect "$ZERG" a-derive-with-no-specs E2069 <<'EOF'

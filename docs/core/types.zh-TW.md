@@ -338,8 +338,8 @@ function 還是方法,由它的 **body** 決定:[`GRAMMAR#impl-decl`](../../GRAM
 不帶 receiver,要透過**型別**去叫,`User.from_id(…)`;不呼叫地寫成 `User.from_id`,就是那個函式作為
 [值](../code/functions.zh-TW.md)。**私有欄位是外部永遠指不出的欄位**：它必須帶預設值
 （見下），所以外部的建構把它省略掉、由宣告決定它的值。要讓 literal 本身在 module 之外不可用，那是 `#[sealed]`
-decorator 的職責——**[not yet]**,_E9079 NotImplemented: the decorator `#[sealed]`_,所以今天只要型別可及,
-literal 就可及。
+decorator 做的事：宣告它的檔案仍寫 `T(…)`,其他地方的建構是 _E3165_,所以外部透過公開的 associated fn 建構
+([Decorators](decorators.zh-TW.md))。
 
 ### 欄位預設值（Field defaults）
 

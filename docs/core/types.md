@@ -404,8 +404,8 @@ line at `this` — a `fn` that does not use it takes no receiver and is reached 
 [value](../code/functions.md). A **private field is one an outsider never
 names**: it must carry a default (below), so an outside construction leaves it off and the declaration
 decides its value. Making the literal itself unavailable outside the module is what the `#[sealed]`
-decorator is for — **[not yet]**, _E9079 NotImplemented: the decorator `#[sealed]`_, so today the literal is
-reachable wherever the type is.
+decorator does: the declaring file still writes `T(…)`, and a construction anywhere else is _E3165_, so an
+outsider builds one through a public associated fn ([Decorators](decorators.md)).
 
 ### Field defaults
 

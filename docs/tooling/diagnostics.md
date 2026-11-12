@@ -373,6 +373,7 @@ shipping compiler rather than a part of it (the line
 | `E3164` | `for mut` walks a place spelled by names, fields and literal indexes, and this `…` is not one         |
 | `E3165` | `…(…)` is sealed — `#[sealed]` makes the field-wise constructor private to `…`                        |
 | `E3166` | `…` is not a Zerg type — the integers are `int`, `uint`, `byte` and `rune` and the float is `float`   |
+| `E3167` | `…[T]` is not a Zerg built-in — every primitive's size is fixed by the language                       |
 | `E4001` | `…` outside of a loop: it belongs to a `for`, and a `select` arm is not one                           |
 | `E4002` | a `from` cause is an `Err`, and … is not one                                                          |
 | `E4004` | `…(…)` names one side of an `Either`, which holds exactly one value                                   |
@@ -510,7 +511,6 @@ shipping compiler rather than a part of it (the line
 | `E9038` | an `impl` on a built-in container target                                                              |
 | `E9042` | `type … = …` over a non-scalar                                                                        |
 | `E9043` | `…` leaving a `guard` block                                                                           |
-| `E9046` | the compile-time built-in `…[T]`                                                                      |
 | `E9047` | an `impl` on the built-in type `…`                                                                    |
 | `E9049` | `…` MUTATES its list, and `…` is a value rather than a place                                          |
 | `E9052` | a map key of type …                                                                                   |
@@ -701,6 +701,10 @@ anywhere else is `E3165`, and a public associated fn is how a dependent builds o
 and `float`, and the FFI table already maps each to a fixed C type, so a ladder adds nothing; C's platform
 widths are the boundary-only aliases. The refusal is a rule now, `E3166`.
 
+**And `sizeof` / `alignof` with it (#442).** `E9046` refused both as compile-time built-ins not yet built,
+with whether a layout is a built-in or a library facility left open. It is neither: a primitive's size is
+fixed by the language and `p.offset(n)` counts pointees, so nothing names a layout. The rule is `E3167`.
+
 **One retired with its rule rather than to another range.** `E2060` refused a declared type whose
 name did not begin with a capital, and that rule was the whole of how the language separated its
 two namespaces — a capitalised name was a type, a lower-case one a value. The rule is gone: a name
@@ -823,6 +827,7 @@ name now is the prelude rule (`E2061`), which is about the name rather than abou
 | `E9067` | `E2094` | not an unbuilt form: GRAMMAR derives no call of a type                 |
 | `E9079` | —       | the form was built: `#[sealed]`; a construction outside is E3165       |
 | `E9063` | `E3166` | not an unbuilt form: the five scalars are fixed widths already         |
+| `E9046` | `E3167` | not an unbuilt form: no program names a layout                         |
 
 **One of them moved nowhere**, and it is the only row whose second column is empty. `E3047`
 reported a prefix operator on a `type X = Y` — _operator `not` has no meaning on `Flag`_ — on

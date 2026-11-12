@@ -103,9 +103,9 @@ _E4063 `StopIteration` is testable but not constructible_；`e is StopIteration`
 全部都建好了。**型別**可以寫在任何地方——描述指標形狀的資料是安全的——而每一個**操作**都是 `unsafe`-only：
 在它之外，_E3145_ 會指名它是一個 raw-pointer 操作，而不是讓它讀起來像普通程式碼。
 
-## `sizeof` / `alignof` —— 已延後
+## `sizeof` / `alignof` —— 不屬於這個語言
 
-**不屬於本規格。** `sizeof[T]` 與 `alignof[T]` 具名拒絕 —— _E9046 NotImplemented: the compile-time built-in
-`sizeof[T]` — this compiler does not compute a type's layout_ —— 而「型別的佈局屬於 **built-in** 還是
-**標準函式庫**設施」這個問題尚未決定。原本一章說是前者、[FFI](ffi.zh-TW.md) 說是後者,兩處一併移除而不是留著
-互相矛盾;**決定先於功能**。
+**兩者既不是 built-in,也不是函式庫設施。** 每個原始型別的大小都由規格固定（[型別](../core/types.zh-TW.md)）,
+而 raw pointer 那道門以指向的元素計數——`p.offset(n)` 是往後 `n` 個元素的位址——所以程式寫的任何東西都不需要以位元組
+表示的佈局。兩者都被具名拒絕——_E3167 `sizeof[T]` is not a Zerg built-in — every primitive's size is fixed by the
+language_。它們屬於哪一種設施，在決定之前一直留在這裡懸著;決定是兩者都不是。

@@ -387,5 +387,3 @@ FFI 不對既有模型新增例外——它多半是從中推導出來的：
 - library 模式遇到非 FFI-safe 的 public 宣告：**skip-with-diagnostic**（目前傾向）對上硬性錯誤。
 - scheduler 對**阻塞外部呼叫**的策略（thread pool 擴張）——一個 runtime 細節。
 - 匯入設施未來是否會綁定 **`"C"` 以外的 ABI**；目前只定義 `"C"`。
-- 一個編譯期 **`sizeof` / `alignof`**——型別的佈局屬於 **built-in** 還是 **stdlib** 設施尚未決定,
-  而它兩邊都不存在。具名拒絕(`E9046`)。

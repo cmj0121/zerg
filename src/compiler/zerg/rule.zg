@@ -371,6 +371,10 @@ pub enum Rule {
 	# waiting to be built; there is nothing to build.
 	FixedWidthNotAType = 3166
 
+	# `sizeof[T]` / `alignof[T]` are not Zerg built-ins: a primitive's size is fixed by the language
+	# and `p.offset(n)` counts pointees, so no program has a layout to name. It was `E9046`.
+	LayoutBuiltin = 3167
+
 	# emitting — a form this compiler will not lower
 	LoopKeywordOutsideLoop = 4001
 	FromCauseNotErr = 4002
@@ -607,7 +611,6 @@ pub enum Rule {
 	NotYetImplTypeArgument = 9038
 	NotYetTypedefNonScalar = 9042
 	NotYetJumpOutOfGuard = 9043
-	NotYetCompileTimeBuiltin = 9046
 	NotYetImplOnBuiltin = 9047
 	NotYetMutateListRvalue = 9049
 	NotYetMapKeyType = 9052

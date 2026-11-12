@@ -1263,23 +1263,6 @@ expect_lib "$ZERG" undefined-function-in-a-top-level-binding E4016 <<'EOF'
 a := nope().run()
 EOF
 
-# THE BUILT-IN SET IS CLOSED (docs/runtime/builtins.md): a user cannot add to it, so a
-# program naming one of these has not made a typo, and "undefined name `sizeof`" told the
-# reader the language does not have a form the documentation describes and the SEED builds.
-# Every one of these was reported as an unknown name until the emitter learned the list.
-
-expect "$ZERG" sizeof-builtin E9046 <<'EOF'
-fn main() {
-	print sizeof[int]
-}
-EOF
-
-expect "$ZERG" alignof-builtin E9046 <<'EOF'
-fn main() {
-	print alignof[int]
-}
-EOF
-
 # THE THIRD OF THE THREE, and it became reachable the moment a generic method was built. A
 # witness table holds one slot per required member and a generic one would need one per type
 # ARGUMENT, so a box has nothing to dispatch it through. Unrefused, the answer came out as

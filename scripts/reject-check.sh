@@ -7976,6 +7976,23 @@ fn main() {
 }
 EOF
 
+# --- no program names a layout ------------------------------------------------
+#
+# `sizeof[T]` and `alignof[T]` were refused as compile-time built-ins not yet built (`E9046`).
+# A primitive's size is fixed by the language and `p.offset(n)` counts pointees, so neither is a
+# Zerg form. The seed builds both, which is its gap.
+reject sizeof-builtin E3167 '`sizeof[T]`' seed-gap <<'EOF'
+fn main() {
+	print sizeof[int]
+}
+EOF
+
+reject alignof-builtin E3167 '`alignof[T]`' seed-gap <<'EOF'
+fn main() {
+	print alignof[int]
+}
+EOF
+
 reject a-module-private-type-named-outside-its-module E5008 <<'EOF'
 import "./lib"
 

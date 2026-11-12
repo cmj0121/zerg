@@ -116,10 +116,10 @@ All of it is built. The **type** may be written anywhere — describing pointer-
 every **operation** is `unsafe`-only: outside one, _E3145_ names it as a raw-pointer operation rather than
 letting it read as ordinary code.
 
-## `sizeof` / `alignof` — deferred
+## `sizeof` / `alignof` — not part of the language
 
-**Not part of this specification.** `sizeof[T]` and `alignof[T]` are refused by name — _E9046 NotImplemented:
-the compile-time built-in `sizeof[T]` — this compiler does not compute a type's layout_ — and the question of
-whether a type's layout is a **built-in** or a **standard-library** facility is open. The chapter that described
-them as one and the [FFI](ffi.md) chapter that described them as the other are both removed rather than left
-disagreeing; the decision comes before the feature.
+**Neither is a built-in, and neither is a library facility.** Every primitive's size is fixed by the
+specification ([Types](../core/types.md)), and the raw-pointer door counts in pointees — `p.offset(n)` is the
+address `n` elements along — so nothing a program writes needs a layout in bytes. Both are refused by name —
+_E3167 `sizeof[T]` is not a Zerg built-in — every primitive's size is fixed by the language_. The question of
+which kind of facility they were was left open here until it was decided; the decision is that they are none.

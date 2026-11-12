@@ -2371,13 +2371,13 @@ fn parse_typedecl(mut &p: Parser, start: token.Token, is_pub: bool) -> ast.TypeD
 	nt := cur(p)
 	name := p_type_name(p, "a type alias")
 
-	# A code and a place, which this one refusal did without while its sibling — E9003 for a
-	# generic `enum` — carried one. A generic `struct` was the third and is built now, so what
-	# is left is two declarations refused for one reason, and the alias was the one a gate
-	# could not pin.
+	# A code and a place, which this one refusal did without while its siblings carried one.
+	# A generic `struct` and a generic `enum` are both built now, so the alias is the one
+	# declaration still refused for this reason — and its sentence cited the `enum`'s retired
+	# E9003 as though that one were still refused beside it.
 	if p_at(p, token.Kind.LBrack) {
 		b := cur(p)
-		raise p_diag_at(p, b.line, b.col, rule.Rule.NotYetGenericTypedef, f"NotImplemented: a generic `type {name}[…] = …` — a parameterized alias is one instantiation per argument, and only a `struct` is instantiated (the reason a generic `enum` is E9003) (GRAMMAR#type-decl)")
+		raise p_diag_at(p, b.line, b.col, rule.Rule.NotYetGenericTypedef, f"NotImplemented: a generic `type {name}[…] = …` — a parameterized alias is one instantiation per argument, and only a `struct` and an `enum` are instantiated (GRAMMAR#type-decl)")
 	}
 
 	expect(p, token.Kind.Assign)

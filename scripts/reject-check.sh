@@ -7972,6 +7972,31 @@ fn main() {
 }
 EOF
 
+# EVERY ITEM OF A DECORATOR LIST MUST FIT WHAT IT LEADS. The list was judged by its first
+# entry's kind, so a `#[test]` first let a `#[sealed]` or a `#[derive(Eq)]` onto a `fn`, where
+# it was dropped. Each case puts the misfit SECOND, which is the order that used to pass.
+reject sealed-after-test-on-a-fn E2066 '`#[sealed]` applies to the `struct`' seed-gap <<'EOF'
+#[test, sealed]
+fn t() {
+	nop
+}
+
+fn main() {
+	print 1
+}
+EOF
+
+reject derive-after-test-on-a-fn E2066 '`#[derive(Eq)]` applies to the `struct`, `enum` or `spec`' seed-gap <<'EOF'
+#[test, derive(Eq)]
+fn t() {
+	nop
+}
+
+fn main() {
+	print 1
+}
+EOF
+
 # --- there is no fixed-width ladder ------------------------------------------------
 #
 # `i8`…`i64`, `u8`…`u64`, `f32` and `f64` are not Zerg types: the five scalars are each a fixed C

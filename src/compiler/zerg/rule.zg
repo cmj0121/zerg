@@ -139,6 +139,10 @@ pub enum Rule {
 	# `E9067`, a constructor waiting to be built; GRAMMAR derives none.
 	MapTypeCalled = 2094
 
+	# GRAMMAR#decorator: a no-argument directive written twice in one comma list says nothing the
+	# first did not.
+	DecoratorRepeated = 2095
+
 	# checking — a form whose meaning does not hold together — reported against the tree, all at once
 	NotPublicMember = 3001
 	AssignTargetNotAPlace = 3002

@@ -7916,6 +7916,19 @@ impl Cents {
 }
 EOF
 
+# A no-argument directive written twice in one comma list says nothing the first did not, and a
+# list that means the same with an item gone is two spellings for one thing.
+reject a-decorator-repeated-in-its-list E2095 <<'EOF'
+#[sealed, sealed]
+struct P {
+	pub x: int
+}
+
+fn main() {
+	print P(1).x
+}
+EOF
+
 reject a-module-private-type-named-outside-its-module E5008 <<'EOF'
 import "./lib"
 

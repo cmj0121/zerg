@@ -1746,6 +1746,17 @@ fn p_deco_stacked(mut &p: Parser, line: int, col: int) -> str {
 	return p_diag_at(p, line, col, rule.Rule.SecondDecorator, "a second decorator on one item — an item takes ONE decorator, so merge them into its comma list: `#[a(x), b(y)]`")
 }
 
+# p_deco_marker puts a no-argument decorator's marker on the pending list. A marker already
+# there is the same directive written twice in one decorator: `#[sealed, sealed]` says nothing
+# the first did not, and a list that means the same with an item gone is two spellings for one
+# thing, the reason E2063 refuses a stacked decorator.
+fn p_deco_marker(mut &p: Parser, mut &pending: list[str], nt: token.Token, name: str) {
+	marker := "#" + name
+	raise p_diag_at(p, nt.line, nt.col, rule.Rule.DecoratorRepeated, f"`#[{name}]` is written twice in one decorator — an item takes each directive once, so drop the second") if p_deco_has(pending, marker)
+
+	pending.append(marker)
+}
+
 # p_deco_has reports whether a pending list holds `marker` — `#test`, `#fixture`, `#sealed`.
 fn p_deco_has(pending: list[str], marker: str) -> bool {
 	for nm in pending {
@@ -2781,7 +2792,7 @@ fn parse_deco_item(mut &p: Parser, mut &pending: list[str]) {
 	# derive, under a marker no spec name can be — a `#` is not an identifier character — so
 	# the two never compete for a name while sharing one attachment mechanism.
 	if name == "obj" {
-		pending.append("#obj")
+		p_deco_marker(p, pending, nt, name)
 		return
 	}
 
@@ -2794,7 +2805,7 @@ fn parse_deco_item(mut &p: Parser, mut &pending: list[str]) {
 	# seed has recognised it since 1i. Refusing it here would have made `zerg` the compiler
 	# that cannot read its own test files.
 	if name == "test" {
-		pending.append("#test")
+		p_deco_marker(p, pending, nt, name)
 		return
 	}
 
@@ -2802,7 +2813,7 @@ fn parse_deco_item(mut &p: Parser, mut &pending: list[str]) {
 	# the same reason as `#[test]`: it names a function `zerg test` calls and `zerg build` never
 	# reaches, so it too has to reach a parse somewhere.
 	if name == "fixture" {
-		pending.append("#fixture")
+		p_deco_marker(p, pending, nt, name)
 		return
 	}
 
@@ -2841,7 +2852,7 @@ fn parse_deco_item(mut &p: Parser, mut &pending: list[str]) {
 	# pending list under a marker, the way `#[obj]` does, and the struct arm takes it off as the
 	# declaration's own flag rather than a derive.
 	if name == "sealed" {
-		pending.append("#sealed")
+		p_deco_marker(p, pending, nt, name)
 		return
 	}
 

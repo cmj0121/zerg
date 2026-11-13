@@ -1746,13 +1746,20 @@ fn p_deco_stacked(mut &p: Parser, line: int, col: int) -> str {
 	return p_diag_at(p, line, col, rule.Rule.SecondDecorator, "a second decorator on one item — an item takes ONE decorator, so merge them into its comma list: `#[a(x), b(y)]`")
 }
 
-# p_deco_marker puts a no-argument decorator's marker on the pending list. A marker already
+# p_deco_marker puts a no-argument decorator's marker on the pending list, once and bare. A marker already
 # there is the same directive written twice in one decorator: `#[sealed, sealed]` says nothing
 # the first did not, and a list that means the same with an item gone is two spellings for one
 # thing, the reason E2063 refuses a stacked decorator.
 fn p_deco_marker(mut &p: Parser, mut &pending: list[str], nt: token.Token, name: str) {
 	marker := "#" + name
 	raise p_diag_at(p, nt.line, nt.col, rule.Rule.DecoratorRepeated, f"`#[{name}]` is written twice in one decorator — an item takes each directive once, so drop the second") if p_deco_has(pending, marker)
+
+	# AND IT TAKES NO ARGUMENTS. A `(` here used to reach the comma list's own `expect`, which
+	# answered with the bracket it wanted — "expected `]`" — rather than with the rule.
+	if p_at(p, token.Kind.LParen) {
+		lp := cur(p)
+		raise p_diag_at(p, lp.line, lp.col, rule.Rule.DecoratorTakesNoArgs, f"`#[{name}]` takes no arguments — write it bare, as `#[{name}]`")
+	}
 
 	pending.append(marker)
 }

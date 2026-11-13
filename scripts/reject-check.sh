@@ -7929,6 +7929,20 @@ fn main() {
 }
 EOF
 
+# `#[sealed]`, `#[obj]`, `#[test]` and `#[fixture]` take no arguments. A `(` after one reached the
+# comma list's `expect` and was answered with the bracket it wanted rather than with the rule;
+# the place is the `(`.
+reject a-bare-decorator-given-arguments E2096 at=1:9 <<'EOF'
+#[sealed(x)]
+struct P {
+	pub x: int
+}
+
+fn main() {
+	print P(1).x
+}
+EOF
+
 reject a-module-private-type-named-outside-its-module E5008 <<'EOF'
 import "./lib"
 

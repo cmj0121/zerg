@@ -143,6 +143,9 @@ pub enum Rule {
 	# first did not.
 	DecoratorRepeated = 2095
 
+	# GRAMMAR#deco-item: `#[obj]`, `#[test]`, `#[fixture]` and `#[sealed]` take no arguments.
+	DecoratorTakesNoArgs = 2096
+
 	# checking — a form whose meaning does not hold together — reported against the tree, all at once
 	NotPublicMember = 3001
 	AssignTargetNotAPlace = 3002

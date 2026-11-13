@@ -126,8 +126,8 @@ compiler 能依型別的**結構**幫你**寫出實作**,以型別上的 **decor
 一組**固定**的、編譯器內建的函式，免 `import`——這是語言本身提供的唯一自由函式呼叫。使用者無法自行擴充這組。
 
 - **`Ref(x)` / `deref(r)`**——建立與讀取 reference-counted box（[值與記憶體](core/memory.zh-TW.md)）。
-- **原生型別轉換 `T(x)`**——`int` / `uint` / `float` / `bool` / `byte` / `rune`（以及固定寬度的
-  `i8`…`i64` / `u8`…`u64` / `f32` / `f64`）：帶範圍檢查的**重新建構**，絕非 reinterpret；`int("…")` 另外會
+- **原生型別轉換 `T(x)`**——`int` / `uint` / `float` / `bool` / `byte` / `rune`,旁邊沒有固定寬度階梯：
+  帶範圍檢查的**重新建構**，絕非 reinterpret；`int("…")` 另外會
   **解析**十進位字串（[型別](core/types.zh-TW.md)）。
 - **`str(bytes)` / `str(runes)`** 與 **`bytearray(s)` / `runearray(s)`**——str ⇄ list 的橋接，驗證
   `str` 不變式（[Collection](code/collections.zh-TW.md)）。

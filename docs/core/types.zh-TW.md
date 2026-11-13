@@ -5,9 +5,9 @@
 
 ## 原始型別（Primitive Types）
 
-一組精簡且固定的集合——三種整數寬度（signed `int`、unsigned `uint`、以及 `byte` octet）。此外的**固定寬度階梯**
-（`i8`、`i16`、`u32`、`f64`……）是一組 **stdlib 型別、不是新語法**——型別名不過就是一個 identifier，所以像 `u32`
-這樣的寬度只是多加一個 stdlib 型別、完全不動語法：
+一組精簡且固定的集合——三種整數寬度（signed `int`、unsigned `uint`、以及 `byte` octet）、碼位 `rune` 與 double
+`float`。它們旁邊**沒有固定寬度階梯**：每一個在邊界上都已對映到固定的 C 型別（[FFI](../runtime/ffi.zh-TW.md)），
+所以 `i32` 或 `u8` 什麼都沒加，而 C 的平台寬度是只用在邊界的別名（`c_int`、`c_size`……），不是語言型別：
 
 | 型別    | 說明                                           |
 | ------- | ---------------------------------------------- |
@@ -29,10 +29,10 @@ statement 不是 expression、或根本沒有 statement 的 **block**（`GRAMMAR
 `(f(), 1)` 往下一層仍然是儲存。真正接受「不存在」的位置是 `T?`,也就是 `z: int? = { nop }` 寫的那件事——一個
 carrier 把位置往內移並包起來,正是[型別系統](type-system.zh-TW.md)說「位置可以 wrap」的那條規則。
 
-> **[not yet]** `zerg` 沒有固定寬度階梯的任何一部分:`i8` … `i64`、`u8` … `u64`、`f32` 與 `f64` 被規範為 stdlib
-> 型別,而沒有任何 stdlib 宣告過其中一個。它是**具名**被拒的——一個寬度不過是普通的 identifier、不是關鍵字,所以
-> 拒絕曾經是 _undefined function `i32`_,任何拼錯的呼叫都會拿到的那句話,讀者被告知的是自己的名字不存在。**seed**
-> 建得起也跑得動它們,這使本章成為唯一一處 seed 比較寬的地方。
+因此 `i8` … `i64`、`u8` … `u64`、`f32` 與 `f64` 都不是型別，指名其中一個的程式會被**具名**拒絕——_E3166 `i32`
+is not a Zerg type — the integers are `int`, `uint`, `byte` and `rune` and the float is `float`_。寬度不過是普通的
+identifier、不是關鍵字，所以沒有這條規則的話 `i32(5)` 會讀成拼錯的呼叫。**seed** 建得起也跑得動它們，這是記在它自己
+名下的落差。
 
 - **整數溢位與除以零會 raise**（`OverflowError`、`DivideByZeroError`）——這是一次 **abort**、不是值
   （見 [Null-safety 與錯誤處理](../code/errors.zh-TW.md)）；`int`/`uint`/`byte`/`rune` 絕不環繞
@@ -45,8 +45,7 @@ carrier 把位置往內移並包起來,正是[型別系統](type-system.zh-TW.md
 - **`rune` 的值域不是一個區間**，這讓它成為唯一以**述詞**（predicate）而非上下界界定的 scalar：一個碼位是
   `0..=0x10FFFF` **扣掉** UTF-16 的 surrogate 區間 `0xD800..=0xDFFF`，那些不是字元。所以 `rune(0xD800)` 會
   raise `OverflowError`，即使那個數字綽綽有餘地放得進這個型別的 32 bit；而 `r: rune = 0xD800` 是同一條規則
-  對一個已知值給出的編譯錯誤。這也是 `rune` 不屬於下方 fixed-width ladder 的原因：`i32` 是一個區間，`rune`
-  不是。
+  對一個已知值給出的編譯錯誤。這也是 `rune` 不是 32 bit 整數的原因：`i32` 會是一個區間，`rune` 不是。
 
 ### 整數運算（Integer operations）
 
@@ -338,8 +337,8 @@ function 還是方法,由它的 **body** 決定:[`GRAMMAR#impl-decl`](../../GRAM
 不帶 receiver,要透過**型別**去叫,`User.from_id(…)`;不呼叫地寫成 `User.from_id`,就是那個函式作為
 [值](../code/functions.zh-TW.md)。**私有欄位是外部永遠指不出的欄位**：它必須帶預設值
 （見下），所以外部的建構把它省略掉、由宣告決定它的值。要讓 literal 本身在 module 之外不可用，那是 `#[sealed]`
-decorator 的職責——**[not yet]**,_E9079 NotImplemented: the decorator `#[sealed]`_,所以今天只要型別可及,
-literal 就可及。
+decorator 做的事：宣告它的檔案仍寫 `T(…)`,其他地方的建構是 _E3165_,所以外部透過公開的 associated fn 建構
+([Decorators](decorators.zh-TW.md))。
 
 ### 欄位預設值（Field defaults）
 

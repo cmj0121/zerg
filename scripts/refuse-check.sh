@@ -689,19 +689,9 @@ impl B {
 fn main() { print B.NOPE }
 EOF
 
-# ONE NUMBER, TWO QUESTIONS (#87). `#[repr]`, `#[packed]` and `#[align]` are RESERVED on
-# docs/core/decorators.md and unbuilt here, which is what E9xxx is for; every other name is not
-# a decorator in any Zerg, because the set is closed and compiler-owned, so there is no day its
-# code retires on. The page said in as many words that the distinction was lost.
-expect "$ZERG" unknown-decorator E2076 <<'EOF'
-#[dyn]
-struct P {
-	pub x: int
-}
-
-fn main() { print 1 }
-EOF
-
+# `#[repr]`, `#[packed]` and `#[align]` are RESERVED on docs/core/decorators.md and unbuilt
+# here, which is what E9xxx is for. Every other name is not a decorator in any Zerg — the set is
+# closed and compiler-owned — and that permanent rule is reject-check's (E2076).
 expect "$ZERG" a-reserved-layout-decorator E9005 <<'EOF'
 #[repr]
 struct P {
@@ -1261,23 +1251,6 @@ EOF
 
 expect_lib "$ZERG" undefined-function-in-a-top-level-binding E4016 <<'EOF'
 a := nope().run()
-EOF
-
-# THE BUILT-IN SET IS CLOSED (docs/runtime/builtins.md): a user cannot add to it, so a
-# program naming one of these has not made a typo, and "undefined name `sizeof`" told the
-# reader the language does not have a form the documentation describes and the SEED builds.
-# Every one of these was reported as an unknown name until the emitter learned the list.
-
-expect "$ZERG" sizeof-builtin E9046 <<'EOF'
-fn main() {
-	print sizeof[int]
-}
-EOF
-
-expect "$ZERG" alignof-builtin E9046 <<'EOF'
-fn main() {
-	print alignof[int]
-}
 EOF
 
 # THE THIRD OF THE THREE, and it became reachable the moment a generic method was built. A
@@ -3131,44 +3104,6 @@ fn main() {
 }
 EOF
 
-# --- the fixed-width ladder is unbuilt, and says so ------------------------------------
-#
-# A `[not yet]` is a legitimate state; an UNNAMED refusal is not. Because a width is an
-# ordinary identifier rather than a keyword, `i32(x)` reported "undefined function `i32`" — the
-# message any misspelled call gets — so a reader was told the name is unknown rather than that
-# the ladder is not built, and would go looking for their own typo.
-#
-# HERE AND NOT IN reject-check, which is the file for programs that are not Zerg. These ARE
-# Zerg: the SEED builds and runs every one of them. What they are is a feature the shipping
-# compiler has not caught up to, which is exactly what this file is for.
-
-expect "$ZERG" fixed-width-conversion E9063 <<'EOF'
-fn main() {
-	print i32(5)
-}
-EOF
-
-expect "$ZERG" fixed-width-annotation E9063 <<'EOF'
-fn main() {
-	x: u8 = 5
-	print int(x)
-}
-EOF
-
-expect "$ZERG" fixed-width-float E9063 <<'EOF'
-fn main() {
-	print f32(1.5)
-}
-EOF
-
-expect "$ZERG" fixed-width-typedef E9063 <<'EOF'
-type W = u8
-
-fn main() {
-	print 1
-}
-EOF
-
 # --- five grammar forms that read as a typo ---------------------------------------------
 #
 # Each is a form GRAMMAR has and this compiler does not, and each was refused with the message
@@ -3538,25 +3473,6 @@ fn f(x: int?) -> int {
 
 fn main() {
 	print f(nil)
-}
-EOF
-
-# GRAMMAR#decorator is a COMMA LIST of items, and this read the brackets as one item with a
-# bag of identifiers in it: every name that was not `derive` went on as a derive argument,
-# so `#[derive(Eq), frobnicate]` asked to derive `frobnicate`. Each item now gets its own
-# answer, and an unknown one alone has had one all along.
-#
-# The second item is an UNKNOWN name and not `sealed`, which is what it used to be: `sealed`
-# now has a code of its own (E9079, a reserved decorator that is not built), so asserting E9005
-# through it would have stopped testing the unknown-decorator rule the moment it got one.
-expect "$ZERG" second-decorator-in-a-comma-list E2076 <<'EOF'
-#[derive(Eq), frobnicate]
-struct P {
-	pub v: int
-}
-
-fn main() {
-	print 1
 }
 EOF
 
@@ -4218,20 +4134,6 @@ fn work() {
 
 fn main() {
 	work()
-}
-EOF
-
-# `#[sealed]` is RESERVED — GRAMMAR group 7 gives it a meaning — so it is not the sentence an
-# unknown decorator gets. The word is right and the behaviour is not built, which is what a
-# reader who wrote it needs to know: nothing is protecting the constructor they sealed.
-expect "$ZERG" the-reserved-sealed-decorator E9079 <<'EOF'
-#[sealed]
-struct R {
-	pub x: int
-}
-
-fn main() {
-	print R(3).x
 }
 EOF
 

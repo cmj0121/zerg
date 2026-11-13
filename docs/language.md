@@ -142,9 +142,9 @@ A small, **fixed** set of compiler-recognized functions need no `import` — the
 the language itself provides. A user cannot add to the set.
 
 - **`Ref(x)` / `deref(r)`** — construct and read the reference-counted box ([Values & Memory](core/memory.md)).
-- **Primitive conversion `T(x)`** — `int` / `uint` / `float` / `bool` / `byte` / `rune` (and the
-  fixed-width `i8`…`i64` / `u8`…`u64` / `f32` / `f64`): a **re-construction** with range checks, never a
-  reinterpretation; `int("…")` additionally **parses** a decimal string ([Types](core/types.md)).
+- **Primitive conversion `T(x)`** — `int` / `uint` / `float` / `bool` / `byte` / `rune`, and no fixed-width
+  ladder beside them: a **re-construction** with range checks, never a reinterpretation; `int("…")`
+  additionally **parses** a decimal string ([Types](core/types.md)).
 - **`str(bytes)` / `str(runes)`** and **`bytearray(s)` / `runearray(s)`** — the str ⇄ list bridges,
   validating the `str` invariant ([Collections](code/collections.md)).
 - **Error constructors** — one per built-in kind, each building an `Err` of that kind. There are

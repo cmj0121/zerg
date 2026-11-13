@@ -918,6 +918,9 @@ pub struct StructDecl {
 	# where the declaration ends — see `decl-extent`
 	pub end_line: int
 	pub end_col: int
+
+	# `#[sealed]` on the declaration — what it means is check.chk_ctor_sealed's
+	pub sealed: bool
 }
 
 # TypeDecl is `type X = Y` — a NEW, DISTINCT type, not a transparent alias

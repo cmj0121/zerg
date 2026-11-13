@@ -259,7 +259,7 @@ pub fn gen_resolve_lens(f: ast.File) -> ast.File {
 	mut structs: list[ast.StructDecl] = []
 	for sd in f.structs {
 		su := gen_len_view(lt, vs, sd.path)
-		structs.append(ast.StructDecl(sd.name, subst_fields(su, sd.fields), sd.is_pub, sd.path, sd.line, sd.col, sd.tparams, sd.name_line, sd.name_col, sd.end_line, sd.end_col))
+		structs.append(ast.StructDecl(sd.name, subst_fields(su, sd.fields), sd.is_pub, sd.path, sd.line, sd.col, sd.tparams, sd.name_line, sd.name_col, sd.end_line, sd.end_col, sd.sealed))
 	}
 	mut enums: list[ast.EnumDecl] = []
 	for ed in f.enums {

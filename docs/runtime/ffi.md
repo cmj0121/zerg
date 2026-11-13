@@ -453,5 +453,3 @@ Deferred for a later design pass — none blocks the model above:
   error.
 - The scheduler's policy for **blocking foreign calls** (thread-pool growth) — a runtime detail.
 - Whether the import facility will ever bind **ABIs other than `"C"`**; only `"C"` is defined today.
-- A compile-time **`sizeof` / `alignof`** — whether a type's layout is a **built-in** or a **stdlib** facility
-  is undecided, and it exists as neither. Refused by name (`E9046`).

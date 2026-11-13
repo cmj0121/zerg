@@ -6289,6 +6289,35 @@ fn main() {
 }
 EOF
 
+# --- the decorator set is closed -----------------------------------------------
+#
+# A decorator is a compiler directive, and the set is compiler-owned (docs/core/decorators.md):
+# a name not on that page is not a directive in any Zerg, so it is rejected rather than
+# refused. `#[dyn]` is a name the seed reserves; `zerg` reads it as unknown.
+reject unknown-decorator E2076 'the decorator `#[dyn]`' <<'EOF'
+#[dyn]
+struct P {
+	pub x: int
+}
+
+fn main() { print 1 }
+EOF
+
+# GRAMMAR#decorator is a COMMA LIST of items, and this read the brackets as one item with a
+# bag of identifiers in it: every name that was not `derive` went on as a derive argument,
+# so `#[derive(Eq), frobnicate]` asked to derive `frobnicate`. Each item now gets its own
+# answer, and an unknown one alone has had one all along.
+reject second-decorator-in-a-comma-list E2076 'the decorator `#[frobnicate]`' <<'EOF'
+#[derive(Eq), frobnicate]
+struct P {
+	pub v: int
+}
+
+fn main() {
+	print 1
+}
+EOF
+
 # --- a range operator does not end a line ---------------------------------------
 #
 # GRAMMAR#range-expr: `b := x in 1..` over a line holding `10` reads two ways — the open range
@@ -7891,6 +7920,132 @@ EOF
 # type through a qualified name since it was written (resolveTypeRef), so that one is a rule
 # `zerg` LOST rather than a rule invented. The other three are seed gaps, recorded by name in
 # src/bootstrap/README.md.
+
+# `#[sealed]` makes the field-wise `T(…)` constructor module-private (GRAMMAR group 7): the
+# type and its field are `pub`, so the only thing refused is the construction outside the
+# declaring file. The public associated fn beside it is how a dependent builds one, and the
+# declaring file still writes `Cents(…)` inside it.
+reject a-sealed-constructor-called-outside-its-module E3165 at=4:2 <<'EOF'
+import "./money"
+
+fn main() {
+	c := money.Cents(5)
+	print money.Cents.of(5).n + c.n
+}
+--- money/mod.zg
+#[sealed]
+pub struct Cents {
+	pub n: int
+}
+
+impl Cents {
+	pub fn of(n: int) -> Cents {
+		return Cents(n * 100)
+	}
+}
+EOF
+
+# A no-argument directive written twice in one comma list says nothing the first did not, and a
+# list that means the same with an item gone is two spellings for one thing.
+reject a-decorator-repeated-in-its-list E2095 <<'EOF'
+#[sealed, sealed]
+struct P {
+	pub x: int
+}
+
+fn main() {
+	print P(1).x
+}
+EOF
+
+# `#[sealed]`, `#[obj]`, `#[test]` and `#[fixture]` take no arguments. A `(` after one reached the
+# comma list's `expect` and was answered with the bracket it wanted rather than with the rule;
+# the place is the `(`.
+reject a-bare-decorator-given-arguments E2096 at=1:9 <<'EOF'
+#[sealed(x)]
+struct P {
+	pub x: int
+}
+
+fn main() {
+	print P(1).x
+}
+EOF
+
+# EVERY ITEM OF A DECORATOR LIST MUST FIT WHAT IT LEADS. The list was judged by its first
+# entry's kind, so a `#[test]` first let a `#[sealed]` or a `#[derive(Eq)]` onto a `fn`, where
+# it was dropped. Each case puts the misfit SECOND, which is the order that used to pass.
+reject sealed-after-test-on-a-fn E2066 '`#[sealed]` applies to the `struct`' seed-gap <<'EOF'
+#[test, sealed]
+fn t() {
+	nop
+}
+
+fn main() {
+	print 1
+}
+EOF
+
+reject derive-after-test-on-a-fn E2066 '`#[derive(Eq)]` applies to the `struct`, `enum` or `spec`' seed-gap <<'EOF'
+#[test, derive(Eq)]
+fn t() {
+	nop
+}
+
+fn main() {
+	print 1
+}
+EOF
+
+# --- there is no fixed-width ladder ------------------------------------------------
+#
+# `i8`…`i64`, `u8`…`u64`, `f32` and `f64` are not Zerg types: the five scalars are each a fixed C
+# type at the boundary already (docs/runtime/ffi.md). They were refused as a ladder not yet
+# declared (`E9063`). A width is an ordinary identifier, so without the rule `i32(x)` would read
+# as a misspelled call. The SEED builds every one of these, which is its gap and not a form.
+reject fixed-width-conversion E3166 seed-gap <<'EOF'
+fn main() {
+	print i32(5)
+}
+EOF
+
+reject fixed-width-annotation E3166 seed-gap <<'EOF'
+fn main() {
+	x: u8 = 5
+	print int(x)
+}
+EOF
+
+reject fixed-width-float E3166 seed-gap <<'EOF'
+fn main() {
+	print f32(1.5)
+}
+EOF
+
+reject fixed-width-typedef E3166 seed-gap <<'EOF'
+type W = u8
+
+fn main() {
+	print 1
+}
+EOF
+
+# --- no program names a layout ------------------------------------------------
+#
+# `sizeof[T]` and `alignof[T]` were refused as compile-time built-ins not yet built (`E9046`).
+# A primitive's size is fixed by the language and `p.offset(n)` counts pointees, so neither is a
+# Zerg form. The seed builds both, which is its gap.
+reject sizeof-builtin E3167 '`sizeof[T]`' seed-gap <<'EOF'
+fn main() {
+	print sizeof[int]
+}
+EOF
+
+reject alignof-builtin E3167 '`alignof[T]`' seed-gap <<'EOF'
+fn main() {
+	print alignof[int]
+}
+EOF
 
 reject a-module-private-type-named-outside-its-module E5008 <<'EOF'
 import "./lib"

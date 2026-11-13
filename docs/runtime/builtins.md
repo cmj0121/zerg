@@ -42,10 +42,9 @@ the box itself is unaffected.
 
 ## Primitive conversions
 
-`T(x)` where `T` is `int` / `uint` / `float` / `bool` / `byte` / `rune` (and the fixed-width `i8`…`i64` /
-`u8`…`u64` / `f32` / `f64`) **re-constructs** `x`'s value as a `T` — never a reinterpretation of bits. A
-value that does not fit the target **aborts** with `OverflowError` (e.g. `uint(-1)`, or a narrowing that
-loses range), so a conversion is checked, not silent. See [Types](../core/types.md).
+`T(x)` where `T` is `int` / `uint` / `float` / `bool` / `byte` / `rune` **re-constructs** `x`'s value as a `T` —
+never a reinterpretation of bits. A value that does not fit the target **aborts** with `OverflowError` (e.g.
+`uint(-1)`, or a narrowing that loses range), so a conversion is checked, not silent. See [Types](../core/types.md).
 
 **Which pairs `T(x)` accepts is a closed table**, and `int` is the hub every one of them has on a side. A
 pair that is not on it is not a conversion — `float(b)` on a `byte` is `E3091`, and the two steps through
@@ -53,12 +52,11 @@ the hub are written instead. A `float` SOURCE is absent by decision rather than 
 `int(x)` on a float is `E3090`, and the fraction is dropped by a verb. The table and both reasons are in
 [Types](../core/types.md).
 
-> **[not yet]** The **fixed-width ladder** is not built: `i8`…`i64`, `u8`…`u64`, `f32` and `f64` are neither
-> types nor conversions, and both positions say so by name — `i32(5)` and `fn f(x: i32)` alike report _E9063
-> NotImplemented: `i32` is part of the fixed-width ladder — … the built-in widths are `int`, `uint`, `byte`,
-> `rune` and `float`_. The six named above all work, and a negative the compiler cannot see aborts with
-> _OverflowError: integer conversion out of range_ exactly as specified — one it CAN see is refused at
-> compile time instead (`E3029`), by the constant rule in [Types](../core/types.md).
+There is **no fixed-width ladder**: `i8`…`i64`, `u8`…`u64`, `f32` and `f64` are neither types nor
+conversions ([Types](../core/types.md)), and both positions say so by name — `i32(5)` and `fn f(x: i32)`
+alike report _E3166 `i32` is not a Zerg type_. The six named above all work, and a negative the compiler
+cannot see aborts with _OverflowError: integer conversion out of range_ exactly as specified — one it CAN see
+is refused at compile time instead (`E3029`), by the constant rule in [Types](../core/types.md).
 
 ## Parsing a string
 
@@ -118,10 +116,10 @@ All of it is built. The **type** may be written anywhere — describing pointer-
 every **operation** is `unsafe`-only: outside one, _E3145_ names it as a raw-pointer operation rather than
 letting it read as ordinary code.
 
-## `sizeof` / `alignof` — deferred
+## `sizeof` / `alignof` — not part of the language
 
-**Not part of this specification.** `sizeof[T]` and `alignof[T]` are refused by name — _E9046 NotImplemented:
-the compile-time built-in `sizeof[T]` — this compiler does not compute a type's layout_ — and the question of
-whether a type's layout is a **built-in** or a **standard-library** facility is open. The chapter that described
-them as one and the [FFI](ffi.md) chapter that described them as the other are both removed rather than left
-disagreeing; the decision comes before the feature.
+**Neither is a built-in, and neither is a library facility.** Every primitive's size is fixed by the
+specification ([Types](../core/types.md)), and the raw-pointer door counts in pointees — `p.offset(n)` is the
+address `n` elements along — so nothing a program writes needs a layout in bytes. Both are refused by name —
+_E3167 `sizeof[T]` is not a Zerg built-in — every primitive's size is fixed by the language_. The question of
+which kind of facility they were was left open here until it was decided; the decision is that they are none.

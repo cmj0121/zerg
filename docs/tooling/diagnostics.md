@@ -206,6 +206,8 @@ shipping compiler rather than a part of it (the line
 | `E2092` | … is a statement, and a match arm's body is an expression                                             |
 | `E2093` | `…` ends the line, so whether the next line is its upper bound cannot be told                         |
 | `E2094` | `map[…](…)` is not a constructor — an empty map is the literal `{:}`                                  |
+| `E2095` | `#[…]` is written twice in one decorator                                                              |
+| `E2096` | `#[…]` takes no arguments                                                                             |
 | `E3001` | `…` is not a public member of module `…`                                                              |
 | `E3002` | `…` is not a place, and an assignment needs one                                                       |
 | `E3003` | cannot assign to `…`: it is a module `const`, and a constant is never written                         |
@@ -369,6 +371,9 @@ shipping compiler rather than a part of it (the line
 | `E3162` | `#[obj]` on a spec that declares an associated fn                                                     |
 | `E3163` | `for mut` binds each element in place, and a … has no slots to bind                                   |
 | `E3164` | `for mut` walks a place spelled by names, fields and literal indexes, and this `…` is not one         |
+| `E3165` | `…(…)` is sealed — `#[sealed]` makes the field-wise constructor private to `…`                        |
+| `E3166` | `…` is not a Zerg type — the integers are `int`, `uint`, `byte` and `rune` and the float is `float`   |
+| `E3167` | `…[T]` is not a Zerg built-in — every primitive's size is fixed by the language                       |
 | `E4001` | `…` outside of a loop: it belongs to a `for`, and a `select` arm is not one                           |
 | `E4002` | a `from` cause is an `Err`, and … is not one                                                          |
 | `E4004` | `…(…)` names one side of an `Either`, which holds exactly one value                                   |
@@ -506,13 +511,11 @@ shipping compiler rather than a part of it (the line
 | `E9038` | an `impl` on a built-in container target                                                              |
 | `E9042` | `type … = …` over a non-scalar                                                                        |
 | `E9043` | `…` leaving a `guard` block                                                                           |
-| `E9046` | the compile-time built-in `…[T]`                                                                      |
 | `E9047` | an `impl` on the built-in type `…`                                                                    |
 | `E9049` | `…` MUTATES its list, and `…` is a value rather than a place                                          |
 | `E9052` | a map key of type …                                                                                   |
 | `E9056` | the list method `…`                                                                                   |
 | `E9062` | `in` over … — a range's members are found by comparing its bounds                                     |
-| `E9063` | `…` is part of the fixed-width ladder                                                                 |
 | `E9066` | `del …` on a CHANNEL                                                                                  |
 | `E9069` | … whose value has no type this compiler can name                                                      |
 | `E9070` | `…` re-binds a name a `match` arm's pattern already binds                                             |
@@ -520,7 +523,6 @@ shipping compiler rather than a part of it (the line
 | `E9075` | a generic `type …[…] = …`                                                                             |
 | `E9077` | a range of a non-integer or unsigned type, as a value                                                 |
 | `E9078` | `is …` names no type to compare against                                                               |
-| `E9079` | the decorator `#[sealed]` — reserved                                                                  |
 | `E9097` | main(args) in a program that uses concurrency                                                         |
 | `E9099` | … of the method `…` on a built-in receiver, which a thunk does not reach                              |
 | `E9100` | the container method `…` on a map or a set                                                            |
@@ -690,6 +692,19 @@ left; a range VALUE stays bounded, and that is `E4110`.
 constructor this compiler had not built. GRAMMAR#postfix makes a `[ … ]` after a name an index, so no
 program calls a type, and an empty map is the literal `{:}`; the refusal is a rule now, `E2094`.
 
+**One retired the day `#[sealed]` was built (#442).** `E9079` refused the decorator as reserved and unbuilt.
+It now makes a struct's field-wise `T(…)` constructor private to the declaring file; a construction from
+anywhere else is `E3165`, and a public associated fn is how a dependent builds one.
+
+**One left E9xxx because the language dropped the form (#442).** `E9063` refused `i8`…`i64`, `u8`…`u64`,
+`f32` and `f64` as a fixed-width ladder not yet declared. Zerg's scalars are `int`, `uint`, `byte`, `rune`
+and `float`, and the FFI table already maps each to a fixed C type, so a ladder adds nothing; C's platform
+widths are the boundary-only aliases. The refusal is a rule now, `E3166`.
+
+**And `sizeof` / `alignof` with it (#442).** `E9046` refused both as compile-time built-ins not yet built,
+with whether a layout is a built-in or a library facility left open. It is neither: a primitive's size is
+fixed by the language and `p.offset(n)` counts pointees, so nothing names a layout. The rule is `E3167`.
+
 **One retired with its rule rather than to another range.** `E2060` refused a declared type whose
 name did not begin with a capital, and that rule was the whole of how the language separated its
 two namespaces — a capitalised name was a type, a lower-case one a value. The rule is gone: a name
@@ -810,6 +825,9 @@ name now is the prelude rule (`E2061`), which is about the name rather than abou
 | `E4011` | —       | not a rule: a list renders in `str(…)` as it does in `print`           |
 | `E9036` | `E4111` | not an unbuilt form: a `spec` member is never `unsafe`                 |
 | `E9067` | `E2094` | not an unbuilt form: GRAMMAR derives no call of a type                 |
+| `E9079` | —       | the form was built: `#[sealed]`; a construction outside is E3165       |
+| `E9063` | `E3166` | not an unbuilt form: the five scalars are fixed widths already         |
+| `E9046` | `E3167` | not an unbuilt form: no program names a layout                         |
 
 **One of them moved nowhere**, and it is the only row whose second column is empty. `E3047`
 reported a prefix operator on a `type X = Y` — _operator `not` has no meaning on `Flag`_ — on

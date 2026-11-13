@@ -22,13 +22,14 @@
 - **它指名一個名字。** `#[` 與 `]` 之間那格是 `identifier`（`deco-item`,[`GRAMMAR`](../../GRAMMAR) group 7）,
   所以不是名字的 token 會以**名字**被拒,而不是以未知 decorator 被拒——`#[42]` 得到 _E2054 a decorator needs a
   name, and `42` is not one_,`#[mut]` 得到 _E2013 `mut` is a reserved word and cannot name a decorator_。
-  兩種答案不同是刻意的:下面那條未知 decorator 的分支報的是 **NotImplemented**,而告訴一個寫了 `#[+]` 的讀者
-  「本編譯器沒有實作這個 decorator」,是在指名一個任何 Zerg 都沒有的形式。
+  兩種答案不同是刻意的:下面那條未知 decorator 的分支回答的是任何 Zerg 都不讀的**名字**,而告訴一個寫了 `#[+]`
+  的讀者「集合裡沒有這個 decorator」,是在指名一個他根本沒寫的 decorator。
 
 ## 集合
 
-`#[derive]`、`#[obj]`、`#[test]`、`#[fixture]` 與 `#[allow]` 是這個編譯器會讀的 decorator。其他每一個——
-`#[sealed]`、layout 指示詞——都是 **[not yet]**,並且會被指名拒絕（見下方〈保留字，以及一個保留名實際上得到什麼〉）。
+`#[derive]`、`#[obj]`、`#[sealed]`、`#[test]`、`#[fixture]` 與 `#[allow]` 是這個編譯器會讀的 decorator。layout
+指示詞是 **[not yet]**,並且會被指名拒絕（見下方〈保留字，以及一個保留名實際上得到什麼〉）;其他任何名字都是
+_E2076_:封閉集合的永久規則，不是等待實作的形式。
 
 - **`#[derive(Spec, …)]`** — 掛在 `struct` / `enum`。依型別的**結構**生成每個所列 blessed spec 的 canonical impl。
   受祝福集合是 **`Eq`** 與 **`Ord`**——都已建置,會在一個 `struct` 與一個 `enum`(帶不帶 payload 都算)上生成正確的
@@ -66,11 +67,13 @@
 
 ## 保留字，以及一個保留名實際上得到什麼
 
-有四個名稱**已規範但未建置**，而其中只有一個是編譯器認得的名字：
+有三個名稱**已規範但未建置**。第四個 `#[sealed]` 過去保留在這裡，現在已經建好：
 
-- **`#[sealed]`** — 掛在 `struct`。*原意*是把預設的 field-wise `T(…)` constructor 降為**模組私有**，外部必須改走
-  公開的自訂 constructor（具名關聯 `fn`），而模組自身仍以 `T(…)` 建——搭配私有、帶 default 的 field 以強制不變量。
-  **[not yet]**，而且有自己的代碼：`E9079`。
+- **`#[sealed]`** — 掛在 `struct`。把預設的 field-wise `T(…)` constructor 降為**模組私有**，外部必須改走公開的
+  自訂 constructor（具名關聯 `fn`），而宣告它的檔案仍以 `T(…)` 建——搭配私有、帶 default 的 field 以強制不變量。
+  型別與欄位保有各自的可見性；在檔案之外建構得到的是 _E3165 `Cents(…)` is sealed — `#[sealed]` makes the
+  field-wise constructor private to `money/mod.zg`, so build one through a public associated fn of `Cents`_。
+  掛在 `struct` 以外的東西上是 _E2066_。
 - **`#[repr]`** / **`#[packed]`** / **`#[align]`** — 記憶體 **layout** decorator，用於對接外部 ABI 時控制記憶體
   寬度、padding 與對齊（見〈保持稀少〉與 [值與記憶體](memory.zh-TW.md)）。**[not yet]**，代碼是 `E9005`，
   而現在那是它們獨有的（見下）。
@@ -78,8 +81,8 @@
 > **[not yet]** layout 那三個是**保留在本頁上、而編譯器沒有建**，而且它們會指名自己說出來：_E9005
 > NotImplemented: the decorator `#[repr]` — it is a reserved LAYOUT decorator (in-memory width, padding and
 > alignment against an external ABI) and this compiler does not build it_。它們過去和拼錯的 `#[frobnicate]`
-> 共用未知 decorator 的分支，於是失去「等待實作」與「打錯字」之間的區分——正是 `#[sealed]` 的 `E9079` 在上一
-> 個項目買回來的那個區分。打錯字現在拿到一個什麼都不承諾的代碼：_E2076 the decorator `#[frobnicate]` — the
+> 共用未知 decorator 的分支，於是失去「等待實作」與「打錯字」之間的區分——正是 `#[sealed]` 還是保留名時以自己的
+> 代碼保住的那個區分。打錯字現在拿到一個什麼都不承諾的代碼：_E2076 the decorator `#[frobnicate]` — the
 > set is closed and compiler-owned, so an unknown name is not a directive this compiler has yet to build_。
 
 這個集合只在編譯器新增指令時成長；**logging** / 觀測與 **FFI** 是可能的下一批。任何**未**列在本頁的名稱根本不是

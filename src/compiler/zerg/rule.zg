@@ -139,6 +139,13 @@ pub enum Rule {
 	# `E9067`, a constructor waiting to be built; GRAMMAR derives none.
 	MapTypeCalled = 2094
 
+	# GRAMMAR#decorator: a no-argument directive written twice in one comma list says nothing the
+	# first did not.
+	DecoratorRepeated = 2095
+
+	# GRAMMAR#deco-item: `#[obj]`, `#[test]`, `#[fixture]` and `#[sealed]` take no arguments.
+	DecoratorTakesNoArgs = 2096
+
 	# checking — a form whose meaning does not hold together — reported against the tree, all at once
 	NotPublicMember = 3001
 	AssignTargetNotAPlace = 3002
@@ -354,6 +361,19 @@ pub enum Rule {
 	# loop can keep writing through, spelled so the freeze can hold it.
 	ForMutNoSlots = 3163
 	ForMutNotAPath = 3164
+
+	# `#[sealed]` makes the field-wise `T(…)` constructor module-private (GRAMMAR group 7). It was
+	# `E9079`, a reserved decorator not built.
+	SealedConstructor = 3165
+
+	# `i8`…`i64`, `u8`…`u64`, `f32`, `f64` are not Zerg types: the scalars are `int`, `uint`, `byte`,
+	# `rune` and `float`, each already a fixed C type at the FFI boundary. It was `E9063`, a ladder
+	# waiting to be built; there is nothing to build.
+	FixedWidthNotAType = 3166
+
+	# `sizeof[T]` / `alignof[T]` are not Zerg built-ins: a primitive's size is fixed by the language
+	# and `p.offset(n)` counts pointees, so no program has a layout to name. It was `E9046`.
+	LayoutBuiltin = 3167
 
 	# emitting — a form this compiler will not lower
 	LoopKeywordOutsideLoop = 4001
@@ -591,13 +611,11 @@ pub enum Rule {
 	NotYetImplTypeArgument = 9038
 	NotYetTypedefNonScalar = 9042
 	NotYetJumpOutOfGuard = 9043
-	NotYetCompileTimeBuiltin = 9046
 	NotYetImplOnBuiltin = 9047
 	NotYetMutateListRvalue = 9049
 	NotYetMapKeyType = 9052
 	NotYetListMethod = 9056
 	NotYetInOverType = 9062
-	NotYetFixedWidthLadder = 9063
 	NotYetDelChannel = 9066
 	NotYetValueUnnameableType = 9069
 	NotYetRebindMatchBinding = 9070
@@ -610,7 +628,6 @@ pub enum Rule {
 	# share `E9077` with "a range as a value", which is built now and is a different finding.
 	NotYetArraySlice = 9117
 	NotYetIsErrorKind = 9078
-	NotYetSealed = 9079
 	NotYetMainArgsWithConcurrency = 9097
 	NotYetSpawnOfUnknownName = 9099
 	NotYetMapMethod = 9100

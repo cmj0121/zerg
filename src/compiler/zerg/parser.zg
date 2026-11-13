@@ -1457,7 +1457,8 @@ pub fn parse_at(src: str, path: str) -> ast.File {
 		# refusal hung off the arms that do not want one — the arms are nine and the rule is
 		# one. `pub` is already consumed because a decorator LEADS it (GRAMMAR#decorated-decl),
 		# and `Hash` is allowed through so decorators stack.
-		raise p_diag_at(p, deco_line, deco_col, rule.Rule.DecoratorOnNonType, f"`{p_deco_says(pending[0])}` applies to the {p_deco_leads(pending)} that follows it, and what follows is `{token.says(cur(p))}` — a decorator changes what a DECLARATION means, so it may not lead one it has nothing to say about") if pending.len() > 0 and not p_deco_may_lead(p, pending)
+		misplaced := p_deco_misplaced(p, pending)
+		raise p_diag_at(p, deco_line, deco_col, rule.Rule.DecoratorOnNonType, f"`{p_deco_says(misplaced)}` applies to the {p_deco_leads(misplaced)} that follows it, and what follows is `{token.says(cur(p))}` — a decorator changes what a DECLARATION means, so it may not lead one it has nothing to say about") if misplaced != ""
 
 		if p_at(p, token.Kind.Import) {
 			# a re-export puts the marker on the import-spec (GRAMMAR#import-spec), so a leading
@@ -1641,7 +1642,7 @@ pub fn parse_at(src: str, path: str) -> ast.File {
 	# A decorator with no declaration under it is a decorator on nothing. Naming it is the
 	# same contract every other unsupported form has: what is written is either implemented
 	# or named, never quietly dropped.
-	raise p_diag_at(p, deco_line, deco_col, rule.Rule.DeriveNoDeclaration, f"`{p_deco_says(pending[0])}` has no declaration under it — a decorator applies to the {p_deco_leads(pending)} that follows it, and this one is the last item in the file") if pending.len() > 0
+	raise p_diag_at(p, deco_line, deco_col, rule.Rule.DeriveNoDeclaration, f"`{p_deco_says(pending[0])}` has no declaration under it — a decorator applies to the {p_deco_leads(pending[0])} that follows it, and this one is the last item in the file") if pending.len() > 0
 
 	# An `unsafe { … }` group with no `}` is the same kind of leftover state, and it was the
 	# one this function did not look at. The loop simply ran to `Eof` with the group still
@@ -1702,33 +1703,39 @@ fn p_not_a_binding() -> ast.ConstDecl {
 	raise p_impossible("parse_binding answered a statement that is not a binding — SLet is its one result, and a top-level declaration must not be fabricated from anything else")
 }
 
-# p_deco_may_lead reports whether the item starting here is one THIS pending list may lead.
-# The three that take a derive or an `#[obj]` are the three that call p_take_derives —
-# `struct`, `enum` and `spec` — and `#[test]` goes on the one declaration none of those is, a
-# `fn`.
+# p_deco_misplaced is the first entry of the pending list that may NOT lead the item starting
+# here, or "" when every one may. The three that take a derive or an `#[obj]` are the three that
+# call p_take_derives — `struct`, `enum` and `spec` — `#[sealed]` goes on a `struct` alone, and
+# `#[test]` and `#[fixture]` go on the one declaration none of those is, a `fn`.
 #
 # A SECOND DECORATOR IS NOT ASKED ABOUT HERE ANY MORE. It used to be let through so that
 # decorators could stack; stacking is E2063 now, raised before this is reached, so a `#[` can
 # no longer be the token under the cursor while anything is pending.
 #
-# It reads the LIST and not just the token, because the two sets are disjoint: without that,
-# `#[test]` on a struct would be accepted and dropped, which is the silence the whole rule
-# exists to end.
-fn p_deco_may_lead(mut &p: Parser, pending: list[str]) -> bool {
-	return p_at(p, token.Kind.Fn) if p_deco_on_fn(pending)
+# EVERY ENTRY IS ASKED, not the list as a whole. The list used to be judged by whichever kind it
+# held first, so `#[test, sealed] fn` and `#[test, derive(Eq)] fn` were let onto the `fn` and the
+# second item was dropped — the silence the whole rule exists to end, one comma along.
+fn p_deco_misplaced(mut &p: Parser, pending: list[str]) -> str {
+	for nm in pending {
+		return nm if not p_deco_fits(p, nm)
+	}
+	return ""
+}
+
+# p_deco_fits reports whether ONE pending entry may lead the item starting here.
+fn p_deco_fits(mut &p: Parser, nm: str) -> bool {
+	return p_at(p, token.Kind.Fn) if p_deco_on_fn(nm)
 
 	# `#[sealed]` is about a field-wise constructor, which only a `struct` has
-	return p_at(p, token.Kind.Struct) if p_deco_has(pending, "#sealed")
+	return p_at(p, token.Kind.Struct) if nm == "#sealed"
 
 	return p_at(p, token.Kind.Struct) or p_at(p, token.Kind.Enum) or p_at(p, token.Kind.Spec)
 }
 
-# p_deco_on_fn is the pending list that belongs on a `fn` — `#[test]` and `#[fixture]`, the two
-# decorators `zerg test` reads. They are asked about together because every question the parser
-# has about them is the same one: which declaration may they lead, and what to say when what
-# follows is not it.
-fn p_deco_on_fn(pending: list[str]) -> bool {
-	return p_deco_has(pending, "#test") or p_deco_has(pending, "#fixture")
+# p_deco_on_fn is whether a pending entry belongs on a `fn` — `#[test]` and `#[fixture]`, the
+# two decorators `zerg test` reads.
+fn p_deco_on_fn(nm: str) -> bool {
+	return nm == "#test" or nm == "#fixture"
 }
 
 # p_deco_stacked is the ONE decorator-per-item refusal, written once and raised from the two
@@ -1757,13 +1764,13 @@ fn p_deco_without(pending: list[str], marker: str) -> list[str] {
 	return out
 }
 
-# p_deco_leads spells the declarations the pending list may lead, for the sentence that turns
-# one away. A derive and an `#[obj]` name a type or a spec; a `#[test]` names a function, and
+# p_deco_leads spells the declarations ONE pending entry may lead, for the sentence that turns
+# it away. A derive and an `#[obj]` name a type or a spec; a `#[test]` names a function, and
 # telling a reader who wrote one that it belongs on a `struct` would be advice for the other
 # decorator.
-fn p_deco_leads(pending: list[str]) -> str {
-	return "`fn`" if p_deco_on_fn(pending)
-	return "`struct`" if p_deco_has(pending, "#sealed")
+fn p_deco_leads(nm: str) -> str {
+	return "`fn`" if p_deco_on_fn(nm)
+	return "`struct`" if nm == "#sealed"
 
 	return "`struct`, `enum` or `spec`"
 }
@@ -3424,7 +3431,7 @@ fn p_stmt_decorator(mut &p: Parser) {
 	mut pending: list[str] = []
 	parse_decorator(p, pending)
 
-	raise p_diag_at(p, t.line, t.col, rule.Rule.DecoratorOnStatement, f"`{p_deco_says(pending[0])}` applies to the {p_deco_leads(pending)} that follows it, and a statement is not one — the decorator a STATEMENT takes is `#[allow(…)]`, which suppresses a lint finding over it") if pending.len() > 0
+	raise p_diag_at(p, t.line, t.col, rule.Rule.DecoratorOnStatement, f"`{p_deco_says(pending[0])}` applies to the {p_deco_leads(pending[0])} that follows it, and a statement is not one — the decorator a STATEMENT takes is `#[allow(…)]`, which suppresses a lint finding over it") if pending.len() > 0
 }
 
 # --- statements ----------------------------------------------------------------

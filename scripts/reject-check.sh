@@ -10772,6 +10772,22 @@ fn main() {
 }
 EOF
 
+# A `break` leaves the INNERMOST loop only. A `del` of a name the enclosing loop goes round with,
+# followed by a `break` out of an inner loop, freed it for the outer loop's next round: a `Ref`
+# read there was a use after free, a list an IndexError. `return` leaves them all and stays.
+reject a-del-and-break-in-an-inner-loop E3168 'the next iteration would use `xs` after del' <<'EOF'
+fn main() {
+	xs := [10, 20, 30]
+	for i in 0..3 {
+		print xs[1]
+		for j in 0..2 {
+			del xs
+			break
+		}
+	}
+}
+EOF
+
 # and a `break` right after it does NOT excuse the name the loop is WALKING: the loop reads
 # its operand on the way out too. Which of the two rules answers is the point of the pair —
 # this one is E3169, the one above E3168, and each would fail if the other were picked.

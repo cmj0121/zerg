@@ -3234,33 +3234,9 @@ fn main() {
 }
 EOF
 
-# GRAMMAR#del-stmt gives `del` a second meaning on a channel — drop a sender reference,
-# close the stream if it was the last. This compiler releases a channel where its
-# binding's scope ends, so `del ch` revoked the name and emitted nothing: the program
-# built, said nothing, and DEADLOCKED waiting on an end the writer thought it had closed.
-expect "$ZERG" del-on-a-channel E9066 <<'EOF'
-fn consume(rx: <-chan[int], done: chan[int]<-) {
-	mut n := 0
-	for v in rx {
-		n = n + v
-	}
-	done <- n
-}
-
-fn main() {
-	ch := chan[int](4)
-	done := chan[int](1)
-	spawn consume(ch, done)
-	ch <- 1
-	del ch
-	print <-done!
-}
-EOF
-
-# THE OTHER HALF OF `del`'s ABSENCE, and it is the same absence read from the value side. The
-# channel case above is refused because the drop cannot be taken out of the middle of the
-# cleanup stack; an owning struct, list or map is refused for exactly that reason, and used to
-# be accepted in SILENCE — the name was revoked, the storage was not freed, and the "storage
+# `del` OF AN OWNING VALUE. The drop could not be taken out of the middle of the cleanup
+# stack, which is why an owning struct, list or map is refused; it used to be accepted in
+# SILENCE — the name was revoked, the storage was not freed, and the "storage
 # freed" row of docs/core/memory.md was a promise no program kept (#94).
 #
 # A SCALAR `del` IS NOT HERE, deliberately: there is no storage to free early, so revoking the

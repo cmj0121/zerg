@@ -10756,6 +10756,37 @@ fn main() {
 }
 EOF
 
+# A LOOP'S NEXT ITERATION IS A LATER PATH (#472). The liveness walk sees a body once, so a `del`
+# of a name declared outside the loop revoked it for the second round with nothing said — and
+# once `del` paid its release there, the second round read freed storage. The scalar case is
+# here because the rule is about the name, not about what it owns.
+reject a-del-in-a-loop-of-an-outer-name E3168 'the next iteration would use `x` after del' seed-gap <<'EOF'
+fn main() {
+	x := 1
+	mut i := 0
+	for i < 2 {
+		del x
+		i = i + 1
+	}
+	print i
+}
+EOF
+
+# and a `break` right after it does NOT excuse the name the loop is WALKING: the loop reads
+# its operand on the way out too. Which of the two rules answers is the point of the pair —
+# this one is E3169, the one above E3168, and each would fail if the other were picked.
+reject a-del-of-the-walked-channel E3169 'inside the `for … in` that walks `ch`' <<'EOF'
+fn main() {
+	ch := chan[int](2)
+	ch <- 1
+	for v in ch {
+		print v
+		del ch
+		break
+	}
+}
+EOF
+
 # --- the parser's channel: the rules that used to raise with no code ------------------
 #
 # Every one of these was refused before this list existed, and every one said only a

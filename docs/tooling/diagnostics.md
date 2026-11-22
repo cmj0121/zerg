@@ -374,6 +374,8 @@ shipping compiler rather than a part of it (the line
 | `E3165` | `…(…)` is sealed — `#[sealed]` makes the field-wise constructor private to `…`                        |
 | `E3166` | `…` is not a Zerg type — the integers are `int`, `uint`, `byte` and `rune` and the float is `float`   |
 | `E3167` | `…[T]` is not a Zerg built-in — every primitive's size is fixed by the language                       |
+| `E3168` | `del …` inside a loop that `…` was declared outside of — the next iteration would use it              |
+| `E3169` | `del …` inside the `for … in` that walks it — the loop reads its operand on the way out               |
 | `E4001` | `…` outside of a loop: it belongs to a `for`, and a `select` arm is not one                           |
 | `E4002` | a `from` cause is an `Err`, and … is not one                                                          |
 | `E4004` | `…(…)` names one side of an `Either`, which holds exactly one value                                   |
@@ -516,7 +518,6 @@ shipping compiler rather than a part of it (the line
 | `E9052` | a map key of type …                                                                                   |
 | `E9056` | the list method `…`                                                                                   |
 | `E9062` | `in` over … — a range's members are found by comparing its bounds                                     |
-| `E9066` | `del …` on a CHANNEL                                                                                  |
 | `E9069` | … whose value has no type this compiler can name                                                      |
 | `E9070` | `…` re-binds a name a `match` arm's pattern already binds                                             |
 | `E9071` | the default on field `…` reads the field `…`                                                          |
@@ -813,6 +814,7 @@ name now is the prelude rule (`E2061`), which is about the name rather than abou
 | `E9003` | —       | the form was built: a generic enum, one specialization per application |
 | `E9048` | —       | the form was built: a spec names a type, and a box dispatches          |
 | `E9055` | —       | the form was built: `Eq` derives over a payload enum's tag and payload |
+| `E9066` | —       | the form was built: `del ch` drops the binding's reference there       |
 | `E9064` | —       | the form was built: `set[T]`, its constructor and its members          |
 | `E9054` | —       | the form was built: `Encode` and `Decode` derive through `codec`       |
 | `E9010` | —       | the form was built: a named argument, in a call and a construction     |

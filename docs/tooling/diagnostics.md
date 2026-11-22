@@ -531,7 +531,6 @@ shipping compiler rather than a part of it (the line
 | `E9105` | a remote package — the path names a host, and resolving one needs a package layer                     |
 | `E9106` | module `…` declares the function `…`, and a module's function is not a value here                     |
 | `E9107` | the method `…` on a … — `display`, `debug`, `format`; `next` on a channel; `iter` on what `for` walks |
-| `E9108` | `del …` on an owning struct, list or map — the early free, where the release is a scope-exit unwind   |
 | `E9111` | an array length reached through an import                                                             |
 | `E9112` | the array method `…`                                                                                  |
 | `E9117` | a slice of an array — its length is part of its type                                                  |
@@ -815,6 +814,7 @@ name now is the prelude rule (`E2061`), which is about the name rather than abou
 | `E9048` | —       | the form was built: a spec names a type, and a box dispatches          |
 | `E9055` | —       | the form was built: `Eq` derives over a payload enum's tag and payload |
 | `E9066` | —       | the form was built: `del ch` drops the binding's reference there       |
+| `E9108` | —       | the form was built: `del` frees an owning value at the statement       |
 | `E9064` | —       | the form was built: `set[T]`, its constructor and its members          |
 | `E9054` | —       | the form was built: `Encode` and `Decode` derive through `codec`       |
 | `E9010` | —       | the form was built: a named argument, in a call and a construction     |

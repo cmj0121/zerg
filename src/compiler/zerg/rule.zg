@@ -667,12 +667,6 @@ pub enum Rule {
 	# sentence says there is nothing to write instead, because the substitute has to compile.
 	NotYetSpecifiedMethod = 9107
 
-	# `del` of an OWNING value — a local struct, list or map — whose storage the statement is
-	# for freeing early. Revoking the name is built and is the first half; the free is not,
-	# because the release is registered on the runtime cleanup stack at the declaration and
-	# every exit unwinds to a mark. It retires the way the channel case (9066) did, once a
-	# release can be taken out of the middle.
-	NotYetDelOwning = 9108
 	NotYetArrayLenImported = 9111
 	NotYetArrayMethod = 9112
 

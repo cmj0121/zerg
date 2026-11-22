@@ -845,11 +845,17 @@ pub struct Emitter {
 
 	# loop_env_lo is the environment's length at the innermost loop BODY's entry, -1 outside
 	# any loop: a binding below it was declared outside the loop, so a `del` of one inside the
-	# body revokes it for the NEXT iteration too (c_del_in_loop). del_exits says the statement
-	# after the one being lowered leaves the loop — a `break` or a `return` — which is the one
-	# shape in which there is no next iteration to use the name.
+	# body revokes it for the NEXT iteration too (c_del_in_loop). A `for … in` variable is bound
+	# before the body opens, and loop_lo_next is the length it saw first, so its own variable
+	# counts as the loop's. loop_env_outer is the ENCLOSING loop's loop_env_lo: a `break` leaves
+	# the innermost loop only, and the enclosing one goes round again.
+	#
+	# del_exits says how the statement after the one being lowered leaves: 0 it does not, 1 a
+	# `break`, 2 a `return`, which leaves every loop at once.
 	pub loop_env_lo: int
-	pub del_exits: bool
+	pub del_exits: int
+	pub loop_env_outer: int
+	pub loop_lo_next: int
 
 	# walk_idxs is the environment row of each `for … in` operand now being walked, innermost
 	# last, -1 for an operand with no root name. It is wider than the freeze stack: a channel
@@ -2464,6 +2470,8 @@ fn c_reset_env(mut &em: Emitter) {
 	em.loop_defer = false
 	em.loop_mark = ""
 	em.loop_env_lo = -1
+	em.loop_env_outer = -1
+	em.loop_lo_next = -1
 	em.force_mark = ""
 	em.fn_mark_used = false
 	em.ref_rows = []
@@ -20268,8 +20276,9 @@ fn c_del_in_loop(mut &em: Emitter, name: str) {
 		return
 	}
 
-	return if em.loop_env_lo < 0 or em.del_exits
-	return if idx >= em.loop_env_lo
+	return if em.loop_env_lo < 0 or idx >= em.loop_env_lo
+	return if em.del_exits == 2
+	return if em.del_exits == 1 and (em.loop_env_outer < 0 or idx >= em.loop_env_outer)
 
 	check.chk_at(em, rule.Rule.DelInLoop, f"`del {name}` inside a loop that `{name}` was declared outside of — the next iteration would use `{name}` after del (GRAMMAR#del-stmt). Move the `del` after the loop, or leave the loop right after it with `break` or `return`")
 }
@@ -20282,10 +20291,10 @@ fn c_ints_has(xs: list[int], x: int) -> bool {
 	return false
 }
 
-# c_next_leaves_loop is whether the first real statement from `i` on always leaves the
-# enclosing loop — a `break` or a `return`. The position markers between statements are
+# c_next_exit is how the first real statement from `i` on leaves the enclosing loop: 1 a
+# `break`, 2 a `return`, 0 anything else. The position markers between statements are
 # skipped: they are where a statement is, not one.
-fn c_next_leaves_loop(body: list[ast.Stmt], i: int) -> bool {
+fn c_next_exit(body: list[ast.Stmt], i: int) -> int {
 	mut j := i
 	for j < body.len() {
 		match body[j] {
@@ -20293,17 +20302,17 @@ fn c_next_leaves_loop(body: list[ast.Stmt], i: int) -> bool {
 				j = j + 1
 			}
 			Stmt.SBreak => {
-				return true
+				return 1
 			}
 			Stmt.SReturn(_, _) => {
-				return true
+				return 2
 			}
 			_ => {
-				return false
+				return 0
 			}
 		}
 	}
-	return false
+	return 0
 }
 
 # c_alias_guard renders the run-time half of the `mut &` no-alias rule: one zrt_alias_check per
@@ -23942,6 +23951,7 @@ fn c_frz_pop(mut &em: Emitter, pushed: bool, iter: ast.Expr) {
 # c_forin_any is the two `for … in` forms: the plain one binds a copy, `for mut` the slot.
 fn c_forin_any(mut &em: Emitter, var: str, is_mut: bool, iter: ast.Expr, body: list[ast.Stmt], ind: str) -> str {
 	em.walk_idxs.append(c_live_idx(em, check.chk_root_name(iter)))
+	em.loop_lo_next = em.env_names.len()
 	mut out := ""
 	if is_mut {
 		out = c_formut(em, var, iter, body, ind)
@@ -23949,6 +23959,7 @@ fn c_forin_any(mut &em: Emitter, var: str, is_mut: bool, iter: ast.Expr, body: l
 		out = c_forin(em, var, iter, body, ind)
 	}
 	c_ints_drop_last(em.walk_idxs)
+	em.loop_lo_next = -1
 	return out
 }
 
@@ -25002,6 +25013,7 @@ struct LoopFrame {
 	pub used: bool
 	pub deferred: bool
 	pub env_lo: int
+	pub env_outer: int
 }
 
 # c_loop_enter takes the mark the body's jumps will unwind to and answers what was there
@@ -25010,10 +25022,15 @@ struct LoopFrame {
 # defer in the enclosing function is that function's to unwind, and an inner loop must not
 # go on making the outer loop's jumps pay for a record it already gave back.
 fn c_loop_enter(mut &em: Emitter, mark: str) -> LoopFrame {
-	saved := LoopFrame(em.loop_mark, em.loop_keep, em.loop_mark_used, em.loop_defer, em.loop_env_lo)
+	saved := LoopFrame(em.loop_mark, em.loop_keep, em.loop_mark_used, em.loop_defer, em.loop_env_lo, em.loop_env_outer)
 	em.loop_mark = mark
 	em.loop_keep = em.rel_cnames.len()
+	em.loop_env_outer = em.loop_env_lo
 	em.loop_env_lo = em.env_names.len()
+	if em.loop_lo_next >= 0 {
+		em.loop_env_lo = em.loop_lo_next
+		em.loop_lo_next = -1
+	}
 	em.loop_mark_used = false
 	em.loop_defer = false
 	return saved
@@ -25025,6 +25042,7 @@ fn c_loop_leave(mut &em: Emitter, saved: LoopFrame) {
 	em.loop_mark_used = saved.used
 	em.loop_defer = saved.deferred
 	em.loop_env_lo = saved.env_lo
+	em.loop_env_outer = saved.env_outer
 }
 
 # c_loop_block emits a loop BODY. It exists for two things the C does not say: a loop may
@@ -25390,11 +25408,11 @@ fn c_block(mut &em: Emitter, body: list[ast.Stmt], ind: str) -> str {
 	mut out := ""
 	mut i := 0
 	for i < body.len() {
-		em.del_exits = c_next_leaves_loop(body, i + 1)
+		em.del_exits = c_next_exit(body, i + 1)
 		out = out + c_stmt(em, body[i], ind)
 		i = i + 1
 	}
-	em.del_exits = false
+	em.del_exits = 0
 
 	# THE TEXT AFTER A BLOCK IS THE ENCLOSING STATEMENT'S AGAIN. A place is read off an address,
 	# and an `elif`'s condition or a match's next arm sits behind the last statement of this
@@ -25572,6 +25590,8 @@ fn c_fn(mut &em: Emitter, fn_d: ast.FnDecl) -> str {
 	outer_loop_defer := em.loop_defer
 	outer_loop_env_lo := em.loop_env_lo
 	outer_del_exits := em.del_exits
+	outer_loop_env_outer := em.loop_env_outer
+	outer_loop_lo_next := em.loop_lo_next
 	c_reset_env(em)
 
 	# and PUT THE DECLARATION'S PLACE BACK, because the pre-pass moves the marker: it walks
@@ -25692,6 +25712,8 @@ fn c_fn(mut &em: Emitter, fn_d: ast.FnDecl) -> str {
 	em.loop_defer = outer_loop_defer
 	em.loop_env_lo = outer_loop_env_lo
 	em.del_exits = outer_del_exits
+	em.loop_env_outer = outer_loop_env_outer
+	em.loop_lo_next = outer_loop_lo_next
 
 	# The body never falls through when it has a value to return, and nothing tells cc that once
 	# the end of it is reachable.
@@ -29294,7 +29316,7 @@ fn c_emit_unit_as(prog0: ast.File, own0: ast.File, ft: FileTypes, ms: Mods, whol
 	# is what makes that invariant hold for a multi-unit program, at the place it already lives,
 	# and it is what lets the declaration passes below go back to reading the WHOLE program.
 	seen := diags.len()
-	mut em := Emitter([], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], false, false, false, false, [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], 0, [], 0, [], [], false, "", "", [], [], ast.Ty.TVoid, 0, "", 0, 0, 0, 0, "", diags, 0, 0, [], [], [], [], [], false, 0, false, "", 0, false, false, [], [], [], [], [], [], [], [], [], [], [], "", want_lints, [], [], [], [], [], [], [], [], [], [], [], [], false, 0, [], [], "", c_nosub(), [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], false, ast.no_index(), [], [], [], [], [], [], [], [], [], [], [], [], false, [], [], [], [], [], [], [], [], [], [], [], "", [], [], 0, 0, [], -1, false, [])
+	mut em := Emitter([], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], false, false, false, false, [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], 0, [], 0, [], [], false, "", "", [], [], ast.Ty.TVoid, 0, "", 0, 0, 0, 0, "", diags, 0, 0, [], [], [], [], [], false, 0, false, "", 0, false, false, [], [], [], [], [], [], [], [], [], [], [], "", want_lints, [], [], [], [], [], [], [], [], [], [], [], [], false, 0, [], [], "", c_nosub(), [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], false, ast.no_index(), [], [], [], [], [], [], [], [], [], [], [], [], false, [], [], [], [], [], [], [], [], [], [], [], "", [], [], 0, 0, [], -1, 0, -1, -1, [])
 
 	# ASSIGNED, NOT PASSED. Every argument above is a zero value, and `layering` asserts that
 	# — it lines the call up with the fields by KIND, which only works while nothing in it

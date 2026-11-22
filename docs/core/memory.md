@@ -327,7 +327,8 @@ subsequent path (no runtime drop flags). A `del` inside one arm of an `if` there
 unusable after the merge, symmetrically with the other arms.
 
 A loop's **next iteration** is a subsequent path too. A `del` inside a loop body of a name declared outside
-the loop is refused (_E3168_) unless a `break` or a `return` comes right after it, and a `del` of the name
+the loop is refused (_E3168_) unless a `return` comes right after it, or a `break` out of the one loop the
+name is outside of; a loop's own variable is inside it, and a `del` of the name
 a `for … in` is walking is refused even then (_E3169_): the loop reads its operand at every step and on its
 way out.
 

@@ -521,6 +521,14 @@ void zrt_unwind_to(size_t mark);
  * a balanced expression guarantees; zrt_unwind_to is the exit that runs what it pops. */
 void zrt_forget(size_t n);
 
+/* zrt_undefer runs the cleanup registered for `env` NOW, and disarms its entry so the scope
+ * exit (or an abort) that reaches it later runs nothing. It is `del name` for a binding that
+ * owns what it holds: the release a scope exit would have paid is paid at the statement.
+ * The entry stays on the stack rather than being taken out, so every mark and every
+ * zrt_forget count taken around it is still right. An env with no live entry - already
+ * revoked, or never registered - is a no-op. */
+void zrt_undefer(void *env);
+
 /* zrt_defer_release is the `void (*)(void *)` adapter for a refcounted CELL held in a
  * temporary: zrt_defer hands a cleanup the ADDRESS of what it registered, and zrt_release
  * takes the cell. It is what holds a boxed enum payload while the payloads after it are

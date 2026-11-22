@@ -20189,13 +20189,10 @@ fn c_close_callee(mut &em: Emitter, ch: ast.Expr) -> Callee {
 	return Callee("zrt_chan_close", args, "")
 }
 
-# c_del lowers `del name`: it REVOKES the name, and nothing else. The revocation is the
-# whole statement — c_live_del records it and c_live_use rejects a later read, which is
-# what makes `del` mean one thing for every type.
-#
-# It emits no C. A channel handle is not released here because the binding already owes
-# its reference to the pending-release list, and the scope that ends pays it — releasing
-# again would be the double-release the list exists to rule out. Giving up the SEND end
+# c_del lowers `del name`: it REVOKES the name — c_live_del records it and c_live_use
+# rejects a later read, which is what makes `del` mean one thing for every type — and, for a
+# binding on the pending-release list, pays that release at the statement (zrt_undefer),
+# which disarms the entry so the scope that ends cannot pay it twice. Giving up the SEND end
 # early is `close(ch)`, a statement of its own, and it keeps its holder on purpose.
 fn c_del(mut &em: Emitter, name: str, ind: str) -> str {
 	# `del ch` ON A CHANNEL. GRAMMAR#del-stmt gives it a second meaning there — "a Ref[T]/chan
@@ -20231,8 +20228,27 @@ fn c_del(mut &em: Emitter, name: str, ind: str) -> str {
 	# down is E3069. The read path asked and this one did not, which is the whole of it.
 	c_del_target(em, name)
 
+	cn := c_var_cname(em, name)
 	c_live_del(em, name)
+
+	# THE RELEASE IS PAID HERE when this binding owes one (#471). A binding that owns what it
+	# holds registered its give-back with zrt_defer at the declaration, and zrt_undefer runs
+	# that entry now and disarms it, so the scope exit — or an abort before it — pays nothing
+	# twice. A `Ref[T]` dropped one holder at its scope end while the chapter promises the
+	# `del`, and the order was observable: `Ref(7, bye); del r; print "after"` ran `bye` after
+	# the print. A binding that registered nothing (a scalar, a `mut &` borrow) is revoked and
+	# that is all of it.
+	return f"{ind}zrt_undefer(&{cn});\n" if c_owes_release(em, cn)
+
 	return f"{ind}/* del {name} */\n"
+}
+
+# c_owes_release is whether a C local is on the pending-release list of the scopes now open.
+fn c_owes_release(mut &em: Emitter, cn: str) -> bool {
+	for c in em.rel_cnames {
+		return true if c == cn
+	}
+	return false
 }
 
 # c_del_target is the rule that `del`'s operand names a BINDING. GRAMMAR#del-stmt is `'del'

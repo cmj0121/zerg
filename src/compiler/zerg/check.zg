@@ -1972,7 +1972,9 @@ fn chk_alias_pair(mut &em: emit.Emitter, a: ast.Expr, b: ast.Expr) -> int {
 	la := chk_int_lexeme(ia)
 	lb := chk_int_lexeme(ib)
 	if la != "" and lb != "" {
-		return 1 if la == lb
+		# by VALUE: `xs[0x1]` and `xs[1]` are one element, and comparing the lexemes built
+		# that call with no check
+		return 1 if lexer.int_value(la) == lexer.int_value(lb)
 		return 0
 	}
 	return 1 if not chk_alias_index_ok(em, ia) or not chk_alias_index_ok(em, ib)

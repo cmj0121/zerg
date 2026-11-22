@@ -10787,6 +10787,38 @@ fn main() {
 }
 EOF
 
+# TWO ELEMENTS OF ONE LIST are told apart by their indexes (#474): distinct literals build with
+# no check and two literals or immutable names are compared at run time, so what is left for
+# E3025 is the pair no comparison can decide. Equal literals are the aliasing itself; a MUTABLE
+# index is the pair the guard would have to evaluate twice. Each case is the one its neighbour
+# in the corpus is not — `two(xs[0], xs[1])` there builds.
+reject two-mut-refs-to-one-literal-index E3025 '`xs` is given to two `mut &` parameters' <<'EOF'
+fn two(mut &a: int, mut &b: int) {
+	a = a + 1
+	b = b + 1
+}
+
+fn main() {
+	mut xs := [1, 2]
+	two(xs[1], xs[1])
+	print xs
+}
+EOF
+
+reject two-mut-refs-by-a-mutable-index E3025 '`xs` is given to two `mut &` parameters' <<'EOF'
+fn two(mut &a: int, mut &b: int) {
+	a = a + 1
+	b = b + 1
+}
+
+fn main() {
+	mut xs := [1, 2]
+	mut i := 0
+	two(xs[i], xs[1])
+	print xs
+}
+EOF
+
 # --- the parser's channel: the rules that used to raise with no code ------------------
 #
 # Every one of these was refused before this list existed, and every one said only a

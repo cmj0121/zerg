@@ -141,15 +141,11 @@ linker against generated code nobody wrote. A feature the specification marks **
 `NotImplemented` and stops.
 
 **Where the compiler falls short of that, the specification says so** — a **[deviation]** in the
-chapter the feature belongs to. The ones worth knowing before writing anything are the **silent**
-ones, where a program gets an answer and no diagnostic:
+chapter the feature belongs to, naming the issue that owes the fix. `make deviation-check` holds both
+halves, so the chapters are the list: this page keeps no copy of it, because the copy it kept went on
+naming two leaks after #326 and #320 had closed them.
 
-| Silent deviation                                               | Chapter                       |
-| -------------------------------------------------------------- | ----------------------------- |
-| an argument already built leaks when a later one aborts        | [memory](docs/core/memory.md) |
-| an `Err`'s run-time message leaks when `??` discards the `Err` | [memory](docs/core/memory.md) |
-
-One more is structural, and a running program feels it: the scheduler is **cooperative, not
+One limit is structural, and a running program feels it: the scheduler is **cooperative, not
 preemptive**, so a CPU-bound coroutine occupies a worker until it parks
 ([coroutines](docs/code/coroutine.md)).
 

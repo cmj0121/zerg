@@ -136,14 +136,15 @@ UTF-8 的 `str` 橋接是 `EncodingError`、越界索引是 `IndexError`、缺�
 > 一個空的定義域上是完整的，而不是一個程式碰得到、然後被拒絕的形式；`message()` 與 `unwrap()` 依規格回答。
 
 **Aborts。** 一次 abort——一個內建 runtime fault 或任何你 `raise` 的 `Err`——代表 **bug**，不是預期內的失敗。本章
-用到的 fault 名稱裡,今天有十一個具現化成可 `is` 測試的**種類**:`ValueError`、`OverflowError`、`IOError`、
+用到的 fault 名稱裡,今天有十二個具現化成可 `is` 測試的**種類**:`ValueError`、`OverflowError`、`IOError`、
 `EncodingError`、`IndexError`、`KeyError`、`DivideByZeroError`，加上並行那章指名的三個——`SendOnClosedError`、
-`DeadlockError` 與 `StopIteration`——以及 `AssertionError`:那是失敗的 `assert` raise 出來的東西,而且**沒有別的
+`DeadlockError` 與 `StopIteration`——`AliasError`,`mut &` 不可別名規則的執行期那一半
+（[值與記憶體](../core/memory.zh-TW.md)）,以及 `AssertionError`:那是失敗的 `assert` raise 出來的東西,而且**沒有別的
 東西**會 raise 它。這份獨佔性正是種類勝過訊息之處:`zerg test` 把不成立的主張報成**失敗**、把其他抵達測試本體頂端
-的東西報成**崩潰**,而它分辨兩者的方法就是問 `e is AssertionError`。其餘在語言表面還**叫不出名字**:`UnwrapError`、
-`MatchError` 與 `AliasError` 是 **[not yet]**——`err is AliasError` 在**兩個編譯器**裡都是
-_E9078 NotImplemented: `is AliasError` — an `is` test compares the operand's own type against a named one
-here, and `AliasError` names no type to put on the right of it_——而它們的 abort 也不帶獨立具現化種類、只有一般
+的東西報成**崩潰**,而它分辨兩者的方法就是問 `e is AssertionError`。其餘在語言表面還**叫不出名字**:`UnwrapError`
+與 `MatchError` 是 **[not yet]**——`err is MatchError` 在**兩個編譯器**裡都是
+_E9078 NotImplemented: `is MatchError` — an `is` test compares the operand's own type against a named one
+here, and `MatchError` names no type to put on the right of it_——而它們的 abort 也不帶獨立具現化種類、只有一般
 訊息。這道拒收正是把它們擋在下面那個折疊之外的東西:一個分類**有**、而這個編譯器叫不出名字的種類,不可以讀成
 一句自信的「不,它不是那些之一」。
 
@@ -233,7 +234,7 @@ match guard { work() } {
 ```
 
 `is` 只產出 `bool`，所以一個分支能用 **`Error` 介面**（`message` / `code` / `unwrap`）、但**碰不到具體型別自己的欄位**
-——值已被抹除、永不重新建構。在一個錯誤上,那正是 `is` 的用途:上面那十一個具現化種類,是它唯一會從 runtime tag
+——值已被抹除、永不重新建構。在一個錯誤上,那正是 `is` 的用途:上面那十二個具現化種類,是它唯一會從 runtime tag
 回答的名字,而分類範圍外的名字得到的是 `E9078`、而不是一個回答 `false` 的測試。其他每一個名字都是從運算元自己的
 型別回答的編譯期常數,那由 [Spec 與 Generics](../core/specs.zh-TW.md#型別測試type-testsis) 決定;仍然
 **裝箱**的運算元是唯一在執行期得到答案的:讀的是它被裝箱時對上的那張見證表。這裡可達的錯誤集合在覆蓋上被

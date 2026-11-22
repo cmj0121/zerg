@@ -1905,13 +1905,15 @@ pub fn chk_payload_says(where: str, carrier: ast.Ty) -> str {
 # wording drifts by a word. It drifted, and a reader was told twice.
 pub const CHK_ANSWER := "this function's answer"
 
-# chk_ref_alias raises when one call hands the same variable to two `mut &` parameters.
+# chk_ref_alias raises when one call hands the same variable to two `mut &` parameters, and
+# answers the index pairs the call must compare at run time where the compiler cannot decide
+# them (see chk_ref_alias_in) — empty when there are none.
 #
 # GRAMMAR#param — a `mut &` "cannot ALIAS (the same variable to two `mut &` in one call),
 # which keeps it safe with no borrow checker". That sentence is the reason there is no
 # borrow checker, and nothing was holding it: `two(k, k)` passed one address twice, so the
 # callee's two names were one variable and the second write landed on top of the first.
-pub fn chk_ref_alias(mut &em: emit.Emitter, key: str, args: list[ast.Expr]) {
+pub fn chk_ref_alias(mut &em: emit.Emitter, key: str, args: list[ast.Expr]) -> list[ast.Expr] {
 	mut refs: list[bool] = []
 	mut i := 0
 	for i < args.len() {
@@ -1919,12 +1921,21 @@ pub fn chk_ref_alias(mut &em: emit.Emitter, key: str, args: list[ast.Expr]) {
 		refs.append(row >= 0 and em.pr_ref[row])
 		i = i + 1
 	}
-	chk_ref_alias_in(em, chk_call_name(key), refs, args)
+	return chk_ref_alias_in(em, chk_call_name(key), refs, args)
 }
 
 # chk_ref_alias_in is the rule over `refs`, which slot is a `mut &` — a named call's from its
 # parameter table, a call by a closure's name (emit.c_cl_call) from the type.
-pub fn chk_ref_alias_in(mut &em: emit.Emitter, who: str, mut &refs: list[bool], args: list[ast.Expr]) {
+#
+# TWO ELEMENTS OF ONE LIST OR ARRAY are told apart by their indexes (#474). docs/core/memory.md
+# accepts `f(xs[i], xs[j])` and aborts with AliasError only where `i == j` at run time, so:
+# two integer literals are decided here — distinct builds with no check, equal is the
+# aliasing this rule refuses — and two indexes that are each a literal or an IMMUTABLE name
+# are compared at run time: the pair is answered, flat, and emit.c_alias_guard wraps the call.
+# An index that is anything else stays refused: it would be evaluated twice, once for the
+# argument and once for the guard, and a mutable name could change between the two.
+pub fn chk_ref_alias_in(mut &em: emit.Emitter, who: str, mut &refs: list[bool], args: list[ast.Expr]) -> list[ast.Expr] {
+	mut pairs: list[ast.Expr] = []
 	mut i := 0
 	for i < args.len() {
 		if i < refs.len() and refs[i] {
@@ -1932,14 +1943,88 @@ pub fn chk_ref_alias_in(mut &em: emit.Emitter, who: str, mut &refs: list[bool], 
 			mut j := i + 1
 			for j < args.len() {
 				if ni != "" and j < refs.len() and refs[j] and chk_root_name(args[j]) == ni {
-					chk_at(em, rule.Rule.MutRefAliasInCall, f"`{ni}` is given to two `mut &` parameters of `{who}` in one call — a borrow may not alias, which is what keeps it safe without a borrow checker")
-					return
+					pair := chk_alias_pair(em, args[i], args[j])
+					if pair == 1 {
+						chk_at(em, rule.Rule.MutRefAliasInCall, f"`{ni}` is given to two `mut &` parameters of `{who}` in one call — a borrow may not alias, which is what keeps it safe without a borrow checker")
+						return []
+					}
+					if pair == 2 {
+						pairs.append(chk_elem_index(em, args[i]))
+						pairs.append(chk_elem_index(em, args[j]))
+					}
 				}
 				j = j + 1
 			}
 		}
 		i = i + 1
 	}
+	return pairs
+}
+
+# chk_alias_pair decides two `mut &` arguments that share a root: 1 when they alias, or may
+# in a way no run-time comparison can check; 0 when they provably do not; 2 when their
+# indexes are compared at run time.
+fn chk_alias_pair(mut &em: emit.Emitter, a: ast.Expr, b: ast.Expr) -> int {
+	return 1 if not chk_is_elem(em, a) or not chk_is_elem(em, b)
+
+	ia := chk_elem_index(em, a)
+	ib := chk_elem_index(em, b)
+	la := chk_int_lexeme(ia)
+	lb := chk_int_lexeme(ib)
+	if la != "" and lb != "" {
+		# by VALUE: `xs[0x1]` and `xs[1]` are one element, and comparing the lexemes built
+		# that call with no check
+		return 1 if lexer.int_value(la) == lexer.int_value(lb)
+		return 0
+	}
+	return 1 if not chk_alias_index_ok(em, ia) or not chk_alias_index_ok(em, ib)
+
+	return 2
+}
+
+# chk_is_elem is whether an argument is `name[index]` over a list or an array, the one shape
+# whose two places a run-time comparison of the indexes can tell apart.
+fn chk_is_elem(mut &em: emit.Emitter, e: ast.Expr) -> bool {
+	return match e {
+		Expr.EIndex(base, _) => chk_elem_base(em, base)
+		_ => false
+	}
+}
+
+fn chk_elem_base(mut &em: emit.Emitter, base: ast.Expr) -> bool {
+	name := emit.c_ident_name(base)
+	return false if name == ""
+
+	t := emit.c_lookup_var(em, name)
+	return emit.c_is_list(t) or emit.c_is_arr(t)
+}
+
+# chk_elem_index is the index of an argument chk_is_elem accepted.
+fn chk_elem_index(mut &em: emit.Emitter, e: ast.Expr) -> ast.Expr {
+	return match e {
+		Expr.EIndex(_, idx) => idx
+		_ => ast.Expr.ENil
+	}
+}
+
+# chk_int_lexeme is an integer literal's lexeme, or "".
+fn chk_int_lexeme(e: ast.Expr) -> str {
+	return match e {
+		Expr.EInt(lex, _, _) => lex
+		_ => ""
+	}
+}
+
+# chk_alias_index_ok is whether an index can be evaluated a second time for the guard and give
+# the same answer: an integer literal, or the name of a binding nothing can write.
+fn chk_alias_index_ok(mut &em: emit.Emitter, e: ast.Expr) -> bool {
+	return true if chk_int_lexeme(e) != ""
+
+	name := emit.c_ident_name(e)
+	return false if name == ""
+
+	idx := emit.c_live_idx(em, name)
+	return idx >= 0 and not em.env_mut[idx]
 }
 
 # chk_call_arity raises when a call passes too few or too many arguments. `base` is 1 for

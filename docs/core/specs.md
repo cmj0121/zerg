@@ -352,7 +352,7 @@ the same question. A type that does not implement the spec was never in the box,
 
 A name that denotes **no type to compare against** is refused instead of answered: a `spec`, a name that
 needs arguments (`list`, `Result`), a built-in alias (`bytearray`), an error-carrier constructor (`Left`),
-and the taxonomy kinds this compiler cannot name (`UnwrapError`, `MatchError`, `AliasError`) — each is
+and the taxonomy kinds this compiler cannot name (`UnwrapError`, `MatchError`) — each is
 _E9078 NotImplemented: `is P` — an `is` test compares the operand's own type against a named one here, and
 `P` names no type to put on the right of it; GRAMMAR#cmp-expr takes any `type-name`, so this is a narrower
 test than the grammar writes_. The refusal is what keeps `xs is list` from reading as a confident `false`

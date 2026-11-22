@@ -652,16 +652,6 @@ byte(N)` and `byte(N * 3)` are compile errors. The seed folds the literal alone:
   pair, and a program the seed accepts and `zerg` rejects is never compared by `make oracle`.
   `scripts/reject-check.sh`'s `one-associated-value-in-two-files` carries the `seed-gap` marker.
 
-- **A `return` OF AN IF-EXPRESSION WHOSE BLOCK BRANCH ANSWERS A `str` LOCAL CRASHES.**
-  `return if n == 0 { k := "zero"; k } else { k := n * 10; f"pos {k}" }` builds, and the call
-  that takes the first branch dies with a bus error or a segfault. Binding the same expression
-  first — `v := if … ; return v` — runs and answers `zero`, as `zerg` does for both.
-
-  It costs the bootstrap nothing: the compiler's own sources return no if-expression with a
-  block branch. `test-data/codegen/if_expr_block_branch` binds before it returns so `make oracle`
-  can hold the two compilers to the rest of it; `test-data/behaviour/if-expr` returns one, and
-  only `zerg` runs it.
-
 - **`for mut` OVER WHAT IT CANNOT WRITE BACK INTO IS ACCEPTED.** `zerg` binds the loop variable
   to the walked collection's slot, so it asks what a write needs: a collection this scope may
   write (`E3006` on an immutable `xs`) and a place the freeze can spell (`E3164` on a call
@@ -670,6 +660,14 @@ byte(N)` and `byte(N * 3)` are compile errors. The seed folds the literal alone:
   It costs the bootstrap nothing: the compiler's own sources walk no immutable collection and no
   call result with `for mut`. `scripts/reject-check.sh`'s `for-mut-over-an-immutable-list` and
   `for-mut-over-a-call-result` carry the `seed-gap` marker.
+
+- **A `del` INSIDE A LOOP OF A NAME THE LOOP DID NOT DECLARE IS ACCEPTED.** The next iteration is
+  a later path, so `zerg` refuses it (`E3168`) unless a `break` or a `return` comes right after.
+  The seed's `del` revokes a name and frees nothing, so the program it builds is safe and only
+  the refusal is missing.
+
+  It costs the bootstrap nothing: the compiler's own sources `del` nothing inside a loop.
+  `scripts/reject-check.sh`'s `a-del-in-a-loop-of-an-outer-name` carries the `seed-gap` marker.
 
 - **`for mut` LOSES EDITS THE SEED DOES NOT WRITE BACK, with nothing said.** The seed binds a
   copy and writes it back at the end of a round that runs to its end, over a list named by a

@@ -82,12 +82,12 @@ through:
   inserted only where `mut &` arguments could dynamically alias.
 - **Channels** — shared by ref across coroutines, for communication only.
 
-> **[not yet]** There is no run-time `AliasError`, and no run-time check of any kind: the compiler decides
-> aliasing **statically and conservatively**, and two `mut &` arguments drawn from the same variable are
-> rejected whatever the indices say. So the provably distinct `two(xs[0], xs[1])` is refused outright with
-> _E3025 `xs` is given to two `mut &` parameters of `two` in one call — a borrow may not alias, which is what
-> keeps it safe without a borrow checker_. The guarantee the callee relies on does hold, and it holds by **rejecting
-> legal programs**: the specified rule accepts this call and aborts only where the indices really do meet.
+Two elements of one `list` or array are told apart by their indexes. Two integer literals are decided at
+compile time: `two(xs[0], xs[1])` builds with no check, and `two(xs[1], xs[1])` is _E3025 `xs` is given to two
+`mut &` parameters of `two` in one call_. Two indexes that are each a literal or an **immutable** name are
+compared before the call, which aborts with `AliasError` where they meet. Any other pair drawn from one
+variable — a mutable index, an index that calls something, a field and its struct — stays `E3025`: the check
+would evaluate the index a second time, and a name that can change could answer differently.
 
 **Evaluation order is left-to-right.** Function arguments, operator operands, and the elements of a
 `list` / `map` literal or a `set(...)` constructor evaluate **in source order**, deterministically — so a

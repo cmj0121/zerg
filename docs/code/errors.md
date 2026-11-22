@@ -161,15 +161,16 @@ answers the text alone, and the kind is rendered in front of it when the error r
 > `message()` and `unwrap()` answer as specified.
 
 **Aborts.** An abort — a built-in runtime fault or any `Err` you `raise` — marks a **bug**, not an
-expected failure. Of the fault names this chapter uses, eleven reify as `is`-testable **kinds** today:
+expected failure. Of the fault names this chapter uses, twelve reify as `is`-testable **kinds** today:
 `ValueError`, `OverflowError`, `IOError`, `EncodingError`, `IndexError`, `KeyError`, `DivideByZeroError`,
-the three the concurrency chapter names — `SendOnClosedError`, `DeadlockError` and `StopIteration` — and
+the three the concurrency chapter names — `SendOnClosedError`, `DeadlockError` and `StopIteration` —
+`AliasError`, the run-time half of the `mut &` no-alias rule ([Values & Memory](../core/memory.md)), and
 `AssertionError`, which a failed `assert` raises and **nothing else** does. That exclusivity is what the
 kind buys over a message: `zerg test` reports a claim that did not hold as a **failure** and anything else
 that reached the top of a test body as a **crash**, and it tells them apart by asking `e is AssertionError`.
-The rest cannot be **named** at the surface yet: `UnwrapError`, `MatchError` and `AliasError` are
-**[not yet]** — `err is AliasError` is _E9078 NotImplemented: `is AliasError` — an `is` test compares the
-operand's own type against a named one here, and `AliasError` names no type to put on the right of it_ — and
+The rest cannot be **named** at the surface yet: `UnwrapError` and `MatchError` are **[not yet]** —
+`err is MatchError` is _E9078 NotImplemented: `is MatchError` — an `is` test compares the operand's own type
+against a named one here, and `MatchError` names no type to put on the right of it_ — and
 the abort carries no distinct reified kind for them, only a generic message. The refusal is what keeps them
 out of the fold below: a kind the taxonomy HAS and this compiler cannot name must not read as a confident
 "no, it is not one of those".
@@ -272,7 +273,7 @@ match guard { work() } {
 
 `is` yields only a `bool`, so a branch may use the **`Error` interface** (`message` / `code` / `unwrap`)
 but **not the concrete type's own fields** — the value was erased and is never re-constructed. On an error
-that is what `is` is FOR: the eleven reified kinds above are the only names it answers from a runtime tag,
+that is what `is` is FOR: the twelve reified kinds above are the only names it answers from a runtime tag,
 and a taxonomy name outside them is `E9078` rather than a test that answers `false`. Every OTHER name is
 answered from the operand's own type as a compile-time constant, which
 [Specs & Generics](../core/specs.md#type-tests--is) decides — a **boxed** operand being the one whose

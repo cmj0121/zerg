@@ -85,13 +85,14 @@ See [Collections](../code/collections.md).
 
 ## Error constructors
 
-The taxonomy is **eleven compiler-owned kinds**, and each is `Kind(msg: str) -> Err` — an `Err` of that
+The taxonomy is **twelve compiler-owned kinds**, and each is `Kind(msg: str) -> Err` — an `Err` of that
 kind carrying the message. Use one with `raise` to abort, or in an `Either` value; test an erased `Err`
 with `e is IOError`. A program cannot define a new kind this phase. See
 [Null-safety & Errors](../code/errors.md).
 
 `ValueError` · `OverflowError` · `IOError` · `EncodingError` · `IndexError` · `KeyError` ·
-`DeadlockError` · `SendOnClosedError` · `StopIteration` · `DivideByZeroError` · `AssertionError`
+`DeadlockError` · `SendOnClosedError` · `StopIteration` · `DivideByZeroError` · `AssertionError` ·
+`AliasError`
 
 Their **numbering is an ABI** shared between the runtime (`ZRT_ERR_*`) and both compilers, which is why the
 table stops nowhere: a kind added to one and not the others would make one number mean two things depending

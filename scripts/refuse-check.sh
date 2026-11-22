@@ -1037,13 +1037,6 @@ fn main() {
 }
 EOF
 
-expect "$ZERG" is-aliaserror E9078 'is AliasError' <<'EOF'
-fn main() {
-	e := ValueError("x")
-	print e is AliasError
-}
-EOF
-
 expect "$ZERG" is-matcherror E9078 'is MatchError' <<'EOF'
 fn main() {
 	e := ValueError("x")
@@ -1051,10 +1044,10 @@ fn main() {
 }
 EOF
 
-# THE THIRD OF THE THREE. `docs/code/errors.md` marks `UnwrapError`, `MatchError` and
-# `AliasError` **[not yet]** together, so all three are pinned together: they live in
-# `c_err_kinds_unbuilt` for one reason, which is that the split below must not read them as
-# names nothing declares.
+# THE OTHER OF THE TWO. `docs/code/errors.md` marks `UnwrapError` and `MatchError` **[not yet]**
+# together, so both are pinned together: they live in `c_err_kinds_unbuilt` for one reason,
+# which is that the split below must not read them as names nothing declares. `AliasError` was
+# the third and is a kind now (#474).
 expect "$ZERG" is-unwraperror E9078 'is UnwrapError' <<'EOF'
 fn main() {
 	e := ValueError("x")

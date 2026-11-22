@@ -170,6 +170,7 @@ static const char *zrt_err_kindname(int kind) {
 	case ZRT_ERR_STOP_ITERATION: return "StopIteration";
 	case ZRT_ERR_DIVZERO: return "DivideByZeroError";
 	case ZRT_ERR_ASSERTION: return "AssertionError";
+	case ZRT_ERR_ALIAS: return "AliasError";
 	default: return NULL;
 	}
 }

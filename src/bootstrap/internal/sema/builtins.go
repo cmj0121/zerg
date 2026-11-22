@@ -55,6 +55,10 @@ type errKind struct {
 // shared with the runtime, and a table that stopped at 10 would let a later kind take 11 and
 // make one number mean two things depending on which compiler built the program.
 //
+// `AliasError` is 12 for the same reason: the shipped compiler raises it from a run-time
+// check of two `mut &` arguments (#474), and the seed, which refuses every such pair, keeps
+// the number reserved.
+//
 //nolint:gochecknoglobals // a fixed, compiler-owned lookup table.
 var errKinds = map[string]errKind{
 	"ValueError":        {1, true},
@@ -68,6 +72,7 @@ var errKinds = map[string]errKind{
 	"StopIteration":     {9, false},
 	"DivideByZeroError": {10, true},
 	"AssertionError":    {11, true},
+	"AliasError":        {12, true},
 }
 
 // ErrKind reports the built-in error kind a name denotes and whether it is one, so the

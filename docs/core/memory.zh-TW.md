@@ -66,11 +66,11 @@ mutability 屬於**實例（instance）**——也就是 binding——不是型�
   **abort**（`AliasError`）。檢查只插在「`mut &` 引數可能動態別名」的呼叫點。
 - **Channel**——在 coroutine 之間以 by ref 共享，僅用於通訊。
 
-> **[not yet]** 沒有執行期的 `AliasError`,也沒有任何一種執行期檢查:編譯器是**靜態而保守地**判定別名的,兩個取自
-> 同一個變數的 `mut &` 引數一律被拒絕,不管索引說了什麼。所以連可證明互異的 `two(xs[0], xs[1])` 也會被直接拒絕、報
-> _E3025 `xs` is given to two `mut &` parameters of `two` in one call — a borrow may not alias, which is what keeps it
-> safe without a borrow checker_。被呼叫端倚賴的那個保證確實成立,而它成立的方式是**拒絕合法的程式**:規範中的規則
-> 接受這次呼叫,只有在索引真的相遇時才 abort。
+同一個 `list` 或陣列的兩個元素,靠索引區分。兩個整數字面值在編譯期就決定:`two(xs[0], xs[1])` 不加檢查就建得
+起來,`two(xs[1], xs[1])` 則是 _E3025 `xs` is given to two `mut &` parameters of `two` in one call_。兩個各自是
+字面值或**不可變**名字的索引,會在呼叫之前比較,相遇時以 `AliasError` abort。其他取自同一個變數的一對——可變的
+索引、會呼叫東西的索引、一個 field 與它的 struct——仍是 `E3025`:檢查會把索引再求值一次,而一個會變的名字可能
+給出不同的答案。
 
 **求值順序是左到右。** 函式引數、運算子的運算元、以及 `list`／`map` literal 或 `set(...)` constructor 的元素都
 **依原始碼順序**求值、deterministic——所以副作用（一個 `mut &` 引數、一次 abort）的次序可預測，不像 C 的引數

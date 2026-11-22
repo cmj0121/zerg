@@ -77,12 +77,13 @@
 
 ## error 建構子（Error constructors）
 
-這套分類是**十一個由編譯器擁有的 kind**，每一個都是 `Kind(msg: str) -> Err`——該 kind、帶訊息的 `Err`。搭配
+這套分類是**十二個由編譯器擁有的 kind**，每一個都是 `Kind(msg: str) -> Err`——該 kind、帶訊息的 `Err`。搭配
 `raise` 觸發 abort，或放進 `Either` 值；以 `e is IOError` 測試已抹除的 `Err`。本階段程式無法自訂新 kind。見
 [Null-safety 與錯誤處理](../code/errors.zh-TW.md)。
 
 `ValueError` · `OverflowError` · `IOError` · `EncodingError` · `IndexError` · `KeyError` ·
-`DeadlockError` · `SendOnClosedError` · `StopIteration` · `DivideByZeroError` · `AssertionError`
+`DeadlockError` · `SendOnClosedError` · `StopIteration` · `DivideByZeroError` · `AssertionError` ·
+`AliasError`
 
 它們的**編號是一份 ABI**，由 runtime（`ZRT_ERR_*`）與兩個編譯器共用，這也是這張表不會半途停下的原因：只加進其中
 一邊的 kind，會讓同一個數字依「是哪個編譯器建的」而有兩種意思。

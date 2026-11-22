@@ -501,15 +501,6 @@ chan[int]() }`——或任何不是字面值、模組常數，或它們之間算
   拒絕」的程式永遠不會被 `make oracle` 拿去比對。`scripts/reject-check.sh` 的
   `one-associated-value-in-two-files` 帶著 `seed-gap` 標記。
 
-- **`return` 一個 if 運算式、而它的區塊分支回答一個 `str` 區域變數時會崩潰。**
-  `return if n == 0 { k := "zero"; k } else { k := n * 10; f"pos {k}" }` 建得起來，而走第一個分支的
-  呼叫會以 bus error 或 segfault 結束。先綁定同一個運算式——`v := if … ; return v`——就能執行並回答
-  `zero`，與 `zerg` 對兩種寫法的答案相同。
-
-  這對 bootstrap 不花任何代價：編譯器自己的原始碼沒有 return 帶區塊分支的 if 運算式。
-  `test-data/codegen/if_expr_block_branch` 先綁定再 return，讓 `make oracle` 能拿其餘部分比對兩個編譯器；
-  `test-data/behaviour/if-expr` 則 return 一個，只有 `zerg` 執行它。
-
 - **`for mut` 走訪它無法寫回的東西會被接受。** `zerg` 把迴圈變數綁到被走訪 collection 的槽位，所以它
   問一次寫入需要的東西：這個 scope 可寫的 collection（不可變的 `xs` 是 `E3006`）、以及凍結拼得出的 place
   （呼叫結果是 `E3164`）。種子兩者都建起來，改了一個沒有人讀的值。

@@ -652,16 +652,6 @@ byte(N)` and `byte(N * 3)` are compile errors. The seed folds the literal alone:
   pair, and a program the seed accepts and `zerg` rejects is never compared by `make oracle`.
   `scripts/reject-check.sh`'s `one-associated-value-in-two-files` carries the `seed-gap` marker.
 
-- **A `return` OF AN IF-EXPRESSION WHOSE BLOCK BRANCH ANSWERS A `str` LOCAL CRASHES.**
-  `return if n == 0 { k := "zero"; k } else { k := n * 10; f"pos {k}" }` builds, and the call
-  that takes the first branch dies with a bus error or a segfault. Binding the same expression
-  first — `v := if … ; return v` — runs and answers `zero`, as `zerg` does for both.
-
-  It costs the bootstrap nothing: the compiler's own sources return no if-expression with a
-  block branch. `test-data/codegen/if_expr_block_branch` binds before it returns so `make oracle`
-  can hold the two compilers to the rest of it; `test-data/behaviour/if-expr` returns one, and
-  only `zerg` runs it.
-
 - **`for mut` OVER WHAT IT CANNOT WRITE BACK INTO IS ACCEPTED.** `zerg` binds the loop variable
   to the walked collection's slot, so it asks what a write needs: a collection this scope may
   write (`E3006` on an immutable `xs`) and a place the freeze can spell (`E3164` on a call

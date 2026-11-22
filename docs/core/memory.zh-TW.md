@@ -63,7 +63,8 @@ mutability 屬於**實例（instance）**——也就是 binding——不是型�
   這次呼叫——值的位置（欄位、`return`、送 channel）都是**複製當下的值**，只能往下傳給另一個 `mut &` 參數，且不能跨
   `spawn`。**兩個 `mut &` 引數永不共享同一塊儲存**——這是被呼叫端倚賴的保證：靜態別名（`f(x, x)`）是
   **compile error**，而編譯器無法證明之處（`f(xs[i], xs[j])` 且 runtime `i == j`）該次呼叫會
-  **abort**（`AliasError`）。檢查只插在「`mut &` 引數可能動態別名」的呼叫點。
+  **abort**（`AliasError`）。檢查只插在「`mut &` 引數可能動態別名」的呼叫點。`mut fn` 的 receiver 也是該次呼叫的
+  `mut &` 位置之一，所以 `p.take(p)` 是同一個編譯錯誤。
 - **Channel**——在 coroutine 之間以 by ref 共享，僅用於通訊。
 
 同一個 `list` 或陣列的兩個元素,靠索引區分。兩個整數字面值在編譯期就決定:`two(xs[0], xs[1])` 不加檢查就建得

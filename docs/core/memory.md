@@ -79,7 +79,8 @@ through:
   cross a `spawn`. **Two `mut &` arguments never share storage** — a guarantee the callee relies on:
   static aliasing (`f(x, x)`) is a **compile error**, and where the compiler cannot prove it
   (`f(xs[i], xs[j])` with `i == j` at runtime) the call **aborts** (`AliasError`). A check is
-  inserted only where `mut &` arguments could dynamically alias.
+  inserted only where `mut &` arguments could dynamically alias. A `mut fn`'s receiver is one of the call's
+  `mut &` places, so `p.take(p)` is the same compile error.
 - **Channels** — shared by ref across coroutines, for communication only.
 
 Two elements of one `list` or array are told apart by their indexes. Two integer literals are decided at

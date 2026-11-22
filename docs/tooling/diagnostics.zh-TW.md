@@ -507,7 +507,6 @@ seed 全程維持句子比對:代碼是語言的契約,而 seed 是建置正式�
 | `E9105` | 遠端套件 —— 路徑指名一個 host,而解析它需要這個編譯器尚未建置的 package layer                          |
 | `E9106` | module `…` 宣告了函式 `…`,而模組的函式在這裡不是一個值                                                |
 | `E9107` | … 上的方法 `…` —— `display`、`debug`、`format`;channel 上的 `next`;`for` 走得到的東西上的 `iter`      |
-| `E9108` | `del …` 用在擁有值（struct/list/map）上 —— 提早釋放,而 release 是 scope 退出時的 unwind               |
 | `E9111` | 透過 import 取得的陣列長度                                                                            |
 | `E9112` | 陣列的方法 `…`                                                                                        |
 | `E9117` | array 的切片——它的長度是型別的一部分                                                                  |
@@ -757,6 +756,7 @@ composite 都有了，`print xs` 與 `xs.display()` 也都在用；只剩走 `st
 | `E9048` | —       | 形式建好了:spec 命名一個型別,盒子做分派                  |
 | `E9055` | —       | 形式建好了:`Eq` 對帶 payload 的 enum 比對 tag 與 payload |
 | `E9066` | —       | 形式建好了:`del ch` 在那裡放掉 binding 的參照            |
+| `E9108` | —       | 形式建好了:`del` 在該敘述處釋放擁有值                    |
 | `E9064` | —       | 形式建好了:`set[T]`、它的建構子與它的成員                |
 | `E9054` | —       | 形式建好了:`Encode` 與 `Decode` 經由 `codec` derive      |
 | `E9010` | —       | 形式建好了:具名引數,呼叫與建構都是                       |

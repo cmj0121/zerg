@@ -311,12 +311,9 @@ the storage.
 >
 > ---
 >
-> `del` of an **owning** value — a local `struct`, `list`, or `map` — to free its storage **early** is
-> **[not yet]** for the same reason from the other side, and refused by name rather than half-honoured —
-> _E9108 NotImplemented: `del xs` on an owning list_. The release is registered on the runtime cleanup
-> stack at the declaration and every exit unwinds to a mark, so there is no taking one entry out of the
-> middle; the "storage freed" row above is the intended behaviour and the form is turned away until it is
-> the bootstrap's. A **scalar** `del` is untouched: there is no storage to free early, so revoking the
+> `del` of an **owning** value — a local `struct`, `list`, or `map` — frees its storage at the statement.
+> The release the declaration registered is paid there and disarmed, so the scope exit and an abort past it
+> pay nothing twice. A **scalar** `del` is untouched: there is no storage to free early, so revoking the
 > name is the whole of what the statement means for one.
 
 `del` can never dangle: revoking a borrow cannot free storage another name owns, and Zerg's existing

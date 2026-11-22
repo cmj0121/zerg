@@ -1890,6 +1890,38 @@ fn main() {
 }
 ZG
 
+# `del` OF AN OWNING VALUE frees it at the statement (#473), and the scope exit that reaches
+# the disarmed entry must free nothing: a second free is a double free the sanitizers see, a
+# disarm that forgot the free is storage per round the counts see. Each shape the chapter
+# names is here — a list of strings, a map, a struct holding both — and one `del` sits in an
+# `if` arm, the path where the scope exit still owes the release when the arm is not taken.
+case_run del_owning no no <<'ZG'
+struct P {
+	pub name: str
+	pub xs: list[str]
+	pub m: map[str, int]
+}
+
+fn main() {
+	mut n := 0
+	mut i := 0
+	r := rounds()
+	for i < r {
+		xs := [f"{i}abcdefghijklmnop", f"{i}qrstuvwxyz"]
+		n = n + xs.len()
+		del xs
+		m := {f"{i}k": i}
+		del m
+		p := P(f"{i}name", [f"{i}t"], {f"{i}a": 1})
+		if i % 2 == 0 {
+			del p
+		}
+		i = i + 1
+	}
+	print n
+}
+ZG
+
 case_run ref_box no no <<'ZG'
 fn mk(n: int) -> Ref[str] {
 	return Ref(f"{n}abcdefghijklmnop")

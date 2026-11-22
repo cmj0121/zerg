@@ -13480,6 +13480,18 @@ fn c_recv_args(mut &em: Emitter, key: str, target: ast.Expr, args: list[ast.Expr
 	if bound {
 		em.seq_pre = em.seq_pre + c_arg_hold(em, key, 0, target, recv)
 	}
+
+	# A `mut fn`'s RECEIVER IS A `mut &` (#477), so it takes part in the no-alias rule as the
+	# first of the call's borrows: `p.take(p)` handed one value to two `mut &` places and both
+	# writes landed on it. The parameter rows of a method count the receiver as row 0, so the
+	# rule is asked of the receiver in front of the arguments in their declared order.
+	if c_is_ref_param(em, key, 0) {
+		mut all: list[ast.Expr] = [target]
+		for a in c_args_named(em, key, 1, args) {
+			all.append(a)
+		}
+		em.seq_pre = em.seq_pre + c_alias_guard(em, check.chk_ref_alias(em, key, all), sb)
+	}
 	return recv + c_args_held(em, key, 1, args, true, sb, keep)
 }
 

@@ -251,10 +251,10 @@ mut x := x           # 再次遮蔽——這次可變，並以前一份 copy 為
 | closure body 內的捕獲值        | 否           | 結束**本次 invocation** 的存取 → 不釋放；下次呼叫仍有              |
 | channel、`Ref[T]`              | refcounted   | 撤銷名字**並**放掉這個 holder（refcount--）；最後一個跑 **`drop`** |
 
-> **狀態。** 上表最後一列是 `del` 一個 `Ref` 值,而它是 **[not yet]**:對 channel 做 `del ch` 會被具名拒絕
-> (_E9066 NotImplemented: `del ch` on a CHANNEL_,訊息要你改寫 `close(ch)`),而 `Ref[T]`——現在是一個型別了——
-> 也沒有 `del`。編譯器對兩者做的事,是在 binding 的 scope 結束處歸還它們,所以 holder 仍會被放掉、最後一個仍會跑
-> `drop`;缺的是**提早**具名說出這件事的能力。
+> **狀態。** 上表最後一列只完成一半。對 `Ref[T]` 做 `del r` 會在該敘述處放掉這個 holder,所以最後一個 holder
+> 會在那裡、在下一行之前跑 `drop`。對 channel 做 `del ch` 是 **[not yet]**:它會被具名拒絕
+> (_E9066 NotImplemented: `del ch` on a CHANNEL_,訊息要你改寫 `close(ch)`),編譯器在 binding 的 scope
+> 結束處歸還 channel。
 >
 > ---
 >

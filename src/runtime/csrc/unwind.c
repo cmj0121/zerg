@@ -101,6 +101,28 @@ void zrt_forget(size_t n) {
 	g_tls.len -= n;
 }
 
+/* the cleanup a disarmed entry holds: it keeps the slot's place on the stack and gives
+ * nothing back, because zrt_undefer already did */
+static void zrt_disarmed(void *env) {
+	(void)env;
+}
+
+/* Searched from the top: the binding a `del` names is in the current scope or one around
+ * it, so its entry is near the top, and the innermost live entry for an address is its own. */
+void zrt_undefer(void *env) {
+	size_t i = g_tls.len;
+	while (i > 0) {
+		i--;
+		zrt_cleanup *c = &g_tls.stack[i];
+		if (c->env == env && c->fn != zrt_disarmed) {
+			void (*fn)(void *) = c->fn;
+			c->fn = zrt_disarmed;
+			fn(env);
+			return;
+		}
+	}
+}
+
 void zrt_defer_release(void *p) {
 	zrt_release(*(void **)p);
 }

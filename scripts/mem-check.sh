@@ -1863,6 +1863,33 @@ fn main() {
 }
 ZG
 
+# `del` ON A BOX pays the release at the statement (#471): it runs the entry the binding
+# registered and disarms it, so the scope exit that reaches it later must pay NOTHING. A
+# second release there is a double free the sanitizers see; a disarm that forgot the run is
+# a cell that never comes back, and that is what the counts see. The copy is the half where
+# `del` must NOT free: `b` still holds the box when `a` lets go.
+case_run ref_box_del no no <<'ZG'
+fn closed(n: int) {
+	nop
+}
+
+fn main() {
+	mut n := 0
+	mut i := 0
+	r := rounds()
+	for i < r {
+		a := Ref(i, closed)
+		b := a
+		del a
+		n = n + deref(b)
+		c := Ref(f"{i}abcdefghijklmnop")
+		del c
+		i = i + 1
+	}
+	print n
+}
+ZG
+
 case_run ref_box no no <<'ZG'
 fn mk(n: int) -> Ref[str] {
 	return Ref(f"{n}abcdefghijklmnop")

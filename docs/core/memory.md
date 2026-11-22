@@ -304,11 +304,10 @@ the storage.
 | captured value, inside a closure body | no   | ends **this invocation's** access only; next call still has it  |
 | channel, `Ref[T]`                     | ref  | revokes the name, drops a holder (refcount--); last one `drop`s |
 
-> **Status.** The last row of the table is `del` of a `Ref` value, and it is **[not yet]**: `del ch` on a
-> channel is refused by name (_E9066 NotImplemented: `del ch` on a CHANNEL_, which says to write `close(ch)`
-> instead), and a `Ref[T]` — which is a type now — has no `del` either. What the compiler does with both is
-> release them where the binding's scope ends, so the holder is dropped and `drop` still runs at the last
-> one; what is missing is the ability to say so **early**, by name.
+> **Status.** The last row of the table is half built. `del r` on a `Ref[T]` drops this holder at the
+> statement, so the last one runs `drop` there, before the next line. `del ch` on a channel is **[not yet]**:
+> it is refused by name (_E9066 NotImplemented: `del ch` on a CHANNEL_, which says to write `close(ch)`
+> instead), and the compiler releases a channel where its binding's scope ends.
 >
 > ---
 >

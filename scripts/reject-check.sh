@@ -10805,6 +10805,21 @@ fn main() {
 }
 EOF
 
+# Two literals are one element when their VALUES agree, whatever they are spelled as: the
+# lexemes `0x1` and `1` differ, and comparing those built this call with both writes on xs[1].
+reject two-mut-refs-to-one-index-spelled-twice E3025 '`xs` is given to two `mut &` parameters' <<'EOF'
+fn two(mut &a: int, mut &b: int) {
+	a = a + 1
+	b = b + 1
+}
+
+fn main() {
+	mut xs := [1, 2]
+	two(xs[0x1], xs[1])
+	print xs
+}
+EOF
+
 reject two-mut-refs-by-a-mutable-index E3025 '`xs` is given to two `mut &` parameters' <<'EOF'
 fn two(mut &a: int, mut &b: int) {
 	a = a + 1

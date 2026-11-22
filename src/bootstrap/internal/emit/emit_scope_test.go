@@ -124,3 +124,26 @@ func TestScopeEmit(t *testing.T) {
 		})
 	}
 }
+
+// TestBlockBranchUnwindsItsOwn holds #476: a binding declared inside an if-EXPRESSION's
+// block branch is a C local of that branch, so the release it registers must be unwound
+// before the branch's `}`. Registered on the function's frame, it ran at the function's
+// unwind and read a dead stack slot — clean on macOS, an intermittent glibc abort in CI.
+func TestBlockBranchUnwindsItsOwn(t *testing.T) {
+	src := "fn label(n: int) -> str {\n" +
+		" v := if n < 0 {\n  k := \"neg\"\n  print k\n  k + \"!\"\n } else {\n  \"pos\"\n }\n" +
+		" return v\n}\n" +
+		"fn main() {\n print label(-1)\n}"
+	code := emitC(t, src)
+	reg := strings.Index(code, "zrt_defer(zg_str_drop, &zg_k);")
+	if reg < 0 {
+		t.Fatalf("the branch binding is not registered; the case no longer tests the shape:\n%s", code)
+	}
+	end := strings.Index(code[reg:], "} else {")
+	if end < 0 {
+		t.Fatalf("no else after the branch binding:\n%s", code)
+	}
+	if !strings.Contains(code[reg:reg+end], "zrt_unwind_to(") {
+		t.Errorf("the branch's registration outlives the branch — no zrt_unwind_to before its `}`:\n%s", code[reg:reg+end])
+	}
+}

@@ -10836,6 +10836,28 @@ fn main() {
 }
 EOF
 
+# A `mut fn`'s RECEIVER IS A `mut &` (#477). The rule was asked of the written arguments only,
+# so a receiver handed back to the method as its own argument was two borrows of one value and
+# both writes landed on it.
+reject a-mut-fn-receiver-given-as-its-argument E3025 '`p` is given to two `mut &` parameters' <<'EOF'
+struct P {
+	pub n: int
+}
+
+impl P {
+	mut fn take(mut &o: P) {
+		this.n = this.n + 1
+		o.n = o.n - 1
+	}
+}
+
+fn main() {
+	mut p := P(0)
+	p.take(p)
+	print p.n
+}
+EOF
+
 reject two-mut-refs-by-a-mutable-index E3025 '`xs` is given to two `mut &` parameters' <<'EOF'
 fn two(mut &a: int, mut &b: int) {
 	a = a + 1

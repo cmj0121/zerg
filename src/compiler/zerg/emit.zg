@@ -3281,7 +3281,7 @@ fn c_new_mark(mut &em: Emitter) -> str {
 	return "zgt_mk" + strconv.to_string(em.dfn_n, 10)
 }
 
-fn c_lookup_var(mut &em: Emitter, name: str) -> ast.Ty {
+pub fn c_lookup_var(mut &em: Emitter, name: str) -> ast.Ty {
 	idx := c_live_idx(em, name)
 	return em.env_tys[idx] if idx >= 0
 	return ast.Ty.TUnknown
@@ -14591,7 +14591,7 @@ fn c_args_held(mut &em: Emitter, key: str, base: int, written: list[ast.Expr], l
 	# the aliasing rule is about a CALL rather than an argument, so it is asked once here
 	# and not inside the per-argument walk below
 	if base == 0 {
-		check.chk_ref_alias(em, key, args)
+		em.seq_pre = em.seq_pre + c_alias_guard(em, check.chk_ref_alias(em, key, args), sb)
 	}
 
 	# `lead` is also the answer to "does an operand already stand in front of these": it is
@@ -15032,7 +15032,7 @@ fn c_any_owned(rels: list[str]) -> bool {
 # in another call's argument cannot shadow the name the outer one is still holding.
 fn c_call_releasing(mut &em: Emitter, cfn: str, key: str, args: list[ast.Expr], rels: list[str], sb: Subst) -> str {
 	check.chk_call_arity(em, key, 0, args.len())
-	check.chk_ref_alias(em, key, args)
+	em.seq_pre = em.seq_pre + c_alias_guard(em, check.chk_ref_alias(em, key, args), sb)
 
 	# THE ORDER IS DECIDED WITH THESE DECLARATIONS and not with c_ordered's, for the reason
 	# c_str_concat gives: this call's own temporaries are declared INSIDE its statement
@@ -15605,7 +15605,7 @@ fn c_cl_call(mut &em: Emitter, name: str, bt: ast.Ty, row: int, mut &cd: ClDecl,
 		earlier.append(cd.names[k])
 		k = k + 1
 	}
-	check.chk_ref_alias_in(em, name, refs, es)
+	em.seq_pre = em.seq_pre + c_alias_guard(em, check.chk_ref_alias_in(em, name, refs, es), sb)
 
 	mut lo := 0
 	mut hi := 0
@@ -20304,6 +20304,21 @@ fn c_next_leaves_loop(body: list[ast.Stmt], i: int) -> bool {
 		}
 	}
 	return false
+}
+
+# c_alias_guard renders the run-time half of the `mut &` no-alias rule: one zrt_alias_check per
+# index pair check.chk_ref_alias_in could not decide, run before the call (#474). The indexes
+# are literals or immutable names, so evaluating them again here answers what the arguments
+# were given.
+fn c_alias_guard(mut &em: Emitter, pairs: list[ast.Expr], sb: Subst) -> str {
+	mut out := ""
+	mut i := 0
+	for i + 1 < pairs.len() {
+		em.used_rt = true
+		out = out + "zrt_alias_check(" + c_expr(em, pairs[i], sb) + ", " + c_expr(em, pairs[i + 1], sb) + "); "
+		i = i + 2
+	}
+	return out
 }
 
 # c_owes_release is whether a C local is on the pending-release list of the scopes now open.
@@ -25276,10 +25291,13 @@ fn c_is_err_ctor(mut &em: Emitter, x: ast.Expr) -> bool {
 # sentinel a clean channel close carries — a kind rather than a message, which is what lets a
 # receiver tell an ordinary ending from a crash without matching on text.
 #
-# AssertionError is the last, and it is here for that same reason one step up: `zerg test`
-# has to tell a claim that did not hold from a program that fell over, and a runner reading
-# prose to do it would be reading a message as a protocol. `assert` (GRAMMAR#assert-stmt)
-# raises this one and nothing else does.
+# AssertionError is here for that same reason one step up: `zerg test` has to tell a claim
+# that did not hold from a program that fell over, and a runner reading prose to do it would be
+# reading a message as a protocol. `assert` (GRAMMAR#assert-stmt) raises this one and nothing
+# else does.
+#
+# AliasError is the last: the run-time half of the `mut &` no-alias rule, raised by
+# zrt_alias_check when two arguments drawn from one collection name the same element (#474).
 fn c_err_kinds() -> list[str] {
 	return [
 		"ValueError",
@@ -25292,18 +25310,19 @@ fn c_err_kinds() -> list[str] {
 		"SendOnClosedError",
 		"StopIteration",
 		"DivideByZeroError",
-		"AssertionError"
+		"AssertionError",
+		"AliasError"
 	]
 }
 
 # c_err_kinds_unbuilt is the rest of the TAXONOMY: kinds `docs/code/errors.md` gives the
-# language and this compiler cannot name at the surface. They are here so that `is AliasError`
+# language and this compiler cannot name at the surface. They are here so that `is MatchError`
 # is answered as the unbuilt form the chapter says it is, rather than as a name nothing
-# declares — which is what the split below would otherwise make of it. The chapter marks all
-# three **[not yet]** and quotes E9078's sentence, and `refuse-check` pins one case per name,
-# so a name dropped from this list turns a gate red rather than changing an answer quietly.
+# declares — which is what the split below would otherwise make of it. The chapter marks each
+# **[not yet]** and quotes E9078's sentence, and `refuse-check` pins one case per name, so a
+# name dropped from this list turns a gate red rather than changing an answer quietly.
 fn c_err_kinds_unbuilt() -> list[str] {
-	return ["UnwrapError", "MatchError", "AliasError"]
+	return ["UnwrapError", "MatchError"]
 }
 
 fn c_err_kind(name: str) -> int {

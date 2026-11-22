@@ -455,6 +455,7 @@ enum {
 	ZRT_ERR_STOP_ITERATION = 9, /* StopIteration: the end-of-stream sentinel, not a failure */
 	ZRT_ERR_DIVZERO        = 10, /* DivideByZeroError (docs/core/types.md) */
 	ZRT_ERR_ASSERTION      = 11, /* AssertionError: a claim `assert` made that did not hold */
+	ZRT_ERR_ALIAS          = 12, /* AliasError: two `mut &` arguments named one element */
 };
 
 /* AN ERR OWNS WHAT IT HOLDS, when it says so. `owned` is set on an Err built with
@@ -688,6 +689,17 @@ static inline int64_t zrt_arr_index(int64_t i, int64_t n) {
 		zrt_abort_kind(ZRT_ERR_INDEX, ZRT_MSG_INDEX);
 	}
 	return i;
+}
+
+#define ZRT_MSG_ALIAS "two `mut &` arguments name the same element"
+
+/* zrt_alias_check is the run-time half of the `mut &` no-alias rule (docs/core/memory.md):
+ * two arguments drawn from one collection by indexes the compiler cannot tell apart are
+ * compared here, before the call, and the call is not made when they meet. */
+static inline void zrt_alias_check(int64_t i, int64_t j) {
+	if (i == j) {
+		zrt_abort_kind(ZRT_ERR_ALIAS, ZRT_MSG_ALIAS);
+	}
 }
 
 static inline int64_t zrt_add_i64(int64_t a, int64_t b) {

@@ -37,8 +37,8 @@ being `P(x: 1)`, through the same generator `print` and `str(x)` reach; see
 protocol this row names is not a declaration any type carries yet — so `zerg desugar` writes out every
 hole but that one ([Desugar](../tooling/desugar.md)).
 
-**`del ch`** is **[not yet]**: _E9066 NotImplemented: `del ch` on a CHANNEL_, which points at `close(ch)`
-and at the release the binding's scope already performs. And the **operator** row desugars only where the
+**`del ch`** drops the binding's reference at the statement, and the last sender's closes the stream
+([Values & Memory](../core/memory.md)). And the **operator** row desugars only where the
 operator is compiler-owned: no operator `spec` is declared, so `impl Add for P` is _E3013 no spec named
 `Add`_ and `P(1) + P(2)` is _E3043_ — see [Specs & Generics](../core/specs.md). `==` is the exception, via
 `#[derive(Eq)]` or a hand-written `impl Eq`. Both command literals desugar to `os.command(argv)` — a child

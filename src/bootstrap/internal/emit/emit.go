@@ -1925,7 +1925,13 @@ func (e *emitter) blockValueInto(tmp string, ty sema.Type, b *ast.Block) {
 			}
 		}
 	}
+	// The block owns a teardown frame of its own, as body() gives a statement block: a
+	// binding it declares is a C local of THIS block, so its release has to run before the
+	// block's `}`. Registered on the enclosing frame, it ran at the function's unwind and
+	// read a dead stack slot (#476). The value is copied into tmp first, so it outlives the
+	// release.
 	e.pushScope()
+	e.openScope(e.directTeardown(stmts), false)
 	for _, s := range stmts {
 		e.stmt(s)
 	}
@@ -1933,6 +1939,7 @@ func (e *emitter) blockValueInto(tmp string, ty sema.Type, b *ast.Block) {
 		val := e.wrapValue(ty, e.cur.ExprType(e.info, last), e.copyValue(ty, last))
 		e.line(fmt.Sprintf("%s = %s;", tmp, val))
 	}
+	e.closeScope()
 	e.popScope()
 }
 

@@ -351,7 +351,7 @@ kind_of_arg() {
 	Ty.* | *.Ty.*) printf 'Ty\n' ;;
 	"c_nosub()") printf 'Subst\n' ;;
 	"ast.no_index()") printf 'NameIndex\n' ;;
-	[0-9]*) printf 'int\n' ;;
+	[0-9]* | -[0-9]*) printf 'int\n' ;;
 	*) printf 'UNKNOWN(%s)\n' "$1" ;;
 	esac
 }

@@ -1037,13 +1037,6 @@ fn main() {
 }
 EOF
 
-expect "$ZERG" is-aliaserror E9078 'is AliasError' <<'EOF'
-fn main() {
-	e := ValueError("x")
-	print e is AliasError
-}
-EOF
-
 expect "$ZERG" is-matcherror E9078 'is MatchError' <<'EOF'
 fn main() {
 	e := ValueError("x")
@@ -1051,10 +1044,10 @@ fn main() {
 }
 EOF
 
-# THE THIRD OF THE THREE. `docs/code/errors.md` marks `UnwrapError`, `MatchError` and
-# `AliasError` **[not yet]** together, so all three are pinned together: they live in
-# `c_err_kinds_unbuilt` for one reason, which is that the split below must not read them as
-# names nothing declares.
+# THE OTHER OF THE TWO. `docs/code/errors.md` marks `UnwrapError` and `MatchError` **[not yet]**
+# together, so both are pinned together: they live in `c_err_kinds_unbuilt` for one reason,
+# which is that the split below must not read them as names nothing declares. `AliasError` was
+# the third and is a kind now (#474).
 expect "$ZERG" is-unwraperror E9078 'is UnwrapError' <<'EOF'
 fn main() {
 	e := ValueError("x")
@@ -3231,58 +3224,6 @@ fn f(n: int) -> int {
 
 fn main() {
 	print f(3)
-}
-EOF
-
-# GRAMMAR#del-stmt gives `del` a second meaning on a channel — drop a sender reference,
-# close the stream if it was the last. This compiler releases a channel where its
-# binding's scope ends, so `del ch` revoked the name and emitted nothing: the program
-# built, said nothing, and DEADLOCKED waiting on an end the writer thought it had closed.
-expect "$ZERG" del-on-a-channel E9066 <<'EOF'
-fn consume(rx: <-chan[int], done: chan[int]<-) {
-	mut n := 0
-	for v in rx {
-		n = n + v
-	}
-	done <- n
-}
-
-fn main() {
-	ch := chan[int](4)
-	done := chan[int](1)
-	spawn consume(ch, done)
-	ch <- 1
-	del ch
-	print <-done!
-}
-EOF
-
-# THE OTHER HALF OF `del`'s ABSENCE, and it is the same absence read from the value side. The
-# channel case above is refused because the drop cannot be taken out of the middle of the
-# cleanup stack; an owning struct, list or map is refused for exactly that reason, and used to
-# be accepted in SILENCE — the name was revoked, the storage was not freed, and the "storage
-# freed" row of docs/core/memory.md was a promise no program kept (#94).
-#
-# A SCALAR `del` IS NOT HERE, deliberately: there is no storage to free early, so revoking the
-# name is the whole of what the statement means for one, and the silent case below in this
-# file's companion asserts it still builds.
-expect "$ZERG" del-on-an-owning-list E9108 'on an owning list' <<'EOF'
-fn main() {
-	mut xs := [1, 2]
-	del xs
-	print 1
-}
-EOF
-
-expect "$ZERG" del-on-an-owning-struct E9108 'on an owning struct' <<'EOF'
-struct P {
-	pub a: int
-}
-
-fn main() {
-	p := P(1)
-	del p
-	print 1
 }
 EOF
 

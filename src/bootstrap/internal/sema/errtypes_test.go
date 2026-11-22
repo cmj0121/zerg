@@ -49,6 +49,7 @@ func TestErrKindTableMirrorsTheRuntime(t *testing.T) {
 		{"StopIteration", 9, false},
 		{"DivideByZeroError", 10, true},
 		{"AssertionError", 11, true},
+		{"AliasError", 12, true},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

@@ -63,14 +63,15 @@ mutability 屬於**實例（instance）**——也就是 binding——不是型�
   這次呼叫——值的位置（欄位、`return`、送 channel）都是**複製當下的值**，只能往下傳給另一個 `mut &` 參數，且不能跨
   `spawn`。**兩個 `mut &` 引數永不共享同一塊儲存**——這是被呼叫端倚賴的保證：靜態別名（`f(x, x)`）是
   **compile error**，而編譯器無法證明之處（`f(xs[i], xs[j])` 且 runtime `i == j`）該次呼叫會
-  **abort**（`AliasError`）。檢查只插在「`mut &` 引數可能動態別名」的呼叫點。
+  **abort**（`AliasError`）。檢查只插在「`mut &` 引數可能動態別名」的呼叫點。`mut fn` 的 receiver 也是該次呼叫的
+  `mut &` 位置之一，所以 `p.take(p)` 是同一個編譯錯誤。
 - **Channel**——在 coroutine 之間以 by ref 共享，僅用於通訊。
 
-> **[not yet]** 沒有執行期的 `AliasError`,也沒有任何一種執行期檢查:編譯器是**靜態而保守地**判定別名的,兩個取自
-> 同一個變數的 `mut &` 引數一律被拒絕,不管索引說了什麼。所以連可證明互異的 `two(xs[0], xs[1])` 也會被直接拒絕、報
-> _E3025 `xs` is given to two `mut &` parameters of `two` in one call — a borrow may not alias, which is what keeps it
-> safe without a borrow checker_。被呼叫端倚賴的那個保證確實成立,而它成立的方式是**拒絕合法的程式**:規範中的規則
-> 接受這次呼叫,只有在索引真的相遇時才 abort。
+同一個 `list` 或陣列的兩個元素,靠索引區分。兩個整數字面值在編譯期就決定:`two(xs[0], xs[1])` 不加檢查就建得
+起來,`two(xs[1], xs[1])` 則是 _E3025 `xs` is given to two `mut &` parameters of `two` in one call_。兩個各自是
+字面值或**不可變**名字的索引,會在呼叫之前比較,相遇時以 `AliasError` abort。其他取自同一個變數的一對——可變的
+索引、會呼叫東西的索引、一個 field 與它的 struct——仍是 `E3025`:檢查會把索引再求值一次,而一個會變的名字可能
+給出不同的答案。
 
 **求值順序是左到右。** 函式引數、運算子的運算元、以及 `list`／`map` literal 或 `set(...)` constructor 的元素都
 **依原始碼順序**求值、deterministic——所以副作用（一個 `mut &` 引數、一次 abort）的次序可預測，不像 C 的引數
@@ -251,19 +252,15 @@ mut x := x           # 再次遮蔽——這次可變，並以前一份 copy 為
 | closure body 內的捕獲值        | 否           | 結束**本次 invocation** 的存取 → 不釋放；下次呼叫仍有              |
 | channel、`Ref[T]`              | refcounted   | 撤銷名字**並**放掉這個 holder（refcount--）；最後一個跑 **`drop`** |
 
-> **狀態。** 上表最後一列是 `del` 一個 `Ref` 值,而它是 **[not yet]**:對 channel 做 `del ch` 會被具名拒絕
-> (_E9066 NotImplemented: `del ch` on a CHANNEL_,訊息要你改寫 `close(ch)`),而 `Ref[T]`——現在是一個型別了——
-> 也沒有 `del`。編譯器對兩者做的事,是在 binding 的 scope 結束處歸還它們,所以 holder 仍會被放掉、最後一個仍會跑
-> `drop`;缺的是**提早**具名說出這件事的能力。
+> **狀態。** 上表最後一列已建好。對 `Ref[T]` 做 `del r` 會在該敘述處放掉這個 holder,所以最後一個 holder 會在
+> 那裡、在下一行之前跑 `drop`;`del ch` 放掉這個 binding 對 channel 的參照,最後一個 sender 的 `del` 會關閉
+> stream。channel **參數**借用的是呼叫端的參照,所以對它做 `del` 只撤銷名字,不動呼叫端的計數。
 >
 > ---
 >
-> `del` 一個**擁有**的值——一個 local `struct`、`list`、或 `map`——以**提早**釋放其儲存是 **[not yet]**，理由是
-> 同一件事的另一面：今天這樣的 `del` 會撤銷名字的存取，但儲存是在一般的 scope 退出時回收、而非在 `del` 當下。所
-> 以上表「釋放儲存」那一列，對擁有值而言是預期行為、尚非 bootstrap 現況——而在那之前，這個形式會被**具名拒絕**
-> 而不是做一半：_E9108 NotImplemented: `del xs` on an owning list_。release 是在**宣告處**登記在 runtime 的
-> cleanup stack 上、每個出口都退到一個 mark，所以沒辦法從中間抽掉一筆。**純量**的 `del` 不受影響：沒有儲存要
-> 提早釋放，撤銷名字就是這個敘述對它的全部意義。
+> `del` 一個**擁有**的值——一個 local `struct`、`list`、或 `map`——會在該敘述處釋放其儲存。宣告處登記的那次
+> release 在那裡付清並解除，所以 scope 退出、以及越過它的 abort，都不會再付第二次。**純量**的 `del` 不受影響：
+> 沒有儲存要提早釋放，撤銷名字就是這個敘述對它的全部意義。
 
 `del` 永不懸空：撤銷一個借用不可能釋放別的名字所擁有的儲存，而 Zerg 既有規則已擋掉「owner 在 borrower 仍存活時
 就釋放」（`mut &` 參數受限於該次呼叫；逃逸的 closure 擁有捕獲的副本）。編譯器靜態就知道每個 `del` 是釋放還是純
@@ -272,13 +269,14 @@ mut x := x           # 再次遮蔽——這次可變，並以前一份 copy 為
 `del` 是**流程一致的**：一個名字只要在任一路徑上被 `del`，其後**每一條**路徑都視它為已死（不引入 runtime drop
 flag）。因此在 `if` 某一分支裡 `del`，匯流之後該名字即不可再用，與其他分支對稱。
 
+迴圈的**下一圈**也是之後的路徑。在迴圈 body 裡 `del` 一個宣告在迴圈之外的名字會被拒絕（_E3168_），除非緊接著是 `return`,或是一個跳出
+「名字唯一在其之外的那個迴圈」的 `break`;迴圈自己的變數算在迴圈之內;而 `del` 一個 `for … in` 正在走訪的名字，即使如此也會被拒絕（_E3169_）：迴圈每一步、以及
+離開時都會讀它的運算元。
+
 **channel 也不例外。** `del ch` 放掉你的持有*並且*撤銷名字，所以 `ch` 之後就不能用了——後續的 `ch <- v` 或 `<-ch`
 都是編譯錯誤（_`ch` is used after del_）。因此它**不是**用來通知「沒有更多值」的方法：要在保留 handle 的情況下結束
 一條 stream，用 channel 專屬的敘述 **`close(ch)`**；要靠 scope 結束它，就讓該 binding 的 scope 離開去歸還它所持有
 的東西。兩者都在 [Coroutines](../code/coroutine.zh-TW.md)。當你連**名字**也用完了，才用 `del ch`。
-
-> **[not yet]** 上一段是規格所訂的規則；`del ch` 本身會被拒絕（`E9066`，見上方狀態註）。其中已經成立的那一半是那
-> 個建議：`close(ch)` 結束一條 stream、scope 離開歸還持有，那兩件才是今天的程式寫得出來的。
 
 ## `defer`——在 block 退出時清理
 

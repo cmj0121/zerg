@@ -455,6 +455,7 @@ enum {
 	ZRT_ERR_STOP_ITERATION = 9, /* StopIteration: the end-of-stream sentinel, not a failure */
 	ZRT_ERR_DIVZERO        = 10, /* DivideByZeroError (docs/core/types.md) */
 	ZRT_ERR_ASSERTION      = 11, /* AssertionError: a claim `assert` made that did not hold */
+	ZRT_ERR_ALIAS          = 12, /* AliasError: two `mut &` arguments named one element */
 };
 
 /* AN ERR OWNS WHAT IT HOLDS, when it says so. `owned` is set on an Err built with
@@ -520,6 +521,14 @@ void zrt_unwind_to(size_t mark);
  * simply taken off. The caller owes that everything pushed since has been unwound, which
  * a balanced expression guarantees; zrt_unwind_to is the exit that runs what it pops. */
 void zrt_forget(size_t n);
+
+/* zrt_undefer runs the cleanup registered for `env` NOW, and disarms its entry so the scope
+ * exit (or an abort) that reaches it later runs nothing. It is `del name` for a binding that
+ * owns what it holds: the release a scope exit would have paid is paid at the statement.
+ * The entry stays on the stack rather than being taken out, so every mark and every
+ * zrt_forget count taken around it is still right. An env with no live entry - already
+ * revoked, or never registered - is a no-op. */
+void zrt_undefer(void *env);
 
 /* zrt_defer_release is the `void (*)(void *)` adapter for a refcounted CELL held in a
  * temporary: zrt_defer hands a cleanup the ADDRESS of what it registered, and zrt_release
@@ -680,6 +689,17 @@ static inline int64_t zrt_arr_index(int64_t i, int64_t n) {
 		zrt_abort_kind(ZRT_ERR_INDEX, ZRT_MSG_INDEX);
 	}
 	return i;
+}
+
+#define ZRT_MSG_ALIAS "two `mut &` arguments name the same element"
+
+/* zrt_alias_check is the run-time half of the `mut &` no-alias rule (docs/core/memory.md):
+ * two arguments drawn from one collection by indexes the compiler cannot tell apart are
+ * compared here, before the call, and the call is not made when they meet. */
+static inline void zrt_alias_check(int64_t i, int64_t j) {
+	if (i == j) {
+		zrt_abort_kind(ZRT_ERR_ALIAS, ZRT_MSG_ALIAS);
+	}
 }
 
 static inline int64_t zrt_add_i64(int64_t a, int64_t b) {

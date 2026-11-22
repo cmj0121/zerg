@@ -79,15 +79,16 @@ through:
   cross a `spawn`. **Two `mut &` arguments never share storage** — a guarantee the callee relies on:
   static aliasing (`f(x, x)`) is a **compile error**, and where the compiler cannot prove it
   (`f(xs[i], xs[j])` with `i == j` at runtime) the call **aborts** (`AliasError`). A check is
-  inserted only where `mut &` arguments could dynamically alias.
+  inserted only where `mut &` arguments could dynamically alias. A `mut fn`'s receiver is one of the call's
+  `mut &` places, so `p.take(p)` is the same compile error.
 - **Channels** — shared by ref across coroutines, for communication only.
 
-> **[not yet]** There is no run-time `AliasError`, and no run-time check of any kind: the compiler decides
-> aliasing **statically and conservatively**, and two `mut &` arguments drawn from the same variable are
-> rejected whatever the indices say. So the provably distinct `two(xs[0], xs[1])` is refused outright with
-> _E3025 `xs` is given to two `mut &` parameters of `two` in one call — a borrow may not alias, which is what
-> keeps it safe without a borrow checker_. The guarantee the callee relies on does hold, and it holds by **rejecting
-> legal programs**: the specified rule accepts this call and aborts only where the indices really do meet.
+Two elements of one `list` or array are told apart by their indexes. Two integer literals are decided at
+compile time: `two(xs[0], xs[1])` builds with no check, and `two(xs[1], xs[1])` is _E3025 `xs` is given to two
+`mut &` parameters of `two` in one call_. Two indexes that are each a literal or an **immutable** name are
+compared before the call, which aborts with `AliasError` where they meet. Any other pair drawn from one
+variable — a mutable index, an index that calls something, a field and its struct — stays `E3025`: the check
+would evaluate the index a second time, and a name that can change could answer differently.
 
 **Evaluation order is left-to-right.** Function arguments, operator operands, and the elements of a
 `list` / `map` literal or a `set(...)` constructor evaluate **in source order**, deterministically — so a
@@ -304,20 +305,16 @@ the storage.
 | captured value, inside a closure body | no   | ends **this invocation's** access only; next call still has it  |
 | channel, `Ref[T]`                     | ref  | revokes the name, drops a holder (refcount--); last one `drop`s |
 
-> **Status.** The last row of the table is `del` of a `Ref` value, and it is **[not yet]**: `del ch` on a
-> channel is refused by name (_E9066 NotImplemented: `del ch` on a CHANNEL_, which says to write `close(ch)`
-> instead), and a `Ref[T]` — which is a type now — has no `del` either. What the compiler does with both is
-> release them where the binding's scope ends, so the holder is dropped and `drop` still runs at the last
-> one; what is missing is the ability to say so **early**, by name.
+> **Status.** The last row of the table is built. `del r` on a `Ref[T]` drops this holder at the statement,
+> so the last one runs `drop` there, before the next line; `del ch` drops the binding's reference to the
+> channel, and the last sender's closes the stream. A channel **parameter** borrows its caller's reference,
+> so `del` on one revokes the name and leaves the caller's count alone.
 >
 > ---
 >
-> `del` of an **owning** value — a local `struct`, `list`, or `map` — to free its storage **early** is
-> **[not yet]** for the same reason from the other side, and refused by name rather than half-honoured —
-> _E9108 NotImplemented: `del xs` on an owning list_. The release is registered on the runtime cleanup
-> stack at the declaration and every exit unwinds to a mark, so there is no taking one entry out of the
-> middle; the "storage freed" row above is the intended behaviour and the form is turned away until it is
-> the bootstrap's. A **scalar** `del` is untouched: there is no storage to free early, so revoking the
+> `del` of an **owning** value — a local `struct`, `list`, or `map` — frees its storage at the statement.
+> The release the declaration registered is paid there and disarmed, so the scope exit and an abort past it
+> pay nothing twice. A **scalar** `del` is untouched: there is no storage to free early, so revoking the
 > name is the whole of what the statement means for one.
 
 `del` can never dangle: revoking a borrow cannot free storage another name owns, and Zerg's existing
@@ -330,15 +327,17 @@ refcount.
 subsequent path (no runtime drop flags). A `del` inside one arm of an `if` therefore makes the name
 unusable after the merge, symmetrically with the other arms.
 
+A loop's **next iteration** is a subsequent path too. A `del` inside a loop body of a name declared outside
+the loop is refused (_E3168_) unless a `return` comes right after it, or a `break` out of the one loop the
+name is outside of; a loop's own variable is inside it, and a `del` of the name
+a `for … in` is walking is refused even then (_E3169_): the loop reads its operand at every step and on its
+way out.
+
 **A channel is no exception.** `del ch` drops your hold _and_ revokes the name, so `ch` is unusable
 afterwards — a later `ch <- v` or `<-ch` is a compile error (_`ch` is used after del_). It is therefore
 **not** the way to signal "no more values": to end a stream while keeping the handle, use the channel-only
 statement **`close(ch)`**; to end it by scope, let the binding's scope exit release what it holds. Both are
 in [Coroutines](../code/coroutine.md). Use `del ch` when you are finished with the **name** as well.
-
-> **[not yet]** The paragraph above is the specified rule; `del ch` itself is refused (`E9066`, the Status
-> note above). The half of it that already holds is the advice: `close(ch)` ends a stream and scope exit
-> releases the hold, and those are what a program writes today.
 
 ## `defer` — cleanup at block exit
 

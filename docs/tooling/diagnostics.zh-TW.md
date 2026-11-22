@@ -350,6 +350,8 @@ seed 全程維持句子比對:代碼是語言的契約,而 seed 是建置正式�
 | `E3165` | `…(…)` 是 sealed 的——`#[sealed]` 讓依欄位的 constructor 只屬於 `…`                                    |
 | `E3166` | `…` 不是 Zerg 型別——整數是 `int`、`uint`、`byte` 與 `rune`,浮點數是 `float`                           |
 | `E3167` | `…[T]` 不是 Zerg 的 built-in——每個原始型別的大小都由語言固定                                          |
+| `E3168` | 在迴圈裡 `del …`,而 `…` 宣告在迴圈之外——下一圈會在 del 之後用到它                                     |
+| `E3169` | 在走訪它的 `for … in` 裡 `del …`——迴圈離開時還會讀它的運算元                                          |
 | `E4001` | `break` / `continue` 在它所屬的迴圈之外                                                               |
 | `E4002` | `raise … from` 的 cause 不是 `Err`                                                                    |
 | `E4004` | `…(…)` names one side of an `Either`, which holds exactly one value                                   |
@@ -492,7 +494,6 @@ seed 全程維持句子比對:代碼是語言的契約,而 seed 是建置正式�
 | `E9052` | 型別為 … 的 map key                                                                                   |
 | `E9056` | list 方法 `…`                                                                                         |
 | `E9062` | 對 … 做 `in` — range 的成員是靠比較它的上下界找到的                                                   |
-| `E9066` | 對 CHANNEL 做 `del …`                                                                                 |
 | `E9069` | …的值沒有這個編譯器能命名的型別                                                                       |
 | `E9070` | `…` 重新綁定 `match` arm 的 pattern 已經綁住的名字                                                    |
 | `E9071` | 欄位 `…` 的預設值讀了欄位 `…`                                                                         |
@@ -506,7 +507,6 @@ seed 全程維持句子比對:代碼是語言的契約,而 seed 是建置正式�
 | `E9105` | 遠端套件 —— 路徑指名一個 host,而解析它需要這個編譯器尚未建置的 package layer                          |
 | `E9106` | module `…` 宣告了函式 `…`,而模組的函式在這裡不是一個值                                                |
 | `E9107` | … 上的方法 `…` —— `display`、`debug`、`format`;channel 上的 `next`;`for` 走得到的東西上的 `iter`      |
-| `E9108` | `del …` 用在擁有值（struct/list/map）上 —— 提早釋放,而 release 是 scope 退出時的 unwind               |
 | `E9111` | 透過 import 取得的陣列長度                                                                            |
 | `E9112` | 陣列的方法 `…`                                                                                        |
 | `E9117` | array 的切片——它的長度是型別的一部分                                                                  |
@@ -755,6 +755,8 @@ composite 都有了，`print xs` 與 `xs.display()` 也都在用；只剩走 `st
 | `E9003` | —       | 形式建好了:泛型 enum,每個應用一份特化                    |
 | `E9048` | —       | 形式建好了:spec 命名一個型別,盒子做分派                  |
 | `E9055` | —       | 形式建好了:`Eq` 對帶 payload 的 enum 比對 tag 與 payload |
+| `E9066` | —       | 形式建好了:`del ch` 在那裡放掉 binding 的參照            |
+| `E9108` | —       | 形式建好了:`del` 在該敘述處釋放擁有值                    |
 | `E9064` | —       | 形式建好了:`set[T]`、它的建構子與它的成員                |
 | `E9054` | —       | 形式建好了:`Encode` 與 `Decode` 經由 `codec` derive      |
 | `E9010` | —       | 形式建好了:具名引數,呼叫與建構都是                       |

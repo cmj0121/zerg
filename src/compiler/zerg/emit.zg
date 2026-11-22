@@ -842,6 +842,25 @@ pub struct Emitter {
 	# tk_sealed is tk_pub's twin for a struct's `#[sealed]` (check.chk_ctor_sealed); false for
 	# every other kind
 	pub tk_sealed: list[bool]
+
+	# loop_env_lo is the environment's length at the innermost loop BODY's entry, -1 outside
+	# any loop: a binding below it was declared outside the loop, so a `del` of one inside the
+	# body revokes it for the NEXT iteration too (c_del_in_loop). A `for … in` variable is bound
+	# before the body opens, and loop_lo_next is the length it saw first, so its own variable
+	# counts as the loop's. loop_env_outer is the ENCLOSING loop's loop_env_lo: a `break` leaves
+	# the innermost loop only, and the enclosing one goes round again.
+	#
+	# del_exits says how the statement after the one being lowered leaves: 0 it does not, 1 a
+	# `break`, 2 a `return`, which leaves every loop at once.
+	pub loop_env_lo: int
+	pub del_exits: int
+	pub loop_env_outer: int
+	pub loop_lo_next: int
+
+	# walk_idxs is the environment row of each `for … in` operand now being walked, innermost
+	# last, -1 for an operand with no root name. It is wider than the freeze stack: a channel
+	# or a range is walked without being frozen, and a `del` of any of them is c_del_in_loop's.
+	pub walk_idxs: list[int]
 }
 
 # Subst is an active set of identifier substitutions: an EIdent whose name appears in
@@ -2450,6 +2469,9 @@ fn c_reset_env(mut &em: Emitter) {
 	em.loop_mark_used = false
 	em.loop_defer = false
 	em.loop_mark = ""
+	em.loop_env_lo = -1
+	em.loop_env_outer = -1
+	em.loop_lo_next = -1
 	em.force_mark = ""
 	em.fn_mark_used = false
 	em.ref_rows = []
@@ -3267,7 +3289,7 @@ fn c_new_mark(mut &em: Emitter) -> str {
 	return "zgt_mk" + strconv.to_string(em.dfn_n, 10)
 }
 
-fn c_lookup_var(mut &em: Emitter, name: str) -> ast.Ty {
+pub fn c_lookup_var(mut &em: Emitter, name: str) -> ast.Ty {
 	idx := c_live_idx(em, name)
 	return em.env_tys[idx] if idx >= 0
 	return ast.Ty.TUnknown
@@ -13466,6 +13488,18 @@ fn c_recv_args(mut &em: Emitter, key: str, target: ast.Expr, args: list[ast.Expr
 	if bound {
 		em.seq_pre = em.seq_pre + c_arg_hold(em, key, 0, target, recv)
 	}
+
+	# A `mut fn`'s RECEIVER IS A `mut &` (#477), so it takes part in the no-alias rule as the
+	# first of the call's borrows: `p.take(p)` handed one value to two `mut &` places and both
+	# writes landed on it. The parameter rows of a method count the receiver as row 0, so the
+	# rule is asked of the receiver in front of the arguments in their declared order.
+	if c_is_ref_param(em, key, 0) {
+		mut all: list[ast.Expr] = [target]
+		for a in c_args_named(em, key, 1, args) {
+			all.append(a)
+		}
+		em.seq_pre = em.seq_pre + c_alias_guard(em, check.chk_ref_alias(em, key, all), sb)
+	}
 	return recv + c_args_held(em, key, 1, args, true, sb, keep)
 }
 
@@ -14577,7 +14611,7 @@ fn c_args_held(mut &em: Emitter, key: str, base: int, written: list[ast.Expr], l
 	# the aliasing rule is about a CALL rather than an argument, so it is asked once here
 	# and not inside the per-argument walk below
 	if base == 0 {
-		check.chk_ref_alias(em, key, args)
+		em.seq_pre = em.seq_pre + c_alias_guard(em, check.chk_ref_alias(em, key, args), sb)
 	}
 
 	# `lead` is also the answer to "does an operand already stand in front of these": it is
@@ -15018,7 +15052,7 @@ fn c_any_owned(rels: list[str]) -> bool {
 # in another call's argument cannot shadow the name the outer one is still holding.
 fn c_call_releasing(mut &em: Emitter, cfn: str, key: str, args: list[ast.Expr], rels: list[str], sb: Subst) -> str {
 	check.chk_call_arity(em, key, 0, args.len())
-	check.chk_ref_alias(em, key, args)
+	em.seq_pre = em.seq_pre + c_alias_guard(em, check.chk_ref_alias(em, key, args), sb)
 
 	# THE ORDER IS DECIDED WITH THESE DECLARATIONS and not with c_ordered's, for the reason
 	# c_str_concat gives: this call's own temporaries are declared INSIDE its statement
@@ -15591,7 +15625,7 @@ fn c_cl_call(mut &em: Emitter, name: str, bt: ast.Ty, row: int, mut &cd: ClDecl,
 		earlier.append(cd.names[k])
 		k = k + 1
 	}
-	check.chk_ref_alias_in(em, name, refs, es)
+	em.seq_pre = em.seq_pre + c_alias_guard(em, check.chk_ref_alias_in(em, name, refs, es), sb)
 
 	mut lo := 0
 	mut hi := 0
@@ -20189,41 +20223,29 @@ fn c_close_callee(mut &em: Emitter, ch: ast.Expr) -> Callee {
 	return Callee("zrt_chan_close", args, "")
 }
 
-# c_del lowers `del name`: it REVOKES the name, and nothing else. The revocation is the
-# whole statement — c_live_del records it and c_live_use rejects a later read, which is
-# what makes `del` mean one thing for every type.
-#
-# It emits no C. A channel handle is not released here because the binding already owes
-# its reference to the pending-release list, and the scope that ends pays it — releasing
-# again would be the double-release the list exists to rule out. Giving up the SEND end
+# c_del lowers `del name`: it REVOKES the name — c_live_del records it and c_live_use
+# rejects a later read, which is what makes `del` mean one thing for every type — and, for a
+# binding on the pending-release list, pays that release at the statement (zrt_undefer),
+# which disarms the entry so the scope that ends cannot pay it twice. Giving up the SEND end
 # early is `close(ch)`, a statement of its own, and it keeps its holder on purpose.
 fn c_del(mut &em: Emitter, name: str, ind: str) -> str {
-	# `del ch` ON A CHANNEL. GRAMMAR#del-stmt gives it a second meaning there — "a Ref[T]/chan
-	# drops a refcount instead: `del ch` closes a channel if you were its last sender" — and
-	# revoking the name is not that. Revoking emits no C, so the program below built, said
-	# nothing, and DEADLOCKED: the consumer waited on an end the writer believed it closed.
+	# `del ch` ON A CHANNEL drops this binding's reference at the statement (#472), which is
+	# GRAMMAR#del-stmt's second meaning there: a sender that was the last one closes the stream,
+	# so a consumer's `for v in rx` ends. It was refused while revoking was all `del` did — the
+	# program below built, said nothing, and DEADLOCKED, the consumer waiting on an end the
+	# writer believed it had let go:
 	#
 	#     ch := chan[int](4);  spawn consume(ch);  ch <- 1;  del ch
 	#
-	# The header above is why the drop cannot simply be added here: the release is registered
-	# on the runtime's cleanup stack at the declaration and every exit unwinds to a mark, so
-	# there is no taking one entry out of the middle early.
-	raise c_diag(em, rule.Rule.NotYetDelChannel, f"NotImplemented: `del {name}` on a CHANNEL — GRAMMAR makes this drop a sender reference and close the stream when it was the last one, and this compiler releases a channel where its binding's scope ends. Write `close({name})` to end it now (GRAMMAR#del-stmt)") if ast.ty_is_chan(c_lookup_var(em, name))
+	# A channel PARAMETER borrows the caller's reference and registered nothing, so `del` on one
+	# revokes the name and leaves the caller's count where it was.
 
-	# `del` OF AN OWNING VALUE — a local `struct`, `list` or `map` — is the other half of the
-	# same absence (#94). GRAMMAR and docs/core/memory.md give it a job the revocation is only
-	# the first step of: free the storage EARLY, before the scope ends. This compiler frees it
-	# at ordinary scope exit for the reason the channel paragraph above gives — the release is
-	# registered on the runtime cleanup stack at the DECLARATION and every exit unwinds to a
-	# mark, so there is no taking one entry out of the middle.
-	#
-	# So the form is turned away rather than half-honoured. A reader who believes the "storage
-	# freed" row of that chapter reaches for `del` to bound peak memory inside a long scope,
-	# and got the revocation with no free and nothing said — which is the one thing
-	# docs/conformance.md rules out: implemented, or refused by name, never silently different.
-	# A SCALAR `del` is untouched: there is no storage to free early, so revocation IS the
-	# whole of what the statement means for one.
-	c_del_owning(em, name)
+	# `del` OF AN OWNING VALUE — a local `struct`, `list` or `map` — frees its storage at the
+	# statement (#473): the binding registered its give-back at the declaration, and the
+	# release below pays it now and disarms it. It was refused (E9108) while nothing could take
+	# one entry out of the middle of the cleanup stack, and before that accepted in silence,
+	# the "storage freed" row of docs/core/memory.md a promise no program kept (#94). A `str`
+	# drops its holder the same way; a scalar owns nothing, and revoking is all of it.
 
 	# THERE HAS TO BE SOMETHING TO REVOKE. `del` emits no C, so a name it could not find was
 	# revoked in nobody's environment and the statement vanished without a word: `del
@@ -20231,8 +20253,101 @@ fn c_del(mut &em: Emitter, name: str, ind: str) -> str {
 	# down is E3069. The read path asked and this one did not, which is the whole of it.
 	c_del_target(em, name)
 
+	c_del_in_loop(em, name)
+
+	cn := c_var_cname(em, name)
 	c_live_del(em, name)
+
+	# THE RELEASE IS PAID HERE when this binding owes one (#471). A binding that owns what it
+	# holds registered its give-back with zrt_defer at the declaration, and zrt_undefer runs
+	# that entry now and disarms it, so the scope exit — or an abort before it — pays nothing
+	# twice. A `Ref[T]` dropped one holder at its scope end while the chapter promises the
+	# `del`, and the order was observable: `Ref(7, bye); del r; print "after"` ran `bye` after
+	# the print. A binding that registered nothing (a scalar, a `mut &` borrow) is revoked and
+	# that is all of it.
+	return f"{ind}zrt_undefer(&{cn});\n" if c_owes_release(em, cn)
+
 	return f"{ind}/* del {name} */\n"
+}
+
+# c_del_in_loop refuses a `del` inside a loop body of a name the loop did not declare, unless
+# the statement after it leaves the loop. `del` is flow-consistent, and the next iteration is
+# a path after this one: `for v in ch { del ch }` gave the stream's last reference back in the
+# first iteration and received from freed memory in the second (#472). The liveness walk sees
+# the body once, so the back edge is answered here rather than by a second pass.
+fn c_del_in_loop(mut &em: Emitter, name: str) {
+	idx := c_live_idx(em, name)
+	return if idx < 0
+
+	# A NAME A `for … in` IS WALKING is the loop's own operand, and the loop reads it again at
+	# every step and on its way out — a `break` included, which is why the exit below does not
+	# apply to it. `for v in ch { del ch; break }` gave the last reference back and the loop's
+	# exit then closed a freed channel.
+	if c_ints_has(em.walk_idxs, idx) {
+		check.chk_at(em, rule.Rule.DelWalked, f"`del {name}` inside the `for … in` that walks `{name}` — the loop reads `{name}` at every step and on its way out, a `break` included (GRAMMAR#del-stmt). Move the `del` after the loop")
+		return
+	}
+
+	return if em.loop_env_lo < 0 or idx >= em.loop_env_lo
+	return if em.del_exits == 2
+	return if em.del_exits == 1 and (em.loop_env_outer < 0 or idx >= em.loop_env_outer)
+
+	check.chk_at(em, rule.Rule.DelInLoop, f"`del {name}` inside a loop that `{name}` was declared outside of — the next iteration would use `{name}` after del (GRAMMAR#del-stmt). Move the `del` after the loop, or leave the loop right after it with `break` or `return`")
+}
+
+# c_ints_has is whether a list of rows holds one.
+fn c_ints_has(xs: list[int], x: int) -> bool {
+	for v in xs {
+		return true if v == x
+	}
+	return false
+}
+
+# c_next_exit is how the first real statement from `i` on leaves the enclosing loop: 1 a
+# `break`, 2 a `return`, 0 anything else. The position markers between statements are
+# skipped: they are where a statement is, not one.
+fn c_next_exit(body: list[ast.Stmt], i: int) -> int {
+	mut j := i
+	for j < body.len() {
+		match body[j] {
+			Stmt.SAt(_, _, _, _) => {
+				j = j + 1
+			}
+			Stmt.SBreak => {
+				return 1
+			}
+			Stmt.SReturn(_, _) => {
+				return 2
+			}
+			_ => {
+				return 0
+			}
+		}
+	}
+	return 0
+}
+
+# c_alias_guard renders the run-time half of the `mut &` no-alias rule: one zrt_alias_check per
+# index pair check.chk_ref_alias_in could not decide, run before the call (#474). The indexes
+# are literals or immutable names, so evaluating them again here answers what the arguments
+# were given.
+fn c_alias_guard(mut &em: Emitter, pairs: list[ast.Expr], sb: Subst) -> str {
+	mut out := ""
+	mut i := 0
+	for i + 1 < pairs.len() {
+		em.used_rt = true
+		out = out + "zrt_alias_check(" + c_expr(em, pairs[i], sb) + ", " + c_expr(em, pairs[i + 1], sb) + "); "
+		i = i + 2
+	}
+	return out
+}
+
+# c_owes_release is whether a C local is on the pending-release list of the scopes now open.
+fn c_owes_release(mut &em: Emitter, cn: str) -> bool {
+	for c in em.rel_cnames {
+		return true if c == cn
+	}
+	return false
 }
 
 # c_del_target is the rule that `del`'s operand names a BINDING. GRAMMAR#del-stmt is `'del'
@@ -20245,28 +20360,6 @@ fn c_del(mut &em: Emitter, name: str, ind: str) -> str {
 # a function, a struct, an enum, one of its variants — is a different confusion: the reader
 # meant something by it, and what they need told is that the thing they named is not a
 # binding and has no storage a name is an access to.
-# c_del_owning refuses `del` on a value whose storage the statement claims to free. The three
-# owning shapes are the three docs/core/memory.md names, and they are asked of the TYPE rather
-# than of the binding, so a `str` — refcounted, shared, and freed by the last holder — is not
-# among them: `del s` on one revokes a name and frees nothing, which is what it says.
-fn c_del_owning(mut &em: Emitter, name: str) {
-	t := c_lookup_var(em, name)
-	what := c_del_owning_kind(em, t)
-	return if what == ""
-
-	raise c_diag(em, rule.Rule.NotYetDelOwning, f"NotImplemented: `del {name}` on an owning {what} — GRAMMAR#del-stmt frees its storage EARLY and this compiler releases it where the binding's scope ends, so the free the statement is for would not happen. Let the scope end, or put the value in a narrower one")
-}
-
-fn c_del_owning_kind(mut &em: Emitter, t: ast.Ty) -> str {
-	k := ast.ty_owning_kind(t)
-
-	return k if k != ""
-
-	return "struct" if c_is_struct_name(em, ast.ty_name(t))
-
-	return ""
-}
-
 fn c_del_target(mut &em: Emitter, name: str) {
 	return if c_live_idx(em, name) >= 0
 
@@ -20602,6 +20695,8 @@ fn c_lambda(mut &em: Emitter, ps: list[ast.Param], has_ret: bool, ret: ast.Ty, b
 	saved_frz := em.frz_idxs
 	saved_frz_paths := em.frz_paths
 	saved_frz_roots := em.frz_roots
+	saved_walk := em.walk_idxs
+	em.walk_idxs = []
 
 	# and the active substitution with them. It belongs to the block expression that opened
 	# it, and inside a function lifted OUT of that block its names mean nothing — the values
@@ -20625,6 +20720,7 @@ fn c_lambda(mut &em: Emitter, ps: list[ast.Param], has_ret: bool, ret: ast.Ty, b
 	em.frz_idxs = saved_frz
 	em.frz_paths = saved_frz_paths
 	em.frz_roots = saved_frz_roots
+	em.walk_idxs = saved_walk
 	em.used_fnptr = true
 
 	# NOTHING CAPTURED is the case that already worked: the lifted function is an ordinary
@@ -23866,9 +23962,17 @@ fn c_frz_pop(mut &em: Emitter, pushed: bool, iter: ast.Expr) {
 
 # c_forin_any is the two `for … in` forms: the plain one binds a copy, `for mut` the slot.
 fn c_forin_any(mut &em: Emitter, var: str, is_mut: bool, iter: ast.Expr, body: list[ast.Stmt], ind: str) -> str {
-	return c_formut(em, var, iter, body, ind) if is_mut
-
-	return c_forin(em, var, iter, body, ind)
+	em.walk_idxs.append(c_live_idx(em, check.chk_root_name(iter)))
+	em.loop_lo_next = em.env_names.len()
+	mut out := ""
+	if is_mut {
+		out = c_formut(em, var, iter, body, ind)
+	} else {
+		out = c_forin(em, var, iter, body, ind)
+	}
+	c_ints_drop_last(em.walk_idxs)
+	em.loop_lo_next = -1
+	return out
 }
 
 # c_formut lowers `for mut x in xs` (GRAMMAR#for-stmt): `x` IS the element's slot for the
@@ -24920,6 +25024,8 @@ struct LoopFrame {
 	pub keep: int
 	pub used: bool
 	pub deferred: bool
+	pub env_lo: int
+	pub env_outer: int
 }
 
 # c_loop_enter takes the mark the body's jumps will unwind to and answers what was there
@@ -24928,9 +25034,15 @@ struct LoopFrame {
 # defer in the enclosing function is that function's to unwind, and an inner loop must not
 # go on making the outer loop's jumps pay for a record it already gave back.
 fn c_loop_enter(mut &em: Emitter, mark: str) -> LoopFrame {
-	saved := LoopFrame(em.loop_mark, em.loop_keep, em.loop_mark_used, em.loop_defer)
+	saved := LoopFrame(em.loop_mark, em.loop_keep, em.loop_mark_used, em.loop_defer, em.loop_env_lo, em.loop_env_outer)
 	em.loop_mark = mark
 	em.loop_keep = em.rel_cnames.len()
+	em.loop_env_outer = em.loop_env_lo
+	em.loop_env_lo = em.env_names.len()
+	if em.loop_lo_next >= 0 {
+		em.loop_env_lo = em.loop_lo_next
+		em.loop_lo_next = -1
+	}
 	em.loop_mark_used = false
 	em.loop_defer = false
 	return saved
@@ -24941,6 +25053,8 @@ fn c_loop_leave(mut &em: Emitter, saved: LoopFrame) {
 	em.loop_keep = saved.keep
 	em.loop_mark_used = saved.used
 	em.loop_defer = saved.deferred
+	em.loop_env_lo = saved.env_lo
+	em.loop_env_outer = saved.env_outer
 }
 
 # c_loop_block emits a loop BODY. It exists for two things the C does not say: a loop may
@@ -25207,10 +25321,13 @@ fn c_is_err_ctor(mut &em: Emitter, x: ast.Expr) -> bool {
 # sentinel a clean channel close carries — a kind rather than a message, which is what lets a
 # receiver tell an ordinary ending from a crash without matching on text.
 #
-# AssertionError is the last, and it is here for that same reason one step up: `zerg test`
-# has to tell a claim that did not hold from a program that fell over, and a runner reading
-# prose to do it would be reading a message as a protocol. `assert` (GRAMMAR#assert-stmt)
-# raises this one and nothing else does.
+# AssertionError is here for that same reason one step up: `zerg test` has to tell a claim
+# that did not hold from a program that fell over, and a runner reading prose to do it would be
+# reading a message as a protocol. `assert` (GRAMMAR#assert-stmt) raises this one and nothing
+# else does.
+#
+# AliasError is the last: the run-time half of the `mut &` no-alias rule, raised by
+# zrt_alias_check when two arguments drawn from one collection name the same element (#474).
 fn c_err_kinds() -> list[str] {
 	return [
 		"ValueError",
@@ -25223,18 +25340,19 @@ fn c_err_kinds() -> list[str] {
 		"SendOnClosedError",
 		"StopIteration",
 		"DivideByZeroError",
-		"AssertionError"
+		"AssertionError",
+		"AliasError"
 	]
 }
 
 # c_err_kinds_unbuilt is the rest of the TAXONOMY: kinds `docs/code/errors.md` gives the
-# language and this compiler cannot name at the surface. They are here so that `is AliasError`
+# language and this compiler cannot name at the surface. They are here so that `is MatchError`
 # is answered as the unbuilt form the chapter says it is, rather than as a name nothing
-# declares — which is what the split below would otherwise make of it. The chapter marks all
-# three **[not yet]** and quotes E9078's sentence, and `refuse-check` pins one case per name,
-# so a name dropped from this list turns a gate red rather than changing an answer quietly.
+# declares — which is what the split below would otherwise make of it. The chapter marks each
+# **[not yet]** and quotes E9078's sentence, and `refuse-check` pins one case per name, so a
+# name dropped from this list turns a gate red rather than changing an answer quietly.
 fn c_err_kinds_unbuilt() -> list[str] {
-	return ["UnwrapError", "MatchError", "AliasError"]
+	return ["UnwrapError", "MatchError"]
 }
 
 fn c_err_kind(name: str) -> int {
@@ -25302,9 +25420,11 @@ fn c_block(mut &em: Emitter, body: list[ast.Stmt], ind: str) -> str {
 	mut out := ""
 	mut i := 0
 	for i < body.len() {
+		em.del_exits = c_next_exit(body, i + 1)
 		out = out + c_stmt(em, body[i], ind)
 		i = i + 1
 	}
+	em.del_exits = 0
 
 	# THE TEXT AFTER A BLOCK IS THE ENCLOSING STATEMENT'S AGAIN. A place is read off an address,
 	# and an `elif`'s condition or a match's next arm sits behind the last statement of this
@@ -25480,6 +25600,10 @@ fn c_fn(mut &em: Emitter, fn_d: ast.FnDecl) -> str {
 	outer_loop_keep := em.loop_keep
 	outer_loop_used := em.loop_mark_used
 	outer_loop_defer := em.loop_defer
+	outer_loop_env_lo := em.loop_env_lo
+	outer_del_exits := em.del_exits
+	outer_loop_env_outer := em.loop_env_outer
+	outer_loop_lo_next := em.loop_lo_next
 	c_reset_env(em)
 
 	# and PUT THE DECLARATION'S PLACE BACK, because the pre-pass moves the marker: it walks
@@ -25598,6 +25722,10 @@ fn c_fn(mut &em: Emitter, fn_d: ast.FnDecl) -> str {
 	em.loop_keep = outer_loop_keep
 	em.loop_mark_used = outer_loop_used
 	em.loop_defer = outer_loop_defer
+	em.loop_env_lo = outer_loop_env_lo
+	em.del_exits = outer_del_exits
+	em.loop_env_outer = outer_loop_env_outer
+	em.loop_lo_next = outer_loop_lo_next
 
 	# The body never falls through when it has a value to return, and nothing tells cc that once
 	# the end of it is reachable.
@@ -29200,7 +29328,7 @@ fn c_emit_unit_as(prog0: ast.File, own0: ast.File, ft: FileTypes, ms: Mods, whol
 	# is what makes that invariant hold for a multi-unit program, at the place it already lives,
 	# and it is what lets the declaration passes below go back to reading the WHOLE program.
 	seen := diags.len()
-	mut em := Emitter([], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], false, false, false, false, [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], 0, [], 0, [], [], false, "", "", [], [], ast.Ty.TVoid, 0, "", 0, 0, 0, 0, "", diags, 0, 0, [], [], [], [], [], false, 0, false, "", 0, false, false, [], [], [], [], [], [], [], [], [], [], [], "", want_lints, [], [], [], [], [], [], [], [], [], [], [], [], false, 0, [], [], "", c_nosub(), [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], false, ast.no_index(), [], [], [], [], [], [], [], [], [], [], [], [], false, [], [], [], [], [], [], [], [], [], [], [], "", [], [], 0, 0, [])
+	mut em := Emitter([], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], false, false, false, false, [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], 0, [], 0, [], [], false, "", "", [], [], ast.Ty.TVoid, 0, "", 0, 0, 0, 0, "", diags, 0, 0, [], [], [], [], [], false, 0, false, "", 0, false, false, [], [], [], [], [], [], [], [], [], [], [], "", want_lints, [], [], [], [], [], [], [], [], [], [], [], [], false, 0, [], [], "", c_nosub(), [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], false, ast.no_index(), [], [], [], [], [], [], [], [], [], [], [], [], false, [], [], [], [], [], [], [], [], [], [], [], "", [], [], 0, 0, [], -1, 0, -1, -1, [])
 
 	# ASSIGNED, NOT PASSED. Every argument above is a zero value, and `layering` asserts that
 	# — it lines the call up with the fields by KIND, which only works while nothing in it

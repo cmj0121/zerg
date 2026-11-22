@@ -281,7 +281,7 @@ guard——不需要任何新的 pattern 形式。它的主要用途是對**被�
 
 一個**指不出可比對型別**的名字會被拒收、而不是被回答:一個 `spec`、一個需要引數的名字(`list`、`Result`)、
 一個內建別名(`bytearray`)、一個 error-carrier 建構子(`Left`),以及這個編譯器叫不出名字的分類種類
-(`UnwrapError`、`MatchError`、`AliasError`)——每一個都是
+(`UnwrapError`、`MatchError`)——每一個都是
 _E9078 NotImplemented: `is P` — an `is` test compares the operand's own type against a named one here, and
 `P` names no type to put on the right of it; GRAMMAR#cmp-expr takes any `type-name`, so this is a narrower
 test than the grammar writes_。這道拒收,正是讓 `xs is list` 不會對一個**確實是** list 的值,自信地回答

@@ -251,10 +251,9 @@ mut x := x           # 再次遮蔽——這次可變，並以前一份 copy 為
 | closure body 內的捕獲值        | 否           | 結束**本次 invocation** 的存取 → 不釋放；下次呼叫仍有              |
 | channel、`Ref[T]`              | refcounted   | 撤銷名字**並**放掉這個 holder（refcount--）；最後一個跑 **`drop`** |
 
-> **狀態。** 上表最後一列只完成一半。對 `Ref[T]` 做 `del r` 會在該敘述處放掉這個 holder,所以最後一個 holder
-> 會在那裡、在下一行之前跑 `drop`。對 channel 做 `del ch` 是 **[not yet]**:它會被具名拒絕
-> (_E9066 NotImplemented: `del ch` on a CHANNEL_,訊息要你改寫 `close(ch)`),編譯器在 binding 的 scope
-> 結束處歸還 channel。
+> **狀態。** 上表最後一列已建好。對 `Ref[T]` 做 `del r` 會在該敘述處放掉這個 holder,所以最後一個 holder 會在
+> 那裡、在下一行之前跑 `drop`;`del ch` 放掉這個 binding 對 channel 的參照,最後一個 sender 的 `del` 會關閉
+> stream。channel **參數**借用的是呼叫端的參照,所以對它做 `del` 只撤銷名字,不動呼叫端的計數。
 >
 > ---
 >
@@ -272,13 +271,14 @@ mut x := x           # 再次遮蔽——這次可變，並以前一份 copy 為
 `del` 是**流程一致的**：一個名字只要在任一路徑上被 `del`，其後**每一條**路徑都視它為已死（不引入 runtime drop
 flag）。因此在 `if` 某一分支裡 `del`，匯流之後該名字即不可再用，與其他分支對稱。
 
+迴圈的**下一圈**也是之後的路徑。在迴圈 body 裡 `del` 一個宣告在迴圈之外的名字會被拒絕（_E3168_），除非緊接著是
+`break` 或 `return`；而 `del` 一個 `for … in` 正在走訪的名字，即使如此也會被拒絕（_E3169_）：迴圈每一步、以及
+離開時都會讀它的運算元。
+
 **channel 也不例外。** `del ch` 放掉你的持有*並且*撤銷名字，所以 `ch` 之後就不能用了——後續的 `ch <- v` 或 `<-ch`
 都是編譯錯誤（_`ch` is used after del_）。因此它**不是**用來通知「沒有更多值」的方法：要在保留 handle 的情況下結束
 一條 stream，用 channel 專屬的敘述 **`close(ch)`**；要靠 scope 結束它，就讓該 binding 的 scope 離開去歸還它所持有
 的東西。兩者都在 [Coroutines](../code/coroutine.zh-TW.md)。當你連**名字**也用完了，才用 `del ch`。
-
-> **[not yet]** 上一段是規格所訂的規則；`del ch` 本身會被拒絕（`E9066`，見上方狀態註）。其中已經成立的那一半是那
-> 個建議：`close(ch)` 結束一條 stream、scope 離開歸還持有，那兩件才是今天的程式寫得出來的。
 
 ## `defer`——在 block 退出時清理
 

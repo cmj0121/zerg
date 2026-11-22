@@ -252,6 +252,14 @@ pub enum Rule {
 	DelNotABinding = 3104
 	UseAfterDel = 3105
 	UseAfterDelOnSomePaths = 3106
+
+	# `del` of a name declared outside the loop whose body holds the `del`, with no `break` or
+	# `return` right after it: the next iteration is a later path, and the name is dead there.
+	DelInLoop = 3168
+
+	# `del` of the name a `for … in` is walking, from inside that loop: the loop reads its
+	# operand at every step and on the way out, so not even a `break` right after is safe.
+	DelWalked = 3169
 	ChanOfOptional = 3107
 	PubMutGlobal = 3108
 	RecvOnSendOnly = 3109
@@ -616,7 +624,6 @@ pub enum Rule {
 	NotYetMapKeyType = 9052
 	NotYetListMethod = 9056
 	NotYetInOverType = 9062
-	NotYetDelChannel = 9066
 	NotYetValueUnnameableType = 9069
 	NotYetRebindMatchBinding = 9070
 	NotYetDefaultReadsField = 9071
@@ -663,8 +670,8 @@ pub enum Rule {
 	# `del` of an OWNING value — a local struct, list or map — whose storage the statement is
 	# for freeing early. Revoking the name is built and is the first half; the free is not,
 	# because the release is registered on the runtime cleanup stack at the declaration and
-	# every exit unwinds to a mark. The channel case next door (9066) is the same absence read
-	# from the other side, and both retire when a release can be taken out of the middle.
+	# every exit unwinds to a mark. It retires the way the channel case (9066) did, once a
+	# release can be taken out of the middle.
 	NotYetDelOwning = 9108
 	NotYetArrayLenImported = 9111
 	NotYetArrayMethod = 9112

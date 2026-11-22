@@ -671,6 +671,14 @@ byte(N)` and `byte(N * 3)` are compile errors. The seed folds the literal alone:
   call result with `for mut`. `scripts/reject-check.sh`'s `for-mut-over-an-immutable-list` and
   `for-mut-over-a-call-result` carry the `seed-gap` marker.
 
+- **A `del` INSIDE A LOOP OF A NAME THE LOOP DID NOT DECLARE IS ACCEPTED.** The next iteration is
+  a later path, so `zerg` refuses it (`E3168`) unless a `break` or a `return` comes right after.
+  The seed's `del` revokes a name and frees nothing, so the program it builds is safe and only
+  the refusal is missing.
+
+  It costs the bootstrap nothing: the compiler's own sources `del` nothing inside a loop.
+  `scripts/reject-check.sh`'s `a-del-in-a-loop-of-an-outer-name` carries the `seed-gap` marker.
+
 - **`for mut` LOSES EDITS THE SEED DOES NOT WRITE BACK, with nothing said.** The seed binds a
   copy and writes it back at the end of a round that runs to its end, over a list named by a
   name or a field. So an edit is dropped when the round leaves by `continue` or `break`, when

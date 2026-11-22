@@ -304,10 +304,10 @@ the storage.
 | captured value, inside a closure body | no   | ends **this invocation's** access only; next call still has it  |
 | channel, `Ref[T]`                     | ref  | revokes the name, drops a holder (refcount--); last one `drop`s |
 
-> **Status.** The last row of the table is half built. `del r` on a `Ref[T]` drops this holder at the
-> statement, so the last one runs `drop` there, before the next line. `del ch` on a channel is **[not yet]**:
-> it is refused by name (_E9066 NotImplemented: `del ch` on a CHANNEL_, which says to write `close(ch)`
-> instead), and the compiler releases a channel where its binding's scope ends.
+> **Status.** The last row of the table is built. `del r` on a `Ref[T]` drops this holder at the statement,
+> so the last one runs `drop` there, before the next line; `del ch` drops the binding's reference to the
+> channel, and the last sender's closes the stream. A channel **parameter** borrows its caller's reference,
+> so `del` on one revokes the name and leaves the caller's count alone.
 >
 > ---
 >
@@ -329,15 +329,16 @@ refcount.
 subsequent path (no runtime drop flags). A `del` inside one arm of an `if` therefore makes the name
 unusable after the merge, symmetrically with the other arms.
 
+A loop's **next iteration** is a subsequent path too. A `del` inside a loop body of a name declared outside
+the loop is refused (_E3168_) unless a `break` or a `return` comes right after it, and a `del` of the name
+a `for … in` is walking is refused even then (_E3169_): the loop reads its operand at every step and on its
+way out.
+
 **A channel is no exception.** `del ch` drops your hold _and_ revokes the name, so `ch` is unusable
 afterwards — a later `ch <- v` or `<-ch` is a compile error (_`ch` is used after del_). It is therefore
 **not** the way to signal "no more values": to end a stream while keeping the handle, use the channel-only
 statement **`close(ch)`**; to end it by scope, let the binding's scope exit release what it holds. Both are
 in [Coroutines](../code/coroutine.md). Use `del ch` when you are finished with the **name** as well.
-
-> **[not yet]** The paragraph above is the specified rule; `del ch` itself is refused (`E9066`, the Status
-> note above). The half of it that already holds is the advice: `close(ch)` ends a stream and scope exit
-> releases the hold, and those are what a program writes today.
 
 ## `defer` — cleanup at block exit
 

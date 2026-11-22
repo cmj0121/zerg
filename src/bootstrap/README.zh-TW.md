@@ -518,6 +518,13 @@ chan[int]() }`——或任何不是字面值、模組常數，或它們之間算
   `scripts/reject-check.sh` 的 `for-mut-over-an-immutable-list` 與 `for-mut-over-a-call-result` 帶著
   `seed-gap` 標記。
 
+- **在迴圈裡 `del` 一個迴圈沒宣告的名字會被接受。** 下一圈是之後的路徑，所以 `zerg` 會拒絕它（`E3168`），
+  除非緊接著是 `break` 或 `return`。種子的 `del` 只撤銷名字、什麼都不釋放，所以它建出的程式是安全的，缺的只是
+  那個拒絕。
+
+  這對 bootstrap 不花任何代價：編譯器自己的原始碼不在迴圈裡 `del` 任何東西。`scripts/reject-check.sh` 的
+  `a-del-in-a-loop-of-an-outer-name` 帶著 `seed-gap` 標記。
+
 - **`for mut` 會丟掉種子沒寫回的編輯，而且什麼都不說。** 種子綁一份 copy，在一輪跑到結尾時寫回，
   而且只對以名字或欄位指名的 list 這樣做。所以當這一輪以 `continue` 或 `break` 離開、被走訪的是陣列、
   或經由索引（`g[0]`）到達時，編輯都會被丟掉：每一種都印出迴圈之前的值，而綁定槽位本身的 `zerg`

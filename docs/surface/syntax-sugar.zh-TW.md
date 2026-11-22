@@ -34,8 +34,8 @@ Zerg 保持一個**精簡核心**,在其上疊了幾個方便的表面寫法—�
 _E9107 NotImplemented: the method `format` on a int_,因為這一列點名的 `Format` protocol 還不是任何型別帶著的
 宣告——所以 `zerg desugar` 會把每一種洞寫出來,唯獨那一種不會（見 [Desugar](../tooling/desugar.zh-TW.md)）。
 
-**`del ch`** 是 **[not yet]**:_E9066 NotImplemented: `del ch` on a CHANNEL_,它指向 `close(ch)`,以及 binding
-的 scope 本來就會做的那次釋放。而**運算子**那一列只有在運算子屬編譯器所有時才 desugar:沒有任何運算子 `spec` 被
+**`del ch`** 在該敘述處放掉這個 binding 的參照,最後一個 sender 的 `del` 會關閉 stream
+（[值與記憶體](../core/memory.zh-TW.md)）。而**運算子**那一列只有在運算子屬編譯器所有時才 desugar:沒有任何運算子 `spec` 被
 宣告,所以 `impl Add for P` 是 _E3013 no spec named `Add`_、`P(1) + P(2)` 是 _E3043_——見
 [Spec 與 Generics](../core/specs.zh-TW.md)。`==` 是例外,經 `#[derive(Eq)]` 或手寫的 `impl Eq`。
 

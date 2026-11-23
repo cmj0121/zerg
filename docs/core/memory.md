@@ -44,18 +44,22 @@ an assignment gives the old value back after materialising the new one. Measured
 200 rounds that each build and drop a 2000-node `enum L { Nil; Cons(int, L) }` end with exactly as many
 live allocations as five rounds do (`make mem-check`).
 
-> **[implementation-defined]** **How long a chain can be freed.** The teardown recurses one C stack frame
-> per node, so the depth is bounded by the stack it runs on: measured on a default 8 MiB main stack, **60
-> 000 nodes complete and 70 000 do not** — about 128 bytes per node. Past that the process dies with its
-> name (`StackOverflowError: stack overflow`, status 1) and not as a bare SIGSEGV, but that is a diagnosis
-> and not a recovery: the free runs on the scope-exit and abort-unwind paths, so no `guard` catches it and
-> no later `defer` runs. A **structure** that deep needs a shape the language has for it — a `list` of
-> nodes indexed by position, rather than a chain.
+> **[implementation-defined]** **How deep a value can be freed.** Freeing does not recurse on the C stack:
+> every release the compiler generates drains whatever it gives back in the order a recursive teardown would
+> use, whatever the value's depth or width. Copying, comparing (a derived `==` or `Hash`) and printing a deep
+> value still recurse. One bound remains, because a **user-written `drop` action** is the only drop that runs
+> Zerg code and the only one that can abort, so it is the only one that nests: a release made inside it
+> completes before its next line. A **chain of them** — a `Ref(x, f)` whose payload holds the next such `Ref`
+> — runs each link's action inside the previous one, and its depth is bounded by the stack.
+> Reaching it ends the process with its name (`StackOverflowError: stack overflow`, status 1) and not as a
+> bare SIGSEGV, but that is a diagnosis and not a recovery: no `guard` catches it and no later `defer` runs
+> (issue #480 tracks making it an ordinary abort). Resources that deep need a shape the language has for
+> them — a `list` of `Ref`s indexed by position, rather than a chain.
 >
-> **[implementation-defined]** HOW a chain is torn down is this implementation's, not the language's: the
-> recursive free above is one way and an explicit worklist is another, and a program cannot tell them apart
-> except by the depth at which the first one runs out of stack. What the specification pins is the bound
-> and the diagnosis, which is what a reader needs to write a structure that stays inside it.
+> **[implementation-defined]** HOW a value is torn down is this implementation's, not the language's: an
+> explicit worklist is one way and a recursive free is another, and a program cannot tell them apart except
+> by the depth at which the second one runs out of stack. What the specification pins is the order of the
+> drops, the bound and the diagnosis, which is what a reader needs to write a structure that stays inside it.
 
 ---
 

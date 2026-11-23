@@ -1914,3 +1914,249 @@ int main(void) {
     return 0;
 }
 `
+
+// TestReleaseDrainsWithoutRecursion holds the teardown of a value to heap, not stack (#479):
+// a release that frees a value whose drop releases the next one runs a worklist in zrt_tls
+// instead of nesting a C frame per level. Every driver links a COUNTING allocator in place of
+// alloc.c, so each case also proves the whole value was freed (live=0).
+//
+// The depth cases overflow main's native stack on a recursive release; the width case holds
+// the pending array to the value's depth, not its element count; the order case pins the
+// depth-first order the recursion gave; the abort case is the one behaviour #479 changes — an
+// abort out of one element's drop used to be longjmp'd past the loop over its siblings.
+func TestReleaseDrainsWithoutRecursion(t *testing.T) {
+	cases := []struct{ name, body, want string }{
+		{"ref_chain", drainRefChainC, "live=0\n"},
+		{"list_chain", drainListChainC, "live=0\n"},
+		{"map_chain", drainMapChainC, "live=0\n"},
+		{"wide_list", drainWideListC, "drops=2000000 pcap-small=1 live=0\n"},
+		{"order", drainOrderC, "order=1,3,5,6,7,8,9,2,10,12,11 live=0\n"},
+		{"abort_mid_list", drainAbortC, "caught=1 order=1,4,5,2,3 live=0\n"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			bin := buildCounted(t, "drain_"+c.name, drainPreludeC+c.body)
+			out, code := runBounded(t, bin, "", 60*time.Second)
+			if code != 0 || out != c.want {
+				t.Fatalf("%s exit=%d output %q, want exit 0 and %q", c.name, code, out, c.want)
+			}
+		})
+	}
+}
+
+// buildCounted compiles a driver against the core runtime with alloc.c left out: the driver
+// defines zrt_alloc/zrt_free itself.
+func buildCounted(t *testing.T, name, src string) string {
+	t.Helper()
+	cc := findCC()
+	if cc == "" {
+		t.Skip("no C compiler found")
+	}
+	dir := t.TempDir()
+	cfiles, err := Materialize(dir)
+	if err != nil {
+		t.Fatalf("materialize: %v", err)
+	}
+	driver := filepath.Join(dir, name+".c")
+	if err := os.WriteFile(driver, []byte(src), 0o644); err != nil {
+		t.Fatalf("write driver: %v", err)
+	}
+	bin := filepath.Join(dir, name+".bin")
+	args := append([]string{"-std=c11", "-I", dir, "-o", bin, driver}, coreUnitsExcept(cfiles, "alloc.c")...)
+	if out, err := exec.Command(cc, args...).CombinedOutput(); err != nil {
+		t.Fatalf("cc failed: %v\n%s", err, out)
+	}
+	return bin
+}
+
+// drainPreludeC is what every drain driver shares: the counting allocator, an id log, and a
+// node cell whose drop logs its id and then releases what it holds in field order — `a`, the
+// list `l`, the map `m` — the shape of a compiler-generated struct drop.
+const drainPreludeC = `
+#include "zergrt.h"
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+
+#define DEEP 1000000
+
+static long g_live;
+void *zrt_alloc(size_t n) { void *p = malloc(n); if (p != NULL) { g_live++; } return p; }
+void zrt_free(void *p) { if (p != NULL) { g_live--; free(p); } }
+
+static char g_log[256];
+static size_t g_loglen;
+static void log_id(int64_t id) {
+    g_loglen += (size_t)snprintf(g_log + g_loglen, sizeof g_log - g_loglen, "%s%lld",
+                                 g_loglen ? "," : "", (long long)id);
+}
+
+static void next_drop(void *p) { void *n = *(void **)p; if (n != NULL) { zrt_release(n); } }
+static void cell_elem_drop(void *e) { zrt_release(*(void **)e); }
+static const zrt_elem_vt vt_cell = { NULL, cell_elem_drop };
+
+typedef struct { int64_t id; void *a; zrt_list l; zrt_map m; } node;
+static int64_t g_abort_id = -1;
+
+static size_t node_hash(const void *k) { return zrt_hash_int(&((node *)zrt_ref_payload(*(void *const *)k))->id); }
+static bool node_eq(const void *x, const void *y) {
+    return ((node *)zrt_ref_payload(*(void *const *)x))->id == ((node *)zrt_ref_payload(*(void *const *)y))->id;
+}
+static const zrt_map_vt vt_node_map = { node_hash, node_eq, NULL, cell_elem_drop, NULL, cell_elem_drop };
+
+static void node_drop(void *p) {
+    node *n = (node *)p;
+    log_id(n->id);
+    if (n->id == g_abort_id) {
+        zrt_abort("drop aborts");
+    }
+    if (n->a != NULL) {
+        zrt_release(n->a);
+    }
+    zrt_list_drop(&n->l);
+    zrt_map_drop(&n->m);
+}
+
+static void *mk(int64_t id) {
+    void *c = zrt_ref_alloc(sizeof(node), node_drop);
+    node *n = (node *)zrt_ref_payload(c);
+    n->id = id;
+    n->a = NULL;
+    zrt_list_init(&n->l, sizeof(void *), &vt_cell);
+    zrt_map_init(&n->m, sizeof(void *), sizeof(void *), &vt_node_map);
+    return c;
+}
+static node *nd(void *c) { return (node *)zrt_ref_payload(c); }
+`
+
+const drainRefChainC = `
+int main(void) {
+    void *r = NULL;
+    for (int i = 0; i < DEEP; i++) {
+        void *c = zrt_ref_alloc(sizeof(void *), next_drop);
+        *(void **)zrt_ref_payload(c) = r;
+        r = c;
+    }
+    zrt_release(r);
+    printf("live=%ld\n", g_live);
+    return 0;
+}
+`
+
+const drainListChainC = `
+static void list_elem_drop(void *e) { zrt_list_drop((zrt_list *)e); }
+static const zrt_elem_vt vt_list = { NULL, list_elem_drop };
+
+int main(void) {
+    zrt_list cur;
+    zrt_list_init(&cur, sizeof(int64_t), NULL);
+    int64_t z = 0;
+    zrt_list_push(&cur, &z);
+    for (int i = 0; i < DEEP; i++) {
+        zrt_list outer;
+        zrt_list_init(&outer, sizeof(zrt_list), &vt_list);
+        zrt_list_push(&outer, &cur);
+        cur = outer;
+    }
+    zrt_list_drop(&cur);
+    printf("live=%ld\n", g_live);
+    return 0;
+}
+`
+
+const drainMapChainC = `
+static void map_val_drop(void *v) { zrt_map_drop((zrt_map *)v); }
+static const zrt_map_vt vt_int_int = { zrt_hash_int, zrt_eq_int, NULL, NULL, NULL, NULL };
+static const zrt_map_vt vt_int_map = { zrt_hash_int, zrt_eq_int, NULL, NULL, NULL, map_val_drop };
+
+int main(void) {
+    zrt_map cur;
+    zrt_map_init(&cur, sizeof(int64_t), sizeof(int64_t), &vt_int_int);
+    int64_t k = 0, v = 0;
+    zrt_map_set(&cur, &k, &v);
+    for (int i = 0; i < DEEP; i++) {
+        zrt_map outer;
+        zrt_map_init(&outer, sizeof(int64_t), sizeof(zrt_map), &vt_int_map);
+        zrt_map_set(&outer, &k, &cur);
+        cur = outer;
+    }
+    zrt_map_drop(&cur);
+    printf("live=%ld\n", g_live);
+    return 0;
+}
+`
+
+// drainWideListC: a list whose every element owns a cell that owns another. The drain's
+// list entry is a cursor, so the pending array holds the value's depth, not its width.
+const drainWideListC = `
+static long g_drops;
+static void leaf_drop(void *p) { (void)p; g_drops++; }
+static void mid_drop(void *p) { g_drops++; zrt_release(*(void **)p); }
+
+int main(void) {
+    zrt_list l;
+    zrt_list_init(&l, sizeof(void *), &vt_cell);
+    for (int i = 0; i < DEEP; i++) {
+        void *leaf = zrt_ref_alloc(sizeof(int64_t), leaf_drop);
+        void *mid = zrt_ref_alloc(sizeof(void *), mid_drop);
+        *(void **)zrt_ref_payload(mid) = leaf;
+        zrt_list_push(&l, &mid);
+    }
+    zrt_list_drop(&l);
+    printf("drops=%ld pcap-small=%d live=%ld\n", g_drops, zrt_tls_cur()->pcap > 0 && zrt_tls_cur()->pcap < 64, g_live);
+    return 0;
+}
+`
+
+// drainOrderC: [n1, n2] with n1 = {a: n3 {a: n5}, m: {n6: n7, n8: n9}} and n2 = {l: [n10 {a:
+// n12}, n11]}. The recursive release ran a drop, then its first child to the end before the
+// second; list elements in index order; each map entry's key, then its value.
+const drainOrderC = `
+int main(void) {
+    void *n1 = mk(1), *n2 = mk(2), *n3 = mk(3), *n10 = mk(10);
+    nd(n3)->a = mk(5);
+    nd(n1)->a = n3;
+    void *k6 = mk(6), *v7 = mk(7), *k8 = mk(8), *v9 = mk(9);
+    zrt_map_set(&nd(n1)->m, &k6, &v7);
+    zrt_map_set(&nd(n1)->m, &k8, &v9);
+    nd(n10)->a = mk(12);
+    void *n11 = mk(11);
+    zrt_list_push(&nd(n2)->l, &n10);
+    zrt_list_push(&nd(n2)->l, &n11);
+    zrt_list root;
+    zrt_list_init(&root, sizeof(void *), &vt_cell);
+    zrt_list_push(&root, &n1);
+    zrt_list_push(&root, &n2);
+    zrt_list_drop(&root);
+    printf("order=%s live=%ld\n", g_log, g_live);
+    return 0;
+}
+`
+
+// drainAbortC: [n1 {l: [n4, n5]}, n2, n3] where n4's drop aborts under a guard. The landing
+// drains what the abort interrupted: n4's sibling n5, then n1's siblings n2 and n3.
+const drainAbortC = `
+int main(void) {
+    void *n1 = mk(1), *n2 = mk(2), *n3 = mk(3), *n4 = mk(4), *n5 = mk(5);
+    zrt_list_push(&nd(n1)->l, &n4);
+    zrt_list_push(&nd(n1)->l, &n5);
+    zrt_list root;
+    zrt_list_init(&root, sizeof(void *), &vt_cell);
+    zrt_list_push(&root, &n1);
+    zrt_list_push(&root, &n2);
+    zrt_list_push(&root, &n3);
+    g_abort_id = 4;
+    int caught = 0;
+    zrt_frame fr;
+    zrt_handler_push_catch(&fr);
+    if (setjmp(fr.buf) == 0) {
+        zrt_list_drop(&root);
+    } else {
+        caught = 1;
+        zrt_err_drop(zrt_taken_err());
+    }
+    zrt_handler_pop(&fr);
+    printf("caught=%d order=%s live=%ld\n", caught, g_log, g_live);
+    return 0;
+}
+`

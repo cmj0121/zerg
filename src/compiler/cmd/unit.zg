@@ -290,8 +290,18 @@ fn cache_path(key: str) -> str {
 # `-g` is in it because the C is the same with and without: a build that asked for debug
 # information and read back an object without any would leave a breakpoint pending, and say
 # nothing about why.
+#
+# `cc_dialect`'s flags are in it for the same reason: they change what cc makes of the same C
+# (-fstack-clash-protection, #480), and a cache filled before a flag was added would otherwise
+# keep answering with objects built without it.
 fn unit_key(code: str, debug: bool) -> str {
-	return sha256.hex(bytearray(f"{layout.cc_bin()}\n{layout.cc_std()}\n{debug}\n{code}"))
+	mut flags: list[str] = []
+	layout.cc_dialect(flags, debug)
+	mut dialect := ""
+	for fl in flags {
+		dialect = dialect + fl + " "
+	}
+	return sha256.hex(bytearray(f"{layout.cc_bin()}\n{layout.cc_std()}\n{dialect}\n{debug}\n{code}"))
 }
 
 # --- compilation units --------------------------------------------------------------------

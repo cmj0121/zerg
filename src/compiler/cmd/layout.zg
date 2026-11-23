@@ -260,9 +260,20 @@ fn thread_unit() -> str {
 #
 # `-g` is there when asked for. `#line` already gave every statement its `.zg` place, so debug
 # information is all a debugger was missing.
-fn cc_dialect(mut &argv: list[str], debug: bool) {
+#
+# -fstack-clash-protection MAKES A LARGE FRAME TOUCH THE STACK AS IT GROWS (#480), so it faults
+# at a guard rather than stepping past it into whatever is mapped below. How large is the cc's:
+# gcc on x86_64 and clang probe every 4 KiB page, but gcc on aarch64 assumes a 64 KiB guard and
+# leaves a frame under that unprobed (`--param=stack-clash-protection-guard-size=12` would lower
+# it, and clang only warns that the parameter is unused, so it is not passed to a cc whose name
+# this driver does not know). Apple's clang probes by default (`___chkstk_darwin`), so only the
+# other targets are told.
+pub fn cc_dialect(mut &argv: list[str], debug: bool) {
 	argv.append("-fno-dollars-in-identifiers")
 	argv.append("-fno-omit-frame-pointer")
+	if __zrt_platform() != "darwin" {
+		argv.append("-fstack-clash-protection")
+	}
 	if debug {
 		argv.append("-g")
 	}

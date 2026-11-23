@@ -420,7 +420,32 @@ typedef struct zrt_frame {
 	 * error). A root/reporting handler (zrt_run, a coroutine trampoline) leaves it
 	 * false, so an uncaught abort still prints its diagnostic. */
 	bool              catches;
+	/* the drain state at push (#479): the landing drains every pending release above
+	 * pmark, then gives the interrupted scope back its pbase and dactive */
+	size_t            pmark;   /* g_tls.plen at push */
+	size_t            pbase;   /* g_tls.pbase at push */
+	bool              dactive; /* g_tls.dactive at push */
 } zrt_frame;
+
+/* one release the drain still owes (#479). Kept by value in zrt_tls.pend; refer by INDEX
+ * (the array is realloc'd). An entry stays in the array while the subtree its current step
+ * released drains above it, and is popped only when its own storage is freed. */
+#define ZRT_PEND_CELL 0   /* a ref cell whose count reached 0: run h->drop once, then free h  */
+#define ZRT_PEND_LIST 1   /* a dead list buffer: drop element `next`, ..., then free `block`   */
+#define ZRT_PEND_MAP  2   /* a dead map table: key_drop+val_drop entry `next`, ..., then free  */
+typedef struct {
+	uint8_t     kind;     /* ZRT_PEND_* */
+	bool        dropped;  /* CELL: h->drop already ran (set BEFORE the call) */
+	void       *block;    /* CELL: the zrt_ref_hdr*; LIST: the buffer's zrt_buf_hdr*; MAP: entries */
+	uint8_t    *data;     /* LIST: element 0; MAP: entry 0 (== block) */
+	size_t      len;      /* LIST/MAP: element / entry count */
+	size_t      next;     /* LIST/MAP cursor: next index to drop (advanced BEFORE the call) */
+	size_t      stride;   /* LIST: elemsz; MAP: entrysz */
+	size_t      koff;     /* MAP: key offset in an entry */
+	size_t      voff;     /* MAP: value offset in an entry */
+	const void *vt;       /* LIST: const zrt_elem_vt*; MAP: const zrt_map_vt* */
+	int64_t    *buckets;  /* MAP: freed with the table */
+} zrt_pending;
 
 /* zrt_tls is the whole of the abort/unwind machinery's mutable state gathered into
  * one switchable bundle: the cleanup(defer) stack and the innermost abort handler.
@@ -488,6 +513,15 @@ typedef struct {
 	 * unwind that sets this runs cleanups that can hand the CPU over, so a flag held per
 	 * WORKER is left behind on the thread the crash started on. */
 	bool         crashing;
+
+	/* the releases still owed (#479): a value of any depth is torn down by a loop over
+	 * this array instead of by C recursion, so its depth costs heap, not stack. It is
+	 * grown with plain malloc/realloc — NEVER zrt_alloc, so mem-check does not count it. */
+	zrt_pending *pend;
+	size_t       plen;    /* live entries */
+	size_t       pcap;
+	size_t       pbase;   /* the innermost drain scope's floor: entries below belong to an outer one */
+	bool         dactive; /* a drain loop is running for the current scope */
 } zrt_tls;
 
 /* zrt_tls_save snapshots the current unwind state into out; zrt_tls_load makes in
@@ -501,6 +535,38 @@ void zrt_tls_load(const zrt_tls *in);
  * zrt_defer) when the coroutine is reclaimed, so a finished coroutine leaks nothing.
  * The process-global (main) zrt_tls is never freed. */
 void zrt_tls_free(zrt_tls *t);
+
+/* zrt_grow doubles a plain malloc'd stack of *cap elements of elsz bytes (from 16 when empty)
+ * and returns it, or NULL with *cap unchanged when out of memory, for the caller to abort with
+ * its own literal. Plain realloc, never zrt_alloc: mem-check does not count this bookkeeping. */
+void *zrt_grow(void *p, size_t *cap, size_t elsz);
+
+/* zrt_tls_cur is the bundle mounted on this thread right now. The drain re-reads it after
+ * every drop it runs: a drop can park, and the coroutine resume on another worker. */
+zrt_tls *zrt_tls_cur(void);
+
+/* A drain scope: the emitted-C-facing bracket around code whose releases must finish before
+ * it goes on (a user drop action, D4). open sets pbase = plen and dactive = false and
+ * returns the old pair; close restores it (plen == pbase here). */
+typedef struct { size_t pbase; bool dactive; } zrt_drain_scope;
+zrt_drain_scope zrt_drain_open(void);
+void            zrt_drain_close(zrt_drain_scope s);
+
+/* runtime-internal (ref.c owns the drain; list.c / map.c / unwind.c / sched.c call it).
+ * The zrt_pend_* push one entry; zrt_drain runs the loop to plen == pbase unless one is
+ * already running for this scope, in which case the running loop reaches the entry. */
+void zrt_pend_cell(zrt_ref_hdr *h);
+void zrt_pend_list(void *hdr, uint8_t *data, size_t len, size_t elemsz,
+                   const zrt_elem_vt *vt);     /* hdr: the buffer's zrt_buf_hdr*, list.c-private type */
+void zrt_pend_map(uint8_t *entries, int64_t *buckets, size_t len, size_t entrysz, size_t koff,
+                  size_t voff, const zrt_map_vt *vt);
+void zrt_drain(void);
+/* zrt_tls_detach zeroes the mounted bundle's pending fields WITHOUT freeing: the array now
+ * belongs to the bundle zrt_tls_save copied it into (D7). */
+void zrt_tls_detach(void);
+/* zrt_pend_free_local frees the mounted bundle's pending array, which after a detach is
+ * one only this thread's own releases grew, then zeroes the fields. */
+void zrt_pend_free_local(void);
 
 /* zrt_scope_mark records the current cleanup-stack height, to unwind back to on
  * scope exit. */

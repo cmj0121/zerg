@@ -4920,7 +4920,8 @@ fn c_ref_drop_fn(mut &em: Emitter, e: ast.Expr) -> str {
 
 # c_ref_drop_thunk gives that function the shape the cell's drop slot has: the payload by
 # ADDRESS, because the runtime hands it what it allocated, and the user's function takes the
-# value. One thunk per (payload type, action), emitted once.
+# value. One thunk per (payload type, action), emitted once. The call runs in an IMMEDIATE drain
+# scope: the action is program code, so a release it makes finishes before its next statement.
 fn c_ref_drop_thunk(mut &em: Emitter, el: ast.Ty, callee: str) -> str {
 	nm := c_spec_cname(f"refdrop${ast.ty_name(el)}${callee}")
 	return nm if c_name_in(em.refnew_done, nm)
@@ -4932,7 +4933,7 @@ fn c_ref_drop_thunk(mut &em: Emitter, el: ast.Ty, callee: str) -> str {
 	# INTO THE DEFER STREAM and not the on-demand one: this thunk CALLS A PROGRAM FUNCTION, and
 	# `res_decls` is emitted ahead of the prototypes. cc reported `zg_closed` undeclared against
 	# generated C. `dfn_decls` is placed after them for exactly this reason, and says so.
-	em.dfn_decls.append(f"static void {nm}(void* p) {{ {cn}(*({ct}*)p); }}\n")
+	em.dfn_decls.append(f"static void {nm}(void* p) {{ zrt_drain_scope zgt_ds = zrt_drain_open(); {cn}(*({ct}*)p); zrt_drain_close(zgt_ds); }}\n")
 	return nm
 }
 

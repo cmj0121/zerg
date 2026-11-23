@@ -106,7 +106,15 @@ run:                            # run in the local environment (not yet built)
 # one it replaces, while looking like it had been fixed.
 ZERG_SRCS := $(shell find src/compiler src/stdlib -name '*.zg' 2>/dev/null)
 RUNTIME_SRCS := $(shell find src/runtime/csrc -type f 2>/dev/null)
-SEED_SRCS := $(shell find src/bootstrap -name '*.go' 2>/dev/null) src/bootstrap/go.mod
+# The seed is more than src/bootstrap: `go.work` resolves the runtime and stdlib modules it
+# imports, and their Go files `go:embed` the C runtime and the .zg library into the binary.
+# The embedded files are read from plain-file `//go:embed` lists; a quoted pattern, an `all:`
+# prefix or a directory is not followed here, and `build-deps-check`, which holds this list to
+# `go list`'s own answer, is what catches that drift.
+SEED_GO := $(filter-out %_test.go,$(wildcard src/runtime/*.go src/stdlib/*.go))
+SEED_SRCS := $(shell find src/bootstrap -name '*.go' 2>/dev/null) src/bootstrap/go.mod go.work \
+	$(SEED_GO) $(addsuffix go.mod,$(sort $(dir $(SEED_GO)))) \
+	$(foreach f,$(SEED_GO),$(addprefix $(dir $(f)),$(shell sed -n 's|^//go:embed ||p' $(f))))
 
 # `src/bootstrap` IS NOT IN THIS FAN-OUT, and leaving it there is what made the first attempt
 # at this rule useless: the sub-make runs `go build -o bin/zerg0`, which REWRITES the file

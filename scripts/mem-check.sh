@@ -50,7 +50,9 @@ cd "$ROOT" || exit 2
 ZERG="${ZERG:-$ROOT/bin/zerg}"
 ZERG0="${ZERG0:-$ROOT/bin/zerg0}"
 CC="${CC:-cc}"
-RT="src/runtime/csrc"
+# RT can name another runtime tree, so a deep case is shown failing against the recursive
+# release it was written for.
+RT="${RT:-src/runtime/csrc}"
 
 # The two round counts. They are far apart on purpose: a per-round leak of one allocation
 # shows up as a difference of 195, which no amount of allocator noise imitates.
@@ -322,6 +324,111 @@ fn main() {
 		r = r + 1
 	}
 	print total
+}
+ZG
+
+# --- a recursive value deeper than the C stack (#479) ------------------------------------
+# `rec_chain` drops a chain short enough for any release to finish; these drop one deep
+# enough to overflow a release that recurses on the C stack, which died there in
+# StackOverflowError. Each carrier a release walks into the next link of gets one chain,
+# dropped once at exit. The chain starts at a FIXED depth, so every run — whatever FEW
+# and MANY are set to — is deep, and a run that does not exit 0 fails here: that is the
+# overflow half. The chain also grows with the rounds, so the difference is the other
+# half — every link the drain walks is freed, or the live count grows with the chain.
+#
+# A map table has no case: a deep map chain cannot be BUILT today. `T.Node(i, {0: t})`
+# overflows in the literal's deep copy (`zg_elemcopy_T`) before any release runs, a
+# recursion on the copy path that is outside this gate's release contract.
+case_run deep_enum yes no <<'ZG'
+enum L {
+	Nil
+	Cons(int, L)
+}
+
+fn head(l: L) -> int {
+	return match l {
+		L.Nil => -1
+		L.Cons(v, _) => v
+	}
+}
+
+fn main() {
+	mut acc := L.Nil
+	mut i := 0
+	n := 200000 + rounds() * 100
+	for i < n {
+		acc = L.Cons(i, acc)
+		i = i + 1
+	}
+	print head(acc)
+}
+ZG
+
+# Each `Node` holds its predecessor inside a list buffer, so the walk alternates the enum's
+# drop and the buffer's element drops in one chain.
+case_run deep_list yes no <<'ZG'
+enum T {
+	Leaf
+	Node(int, list[T])
+}
+
+fn head(t: T) -> int {
+	return match t {
+		T.Leaf => -1
+		T.Node(v, _) => v
+	}
+}
+
+fn main() {
+	mut t := T.Leaf
+	mut i := 0
+	n := 200000 + rounds() * 100
+	for i < n {
+		t = T.Node(i, [t])
+		i = i + 1
+	}
+	print head(t)
+}
+ZG
+
+# The optional field is a struct carried by reference, released through the same cell.
+case_run deep_opt yes no <<'ZG'
+struct S {
+	pub v: int
+	pub next: S?
+}
+
+fn main() {
+	mut s := S(v: 0, next: nil)
+	mut i := 1
+	n := 200000 + rounds() * 100
+	for i < n {
+		s = S(v: i, next: s)
+		i = i + 1
+	}
+	print s.v
+}
+ZG
+
+# Each closure's environment holds the one before it. `zerg` only: the seed refuses a
+# closure used as a value. `f(0)` returns without calling down the chain, so only the
+# release walks it.
+case_run deep_closure no no <<'ZG'
+fn main() {
+	mut f := fn(k: int) -> int {
+		return k
+	}
+	mut i := 0
+	n := 200000 + rounds() * 100
+	for i < n {
+		g := f
+		f = fn(k: int) -> int {
+			return k if k == 0
+			return g(k - 1)
+		}
+		i = i + 1
+	}
+	print f(0)
 }
 ZG
 

@@ -19,7 +19,7 @@
  * this count is a `size_t` whose immortal sentinel is SIZE_MAX — which would
  * read back as -1 through them.
  */
-#include <string.h>  /* memcpy */
+#include <string.h>  /* memcpy, memset */
 
 #include "zergrt.h"
 
@@ -114,6 +114,8 @@ void *zrt_ref_copy(void *ref) {
 	return ref;
 }
 
+static void release_cell(zrt_ref_hdr *h);
+
 void zrt_release(void *ref) {
 	if (ref == NULL) {
 		return;
@@ -132,11 +134,185 @@ void zrt_release(void *ref) {
 	 * carry the ordering the retain does not: it is what makes the drop see every write the
 	 * other holders made. */
 	if (__atomic_fetch_sub(&h->rc, (size_t)1, __ATOMIC_SEQ_CST) == 1) {
-		if (h->drop != NULL) {
-			h->drop(zrt_ref_payload(h));
+		if (h->drop == NULL) {
+			zrt_free(h);
+			return;
 		}
-		zrt_free(h);
+		release_cell(h);
 	}
+}
+
+/* --- the drain (#479) -----------------------------------------------------------------
+ *
+ * A release used to run its drop in place, and the drop released the value's children in
+ * place too, so tearing down a chain a million links long nested a million C frames and
+ * overflowed the stack. Every release that has drop work now pushes an entry onto the
+ * mounted bundle's pending array and one loop per scope runs them, one step at a time: a
+ * CELL step runs the cell's drop, a LIST/MAP step drops one element of a dead buffer and
+ * advances its cursor. Whatever a step released lands above its entry and is drained before
+ * the entry's next step, so the order is the depth-first one of the recursion it replaces,
+ * a child is freed before its parent, and the array grows with the value's DEPTH, not its
+ * width.
+ *
+ * The bundle is re-read after every step: a drop can park, and the coroutine come back on
+ * another worker. Entries are named by index, never by a pointer kept across a step,
+ * because a step's own pushes may move the array. */
+
+static zrt_pending *pend_push(zrt_tls *t) {
+	if (t->plen == t->pcap) {
+		zrt_pending *grown = (zrt_pending *)zrt_grow(t->pend, &t->pcap, sizeof(zrt_pending));
+		if (grown == NULL) {
+			zrt_abort("out of memory (pending releases)");
+		}
+		t->pend = grown;
+	}
+	zrt_pending *e = &t->pend[t->plen++];
+	memset(e, 0, sizeof(*e));
+	return e;
+}
+
+void zrt_pend_cell(zrt_ref_hdr *h) {
+	zrt_pending *e = pend_push(zrt_tls_cur());
+	e->kind = ZRT_PEND_CELL;
+	e->block = h;
+}
+
+void zrt_pend_list(void *hdr, uint8_t *data, size_t len, size_t elemsz, const zrt_elem_vt *vt) {
+	zrt_pending *e = pend_push(zrt_tls_cur());
+	e->kind = ZRT_PEND_LIST;
+	e->block = hdr;
+	e->data = data;
+	e->len = len;
+	e->stride = elemsz;
+	e->vt = vt;
+}
+
+void zrt_pend_map(uint8_t *entries, int64_t *buckets, size_t len, size_t entrysz, size_t koff,
+                  size_t voff, const zrt_map_vt *vt) {
+	zrt_pending *e = pend_push(zrt_tls_cur());
+	e->kind = ZRT_PEND_MAP;
+	e->block = entries;
+	e->data = entries;
+	e->len = len;
+	e->stride = entrysz;
+	e->koff = koff;
+	e->voff = voff;
+	e->vt = vt;
+	e->buckets = buckets;
+}
+
+/* pend_settle puts what one step pushed, pend[top..plen), into release order: the first
+ * child the drop released is the next one popped. */
+static void pend_settle(zrt_tls *t, size_t top) {
+	size_t lo = top;
+	size_t hi = t->plen;
+	while (hi > lo + 1) {
+		hi--;
+		zrt_pending tmp = t->pend[lo];
+		t->pend[lo] = t->pend[hi];
+		t->pend[hi] = tmp;
+		lo++;
+	}
+}
+
+void zrt_drain(void) {
+	zrt_tls *t = zrt_tls_cur();
+	if (t->dactive) {
+		return;
+	}
+	t->dactive = true;
+	while (t->plen > t->pbase) {
+		size_t k = t->plen - 1;
+		size_t top = t->plen;
+		zrt_pending *e = &t->pend[k];
+		if (e->kind == ZRT_PEND_CELL) {
+			zrt_ref_hdr *h = (zrt_ref_hdr *)e->block;
+			if (e->dropped) {
+				t->plen--;
+				zrt_free(h);
+			} else {
+				e->dropped = true;
+				h->drop(zrt_ref_payload(h));
+				t = zrt_tls_cur();
+				if (t->plen - top > 1) {
+					pend_settle(t, top);
+				}
+			}
+		} else if (e->next == e->len) {
+			void *block = e->block;
+			int64_t *buckets = e->buckets;
+			t->plen--;
+			zrt_free(block);
+			if (e->kind == ZRT_PEND_MAP) {
+				zrt_free(buckets);
+			}
+		} else {
+			uint8_t *at = e->data + e->next++ * e->stride;
+			if (e->kind == ZRT_PEND_LIST) {
+				((const zrt_elem_vt *)e->vt)->drop(at);
+			} else {
+				const zrt_map_vt *vt = (const zrt_map_vt *)e->vt;
+				size_t voff = e->voff;
+				if (vt->key_drop != NULL) {
+					vt->key_drop(at + e->koff);
+				}
+				if (vt->val_drop != NULL) {
+					vt->val_drop(at + voff);
+				}
+			}
+			t = zrt_tls_cur();
+			if (t->plen - top > 1) {
+				pend_settle(t, top);
+			}
+		}
+	}
+	t->dactive = false;
+}
+
+/* release_cell is the drain's first step run in place (D6): outside any loop, with nothing
+ * owed in this scope, the cell's drop runs directly and the loop starts only for what that
+ * drop released. The cell sits in pend marked dropped while its drop runs, with dactive set,
+ * exactly as the loop's own CELL step leaves it, so an abort's landing drain frees it. */
+static void release_cell(zrt_ref_hdr *h) {
+	zrt_tls *t = zrt_tls_cur();
+	if (t->dactive || t->plen != t->pbase) {
+		zrt_pend_cell(h);
+		zrt_drain();
+		return;
+	}
+	zrt_pending *e = pend_push(t);
+	e->kind = ZRT_PEND_CELL;
+	e->block = h;
+	e->dropped = true;
+	size_t top = t->plen;
+	t->dactive = true;
+	h->drop(zrt_ref_payload(h));
+	t = zrt_tls_cur();
+	if (t->plen == top) {
+		t->plen--;
+		t->dactive = false;
+		zrt_free(h);
+		return;
+	}
+	if (t->plen - top > 1) {
+		pend_settle(t, top);
+	}
+	t->dactive = false;
+	zrt_drain();
+}
+
+zrt_drain_scope zrt_drain_open(void) {
+	zrt_tls *t = zrt_tls_cur();
+	zrt_drain_scope s = {t->pbase, t->dactive};
+	t->pbase = t->plen;
+	t->dactive = false;
+	return s;
+}
+
+void zrt_drain_close(zrt_drain_scope s) {
+	zrt_tls *t = zrt_tls_cur();
+	t->pbase = s.pbase;
+	t->dactive = s.dactive;
 }
 
 void *zrt_ref_payload(void *ref) {

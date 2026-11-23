@@ -78,12 +78,12 @@ struct zrt_chan {
 	 * that kind, so no crash Err wears it by accident. */
 	zrt_err        crash_err;
 	size_t         elemsz;  /* element size in bytes (memcpy unit) */
-	zrt_drop_fn    drop;    /* gives one buffered element back; NULL for plain data */
+	zrt_elem_vt    vt;      /* .drop gives one buffered element back (NULL for plain data); .copy unused */
 	size_t         cap;     /* ring capacity; 0 = unbuffered rendezvous */
 	size_t         head;    /* ring read cursor */
 	size_t         tail;    /* ring write cursor */
 	size_t         len;     /* live elements in the ring */
-	unsigned char *buf;     /* cap*elemsz bytes; NULL when cap == 0 */
+	unsigned char *buf;     /* cap*elemsz bytes in the channel's own block, right after it; NULL when cap == 0 */
 	zrt_waiter    *sendq_head, *sendq_tail; /* coroutines parked in send */
 	zrt_waiter    *recvq_head, *recvq_tail; /* coroutines parked in recv */
 };
@@ -203,8 +203,13 @@ static zrt_err chan_stop_iteration(void) {
 	return zrt_err_own(ZRT_ERR_STOP_ITERATION, msg.b);
 }
 
+ZRT_STATIC_ASSERT(sizeof(zrt_chan) % 8 == 0, "a channel's ring at ch + 1 must stay 8-byte aligned");
+
 zrt_chan *zrt_chan_new(size_t elemsz, size_t cap, zrt_drop_fn drop) {
-	zrt_chan *ch = (zrt_chan *)zrt_alloc(sizeof(*ch));
+	/* the ring shares the channel's block, so chan_free can hand the drain ONE carrier to
+	 * free once the buffered elements are given back (#479). sizeof(zrt_chan) is a multiple
+	 * of its pointer alignment, which is the 8 every element type needs. */
+	zrt_chan *ch = (zrt_chan *)zrt_alloc(sizeof(*ch) + cap * elemsz);
 	zrt_mutex_init(&ch->lock);
 	ch->rc = 1;
 	ch->senders = 1; /* the new bidirectional handle is a sender */
@@ -212,32 +217,53 @@ zrt_chan *zrt_chan_new(size_t elemsz, size_t cap, zrt_drop_fn drop) {
 	ch->err = chan_stop_iteration(); /* zrt_alloc is malloc: never leave the reason garbage */
 	ch->crash_err = ch->err; /* a clean end until a sender says otherwise */
 	ch->elemsz = elemsz;
-	ch->drop = drop;
+	ch->vt.copy = NULL;
+	ch->vt.drop = drop;
 	ch->cap = cap;
 	ch->head = ch->tail = ch->len = 0;
-	ch->buf = (cap > 0) ? (unsigned char *)zrt_alloc(cap * elemsz) : NULL;
+	ch->buf = (cap > 0) ? (unsigned char *)(ch + 1) : NULL;
 	ch->sendq_head = ch->sendq_tail = NULL;
 	ch->recvq_head = ch->recvq_tail = NULL;
 	return ch;
 }
 
+/* ring_reverse reverses the bytes [lo, hi) of the ring; three of them rotate it. */
+static void ring_reverse(unsigned char *b, size_t lo, size_t hi) {
+	while (hi > lo + 1) {
+		hi--;
+		unsigned char t = b[lo];
+		b[lo] = b[hi];
+		b[hi] = t;
+		lo++;
+	}
+}
+
 /* chan_free gives back what the ring still holds before it frees the ring. A send moves an
  * owned copy in and a receive moves it out, so an element still buffered when the last holder
  * leaves belongs to nobody else: freeing only the bytes kept every str or list a value pointed
- * at (#334). */
+ * at (#334).
+ *
+ * The elements go to the drain as a list cursor over the channel's own block, never through a
+ * loop here: an element can hold a channel whose last holder it is, and recursing through that
+ * nests a C frame per link (#479). The ring is rotated first so the live elements start at
+ * slot 0 in receive order — a raw move, never a copy. */
 static void chan_free(zrt_chan *ch) {
 	zrt_mutex_destroy(&ch->lock);
-	if (ch->buf != NULL) {
-		if (ch->drop != NULL) {
-			for (size_t i = 0; i < ch->len; i++) {
-				ch->drop(ch->buf + ((ch->head + i) % ch->cap) * ch->elemsz);
-			}
-		}
-		zrt_free(ch->buf);
-	}
 	zrt_err_drop(ch->err);
 	zrt_err_drop(ch->crash_err);
-	zrt_free(ch);
+	if (ch->buf == NULL || ch->vt.drop == NULL || ch->len == 0) {
+		zrt_free(ch);
+		return;
+	}
+	if (ch->head != 0) {
+		size_t n = ch->cap * ch->elemsz;
+		size_t k = ch->head * ch->elemsz;
+		ring_reverse(ch->buf, 0, k);
+		ring_reverse(ch->buf, k, n);
+		ring_reverse(ch->buf, 0, n);
+	}
+	zrt_pend_list(ch, ch->buf, ch->len, ch->elemsz, &ch->vt);
+	zrt_drain();
 }
 
 /* chan_close flips the channel to closed carrying the Err a receiver will read back as

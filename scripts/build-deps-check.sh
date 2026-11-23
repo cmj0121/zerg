@@ -66,18 +66,26 @@ tmp=$(mktemp -d)
 trap 'rm -rf "$tmp"' EXIT
 sleep 1
 
+# stale_after_touch <target> <file> succeeds when touching <file> leaves <target> up to date,
+# and puts the file's timestamp back either way
+stale_after_touch() {
+	touch -r "$2" "$tmp/ref"
+	touch "$2"
+	make -q "$1" >/dev/null 2>&1
+	local rc=$?
+	touch -r "$tmp/ref" "$2"
+	return $rc
+}
+
 checked=0
 for root in $roots; do
 	f=$(printf '%s\n' "$deps" | awk -F/ -v r="$root" '{ k = (NF > 1 ? $1 "/" $2 : $1) } k == r { print; exit }')
 	[ -f "$f" ] || continue
 
-	touch -r "$f" "$tmp/ref"
-	touch "$f"
-	if make -q bin/zerg >/dev/null 2>&1; then
+	if stale_after_touch bin/zerg "$f"; then
 		echo "STALE     $root — touching $f leaves \`bin/zerg\` up to date, so a gate would run against a binary that predates it"
 		fail=$((fail + 1))
 	fi
-	touch -r "$tmp/ref" "$f"
 	checked=$((checked + 1))
 done
 
@@ -86,8 +94,48 @@ if ! make -q bin/zerg >/dev/null 2>&1; then
 	fail=$((fail + 1))
 fi
 
-if [ "$fail" -ne 0 ]; then
-	echo "build-deps-check: $fail root(s) can change the binary without rebuilding it"
+# THE SEED'S INPUTS ARE ASKED OF GO, NOT OF THE MAKEFILE. `bin/zerg0` embeds sources from
+# sibling modules (`go:embed` in src/runtime and src/stdlib), and a rule that missed them kept
+# a seed carrying the OLD runtime, which `oracle` then held the compiler to. `build-deps` cannot
+# find that: it prints the same variables the rule reads. `go list -deps` is the build's own
+# answer — every Go file, embedded file and go.mod in the seed's import graph — and `go env
+# GOWORK` names the go.work that resolves the sibling modules. Every one of them inside this
+# repo is touched in turn and must make `bin/zerg0` out of date. `go list`'s stderr is kept so
+# a floor that trips says why.
+repo=$(pwd)
+seed=$(cd src/bootstrap && { go list -deps -f '{{if not .Standard}}{{$d := .Dir}}{{range .GoFiles}}{{$d}}/{{.}}
+{{end}}{{range .EmbedFiles}}{{$d}}/{{.}}
+{{end}}{{with .Module}}{{.GoMod}}
+{{end}}{{end}}' ./cmd/zerg 2>"$tmp/golist.err"; go env GOWORK; } | sed -n "s|^$repo/||p" | sort -u)
+nseed=$(printf '%s\n' "$seed" | grep -c .)
+nseeddirs=$(printf '%s\n' "$seed" | sed -E 's|/[^/]*$||' | sort -u | grep -c .)
+if [ "$nseed" -lt 50 ] || [ "$nseeddirs" -lt 3 ]; then
+	echo "build-deps-check: \`go list\` named $nseed seed inputs in $nseeddirs directories — the seed's graph is not being read, and nothing below was checked"
+	cat "$tmp/golist.err"
 	exit 1
 fi
-echo "build-deps-check: $n files over $checked roots, and touching any one of them rebuilds \`bin/zerg\`"
+if ! make -q bin/zerg0 >/dev/null 2>&1; then
+	echo "UNCONDITIONAL  \`bin/zerg0\` is out of date immediately after a build"
+	exit 1
+fi
+
+seedstale=0
+for f in $seed; do
+	[ -f "$f" ] || continue
+	if stale_after_touch bin/zerg0 "$f"; then
+		echo "STALE     $f — the seed is built from it, and touching it leaves \`bin/zerg0\` up to date"
+		seedstale=$((seedstale + 1))
+	fi
+done
+fail=$((fail + seedstale))
+
+if ! make -q bin/zerg >/dev/null 2>&1; then
+	echo "build-deps-check: a seed timestamp was not put back — the next gate will rebuild for nothing"
+	fail=$((fail + 1))
+fi
+
+if [ "$fail" -ne 0 ]; then
+	echo "build-deps-check: $fail input(s) can change a binary without rebuilding it"
+	exit 1
+fi
+echo "build-deps-check: $n files over $checked roots rebuild \`bin/zerg\`, and $nseed seed inputs over $nseeddirs directories rebuild \`bin/zerg0\`"

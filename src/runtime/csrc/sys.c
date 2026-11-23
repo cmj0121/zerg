@@ -42,6 +42,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/resource.h> /* getrlimit, for main's probe limit */
 #include <sys/stat.h>
 #include <sys/wait.h>
 #include <time.h>
@@ -169,10 +170,11 @@ void zrt_report_at(const char *kind, const char *msg, const zrt_site *site) {
 
 /* --- stack-overflow naming (zrt_fault_*) --------------------------------------
  *
- * The one fault the abort contract cannot route through zrt_abort: by the time a
- * stack overflow is observable, the faulting stack is exhausted — nothing on it can
- * run, so there is no unwind and the pending `defer`s are skipped, which is the half
- * of the docs/conformance.md deviation that stays. What is fixed here is the NAME
+ * The BACKSTOP behind ZRT_PROBE (#480): a probed function's overflow is an ordinary
+ * abort, and what reaches the guard page is a C frame or an unprobed chain deeper than
+ * the reserve. That fault the abort contract cannot route through zrt_abort: by the
+ * time it is observable, the faulting stack is exhausted — nothing on it can run, so
+ * there is no unwind and the pending `defer`s are skipped. What is fixed here is the NAME
  * and the STATUS: the overflow now dies as `StackOverflowError: stack overflow` on
  * stderr with exit status 1, the shape every other abort has, instead of as a bare
  * signal the shell reports.
@@ -313,20 +315,29 @@ static const zrt_site *fault_site(void *ctx) {
 #endif
 }
 
+/* overflow_die writes the overflow's two lines and ends the process; the guard page's
+ * handler and a nested probe hit share it, so the hard fault reads one way. */
+static _Noreturn void overflow_die(const zrt_site *site) {
+	fault_write("StackOverflowError: stack overflow\n");
+	if (site != NULL) {
+		fault_write("  --> ");
+		fault_write(site->path);
+		fault_write(":");
+		fault_write_int(site->line);
+		fault_write(":");
+		fault_write_int(site->col);
+		fault_write("\n");
+	}
+	_exit(1);
+}
+
+_Noreturn void zrt_overflow_exit(void) {
+	overflow_die(zrt_site_here());
+}
+
 static void fault_handler(int sig, siginfo_t *si, void *ctx) {
 	if (si != NULL && fault_is_overflow((uintptr_t)si->si_addr)) {
-		const zrt_site *site = fault_site(ctx);
-		fault_write("StackOverflowError: stack overflow\n");
-		if (site != NULL) {
-			fault_write("  --> ");
-			fault_write(site->path);
-			fault_write(":");
-			fault_write_int(site->line);
-			fault_write(":");
-			fault_write_int(site->col);
-			fault_write("\n");
-		}
-		_exit(1);
+		overflow_die(fault_site(ctx));
 	}
 	/* not a stack overflow: hand the signal back to the action that was there before
 	 * and return, so the faulting instruction re-fires into it. */
@@ -385,10 +396,11 @@ void zrt_fault_init(void) {
 	long pg = sysconf(_SC_PAGESIZE);
 	g_page = (pg > 0) ? (uintptr_t)pg : 4096;
 	zrt_fault_thread_init();
+	uintptr_t hi = 0;
 #if defined(__APPLE__)
 	{
 		pthread_t self = pthread_self();
-		uintptr_t hi = (uintptr_t)pthread_get_stackaddr_np(self);
+		hi = (uintptr_t)pthread_get_stackaddr_np(self);
 		t_main_stack_lo = hi - (uintptr_t)pthread_get_stacksize_np(self);
 	}
 #elif defined(__linux__)
@@ -399,11 +411,25 @@ void zrt_fault_init(void) {
 			size_t size = 0;
 			if (pthread_attr_getstack(&attr, &lo, &size) == 0) {
 				t_main_stack_lo = (uintptr_t)lo;
+				hi = (uintptr_t)lo + size;
 			}
 			(void)pthread_attr_destroy(&attr);
 		}
 	}
 #endif
+	/* main's probe limit (#480), RESERVE above the low bound. Under `ulimit -s unlimited`
+	 * the bound pthread reports is no real floor, so the probe counts from 8 MiB below the
+	 * top instead; an unknown bound leaves main unprobed, on the guard-page backstop. */
+	if (t_main_stack_lo != 0) {
+		uintptr_t lo_eff = t_main_stack_lo;
+		struct rlimit rl;
+		if (getrlimit(RLIMIT_STACK, &rl) == 0 && rl.rlim_cur == RLIM_INFINITY && hi - lo_eff > (uintptr_t)8 << 20) {
+			lo_eff = hi - ((uintptr_t)8 << 20);
+		}
+		zrt_stack_limit_put((char *)(lo_eff + ZRT_STACK_RESERVE));
+	} else {
+		zrt_stack_limit_put(NULL);
+	}
 	/* ONCE, and the guard is not a nicety: there are seven callers (six entry.c
 	 * shims and sched_init), and a second install would save THIS handler as the
 	 * old one — after which an unclaimed fault hands the signal to itself and

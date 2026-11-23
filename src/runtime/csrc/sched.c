@@ -650,7 +650,8 @@ static void coro_trampoline(void *arg) {
 static void spawn_coro(void (*thunk)(void *env), void *env, void (*envdrop)(void *env), bool is_main) {
 	zrt_coro *co = (zrt_coro *)zrt_alloc(sizeof(*co));
 	size_t total = 0;
-	co->stack = stack_alloc(ZRT_CORO_STACK, &total);
+	/* the probe's reserve is mapped on top, so the program keeps the whole ZRT_CORO_STACK */
+	co->stack = stack_alloc(ZRT_CORO_STACK + ZRT_STACK_RESERVE, &total);
 	co->stack_size = total;
 	/* LeakSanitizer scans thread stacks and globals, and a coroutine stack is neither. A
 	 * coroutine ABANDONED at program end (the language's `spawn` lifetime — sched.c's
@@ -683,6 +684,7 @@ static void spawn_coro(void (*thunk)(void *env), void *env, void (*envdrop)(void
 	 * of almost every concurrent program. A field added to zrt_tls must not need an edit
 	 * here to be safe. */
 	co->tls = (zrt_tls){0};
+	co->tls.stack_lim = (char *)co->stack + g_guard_page + ZRT_STACK_RESERVE;
 	co->qnext = NULL;
 	zrt_ctx_init(&co->ctx, co->stack, co->stack_size, coro_trampoline, co);
 	zrt_mutex_lock(&g_lock);

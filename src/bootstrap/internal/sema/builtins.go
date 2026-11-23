@@ -59,20 +59,25 @@ type errKind struct {
 // check of two `mut &` arguments (#474), and the seed, which refuses every such pair, keeps
 // the number reserved.
 //
+// `StackOverflowError` is 13 and, like `StopIteration`, testable but not constructible: the
+// runtime raises it when a call cannot fit (#480), and a program never does. The seed only
+// reserves the number.
+//
 //nolint:gochecknoglobals // a fixed, compiler-owned lookup table.
 var errKinds = map[string]errKind{
-	"ValueError":        {1, true},
-	"OverflowError":     {2, true},
-	"IOError":           {3, true},
-	"EncodingError":     {4, true},
-	"IndexError":        {5, true},
-	"KeyError":          {6, true},
-	"DeadlockError":     {7, true},
-	"SendOnClosedError": {8, true},
-	"StopIteration":     {9, false},
-	"DivideByZeroError": {10, true},
-	"AssertionError":    {11, true},
-	"AliasError":        {12, true},
+	"ValueError":         {1, true},
+	"OverflowError":      {2, true},
+	"IOError":            {3, true},
+	"EncodingError":      {4, true},
+	"IndexError":         {5, true},
+	"KeyError":           {6, true},
+	"DeadlockError":      {7, true},
+	"SendOnClosedError":  {8, true},
+	"StopIteration":      {9, false},
+	"DivideByZeroError":  {10, true},
+	"AssertionError":     {11, true},
+	"AliasError":         {12, true},
+	"StackOverflowError": {13, false},
 }
 
 // ErrKind reports the built-in error kind a name denotes and whether it is one, so the

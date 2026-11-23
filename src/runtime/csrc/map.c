@@ -233,18 +233,17 @@ void zrt_map_copy(zrt_map *dst, const zrt_map *src) {
 }
 
 void zrt_map_drop(zrt_map *m) {
-	if (m->vt->key_drop != NULL || m->vt->val_drop != NULL) {
-		for (size_t i = 0; i < m->len; i++) {
-			if (m->vt->key_drop != NULL) {
-				m->vt->key_drop(zrt_map_ekey(m, i));
-			}
-			if (m->vt->val_drop != NULL) {
-				m->vt->val_drop(zrt_map_eval(m, i));
-			}
-		}
+	if (m->len != 0 && (m->vt->key_drop != NULL || m->vt->val_drop != NULL)) {
+		/* the drain drops the entries and frees both buffers: a value can be a map whose
+		 * table dies with it, and recursing through that nests a C frame per level */
+		zrt_pend_map(m->entries, m->buckets, m->len, m->entrysz,
+		             (size_t)((uint8_t *)zrt_map_ekey(m, 0) - m->entries),
+		             (size_t)((uint8_t *)zrt_map_eval(m, 0) - m->entries), m->vt);
+		zrt_drain();
+	} else {
+		zrt_free(m->entries);
+		zrt_free(m->buckets);
 	}
-	zrt_free(m->entries);
-	zrt_free(m->buckets);
 	m->entries = NULL;
 	m->buckets = NULL;
 	m->len = 0;

@@ -945,6 +945,10 @@ static void sched_run(void) {
 		zrt_fault_stack_set(NULL, 0);
 		ZRT_TSAN_FIBER_SWITCH(t_sched_fiber);
 		zrt_tls_save(&co->tls);
+		/* the pending array is the coroutine's now: a release this worker runs before the
+		 * next load (an envdrop, the sweep) must grow one of its own, not write into an
+		 * array ZRT_CORO_DONE below is about to free (#479 D7) */
+		zrt_tls_detach();
 		t_current = NULL;
 
 		zrt_mutex_lock(&g_lock);
@@ -1013,6 +1017,7 @@ static void worker_main(void *arg) {
 	 * without one of its own this worker's overflow handler has no ground to run on. */
 	zrt_fault_thread_init();
 	sched_run();
+	zrt_pend_free_local();
 }
 
 /* ZRT_MAX_WORKERS caps the pool. The work here is coroutines, not CPU-saturating
@@ -1105,6 +1110,7 @@ static void sched_drain(void) {
 		zrt_thread_join(&workers[i]);
 	}
 	sweep_unstarted();
+	zrt_pend_free_local();
 	/* A coroutine still parked on a socket is abandoned like one parked on a channel: its stack
 	 * stays mapped and stays a leak root. What the netpoller owns is given back, and the floor
 	 * is taken off it first, so a socket a global still holds is closed by the floor alone once

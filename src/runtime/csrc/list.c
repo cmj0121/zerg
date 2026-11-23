@@ -85,12 +85,14 @@ static void buf_release(zrt_list *l) {
 	if (zrt_atomic_add(&h->rc, -1) != 1) {
 		return;
 	}
-	if (l->vt != NULL && l->vt->drop != NULL) {
-		for (size_t i = 0; i < l->len; i++) {
-			l->vt->drop(l->data + i * l->elemsz);
-		}
+	if (l->vt == NULL || l->vt->drop == NULL || l->len == 0) {
+		zrt_free(h);
+		return;
 	}
-	zrt_free(h);
+	/* the elements are dropped by the drain, not by a loop here: an element can be a list
+	 * whose own buffer dies with it, and recursing through that nests a C frame per level */
+	zrt_pend_list(h, l->data, l->len, l->elemsz, l->vt);
+	zrt_drain();
 }
 
 void zrt_list_init(zrt_list *l, size_t elemsz, const zrt_elem_vt *vt) {

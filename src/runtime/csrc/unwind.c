@@ -56,7 +56,38 @@ void zrt_tls_save(zrt_tls *out) {
 }
 
 void zrt_tls_load(const zrt_tls *in) {
+	zrt_pend_free_local();
 	g_tls = *in;
+}
+
+/* never inlined nor analysed across (GCC's noipa; clang has only noinline): a caller that
+ * crossed a park must get THIS worker's bundle, not a TLS address computed before the switch */
+#if defined(__clang__)
+__attribute__((noinline))
+#elif defined(__GNUC__) && __GNUC__ >= 8
+__attribute__((noipa))
+#elif defined(__GNUC__)
+__attribute__((noinline))
+#endif
+zrt_tls *zrt_tls_cur(void) {
+	return &g_tls;
+}
+
+static void pend_reset(zrt_tls *t) {
+	t->pend = NULL;
+	t->plen = 0;
+	t->pcap = 0;
+	t->pbase = 0;
+	t->dactive = false;
+}
+
+void zrt_tls_detach(void) {
+	pend_reset(&g_tls);
+}
+
+void zrt_pend_free_local(void) {
+	free(g_tls.pend);
+	pend_reset(&g_tls);
 }
 
 void zrt_tls_free(zrt_tls *t) {
@@ -69,21 +100,30 @@ void zrt_tls_free(zrt_tls *t) {
 	t->len = 0;
 	t->cap = 0;
 	t->handler = NULL;
+	free(t->pend);
+	pend_reset(t);
 }
 
 size_t zrt_scope_mark(void) {
 	return g_tls.len;
 }
 
+void *zrt_grow(void *p, size_t *cap, size_t elsz) {
+	size_t n = *cap == 0 ? 16 : *cap * 2;
+	void *grown = realloc(p, n * elsz);
+	if (grown != NULL) {
+		*cap = n;
+	}
+	return grown;
+}
+
 void zrt_defer(void (*fn)(void *env), void *env) {
 	if (g_tls.len == g_tls.cap) {
-		size_t cap = g_tls.cap == 0 ? 16 : g_tls.cap * 2;
-		zrt_cleanup *grown = (zrt_cleanup *)realloc(g_tls.stack, cap * sizeof(zrt_cleanup));
+		zrt_cleanup *grown = (zrt_cleanup *)zrt_grow(g_tls.stack, &g_tls.cap, sizeof(zrt_cleanup));
 		if (grown == NULL) {
 			zrt_abort("out of memory (cleanup stack)");
 		}
 		g_tls.stack = grown;
-		g_tls.cap = cap;
 	}
 	g_tls.stack[g_tls.len].fn = fn;
 	g_tls.stack[g_tls.len].env = env;
@@ -135,6 +175,9 @@ void zrt_handler_push(zrt_frame *frame) {
 	frame->mark = g_tls.len;
 	frame->prev = g_tls.handler;
 	frame->catches = false;
+	frame->pmark = g_tls.plen;
+	frame->pbase = g_tls.pbase;
+	frame->dactive = g_tls.dactive;
 	g_tls.handler = frame;
 }
 
@@ -175,6 +218,21 @@ static const char *zrt_err_kindname(int kind) {
 	}
 }
 
+/* land_drain finishes, before the longjmp, every release the abort interrupted above the
+ * handler's floor: a drain loop the longjmp is about to skip would otherwise leave them
+ * owed, and a list whose first element's drop aborted would never drop the rest. Then the
+ * scope the handler was pushed in gets its own drain state back. A further abort inside
+ * this drain lands on the same handler and resumes the entries it left. */
+static void land_drain(const zrt_frame *h) {
+	g_tls.pbase = h->pmark;
+	g_tls.dactive = false;
+	zrt_drain();
+	/* the drain can park and resume on another worker: re-read the bundle */
+	zrt_tls *t = zrt_tls_cur();
+	t->pbase = h->pbase;
+	t->dactive = h->dactive;
+}
+
 /* zrt_unwind_abort is the shared abort core: report the error, then unwind to the
  * innermost handler and longjmp (or exit when none). Both the string zrt_abort and
  * the Err-carrying zrt_raise_err funnel through it; the only difference is whether
@@ -186,6 +244,7 @@ static _Noreturn void zrt_unwind_abort(zrt_err e, bool place) {
 	 * value carries it). Only a reporting handler (or none) prints the diagnostic. */
 	if (h != NULL && h->catches) {
 		zrt_unwind_to(h->mark);
+		land_drain(h);
 		longjmp(h->buf, 1);
 	}
 	zrt_report_at(zrt_err_kindname(e.kind), e.msg, place ? zrt_site_here() : NULL);
@@ -196,7 +255,8 @@ static _Noreturn void zrt_unwind_abort(zrt_err e, bool place) {
 		 * (an inner user handler, prev != NULL) is not a crash and leaves the flag off. */
 		g_tls.crashing = (h->prev == NULL);
 		zrt_unwind_to(h->mark);
-		g_tls.crashing = false;
+		land_drain(h);
+		zrt_tls_cur()->crashing = false;
 		longjmp(h->buf, 1);
 	}
 	/* no handler installed (e.g. abort before program entry): last resort. Under the

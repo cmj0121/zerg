@@ -565,6 +565,12 @@ pub enum Rule {
 	# a pattern that binds one name twice — `(a, a)`, `[x, ..x]`, `(a, b) as a`
 	PatternBindsTwice = 4126
 
+	# a function that carries the stack probe (#480) — it can be entered again before it returns —
+	# whose array-typed bindings alone keep more on its frame than an overflow leaves to unwind
+	# in (ZRT_STACK_FLOOR). Accepting it would let one frame step over the guard with no probe
+	# firing, which is the silently wrong answer the probe exists to remove.
+	FrameTooLargeToUnwind = 4127
+
 	# building — the program as a set of files, which no single file's text answers: imports resolved
 	# before anything is lexed, and `fn main` looked for after everything is emitted
 	EntryHasNoMain = 5001

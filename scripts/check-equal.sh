@@ -80,6 +80,37 @@ compare() {
 	exit 1
 }
 
+# E4127 IS DECIDED AFTER THE WALK (#480): whether a function can re-enter is read off the call
+# graph of the whole unit, which `check` has to build too instead of dropping its text. Two
+# programs held here, since no corpus program has the frame: the refusal alone, which both
+# stages must report, and the refusal behind an earlier error, which neither may report.
+frame_case() {
+	printf '%s\n' "$1" 'fn deep(n: int) -> int {' '	a: [int; 1500] = [0; 1500]' '	b: [int; 1500] = [0; 1500]' \
+		'	return a[0] + b[0] if n == 0' '' '	return deep(n - 1)' '}' '' 'fn main() {' "	print deep(3)$2" '}'
+}
+frame_case '' '' >"$tmp/frame.zg"
+if compare frame "$tmp/frame.zg"; then
+	grep -q 'E4127' "$tmp/emit.err" || {
+		echo "MISSING   frame — neither stage reported E4127 for a recursive frame past the floor"
+		fail=$((fail + 1))
+	}
+else
+	fail=$((fail + 1))
+fi
+frame_case 'fn other() -> int {
+	x: int = "s"
+	return x
+}
+' ' + other()' >"$tmp/frame-behind.zg"
+if compare frame-behind "$tmp/frame-behind.zg"; then
+	if grep -q 'E4127' "$tmp/emit.err" || ! grep -q 'E3033' "$tmp/emit.err"; then
+		echo "ORDER     frame-behind — wanted E3033 alone, the earlier error and not E4127 over it"
+		fail=$((fail + 1))
+	fi
+else
+	fail=$((fail + 1))
+fi
+
 for src in "$CORPUS"/*.zg; do
 	name="$(basename "$src" .zg)"
 

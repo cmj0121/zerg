@@ -12042,6 +12042,30 @@ fn main() {
 }
 EOF
 
+# A PROBED FRAME FITS IN WHAT AN OVERFLOW LEAVES TO UNWIND IN (#480). The recursive function's
+# two arrays are each under the floor and over it together, so the rule sums a frame; the larger
+# array in `once` is on no cycle and carries no probe, so it is not refused — and it comes first,
+# so a rule that asked every function would be reported at the wrong place. The seed has no
+# probe and no such rule, and refuses this program only for its fill-form literals.
+reject a-probed-frame-past-the-unwind-floor E4127 at=6:1 <<'EOF'
+fn once() -> int {
+	big: [int; 4096] = [0; 4096]
+	return big[1]
+}
+
+fn deep(n: int) -> int {
+	a: [int; 1500] = [0; 1500]
+	b: [int; 1500] = [0; 1500]
+	return a[0] + b[0] if n == 0
+
+	return deep(n - 1)
+}
+
+fn main() {
+	print once() + deep(3)
+}
+EOF
+
 # A CONSTRUCTOR PATTERN IS ASKED ABOUT ITS OWN SUBJECT WHEREVER IT SITS. Only the arm's own
 # pattern was, so one inside a tuple compared another enum's tag and took the arm — `F.C` and
 # `E.A` are both tag 0. One case per position and per rule, each wrong in a different way.

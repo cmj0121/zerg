@@ -215,11 +215,8 @@ static void pend_settle(zrt_tls *t, size_t top) {
 	}
 }
 
-void zrt_drain(void) {
+void zrt_drain_run(void) {
 	zrt_tls *t = zrt_tls_cur();
-	if (t->dactive) {
-		return;
-	}
 	t->dactive = true;
 	while (t->plen > t->pbase) {
 		size_t k = t->plen - 1;
@@ -269,6 +266,17 @@ void zrt_drain(void) {
 	t->dactive = false;
 }
 
+/* DURING A STACK OVERFLOW'S UNWIND (#486) a drain runs nothing: the unwind is still on the
+ * deep stack, and an element or cell drop run there re-enters the chain that overflowed.
+ * The entries the caller pushed stay above the handler's mark for land_drain's loop. */
+void zrt_drain(void) {
+	zrt_tls *t = zrt_tls_cur();
+	if (t->overflow_unwind || t->dactive) {
+		return;
+	}
+	zrt_drain_run();
+}
+
 /* release_cell is the drain's first step run in place (D6): outside any loop, with nothing
  * owed in this scope, the cell's drop runs directly and the loop starts only for what that
  * drop released. The cell sits in pend marked dropped while its drop runs, with dactive set,
@@ -278,9 +286,9 @@ static void release_cell(zrt_ref_hdr *h) {
 	/* DURING A STACK OVERFLOW'S UNWIND (#480) a cell's drop is QUEUED, not run: the unwind is
 	 * still on the deep stack, and a user drop run there re-enters the chain that overflowed
 	 * (drop -> release -> drop) and hits the probe a second time, which is the hard fault. The
-	 * entry sits above the handler's mark, so land_drain runs it at the handler's depth, before
-	 * zrt_stack_land restores the limit and the flag; a drop it runs that releases another
-	 * cell queues that one too, and the loop takes it next. */
+	 * entry sits above the handler's mark, so land_drain's flat loop runs it, still on the deep
+	 * stack but one drop deep, before zrt_stack_land restores the limit and the flag; a drop it
+	 * runs that releases another cell queues that one too, and the loop takes it next. */
 	if (t->overflow_unwind) {
 		zrt_pend_cell(h);
 		return;

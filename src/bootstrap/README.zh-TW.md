@@ -553,6 +553,13 @@ chan[int]() }`——或任何不是字面值、模組常數，或它們之間算
   （`E2066`）。這對 bootstrap 不花任何代價：編譯器自己的測試每個只帶一個 decorator。`derive-after-test-on-a-fn`
   與 `sealed-after-test-on-a-fn` 帶著 `seed-gap` 標記。
 
+- **stack 溢位在這裡不是 abort。** `zerg` 讓每個可能被一次呼叫再進入的函式，在開頭對它 stack 的界限做一次檢查，
+  所以那裡的溢位會以一般的 `StackOverflowError` unwind:待決的 `defer` 照跑,`guard` 也接得住它
+  （docs/code/errors.md）;它也會拒絕陣列超出那次 unwind 所剩空間的遞迴函式（`E4127`）。種子不產生檢查、也沒有
+  `E4127`,所以它建出來的程式保留 runtime 的具名 fault:同一行 `StackOverflowError: stack overflow` 與狀態 1,
+  不跑任何 `defer`。種子保留了這個 kind 的編號並拒絕建構它，所以兩個編譯器在其餘每個 kind 上都一致。這對
+  bootstrap 不花任何代價:`bin/zerg` 由它自己重建，所以出貨的編譯器帶著那次檢查。
+
 ## 修改種子時
 
 讓一項改動可以放心進行的不變量：**自舉原始碼所產生的 C 不得變動**。若那是真正的死碼移除，前後產生的 C 會逐位元組

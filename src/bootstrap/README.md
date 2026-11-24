@@ -716,6 +716,15 @@ byte(N)` and `byte(N * 3)` are compile errors. The seed folds the literal alone:
   nothing: the compiler's own tests carry one decorator each. `derive-after-test-on-a-fn` and
   `sealed-after-test-on-a-fn` carry the `seed-gap` marker.
 
+- **A STACK OVERFLOW IS NOT AN ABORT HERE.** `zerg` opens every function a call can re-enter with a
+  check against its stack's limit, so an overflow there unwinds as an ordinary `StackOverflowError`
+  that runs the pending `defer`s and that a `guard` catches (docs/code/errors.md); it also refuses a
+  recursive function whose arrays outgrow what that unwind is left (`E4127`). The seed emits no check
+  and has no `E4127`, so a program it builds keeps the runtime's named fault: the same
+  `StackOverflowError: stack overflow` line and status 1, with no `defer` run. The seed reserves the
+  kind's number and refuses to construct it, so the two compilers agree on every other kind. It costs
+  the bootstrap nothing: `bin/zerg` is rebuilt by itself, so the compiler that ships carries the check.
+
 ## Changing the seed
 
 The invariant that makes a change safe to make: **the C emitted for the self-host source

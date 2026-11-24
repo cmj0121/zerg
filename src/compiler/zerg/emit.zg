@@ -4941,18 +4941,20 @@ fn c_ref_drop_fn(mut &em: Emitter, e: ast.Expr) -> str {
 
 # c_ref_drop_thunk gives that function the shape the cell's drop slot has: the payload by
 # ADDRESS, because the runtime hands it what it allocated, and the user's function takes the
-# value. One thunk per (payload type, action), emitted once. The call runs in an IMMEDIATE drain
+# value. One thunk per (payload type, action), emitted once — the action by its C name, since two
+# modules may each have a private one of the same name, and the pair escaped (c_file_cname), since
+# `_` is in both halves and a plain join would let `(P, zg_x)` and `(P_zg, x)` meet. The call runs in an IMMEDIATE drain
 # scope: the action is program code, so a release it makes finishes before its next statement.
 # An action with a Zerg body is ARMED first (#487): an overflow at its probe gives it back to the
 # cell, and its ZRT_PROBE_VALUE disarms once that probe has passed. A foreign binding has no body
 # and no probe, so nothing would disarm it, and it is called unarmed.
 fn c_ref_drop_thunk(mut &em: Emitter, el: ast.Ty, callee: str) -> str {
-	nm := c_spec_cname(f"refdrop${ast.ty_name(el)}${callee}")
+	cn := c_fn_cname_in(em, em.at_path, "", callee)
+	nm := c_file_cname(f"refdrop${ast.ty_name(el)}${cn}")
 	return nm if c_name_in(em.refnew_done, nm)
 
 	em.refnew_done.append(nm)
 	ct := c_type(el)
-	cn := c_fn_cname_in(em, em.at_path, "", callee)
 
 	# INTO THE DEFER STREAM and not the on-demand one: this thunk CALLS A PROGRAM FUNCTION, and
 	# `res_decls` is emitted ahead of the prototypes. cc reported `zg_closed` undeclared against
@@ -29775,7 +29777,8 @@ fn c_is_filed(nm: str) -> bool {
 
 # c_file_cname is the C name of anything spelled with a file's new type name: `zgf_` and the
 # name escaped byte for byte — `_` doubles, a byte C cannot hold becomes `_<hex>_` — so two
-# distinct names never meet, and nothing else is spelled under the prefix.
+# distinct names never meet. Nothing else is spelled under the prefix but a Ref's drop thunk
+# (c_ref_drop_thunk), whose key holds a `$` no name has.
 fn c_file_cname(nm: str) -> str {
 	mut out := "zgf_"
 	for b in bytearray(nm) {

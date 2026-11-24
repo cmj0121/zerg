@@ -57,13 +57,14 @@ live allocations as five rounds do (`make mem-check`).
 > in place, and its drops run once the unwind lands — on the `guard` that catches it, before the `guard`'s
 > value is seen, or, when nothing does, after the `StackOverflowError` line and before the process exits
 > with status 1 — so no link's storage is leaked, whether the chain runs through `Ref`s alone or through a
-> container. The order shows: a `drop` action and an element's drop the unwind queued run after every
-> `defer` it still had to run, not interleaved with them. The depth of the chain is still bounded by the
-> stack, so resources that deep want a `list` of `Ref`s indexed by position rather than a chain.
->
-> **[deviation]** A chain's teardown after a stack overflow skips one `drop` action: every released `Ref`
-> should have its `drop` action run exactly once, but the link whose drop hit the overflow never runs its
-> action (#487). Its storage is still freed, and every other link's action still runs.
+> container. Every link's `drop` action starts exactly once: one the overflow stopped at its entry starts as
+> the unwind lands, and one it interrupts after it began is abandoned like any aborted code — its `defer`s
+> still run — and is not started again. The order shows: a `drop` action
+> and an element's drop the unwind queued run after every `defer` it still had to run, not interleaved
+> with them. Those actions run while the overflow is still unwinding, in its smaller reserve, so an
+> overflow inside one is the named fault, not an abort a `guard` can catch ([Errors](../code/errors.md)).
+> The depth of the chain is still bounded by the stack, so resources that deep want a `list` of `Ref`s
+> indexed by position rather than a chain.
 >
 > **[implementation-defined]** HOW a value is torn down is this implementation's, not the language's: an
 > explicit worklist is one way and a recursive free is another, and a program cannot tell them apart except

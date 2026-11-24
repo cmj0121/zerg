@@ -612,7 +612,8 @@ runner, which kills that group and exits 130.
 
 **Two paths, and the report says which.** A test runs as a **coroutine**, inside a `guard`, in one process
 — which contains an assertion that does not hold and an uncaught abort alike. What no coroutine can
-contain is a test that ends the **process**: a stack overflow, or `os.exit`. So a test with no result when
+contain is a test that ends the **process**: a stack overflow no check catches (see
+[Errors](../code/errors.md)), or `os.exit`. So a test with no result when
 the run ends is re-run in a **process of its own** — the remainder, exactly, since a result is written only
 after a body returns — and that is what attributes the death to the test that caused it. When it happens
 the report says so on a `NOTE` line; a run that quietly changed strategy is a run whose result nobody can

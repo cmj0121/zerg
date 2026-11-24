@@ -477,8 +477,8 @@ for v in range(0, 10) { use(v) }   # drain 到 producer 的 channel 關閉
 refcount），其餘一切照常運行。這就是 fire-and-forget，但失敗**不會遺失**：以最後 sender 身分關閉 channel 時會帶著
 崩潰的 `Err`，並在 **consumer 下一次 receive 時 raise 出來**（乾淨結束則給 `nil`——見上面的「接收」）。實測:
 producer 送出一個值後 abort，consumer 第二次 `<-ch` 會 re-raise `IOError: disk went away`，而不是回答一次缺席。
-coroutine 邊界包不住的**唯一**一種 abort 是 `StackOverflowError`,它從任何一條 stack 都會結束整個行程——見
-[錯誤處理](errors.zh-TW.md)。
+`StackOverflowError` 也是這種 abort:遞迴超出自己 stack 的 coroutine 獨自結束,只有沒被任何檢查接住的溢位——
+那個具名的 fault——才會從任何一條 stack 結束整個行程(見[錯誤處理](errors.zh-TW.md))。
 
 runtime 會把它**報在 `stderr`** 上——就是那個 `Err` 的訊息，如同頂層 abort 也會印出一則——然後該 coroutine 就
 消失，程式繼續跑。這則回報是**純觀察**的：它是 unwind 本來就知道的東西，順路印出來而已，程式行為完全不依賴

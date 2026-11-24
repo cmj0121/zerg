@@ -136,23 +136,25 @@ UTF-8 的 `str` 橋接是 `EncodingError`、越界索引是 `IndexError`、缺�
 > 一個空的定義域上是完整的，而不是一個程式碰得到、然後被拒絕的形式；`message()` 與 `unwrap()` 依規格回答。
 
 **Aborts。** 一次 abort——一個內建 runtime fault 或任何你 `raise` 的 `Err`——代表 **bug**，不是預期內的失敗。本章
-用到的 fault 名稱裡,今天有十二個具現化成可 `is` 測試的**種類**:`ValueError`、`OverflowError`、`IOError`、
+用到的 fault 名稱裡,今天具現化成可 `is` 測試之**種類**的是:`ValueError`、`OverflowError`、`IOError`、
 `EncodingError`、`IndexError`、`KeyError`、`DivideByZeroError`，加上並行那章指名的三個——`SendOnClosedError`、
 `DeadlockError` 與 `StopIteration`——`AliasError`,`mut &` 不可別名規則的執行期那一半
-（[值與記憶體](../core/memory.zh-TW.md)）,以及 `AssertionError`:那是失敗的 `assert` raise 出來的東西,而且**沒有別的
-東西**會 raise 它。這份獨佔性正是種類勝過訊息之處:`zerg test` 把不成立的主張報成**失敗**、把其他抵達測試本體頂端
-的東西報成**崩潰**,而它分辨兩者的方法就是問 `e is AssertionError`。其餘在語言表面還**叫不出名字**:`UnwrapError`
-與 `MatchError` 是 **[not yet]**——`err is MatchError` 在**兩個編譯器**裡都是
+（[值與記憶體](../core/memory.zh-TW.md)）,`StackOverflowError`——一次放不進自己 stack 的呼叫（見下）,以及
+`AssertionError`:那是失敗的 `assert` raise 出來的東西,而且**沒有別的東西**會 raise 它。這份獨佔性正是種類勝過
+訊息之處:`zerg test` 把不成立的主張報成**失敗**、把其他抵達測試本體頂端的東西報成**崩潰**,而它分辨兩者的方法就是問
+`e is AssertionError`。其餘在語言表面還**叫不出名字**:`UnwrapError` 與 `MatchError` 是 **[not yet]**——
+`err is MatchError` 在**兩個編譯器**裡都是
 _E9078 NotImplemented: `is MatchError` — an `is` test compares the operand's own type against a named one
 here, and `MatchError` names no type to put on the right of it_——而它們的 abort 也不帶獨立具現化種類、只有一般
 訊息。這道拒收正是把它們擋在下面那個折疊之外的東西:一個分類**有**、而這個編譯器叫不出名字的種類,不可以讀成
 一句自信的「不,它不是那些之一」。
 
-**`StopIteration` 可測試，卻無法建構。** 它是唯一一個程式可以放在 `is` 右邊、卻**不可以**呼叫的名字:
+**`StopIteration` 可測試，卻無法建構。** 它是一個程式可以放在 `is` 右邊、卻**不可以**呼叫的名字:
 `raise StopIteration("…")` 在**兩個編譯器**裡都是
 _E4063 `StopIteration` is testable but not constructible_,因為它正是 channel 乾淨關閉早已戴上的那個標記——一個能
 raise 它的 sender 會讓 consumer 付出什麼代價,見 [Concurrency](coroutine.zh-TW.md)。
-`StackOverflowError` 則是唯一不是 abort 的那一個(見下)。
+`StackOverflowError` 是另一個這樣的名字:它由 runtime 在一次呼叫放不下時 raise、從不由程式 raise,所以
+`raise StackOverflowError("…")` 也是 _E4063_。
 abort **不可被當控制流攔截**：沒有 `try`/`catch`、不能檢視是「哪一種」abort、也不能回到出錯處續算。語意上它是一次
 **會執行 scope 清理的 stack unwind**——從 raise 點到它停下之處，每一層 scope 都**先跑
 它的 `defer`**、再按序釋放，其 `Ref` 值（channel 與 `Ref[T]`）的 refcount 遞減，與正常的 scope 結束完全相同；絕不是
@@ -165,19 +167,41 @@ fire-and-forget——見 [Concurrency](coroutine.zh-TW.md)）。
 合併——較晚的 abort 往外傳、把還在飛的那個記成它的 `unwrap()` cause——所以兩者皆不遺失、consumer 讀得到整條鏈。
 沒有哪個錯誤會無聲勝出,也沒有另一個 _suppressed_ 槽要去查。
 
-一個 **`StackOverflowError`** 是唯一**不是 abort** 的結束方式。Zerg **不做 tail-call 優化**——`for` 才是迴圈、有界
-stack 就夠——因此無界遞迴是一個確定的溢位、而不是無聲的卡死,而 runtime 會給那次溢位名字:它的 fault handler 把
-`StackOverflowError: stack overflow` 寫到標準錯誤、行程以狀態 **1** 結束,今天程式能溢出的兩條 stack(coroutine 的
-guard page 與 `main` 的原生 stack)皆然。
+一個 **`StackOverflowError`** 是一次一般的 abort。Zerg **不做 tail-call 優化**——`for` 才是迴圈、有界 stack 就夠——
+因此無界遞迴是一個確定的溢位、而不是無聲的卡死。一個在回傳之前可能再被進入的函式,會在開始時檢查自己的 frame 是否
+還放得進它的 stack;放不進的呼叫就在那裡 raise `StackOverflowError: stack overflow`,從那一刻起它就跟其他 abort
+一樣。待決的 `defer` 與 scope 的 drop 在它 unwind 時照跑,它所釋放之 `Ref` 的 `drop` 動作則在它落地之後才跑
+([值與記憶體](../core/memory.zh-TW.md))。`guard` 把它降級成 `Right(e)` 且 `e is StackOverflowError`,而沒有
+handler 的 unwind 會結束它所在的 stack:`main` 的結束整個程式、狀態 **1**,coroutine 的只結束該 coroutine。
 
-它做不到的是展開。那條會去跑待決 `defer` 的 stack 正是已經耗盡的那一條,所以 `defer` 被**跳過**、沒有 `guard` 能
-把它降級,`err is StackOverflowError` 也不可寫——根本沒有一個值可以拿去問。它也是 coroutine **無法**包住的那一個
-結束:一個沒有 handler 的一般 abort 只結束該 coroutine,溢位卻結束整個行程。它落在哪一份契約之外見
-[Conformance](../conformance.zh-TW.md)。
+```zerg
+fn depth(n: int) -> int {
+    return depth(n + 1) + 1
+}
 
-> **[implementation-defined]** 一次溢位**怎麼**被偵測是這個實作的事。一個擁有並自行成長 stack 的 runtime,可以
-> 在 fault 之前就檢查呼叫深度、然後乾淨地 unwind;這一個是接下那個 fault、然後指名它。規範釘住的是「深度是有界
-> 的」以及「碰到界限會指名結束程式」,不是那個察覺它的機制。
+fn main() {
+    match guard { depth(0) } {
+        Either.Left(v) => { print v }
+        Either.Right(e) => { print e is StackOverflowError }    # prints true
+    }
+}
+```
+
+會檢查的函式,是一次呼叫可能再進入的那些:位於直接呼叫環上的函式、位址被取用的函式——function value、closure、
+spec 派發到的方法、`defer` 或 `drop` 動作——以及自己透過 function value 或派發器呼叫的函式。其他函式不做檢查,
+跑在檢查於每條 stack 界限之下保留的那段空間裡;而一次溢位開始 unwind 之後,它所跑的 `defer` 與 scope 的 drop 會得到一段
+更小的專屬保留空間。位於直接遞迴環上、光是陣列型別的區域變數就超過那段較小保留空間的函式,會在編譯期被拒絕
+(_E4127_,見 [Diagnostics](../tooling/diagnostics.zh-TW.md)),而不是建出來去跨過它。
+
+沒有任何檢查接住的溢位是一次**具名的 fault**、不是 abort:runtime 寫出同樣的 `StackOverflowError: stack overflow`
+那一行與其位置,並以狀態 **1** 結束**整個行程**——不論在哪條 stack 上,沒有 `defer` 會跑、也沒有 `guard` 接得到。
+這是 C 裡的溢位(外部函式、libc、runtime 本身)撞上 stack 的 guard page 時的結局;是一串比保留空間更深的未檢查
+呼叫的結局;也是第一次溢位還在 unwind 時又發生第二次溢位的結局,因為接住它的 `guard` 會讓外層的 unwind 在沒有
+空間的情況下繼續跑。這個 fault 與 abort 契約如何並存,見 [Conformance](../conformance.zh-TW.md)。
+
+> **[implementation-defined]** 一次溢位**怎麼**被偵測是這個實作的事:哪些函式檢查、每段保留空間多大、以及一條
+> stack 的界限從哪裡來。在平台不回報 `main` stack 界限之處,它上面什麼都不檢查,只剩 guard page 的具名 fault。
+> 規範釘住的是「深度是有界的」、「碰到界限會指名結束程式」,以及「被檢查接住的溢位像其他 abort 一樣 unwind」。
 
 一個 **`DeadlockError`**——每個 coroutine 都阻塞、無法再前進——現在已是規格所要求的那次乾淨 abort:它 unwind、跑
 pending `defer`，`guard` 也攔得住。它在 `main` 的 coroutine 上 raise，而且**每一次**偵測都會重新 raise、不是只有
@@ -234,7 +258,7 @@ match guard { work() } {
 ```
 
 `is` 只產出 `bool`，所以一個分支能用 **`Error` 介面**（`message` / `code` / `unwrap`）、但**碰不到具體型別自己的欄位**
-——值已被抹除、永不重新建構。在一個錯誤上,那正是 `is` 的用途:上面那十二個具現化種類,是它唯一會從 runtime tag
+——值已被抹除、永不重新建構。在一個錯誤上,那正是 `is` 的用途:上面那些具現化種類,是它唯一會從 runtime tag
 回答的名字,而分類範圍外的名字得到的是 `E9078`、而不是一個回答 `false` 的測試。其他每一個名字都是從運算元自己的
 型別回答的編譯期常數,那由 [Spec 與 Generics](../core/specs.zh-TW.md#型別測試type-testsis) 決定;仍然
 **裝箱**的運算元是唯一在執行期得到答案的:讀的是它被裝箱時對上的那張見證表。這裡可達的錯誤集合在覆蓋上被

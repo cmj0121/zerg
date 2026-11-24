@@ -39,9 +39,12 @@ copy-by-value 是語意；編譯器會在安全時省略複製：
 > 還回去的東西照遞迴拆解會用的順序排空,不論那個值多深或多寬。複製、比較(衍生的 `==` 或 `Hash`)與印出一個很深的值
 > 仍然會遞迴。只剩一個界限,因為**使用者寫的 `drop` 動作**是唯一跑 Zerg 程式碼、也唯一可能 abort 的 drop,所以只有它
 > 會巢狀:在它裡面做的釋放會在它的下一行之前完成。**一條這種動作的鏈**——payload 裡握著下一個同類 `Ref` 的
-> `Ref(x, f)`——會讓每一節的動作都跑在前一節的動作裡面,深度由 stack 決定。碰到它時行程帶著名字結束
-> (`StackOverflowError: stack overflow`、狀態碼 1),而不是一個裸的 SIGSEGV;但那是一份診斷、不是一次復原:沒有
-> `guard` 抓得到它,它之後的 `defer` 也不會跑(issue #480 追蹤把它變成一般的 abort)。深到那個程度的資源,該用語言為
+> `Ref(x, f)`——會讓每一節的動作都跑在前一節的動作裡面,深度由 stack 決定。碰到它是一次一般的 abort
+> `StackOverflowError`,在放不下的那一節裡 raise,包住放掉那條鏈之 scope 的 `guard` 接得住它
+> ([錯誤處理](../code/errors.zh-TW.md))。它仍是一次完整的拆解:溢位的 unwind 所釋放的 `Ref` 會先排進佇列、不在
+> 原地 drop,它的 `drop` 動作在 unwind 落地之後才跑——在接住它的 `guard` 之後,或在沒有任何東西接住時,於
+> `StackOverflowError` 那一行印出之後、行程以狀態 1 結束之前——所以沒有任何一節洩漏。unwind 釋放的 `list`、`map`
+> 或 channel 仍在原地排空;一條經由它們再進入 `drop` 動作的鏈,會以溢位的具名 fault 結束。深到那個程度的資源,該用語言為
 > 它準備的形狀 —— 一個依位置索引的 `Ref` 的 `list`,而不是一條鏈。
 >
 > **[implementation-defined]** 一個值**怎麼**被拆掉是這個實作的事、不是語言的事:顯式的 worklist 是一種做法,遞迴

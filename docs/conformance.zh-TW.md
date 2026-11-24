@@ -252,18 +252,22 @@ IndexError: index out of range
 只付一些大小。這張表需要 frame pointer 與 linker section，本實作在 Linux 與 macOS 的 x86-64 和 arm64 上具備。
 其他平台以及 AddressSanitizer 之下沒有第二行，絕不猜測。
 
-**stack 溢位是一次 fault、不是一次 abort**,而它是這份契約唯一沒有涵蓋的結束方式。runtime 會給它名字——
-`StackOverflowError: stack overflow` 與其位置寫到標準錯誤、exit 狀態 **1**,即第 1 與第 3 步——但第 2 步不可能成立:那條會
-去跑待決 `defer` 的 stack,正是已經耗盡的那一條,而站在它上面的 signal handler 展不開自己腳下的東西。所以 `defer`
-被**跳過**、沒有 `guard` 攔得住;而且與一般 abort(coroutine 會把它包住)不同,溢位無論發生在哪裡都結束**整個行程**。
-handler 不認得的 fault 會交還給 runtime 之前持有該 signal 的那個 action(sanitizer 的 handler,或預設處置),因此它
-仍以其本來的 signal 死去、該 handler 的診斷完整保留。handler 宣稱的兩個窗口**各為一頁**——coroutine 的 guard page
-恰好一頁,以及 `main` stack 下界之下的那一頁——這也正是它可能誤命名的全部範圍:落在 `main` 下方那一頁的存取會被讀
-成溢位。
+**stack 溢位在被檢查接住之處是一次一般的 abort**:一個可能再被進入的函式,會在開始時拿自己的 frame 去比對它
+stack 的界限([Errors](code/errors.zh-TW.md) 說明是哪些函式),放不進的呼叫就在那裡 raise `StackOverflowError`。
+第 1 到第 3 步與其他 abort 一樣成立,`guard` 攔得住它,coroutine 也會把它包在自己裡面。
 
-這是語言的規則,而不是對規則的虧欠。一個擁有並自行成長 stack 的 runtime,可以在 fault 之前就檢查呼叫深度、乾淨地
-展開。**[implementation-defined]**:一個擁有並自行成長 stack 的 runtime,可以在 fault 之前檢查呼叫深度、乾淨地
-unwind。被釘住的是「深度是有界的」以及「碰到界限會指名結束程式」。
+沒有任何檢查接住的溢位是一次**具名的 fault**——發生在 C frame 裡的溢位(外部函式、libc、runtime)、一串比檢查
+所保留空間更深的未檢查呼叫,或第一次溢位還在 unwind 時的第二次溢位。runtime 在第 1 與第 3 步給它名字——
+`StackOverflowError: stack overflow` 與其位置寫到標準錯誤、exit 狀態 **1**——但第 2 步不成立:在 guard page 上,
+那條會去跑待決 `defer` 的 stack 正是已經耗盡的那一條,而站在它上面的 signal handler 展不開自己腳下的東西;第二次
+溢位則已經沒有保留空間可以 unwind。所以它的 `defer` 被**跳過**、沒有 `guard` 攔得住,而且無論發生在哪裡都結束
+**整個行程**。handler 不認得的 fault 會交還給 runtime 之前持有該 signal 的那個 action(sanitizer 的 handler,或
+預設處置),因此它仍以其本來的 signal 死去、該 handler 的診斷完整保留。handler 宣稱的兩個窗口**各為一頁**——
+coroutine 的 guard page 恰好一頁,以及 `main` stack 下界之下的那一頁——這也正是它可能誤命名的全部範圍:落在
+`main` 下方那一頁的存取會被讀成溢位。
+
+**[implementation-defined]**:哪些呼叫被檢查、每段保留空間多大、以及一條 stack 的界限從哪裡來。被釘住的是「深度
+是有界的」、「碰到界限會指名結束程式」,以及「被檢查接住的溢位像其他 abort 一樣 unwind」。
 
 ## 參考實作 emit 出來的 C
 
@@ -285,8 +289,7 @@ object 的 key,所以兩種 dialect、兩個編譯器,都不會把彼此的 obje
 
 - **Undefined behavior（UB）**——規格對結果不作任何要求。conforming 程式必須避免它；conforming implementation 則
   可做任何事，包含崩潰。Zerg 的設計目標是**從 safe code 無法觸及任何 UB**；凡 bootstrap 目前仍容許 UB 之處，該章
-  會標為 **[deviation]**（例如 stack overflow 是一次硬體 fault，runtime 將其命名為 `StackOverflowError`
-  並以 exit 1 結束，而非一次會跑待決 `defer` 的乾淨 unwind——見 [Errors](code/errors.zh-TW.md)）。
+  會標為 **[deviation]**,並指名追蹤它的 issue。
 - **Implementation-defined**——結果是實作所記錄的一組選項之一，但規格不釘死。conforming 程式不應依賴特定選擇。
   目前的 implementation-defined 點（各於其章節詳述）包含：`select` 在多個就緒 arm 間的勝出 arm（[Coroutines](code/coroutine.zh-TW.md)）；
   浮點渲染的精度與拼法（[Format](runtime/format.zh-TW.md)）；以及超出「送出→接收 happens-before」保證之外的任何 coroutine 排序

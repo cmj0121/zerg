@@ -51,9 +51,13 @@ live allocations as five rounds do (`make mem-check`).
 > Zerg code and the only one that can abort, so it is the only one that nests: a release made inside it
 > completes before its next line. A **chain of them** — a `Ref(x, f)` whose payload holds the next such `Ref`
 > — runs each link's action inside the previous one, and its depth is bounded by the stack.
-> Reaching it ends the process with its name (`StackOverflowError: stack overflow`, status 1) and not as a
-> bare SIGSEGV, but that is a diagnosis and not a recovery: no `guard` catches it and no later `defer` runs
-> (issue #480 tracks making it an ordinary abort). Resources that deep need a shape the language has for
+> Reaching it is an ordinary abort, `StackOverflowError`, raised in the link that did not fit, and a `guard`
+> around the scope that let the chain go catches it ([Errors](../code/errors.md)). It is still a full
+> teardown: a `Ref` the overflow's unwind releases is queued rather than dropped in place, and its `drop`
+> action runs once the unwind lands — after the `guard` that caught it, or, when nothing does, after the
+> `StackOverflowError` line and before the process exits with status 1 — so no link is leaked. A `list`,
+> `map` or channel the unwind frees still drains in place; a chain that re-enters a `drop` action through
+> one of those ends in the overflow's named fault. Resources that deep need a shape the language has for
 > them — a `list` of `Ref`s indexed by position, rather than a chain.
 >
 > **[implementation-defined]** HOW a value is torn down is this implementation's, not the language's: an

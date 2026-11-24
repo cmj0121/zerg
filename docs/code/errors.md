@@ -161,13 +161,14 @@ answers the text alone, and the kind is rendered in front of it when the error r
 > `message()` and `unwrap()` answer as specified.
 
 **Aborts.** An abort — a built-in runtime fault or any `Err` you `raise` — marks a **bug**, not an
-expected failure. Of the fault names this chapter uses, twelve reify as `is`-testable **kinds** today:
+expected failure. Of the fault names this chapter uses, these reify as `is`-testable **kinds** today:
 `ValueError`, `OverflowError`, `IOError`, `EncodingError`, `IndexError`, `KeyError`, `DivideByZeroError`,
 the three the concurrency chapter names — `SendOnClosedError`, `DeadlockError` and `StopIteration` —
-`AliasError`, the run-time half of the `mut &` no-alias rule ([Values & Memory](../core/memory.md)), and
-`AssertionError`, which a failed `assert` raises and **nothing else** does. That exclusivity is what the
-kind buys over a message: `zerg test` reports a claim that did not hold as a **failure** and anything else
-that reached the top of a test body as a **crash**, and it tells them apart by asking `e is AssertionError`.
+`AliasError`, the run-time half of the `mut &` no-alias rule ([Values & Memory](../core/memory.md)),
+`StackOverflowError`, a call that did not fit on its stack (below), and `AssertionError`, which a failed
+`assert` raises and **nothing else** does. That exclusivity is what the kind buys over a message: `zerg test`
+reports a claim that did not hold as a **failure** and anything else that reached the top of a test body as a
+**crash**, and it tells them apart by asking `e is AssertionError`.
 The rest cannot be **named** at the surface yet: `UnwrapError` and `MatchError` are **[not yet]** —
 `err is MatchError` is _E9078 NotImplemented: `is MatchError` — an `is` test compares the operand's own type
 against a named one here, and `MatchError` names no type to put on the right of it_ — and
@@ -175,11 +176,12 @@ the abort carries no distinct reified kind for them, only a generic message. The
 out of the fold below: a kind the taxonomy HAS and this compiler cannot name must not read as a confident
 "no, it is not one of those".
 
-**`StopIteration` is testable but not constructible.** It is the one name a program may put on the right
+**`StopIteration` is testable but not constructible.** It is a name a program may put on the right
 of `is` and may **not** call: `raise StopIteration("…")` is _E4063 `StopIteration` is testable but not
 constructible_ in **both** compilers, because it is the marker a channel's clean close already wears —
 see [Concurrency](coroutine.md) for what a sender able to raise it would cost its consumer.
-`StackOverflowError` is the one that is not an abort (see below). An abort is **not
+`StackOverflowError` is the other such name: the runtime raises it when a call cannot fit, never a program,
+so `raise StackOverflowError("…")` is _E4063_ too. An abort is **not
 catchable as control flow**: no `try`/`catch`,
 no inspecting _which_ abort fired, no resuming the failed expression. Semantically it is a **stack
 unwind that runs scope cleanup** — every scope from the raise point to where it stops **runs its
@@ -194,22 +196,49 @@ two errors combine by the **same nesting as `raise e from cause`** — the later
 already in flight recorded as its `unwrap()` cause — so neither is lost and the consumer reads the whole
 chain. No error silently wins, and there is no separate _suppressed_ slot to consult.
 
-A **`StackOverflowError`** is the one end that is **not an abort**. Zerg does not optimize tail calls —
-`for` is the loop, so a bounded stack is enough — which makes an unbounded recursion a definite overflow
-rather than a silent hang, and the runtime gives that overflow its name: its fault handler writes
-`StackOverflowError: stack overflow` to standard error and the process exits with status **1**, on both
-stacks a program can overflow, a coroutine's guard page and `main`'s native stack.
+A **`StackOverflowError`** is an ordinary abort. Zerg does not optimize tail calls — `for` is the loop,
+so a bounded stack is enough — which makes an unbounded recursion a definite overflow rather than a silent
+hang. A function that can be entered again before it returns checks, as it starts, that its frame still
+fits on its stack; a call that does not fit raises `StackOverflowError: stack overflow` there, and from
+that point it is any other abort. The pending `defer`s and scope drops run as it unwinds, and the `drop`
+action of a `Ref` it releases runs once it lands ([Values & Memory](../core/memory.md)). A `guard` demotes
+it to `Right(e)` with `e is StackOverflowError`, and an unwind with no handler ends its stack: `main`'s ends
+the program with status **1**, a coroutine's ends only that coroutine.
 
-What it cannot do is unwind. The stack that would run the pending `defer`s is the exhausted one, so they
-are **skipped**, no `guard` can demote it, and `err is StackOverflowError` is unwritable — there is no
-value to ask about. It is also the one end a coroutine does **not** contain: an ordinary abort with no
-handler ends only that coroutine, while an overflow ends the process. See
-[Conformance](../conformance.md) for the contract this sits outside of.
+```zerg
+fn depth(n: int) -> int {
+    return depth(n + 1) + 1
+}
 
-> **[implementation-defined]** HOW an overflow is detected is this implementation's. A runtime that owned
-> and grew its own stacks could check call depth before the fault and unwind cleanly; this one takes the
-> fault and names it. What the specification pins is that the depth is bounded and that reaching the bound
-> ends the program by name — not the mechanism that notices.
+fn main() {
+    match guard { depth(0) } {
+        Either.Left(v) => { print v }
+        Either.Right(e) => { print e is StackOverflowError }    # prints true
+    }
+}
+```
+
+The functions that check are the ones a call can re-enter: a function on a cycle of direct calls, one
+whose address is taken — a function value, a closure, a method a spec dispatches to, a `defer` or `drop`
+action — and one that itself calls through a function value or a dispatcher. Any other function runs
+unchecked, in a reserve the check keeps below each stack's limit, and once an overflow is unwinding the
+`defer`s and scope drops it runs get a smaller reserve of their own. A function on a direct recursion cycle
+whose array-typed locals alone outgrow that smaller reserve is refused at compile time (_E4127_, see
+[Diagnostics](../tooling/diagnostics.md)) rather than built to step past it.
+
+An overflow no check catches is a **named fault**, not an abort: the runtime writes the same
+`StackOverflowError: stack overflow` line and its place and ends the **whole process** with status **1**,
+from any stack, with no `defer` run and no `guard` reached. That is the end of an overflow inside C — a
+foreign function, libc, the runtime itself — which meets the stack's guard page; of a chain of unchecked
+calls deeper than the reserve; and of a second overflow while the first one is still unwinding, because a
+`guard` that caught it would leave the outer unwind running with no room left. See
+[Conformance](../conformance.md) for how the fault sits beside the abort contract.
+
+> **[implementation-defined]** HOW an overflow is detected is this implementation's: which functions
+> check, the size of each reserve, and where a stack's limit comes from. Where the platform reports no
+> bound for `main`'s stack, nothing on it checks and the guard page's named fault is all there is. What
+> the specification pins is that the depth is bounded, that reaching the bound ends the program by name,
+> and that an overflow a check catches unwinds like any other abort.
 
 A **`DeadlockError`** — every coroutine blocked with no progress possible — is now the clean abort the spec
 asks for: it unwinds, runs the pending `defer`s, and a `guard` catches it. It is raised on `main`'s
@@ -273,7 +302,7 @@ match guard { work() } {
 
 `is` yields only a `bool`, so a branch may use the **`Error` interface** (`message` / `code` / `unwrap`)
 but **not the concrete type's own fields** — the value was erased and is never re-constructed. On an error
-that is what `is` is FOR: the twelve reified kinds above are the only names it answers from a runtime tag,
+that is what `is` is FOR: the reified kinds above are the only names it answers from a runtime tag,
 and a taxonomy name outside them is `E9078` rather than a test that answers `false`. Every OTHER name is
 answered from the operand's own type as a compile-time constant, which
 [Specs & Generics](../core/specs.md#type-tests--is) decides — a **boxed** operand being the one whose

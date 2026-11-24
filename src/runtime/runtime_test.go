@@ -1663,6 +1663,168 @@ static void prog(void) {
 int main(void) { return zrt_sched_main_nil(prog); }
 `
 
+// TestStackOverflowAtAProbeIsAnAbort is #480's contract, driven from C the way the emitter
+// drives it: a function that opens with ZRT_PROBE and recurses ends in an ordinary
+// `StackOverflowError` abort. Its cleanups run, a handler catches it and finds the limit and
+// the unwind flag restored, an overflow inside the overflow's own unwind is the hard fault
+// rather than a second landing, and on a coroutine only that coroutine ends. The drivers
+// above carry no probe, so they still pin the guard-page backstop.
+func TestStackOverflowAtAProbeIsAnAbort(t *testing.T) {
+	t.Run("caught", func(t *testing.T) {
+		bin := buildCore(t, "probe_caught", probeRecC+probeCaughtC)
+		out, errOut, code := runBoundedStreams(t, bin, "", 20*time.Second)
+		want := "round 0 kind=13 deep=1 cleanups=1 mark=1 limit=1 flag=0\n" +
+			"round 1 kind=13 deep=1 cleanups=1 mark=1 limit=1 flag=0\n"
+		if code != 0 || out != want || errOut != "" {
+			t.Fatalf("caught probe overflow: exit=%d stdout %q stderr %q, want exit 0 stdout %q", code, out, errOut, want)
+		}
+	})
+	t.Run("uncaught", func(t *testing.T) {
+		bin := buildCore(t, "probe_uncaught", probeRecC+probeUncaughtC)
+		out, errOut, code := runBoundedStreams(t, bin, "", 20*time.Second)
+		if code != 1 || out != "rc=1 cleanups=1 deep=1\n" ||
+			!strings.HasPrefix(errOut, "StackOverflowError: stack overflow\n") {
+			t.Fatalf("uncaught probe overflow: exit=%d stdout %q stderr %q", code, out, errOut)
+		}
+	})
+	t.Run("nested", func(t *testing.T) {
+		bin := buildCore(t, "probe_nested", probeRecC+probeNestedC)
+		out, errOut, code := runBoundedStreams(t, bin, "", 20*time.Second)
+		want := "StackOverflowError: stack overflow\nStackOverflowError: stack overflow\n"
+		if code != 1 || out != "cleanup runs\n" || errOut != want {
+			t.Fatalf("overflow inside the overflow's unwind: exit=%d stdout %q stderr %q, "+
+				"want exit 1, the cleanup's line alone, and stderr %q: the abort, then the hard fault", code, out, errOut, want)
+		}
+	})
+	t.Run("coroutine", func(t *testing.T) {
+		bin := buildConcurrent(t, "probe_coro", probeRecC+probeCoroC)
+		want := "crashed coroutine ran its cleanups: 1\ncaught on coroutine: 1\nmain alive\n"
+		for _, w := range workerModes {
+			out, errOut, code := runBoundedStreams(t, bin, w, 20*time.Second)
+			if code != 0 || out != want || !strings.HasPrefix(errOut, "StackOverflowError: stack overflow\n") {
+				t.Fatalf("ZRT_WORKERS=%q: coroutine probe overflow exit=%d stdout %q stderr %q, want exit 0 stdout %q",
+					w, code, out, errOut, want)
+			}
+		}
+	})
+}
+
+// probeRecC is the recursion every probe driver shares: a probed function with a real frame
+// and one cleanup per level, counted so a driver can tell every level's cleanup ran.
+const probeRecC = `
+#include "zergrt.h"
+#include <stdio.h>
+
+static int cleanups, depth;
+static void note(void *env) { (void)env; cleanups++; }
+static int rec(int n) {
+    ZRT_PROBE
+    volatile char pad[256];
+    pad[0] = (char)n;
+    zrt_defer(note, NULL);
+    depth++;
+    return rec(n + 1) + pad[0];
+}
+`
+
+// probeCaughtC catches the overflow twice in a row on main's native stack: a second round
+// that still overflows deep, and lands with the same limit, is the limit and the flag
+// restored by the first landing.
+const probeCaughtC = `
+int main(void) {
+    zrt_fault_init();
+    char *lim0 = ZRT_STACK_LIMIT();
+    if (lim0 == NULL || lim0 != zrt_tls_cur()->stack_lim) { puts("no limit, or its mirror drifted"); return 3; }
+    for (int round = 0; round < 2; round++) {
+        cleanups = depth = 0;
+        size_t mark = zrt_scope_mark();
+        zrt_frame f;
+        zrt_handler_push_catch(&f);
+        if (setjmp(f.buf) == 0) { rec(0); puts("no overflow"); return 2; }
+        zrt_handler_pop(&f);
+        zrt_err e = zrt_taken_err();
+        printf("round %d kind=%d deep=%d cleanups=%d mark=%d limit=%d flag=%d\n", round, e.kind, depth > 1000,
+               cleanups == depth, zrt_scope_mark() == mark,
+               ZRT_STACK_LIMIT() == lim0 && zrt_tls_cur()->stack_lim == lim0, zrt_tls_cur()->overflow_unwind);
+        zrt_err_drop(e);
+    }
+    return 0;
+}
+`
+
+// probeUncaughtC lets the overflow reach the entry's own handler: the program's exit status.
+const probeUncaughtC = `
+static void go(void) { rec(0); }
+int main(void) {
+    int rc = zrt_main_run_nil(go);
+    printf("rc=%d cleanups=%d deep=%d\n", rc, cleanups == depth, depth > 1000);
+    return rc;
+}
+`
+
+// probeNestedC overflows again inside a cleanup the overflow's unwind runs, under a handler
+// of the cleanup's own. Landing there would leave the outer unwind with no reserve below it,
+// so the second hit is the hard fault and the handler never lands.
+const probeNestedC = `
+static void bad_cleanup(void *env) {
+    (void)env;
+    puts("cleanup runs");
+    fflush(stdout);
+    zrt_frame f;
+    zrt_handler_push_catch(&f);
+    if (setjmp(f.buf) == 0) { rec(0); }
+    zrt_handler_pop(&f);
+    puts("WRONG: the handler inside the overflow's unwind landed");
+}
+static int outer(int n) {
+    ZRT_PROBE
+    volatile char pad[256];
+    pad[0] = (char)n;
+    if (n == 5) zrt_defer(bad_cleanup, NULL);
+    return outer(n + 1) + pad[0];
+}
+static void go(void) { outer(0); }
+int main(void) { return zrt_main_run_nil(go); }
+`
+
+// probeCoroC overflows on two coroutines: one with no handler, which ends that coroutine
+// only, its cleanups run; and one that catches it on its own stack with its limit restored.
+const probeCoroC = `
+static zrt_chan *ch;
+static void tell(void *env) { (void)env; long v = cleanups; zrt_chan_send(ch, &v); }
+static void crashes(void *env) { (void)env; zrt_defer(tell, NULL); rec(0); }
+static void catches(void *env) {
+    (void)env;
+    char *lim0 = ZRT_STACK_LIMIT();
+    zrt_frame f;
+    zrt_handler_push_catch(&f);
+    long v;
+    if (setjmp(f.buf) == 0) {
+        rec(0);
+        v = -1;
+    } else {
+        zrt_handler_pop(&f);
+        zrt_err e = zrt_taken_err();
+        v = e.kind == ZRT_ERR_STACK_OVERFLOW && lim0 != NULL && ZRT_STACK_LIMIT() == lim0 &&
+            !zrt_tls_cur()->overflow_unwind;
+        zrt_err_drop(e);
+    }
+    zrt_chan_send(ch, &v);
+}
+static void prog(void) {
+    ch = zrt_chan_new(sizeof(long), 4, NULL);
+    zrt_spawn(crashes, NULL, NULL);
+    long v = 0;
+    zrt_chan_recv(ch, &v);
+    printf("crashed coroutine ran its cleanups: %d\n", v == depth && v > 500);
+    zrt_spawn(catches, NULL, NULL);
+    zrt_chan_recv(ch, &v);
+    printf("caught on coroutine: %ld\n", v);
+    printf("main alive\n");
+}
+int main(void) { return zrt_sched_main_nil(prog); }
+`
+
 // TestGenuineSegvUndisguised is the other edge of the naming: a wild pointer is NOT a
 // stack overflow, and the handler must not dress it as one. It puts back the action that
 // was installed before it and lets the fault re-fire, so the process still dies by the

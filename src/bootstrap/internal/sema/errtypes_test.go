@@ -29,9 +29,11 @@ func TestBuiltinErrorConstructors(t *testing.T) {
 // The integer is the whole contract with the runtime: it is what `zrt_err.kind` holds, so
 // a value that drifts from src/runtime/csrc/zergrt.h ZRT_ERR_* silently makes a runtime
 // abort and a hand-written `raise` of the same name two different errors. And the second
-// column says which names a program may BUILD: every kind is an `is` target, but
-// StopIteration is the runtime's end-of-stream sentinel, and a channel tells a clean close
-// from a crash by that kind alone — a forgeable one would let a crash pass for a clean end.
+// column says which names a program may BUILD: every kind is an `is` target, but two are
+// the runtime's alone. StopIteration is the end-of-stream sentinel, and a channel tells a
+// clean close from a crash by that kind alone — a forgeable one would let a crash pass for a
+// clean end. StackOverflowError is reserved for the stack probe, so a raised one cannot pass
+// for a real overflow.
 func TestErrKindTableMirrorsTheRuntime(t *testing.T) {
 	cases := []struct {
 		name string
@@ -50,6 +52,7 @@ func TestErrKindTableMirrorsTheRuntime(t *testing.T) {
 		{"DivideByZeroError", 10, true},
 		{"AssertionError", 11, true},
 		{"AliasError", 12, true},
+		{"StackOverflowError", 13, false},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

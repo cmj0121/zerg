@@ -117,6 +117,23 @@ for src in "$@"; do
 		same=$((same + 1))
 		continue
 	fi
+	# A program the seed BUILDS and runs differently is a skip only when the inventory names
+	# it, and its reason is then what the seed's PROGRAM did rather than its compiler's
+	# sentence: the seed emits no stack probe (#480), so a runaway recursion it builds dies by
+	# the guard-page fault where `zerg`'s runs its defers or is caught. The reason is the
+	# whole ending — exit status, first stdout line, first stderr line — because the fault
+	# and a probe's abort print the same stderr line with the same status, and only the
+	# output tells a partial change apart. Every field is always written, so no observation
+	# is ever empty. Recorded that way, the line is held to the same three clauses — the two
+	# runs agreeing again is STALE, the seed's program ending any other way is MOVED — and an
+	# unlisted difference still fails.
+	# shellcheck disable=SC2086 # $SKIPS is a list of inventory paths and is meant to split
+	if ledger_lookup "$src" $SKIPS >/dev/null; then
+		skip=$((skip + 1))
+		printf "%s	the seed's program ends: rc=%s out='%s' err=%s\n" "$src" "$rc0" \
+			"$(head -1 "$tmp/run0.out")" "$(grep -v '^  --> ' "$tmp/run0.err" | head -1)" >>"$tmp/skipped"
+		continue
+	fi
 	echo "DIFFER    $src — the two compilers do not agree on $(printf '%s' "$verdict" | cut -f1)"
 	echo "  zerg0 (rc $rc0): $(head -3 "$tmp/run0.out" | tr '\n' '|')$(head -1 "$tmp/run0.err" | sed 's/^/ !/')"
 	echo "  zerg  (rc $rc1): $(head -3 "$tmp/run1.out" | tr '\n' '|')$(head -1 "$tmp/run1.err" | sed 's/^/ !/')"
@@ -145,14 +162,14 @@ done
 
 # shellcheck disable=SC2086 # $SKIPS is a list of inventory paths and is meant to split
 while IFS="$(printf '\t')" read -r path reason; do
-	echo "STALE     $path — the seed builds it now; drop its line from the skip inventory"
+	echo "STALE     $path — the seed builds it now, or its program agrees; drop its line from the skip inventory"
 	echo "  was: $reason"
 	fail=$((fail + 1))
 done < <(ledger_stale "$tmp/skipped" "$tmp/seen" $SKIPS)
 
 # shellcheck disable=SC2086 # ditto
 while IFS="$(printf '\t')" read -r path was now; do
-	echo "REASON    $path — the seed turns it away for a different rule now"
+	echo "REASON    $path — the seed turns it away, or its program ends, for a different reason now"
 	echo "  was: $was"
 	echo "  now: $now"
 	fail=$((fail + 1))
@@ -177,4 +194,4 @@ if [ "$same" -lt "${MIN_COMPARED:-8}" ]; then
 	exit 1
 fi
 echo "oracle-check: $same programs agree between the seed and the shipping compiler"
-echo "oracle-check: $skip the seed cannot build (each one accounted for in $SKIPS), $named the shipping compiler names as not built"
+echo "oracle-check: $skip the seed cannot build or runs differently (each one accounted for in $SKIPS), $named the shipping compiler names as not built"

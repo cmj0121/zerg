@@ -17,9 +17,19 @@
  * so no emitted C changes. The backend only reaches this file when a program uses
  * runtime teardown; value-only programs never touch it.
  */
+
+/* pthread_key_create / pthread_setspecific (the Darwin probe mirror) are POSIX, not ISO C:
+ * ask for the POSIX.1-2008 surface before any header, as sys.c does. */
+#ifndef _POSIX_C_SOURCE
+#define _POSIX_C_SOURCE 200809L
+#endif
+
 #include "zergrt.h"
 
 #include <stdlib.h>
+#if defined(__APPLE__)
+#include <pthread.h>
+#endif
 
 /* the current unwind bundle: the one cleanup stack (grown on demand) and the
  * innermost abort handler. For a non-concurrent program this is the whole program's
@@ -58,7 +68,38 @@ void zrt_tls_save(zrt_tls *out) {
 void zrt_tls_load(const zrt_tls *in) {
 	zrt_pend_free_local();
 	g_tls = *in;
+	zrt_stack_limit_put(in->stack_lim);
 }
+
+/* THE PROBE'S LIMIT (#480). The bundle owns it — a coroutine migrates, and its limit with
+ * it — and ZRT_PROBE reads a per-thread mirror of the mounted one, so every write goes
+ * through zrt_stack_limit_put and the two cannot drift. Darwin's mirror is a pthread TSD
+ * slot, read off the thread register (zergrt.h). */
+#if defined(__APPLE__) && (defined(__aarch64__) || defined(__x86_64__))
+uintptr_t zrt_stack_key;
+
+/* A key left at 0 would name TSD slot 0, which holds pthread_self — never NULL — and every
+ * probed call would read as an overflow. So no key is no program. */
+__attribute__((constructor)) static void zrt_stack_key_init(void) {
+	pthread_key_t k;
+	if (pthread_key_create(&k, NULL) != 0) {
+		zrt_abort("cannot create the stack-probe key");
+	}
+	zrt_stack_key = (uintptr_t)k;
+}
+
+void zrt_stack_limit_put(char *lim) {
+	g_tls.stack_lim = lim;
+	(void)pthread_setspecific((pthread_key_t)zrt_stack_key, lim);
+}
+#else
+ZRT_THREAD_LOCAL char *zrt_stack_lim_tls;
+
+void zrt_stack_limit_put(char *lim) {
+	g_tls.stack_lim = lim;
+	zrt_stack_lim_tls = lim;
+}
+#endif
 
 /* never inlined nor analysed across (GCC's noipa; clang has only noinline): a caller that
  * crossed a park must get THIS worker's bundle, not a TLS address computed before the switch */
@@ -83,6 +124,7 @@ static void pend_reset(zrt_tls *t) {
 
 void zrt_tls_detach(void) {
 	pend_reset(&g_tls);
+	zrt_stack_limit_put(NULL); /* a worker's native stack never probes */
 }
 
 void zrt_pend_free_local(void) {
@@ -178,6 +220,8 @@ void zrt_handler_push(zrt_frame *frame) {
 	frame->pmark = g_tls.plen;
 	frame->pbase = g_tls.pbase;
 	frame->dactive = g_tls.dactive;
+	frame->stack_lim = g_tls.stack_lim;
+	frame->overflow_unwind = g_tls.overflow_unwind;
 	g_tls.handler = frame;
 }
 
@@ -214,15 +258,27 @@ static const char *zrt_err_kindname(int kind) {
 	case ZRT_ERR_DIVZERO: return "DivideByZeroError";
 	case ZRT_ERR_ASSERTION: return "AssertionError";
 	case ZRT_ERR_ALIAS: return "AliasError";
+	case ZRT_ERR_STACK_OVERFLOW: return "StackOverflowError";
 	default: return NULL;
 	}
+}
+
+/* zrt_stack_land gives the landing scope the probe state it had at push (#480): an
+ * overflow's lowered limit and its flag end exactly where its unwind does. Driven by the
+ * frame, never by the Err's kind — a guard inside the unwind keeps the flag it saw. */
+static void zrt_stack_land(const zrt_frame *h) {
+	zrt_tls *t = zrt_tls_cur();
+	t->overflow_unwind = h->overflow_unwind;
+	zrt_stack_limit_put(h->stack_lim);
 }
 
 /* land_drain finishes, before the longjmp, every release the abort interrupted above the
  * handler's floor: a drain loop the longjmp is about to skip would otherwise leave them
  * owed, and a list whose first element's drop aborted would never drop the rest. Then the
- * scope the handler was pushed in gets its own drain state back. A further abort inside
- * this drain lands on the same handler and resumes the entries it left. */
+ * scope the handler was pushed in gets its own drain state and probe state back — the
+ * probe state last, so a drop an overflow queued still drains while overflow_unwind is
+ * set. A further abort inside this drain lands on the same handler and resumes the entries
+ * it left. */
 static void land_drain(const zrt_frame *h) {
 	g_tls.pbase = h->pmark;
 	g_tls.dactive = false;
@@ -231,6 +287,7 @@ static void land_drain(const zrt_frame *h) {
 	zrt_tls *t = zrt_tls_cur();
 	t->pbase = h->pbase;
 	t->dactive = h->dactive;
+	zrt_stack_land(h);
 }
 
 /* zrt_unwind_abort is the shared abort core: report the error, then unwind to the
@@ -272,6 +329,19 @@ _Noreturn void zrt_abort_cell(int kind, const char *msg) {
 	 * owns it like any other str and a reader may keep it (#405). */
 	g_tls.taken = zrt_err_own(kind, msg);
 	zrt_unwind_abort(g_tls.taken, true);
+}
+
+/* zrt_stack_overflow is ZRT_PROBE's hit (#480): the first one lowers the limit to FLOOR,
+ * which is the room the unwind's defers and drops run in, and aborts like any other error.
+ * A hit while that unwind runs has no reserve left to give, so it is the hard fault. */
+_Noreturn void zrt_stack_overflow(void) {
+	zrt_tls *t = zrt_tls_cur();
+	if (t->overflow_unwind) {
+		zrt_overflow_exit();
+	}
+	t->overflow_unwind = true;
+	zrt_stack_limit_put(t->stack_lim - (ZRT_STACK_RESERVE - ZRT_STACK_FLOOR));
+	zrt_abort_kind(ZRT_ERR_STACK_OVERFLOW, "stack overflow");
 }
 
 zrt_err zrt_err_new(const char *msg) {

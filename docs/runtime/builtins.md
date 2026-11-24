@@ -85,23 +85,27 @@ See [Collections](../code/collections.md).
 
 ## Error constructors
 
-The taxonomy is **twelve compiler-owned kinds**, and each is `Kind(msg: str) -> Err` — an `Err` of that
-kind carrying the message. Use one with `raise` to abort, or in an `Either` value; test an erased `Err`
-with `e is IOError`. A program cannot define a new kind this phase. See
+The taxonomy is a set of **compiler-owned kinds**, and each one a program may raise is
+`Kind(msg: str) -> Err` — an `Err` of that kind carrying the message. Use one with `raise` to abort, or in
+an `Either` value; test an erased `Err` with `e is IOError`. A program cannot define a new kind this phase. See
 [Null-safety & Errors](../code/errors.md).
 
 `ValueError` · `OverflowError` · `IOError` · `EncodingError` · `IndexError` · `KeyError` ·
 `DeadlockError` · `SendOnClosedError` · `StopIteration` · `DivideByZeroError` · `AssertionError` ·
-`AliasError`
+`AliasError` · `StackOverflowError`
 
 Their **numbering is an ABI** shared between the runtime (`ZRT_ERR_*`) and both compilers, which is why the
 table stops nowhere: a kind added to one and not the others would make one number mean two things depending
 on which compiler built the program.
 
-**`StopIteration` is testable but not constructible**, the one place the set is asymmetric. It is the
-sentinel a clean channel close carries, so a sender able to build one could close its channel wearing the
-marker for an ordinary ending and its consumer would read the crash as a clean finish. Writing it is
-_E4063 `StopIteration` is testable but not constructible_; `e is StopIteration` costs nothing and stays.
+**`StopIteration` is testable but not constructible**. It is the sentinel a clean channel close carries, so a
+sender able to build one could close its channel wearing the marker for an ordinary ending and its consumer would
+read the crash as a clean finish. Writing it is _E4063 `StopIteration` is testable but not constructible_;
+`e is StopIteration` costs nothing and stays.
+
+**`StackOverflowError` is testable but not constructible** for a reason of its own: the runtime raises it when
+a call cannot fit on its stack, and a program that could raise one would make `e is StackOverflowError` a
+lie. Writing it is _E4063_ too.
 
 **`AssertionError` is raised by `assert` and by nothing else**, which is what lets `zerg test` tell a claim
 that did not hold from a program that fell over without reading a message as a protocol.

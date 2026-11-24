@@ -312,20 +312,27 @@ program that never stops no time and some size. The table needs frame pointers a
 implementation has on x86-64 and arm64, on Linux and macOS. Elsewhere, and under AddressSanitizer, the second
 line is absent, never a guess.
 
-**A stack overflow is a fault and not an abort**, and it is the one end this contract does not cover. The
-runtime names it — `StackOverflowError: stack overflow` and its place on standard error, exit **1**, steps 1 and 3
-— but step 2 cannot hold: the stack that would run the pending `defer`s is the one that is exhausted, and
-nothing can unwind it from a signal handler. So the `defer`s are **skipped**, no `guard` can catch it, and
-unlike an ordinary abort — which a coroutine contains to itself — an overflow ends the **whole process**
-wherever it happens. A fault the handler does not recognise is handed back to whatever held the signal
-before the runtime did (a sanitizer's handler, or the default disposition), so it dies as the signal it is
-with that handler's diagnostic intact. The two windows the handler claims are **one page each** — a
-coroutine's guard page exactly, and the single page below `main`'s stack bound — which is also the whole of
-what it can misname: an access into that one page under `main` reads as an overflow.
+**A stack overflow is an ordinary abort** wherever a check catches it: a function that can be re-entered
+checks its frame against its stack's limit as it starts ([Errors](code/errors.md) says which ones), and a
+call that does not fit raises `StackOverflowError` there. Steps 1 to 3 hold as for any other abort, a
+`guard` catches it, and a coroutine contains it to itself.
 
-That is the language's rule rather than a shortfall against it. **[implementation-defined]**: a runtime that
-owned and grew its own stacks could check call depth before the fault and unwind cleanly instead. What is
-pinned is that the depth is bounded and that reaching the bound ends the program by name.
+An overflow no check catches is a **named fault** — one inside C frames (a foreign function, libc, the
+runtime), a chain of unchecked calls deeper than the reserve the check keeps, or a second overflow while
+the first one is still unwinding. The runtime names it in steps 1 and 3 — `StackOverflowError: stack
+overflow` and its place on standard error, exit **1** — but step 2 does not hold: at the guard page the
+stack that would run the pending `defer`s is the exhausted one, and nothing can unwind it from a signal
+handler; a second overflow has no reserve left to unwind in. So its `defer`s are **skipped**, no `guard`
+catches it, and it ends the **whole process** wherever it happens. A fault the handler does not recognise
+is handed back to whatever held the signal before the runtime did (a sanitizer's handler, or the default
+disposition), so it dies as the signal it is with that handler's diagnostic intact. The two windows the
+handler claims are **one page each** — a coroutine's guard page exactly, and the single page below
+`main`'s stack bound — which is also the whole of what it can misname: an access into that one page under
+`main` reads as an overflow.
+
+**[implementation-defined]**: which calls are checked, the size of each reserve, and where a stack's limit
+comes from. What is pinned is that the depth is bounded, that reaching the bound ends the program by name,
+and that an overflow a check catches unwinds like any other abort.
 
 ## The C the reference implementation emits
 
@@ -352,9 +359,7 @@ The specification uses these terms precisely:
 - **Undefined behavior (UB)** — the spec places no requirement on the result. A conforming program must
   avoid it; a conforming implementation may do anything, including crash. Zerg's design goal is to have
   **no reachable UB from safe code**; where the bootstrap currently admits UB, the chapter marks it a
-  **[deviation]** (for example, a stack overflow is a hardware fault the runtime names
-  `StackOverflowError` and exits 1 on, rather than a clean unwind that runs the pending `defer`s — see
-  [Errors](code/errors.md)).
+  **[deviation]** naming the issue that tracks it.
 - **Implementation-defined** — the result is one of a set the implementation documents but the spec does
   not fix. A conforming program should not depend on a particular choice. Current implementation-defined
   points, each detailed in its chapter, include:

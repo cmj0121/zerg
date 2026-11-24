@@ -553,9 +553,9 @@ unwinds (freeing scopes, decrementing channel refcounts) while everything else r
 fire-and-forget, but the failure is **not lost**: closing a channel as the last sender carries the
 crash `Err`, which is **raised at the consumer's next receive** (a clean finish gives `nil` instead —
 Receive, above). Measured: a producer that aborts after one send makes the consumer's second `<-ch`
-re-raise `IOError: disk went away` rather than answer an absence. The **one** abort a coroutine boundary
-does not contain is a `StackOverflowError`, which ends the process from any stack — see
-[Errors](errors.md).
+re-raise `IOError: disk went away` rather than answer an absence. A `StackOverflowError` is one of these
+aborts: a coroutine whose recursion outgrows its stack ends alone, and only the overflow no check catches
+— the named fault — ends the process from any stack (see [Errors](errors.md)).
 
 The runtime **reports it on `stderr`** — the `Err`'s message, as an abort at the top level prints one
 — and then that coroutine is gone and the program runs on. The report is **purely observational**:

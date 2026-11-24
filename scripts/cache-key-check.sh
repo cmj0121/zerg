@@ -112,4 +112,30 @@ if [[ "$plain" == "$changed" ]]; then
 	exit 1
 fi
 
-printf 'cache-key-check: two compilers, two keys; two headers, two program keys — the cache names what filled it\n'
+# EVERYTHING THAT BUILDS THE COMPILE ARGV IS IN THE KEY. No build can vary the dialect flags from
+# outside, so this half is asked of the source: each `cc_…` helper `cc_object_argv` calls to put
+# together the command is named in `unit_key`'s body. A flag added to cc_dialect then changes the
+# key by construction; a helper added beside it that the key does not read fails here.
+fn_body() {
+	awk -v F="$2" '$0 ~ "^(pub )?fn " F "\\(" { on = 1; next } on && /^}/ { exit } on { print }' "$1"
+}
+argv_helpers=$(fn_body src/compiler/cmd/layout.zg cc_object_argv | grep -oE 'cc_[a-z_]+\(' | tr -d '(' | sort -u)
+key_body=$(fn_body src/compiler/cmd/unit.zg unit_key)
+n=0
+for h in $argv_helpers; do
+	n=$((n + 1))
+	case $key_body in
+	*"$h("*) ;;
+	*)
+		printf 'cache-key-check: cc_object_argv builds the command with `%s`, and unit_key does not read it\n' "$h" >&2
+		printf 'cache-key-check: a change there reaches cc and not the key, so a cache filled before it reads back stale objects\n' >&2
+		exit 1
+		;;
+	esac
+done
+if [[ $n -lt 3 ]]; then
+	printf 'cache-key-check: found %s argv helper(s) in cc_object_argv — the extraction stopped matching\n' "$n" >&2
+	exit 1
+fi
+
+printf 'cache-key-check: two compilers, two keys; two headers, two program keys; every argv helper keyed — the cache names what filled it\n'

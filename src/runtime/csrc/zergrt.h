@@ -393,12 +393,53 @@ typedef struct zrt_site {
 		static const zrt_site zrt_site_ ZRT_SITE_SECTION = {                          \
 			&&zrt_here_, __FILE__, (l), (c), __COUNTER__};                        \
 	}
+/* ZRT_THREAD_LOCAL marks a variable each OS thread gets its own copy of — the
+ * scheduler's "which coroutine is running here" and "where do I swap back to" are
+ * per-worker once there is more than one worker. With thread_none.c there is only
+ * ever one thread, so the qualifier is empty and the variable is an ordinary global,
+ * which is exactly what it was before M:N. */
+#if defined(_MSC_VER)
+#define ZRT_THREAD_LOCAL __declspec(thread)
+#elif defined(__STDC_VERSION__) && __STDC_VERSION__ >= 201112L && !defined(__STDC_NO_THREADS__)
+#define ZRT_THREAD_LOCAL _Thread_local
+#elif defined(__GNUC__) || defined(__clang__)
+#define ZRT_THREAD_LOCAL __thread
+#else
+#define ZRT_THREAD_LOCAL /* single-threaded host: an ordinary global */
+#endif
+
 /* A label behind a `return` is dead text, and gcc keeps its address by moving it up to the
  * statement before it, where it would outrank that statement's record. The end of a function
  * is the one record that has to stand behind a `return`, so ZRT_AT_FN declares it reachable
  * with a jump that is no instruction. The emitter writes no other record where it knows the
  * text is dead. */
 #define ZRT_AT_FN __asm__ goto("" : : : : zrt_fn_end_);
+
+/* THE STACK PROBE (#480). A probed function opens with ZRT_PROBE: a frame below the limit
+ * of the stack it runs on raises a StackOverflowError through the ordinary abort, so its
+ * cleanups run and a handler may take it. The limit sits RESERVE above the stack's low end
+ * — room for the abort path and an unprobed chain — and drops to FLOOR while an overflow
+ * unwinds. NULL never probes (a worker's native stack). The guard page stays the backstop
+ * for C frames.
+ *
+ * Darwin reads a pthread TSD slot mirroring the limit straight off the thread register: a
+ * `_Thread_local` there is a call to tlv_get_addr. Elsewhere it is a plain TLS load. */
+#define ZRT_STACK_RESERVE ((size_t)(64 * 1024)) /* below the limit: the hit's abort path + unprobed chain */
+#define ZRT_STACK_FLOOR   ((size_t)(16 * 1024)) /* left once an overflow unwinds; emit.zg C_FRAME_MAX mirrors it */
+_Noreturn void zrt_stack_overflow(void) __attribute__((cold, noinline));
+#if defined(__APPLE__) && defined(__aarch64__)
+extern uintptr_t zrt_stack_key; /* pthread key whose TSD slot mirrors the mounted zrt_tls.stack_lim */
+#define ZRT_STACK_LIMIT() ({ uintptr_t zrt_tsd_; __asm__ volatile("mrs %0, tpidrro_el0" : "=r"(zrt_tsd_)); \
+	((char *const *)(zrt_tsd_ & ~(uintptr_t)7))[zrt_stack_key]; })
+#elif defined(__APPLE__) && defined(__x86_64__)
+extern uintptr_t zrt_stack_key;
+#define ZRT_STACK_LIMIT() ({ char *zrt_lim_; __asm__ volatile("movq %%gs:(,%1,8), %0" : "=r"(zrt_lim_) : "r"(zrt_stack_key)); zrt_lim_; })
+#else
+extern ZRT_THREAD_LOCAL char *zrt_stack_lim_tls;
+#define ZRT_STACK_LIMIT() (zrt_stack_lim_tls)
+#endif
+#define ZRT_PROBE if (__builtin_expect((char *)__builtin_frame_address(0) < ZRT_STACK_LIMIT(), 0)) zrt_stack_overflow();
+void zrt_stack_limit_put(char *lim); /* the ONE writer: g_tls.stack_lim and this thread's mirror */
 #define ZRT_AT_END                                                                            \
 zrt_fn_end_:;                                                                                 \
 	{                                                                                     \
@@ -425,6 +466,10 @@ typedef struct zrt_frame {
 	size_t            pmark;   /* g_tls.plen at push */
 	size_t            pbase;   /* g_tls.pbase at push */
 	bool              dactive; /* g_tls.dactive at push */
+	/* the probe state at push (#480): the landing gives both back, so an overflow's
+	 * lowered limit and its flag end where its unwind does */
+	char             *stack_lim;       /* g_tls.stack_lim at push */
+	bool              overflow_unwind; /* g_tls.overflow_unwind at push */
 } zrt_frame;
 
 /* one release the drain still owes (#479). Kept by value in zrt_tls.pend; refer by INDEX
@@ -481,6 +526,7 @@ enum {
 	ZRT_ERR_DIVZERO        = 10, /* DivideByZeroError (docs/core/types.md) */
 	ZRT_ERR_ASSERTION      = 11, /* AssertionError: a claim `assert` made that did not hold */
 	ZRT_ERR_ALIAS          = 12, /* AliasError: two `mut &` arguments named one element */
+	ZRT_ERR_STACK_OVERFLOW = 13, /* StackOverflowError: a call that could not fit (#480) */
 };
 
 /* AN ERR OWNS WHAT IT HOLDS, when it says so. `owned` is set on an Err built with
@@ -522,6 +568,11 @@ typedef struct {
 	size_t       pcap;
 	size_t       pbase;   /* the innermost drain scope's floor: entries below belong to an outer one */
 	bool         dactive; /* a drain loop is running for the current scope */
+
+	/* the stack probe's limit for the stack this bundle runs on (#480); NULL never probes.
+	 * Written only through zrt_stack_limit_put, which keeps the thread's mirror in step. */
+	char        *stack_lim;
+	bool         overflow_unwind; /* a StackOverflowError is unwinding: a second hit is a hard fault */
 } zrt_tls;
 
 /* zrt_tls_save snapshots the current unwind state into out; zrt_tls_load makes in
@@ -1206,10 +1257,11 @@ const zrt_site *zrt_site_here(void);
 
 /* --- stack-overflow naming (sys.c) -----------------------------------------------
  *
- * A stack overflow is the one abort that cannot go through zrt_abort: by the time it
- * is observable the faulting stack is exhausted, so nothing on it can run — no unwind,
- * no `defer`s (docs/conformance.md keeps that half of the deviation). What these give
- * the fault is its NAME and its STATUS: a SIGSEGV/SIGBUS handler on a sigaltstack
+ * A probed function's overflow is an ordinary abort (ZRT_PROBE). What these name is
+ * the BACKSTOP: a fault in the guard page, from C frames the probe does not cover or a
+ * chain deeper than the reserve, where the faulting stack is exhausted and nothing on
+ * it can run — no unwind, no `defer`s. What these give that fault is its NAME and its
+ * STATUS: a SIGSEGV/SIGBUS handler on a sigaltstack
  * decides overflow-or-not from the fault address, writes
  * `StackOverflowError: stack overflow` to stderr with write(2) only, and _exit(1)s —
  * the same message-then-status-1 shape every other abort has. A fault that is NOT a
@@ -1229,6 +1281,10 @@ void zrt_fault_thread_init(void);
  * guard page, or NULL when the thread is back on its own native stack. The scheduler
  * brackets every switch into a coroutine with the pair. */
 void zrt_fault_stack_set(void *base, size_t guard_len);
+
+/* zrt_overflow_exit is the hard fault for a probe hit while an overflow already
+ * unwinds: the same two lines the guard page's handler writes, then _exit(1). */
+_Noreturn void zrt_overflow_exit(void);
 
 /* --- io streams (sys.c, Phase 1f) ---------------------------------------------
  *
@@ -1431,21 +1487,6 @@ void zrt_ctx_init(zrt_ctx *c, void *stack_base, size_t size, void (*entry)(void 
  * saved in *to; when control later returns to *from it continues as if this call
  * returned. It saves only callee-saved state (no signal mask), so it is cheap. */
 void zrt_ctx_swap(zrt_ctx *from, zrt_ctx *to);
-
-/* ZRT_THREAD_LOCAL marks a variable each OS thread gets its own copy of — the
- * scheduler's "which coroutine is running here" and "where do I swap back to" are
- * per-worker once there is more than one worker. With thread_none.c there is only
- * ever one thread, so the qualifier is empty and the variable is an ordinary global,
- * which is exactly what it was before M:N. */
-#if defined(_MSC_VER)
-#define ZRT_THREAD_LOCAL __declspec(thread)
-#elif defined(__STDC_VERSION__) && __STDC_VERSION__ >= 201112L && !defined(__STDC_NO_THREADS__)
-#define ZRT_THREAD_LOCAL _Thread_local
-#elif defined(__GNUC__) || defined(__clang__)
-#define ZRT_THREAD_LOCAL __thread
-#else
-#define ZRT_THREAD_LOCAL /* single-threaded host: an ordinary global */
-#endif
 
 typedef struct zrt_thread { void *slots[4]; } zrt_thread;
 typedef struct zrt_mutex  { void *slots[10]; } zrt_mutex;

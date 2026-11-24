@@ -77,20 +77,23 @@
 
 ## error 建構子（Error constructors）
 
-這套分類是**十二個由編譯器擁有的 kind**，每一個都是 `Kind(msg: str) -> Err`——該 kind、帶訊息的 `Err`。搭配
-`raise` 觸發 abort，或放進 `Either` 值；以 `e is IOError` 測試已抹除的 `Err`。本階段程式無法自訂新 kind。見
+這套分類是一組**由編譯器擁有的 kind**，程式可以 raise 的每一個都是 `Kind(msg: str) -> Err`——該 kind、帶訊息的
+`Err`。搭配 `raise` 觸發 abort，或放進 `Either` 值；以 `e is IOError` 測試已抹除的 `Err`。本階段程式無法自訂新 kind。見
 [Null-safety 與錯誤處理](../code/errors.zh-TW.md)。
 
 `ValueError` · `OverflowError` · `IOError` · `EncodingError` · `IndexError` · `KeyError` ·
 `DeadlockError` · `SendOnClosedError` · `StopIteration` · `DivideByZeroError` · `AssertionError` ·
-`AliasError`
+`AliasError` · `StackOverflowError`
 
 它們的**編號是一份 ABI**，由 runtime（`ZRT_ERR_*`）與兩個編譯器共用，這也是這張表不會半途停下的原因：只加進其中
 一邊的 kind，會讓同一個數字依「是哪個編譯器建的」而有兩種意思。
 
-**`StopIteration` 可被測試、但不可被建構**，這是這組唯一不對稱之處。它是 channel 乾淨關閉所攜帶的 sentinel，
-所以一個能建出它的 sender 會讓自己的 channel 戴著「正常結束」的記號關閉，而消費端會把當掉讀成善終。寫出它是
+**`StopIteration` 可被測試、但不可被建構**。它是 channel 乾淨關閉所攜帶的 sentinel，所以一個能建出它的
+sender 會讓自己的 channel 戴著「正常結束」的記號關閉，而消費端會把當掉讀成善終。寫出它是
 _E4063 `StopIteration` is testable but not constructible_；`e is StopIteration` 不花任何代價，予以保留。
+
+**`StackOverflowError` 也可被測試、但不可被建構**，理由另有不同：它由 runtime 在一次呼叫放不進自己的 stack 時
+raise，而一個能 raise 它的程式會讓 `e is StackOverflowError` 變成謊言。寫出它同樣是 _E4063_。
 
 **`AssertionError` 由 `assert` raise，而且只有它會**，這正是 `zerg test` 能在不把訊息當協定讀的情況下，分辨
 「一個不成立的主張」與「一支垮掉的程式」的原因。

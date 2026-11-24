@@ -275,6 +275,16 @@ void zrt_drain(void) {
  * exactly as the loop's own CELL step leaves it, so an abort's landing drain frees it. */
 static void release_cell(zrt_ref_hdr *h) {
 	zrt_tls *t = zrt_tls_cur();
+	/* DURING A STACK OVERFLOW'S UNWIND (#480) a cell's drop is QUEUED, not run: the unwind is
+	 * still on the deep stack, and a user drop run there re-enters the chain that overflowed
+	 * (drop -> release -> drop) and hits the probe a second time, which is the hard fault. The
+	 * entry sits above the handler's mark, so land_drain runs it at the handler's depth, before
+	 * zrt_stack_land restores the limit and the flag; a drop it runs that releases another
+	 * cell queues that one too, and the loop takes it next. */
+	if (t->overflow_unwind) {
+		zrt_pend_cell(h);
+		return;
+	}
 	if (t->dactive || t->plen != t->pbase) {
 		zrt_pend_cell(h);
 		zrt_drain();

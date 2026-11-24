@@ -861,6 +861,24 @@ pub struct Emitter {
 	# last, -1 for an operand with no root name. It is wider than the freeze stack: a channel
 	# or a range is walked without being frozen, and a `del` of any of them is c_del_in_loop's.
 	pub walk_idxs: list[int]
+
+	# THE STACK PROBE'S BOOKS (#480, c_probe_unit). fn_indirect is whether the function being
+	# lowered calls through a function value or a spec dispatcher — a call the C text cannot
+	# show — and fn_frame is the bytes its array-typed bindings keep on its frame; c_fn saves
+	# and restores both around a lambda. zfn_names is the C name of every function c_fn wrote,
+	# zfn_at where in its body the probe goes (bytes past the line its `{` ends), zfn_ind
+	# whether it holds an indirect call or another unit may call it from C (vrefs, the names
+	# c_vrefs reads off the whole program's source), and big_zi / big_at the ones whose arrays
+	# outgrow C_FRAME_MAX, as indexes into zfn_names, with the E4127 each is refused by if it is
+	# on a cycle.
+	pub fn_indirect: bool
+	pub fn_frame: int
+	pub zfn_names: list[str]
+	pub zfn_at: list[int]
+	pub zfn_ind: list[bool]
+	pub vrefs: ProbeGraph
+	pub big_zi: list[int]
+	pub big_at: list[ast.Diag]
 }
 
 # Subst is an active set of identifier substitutions: an EIdent whose name appears in
@@ -2550,6 +2568,7 @@ fn c_add_var_named(mut &em: Emitter, name: str, t: ast.Ty, cname: str, is_mut: b
 # c_env_row appends the row itself, with none of the binding rules: a parameter bound AGAIN for
 # a default to read (c_default_bind) was judged where its function declared it.
 fn c_env_row(mut &em: Emitter, name: str, t: ast.Ty, cname: str, is_mut: bool, is_const: bool) {
+	em.fn_frame = c_frame_add(em.fn_frame, c_frame_bytes(t))
 	em.env_names.append(name)
 	em.env_tys.append(t)
 	em.env_cnames.append(cname)
@@ -13775,6 +13794,7 @@ fn c_call_val(mut &em: Emitter, callee: ast.Expr, args: list[ast.Expr], sb: Subs
 # c_call_through is the call itself, through a function value already held in a C name: the
 # cast back to its signature, then the environment ahead of the arguments.
 fn c_call_through(mut &em: Emitter, v: str, fty: ast.Ty, args: list[ast.Expr], sb: Subst) -> str {
+	em.fn_indirect = true
 	return f"({c_fnptr_cast(fty)}{v}.fn)({v}.env{c_args_after(em, fty, args, sb)})"
 }
 
@@ -13823,7 +13843,7 @@ fn c_call(mut &em: Emitter, name: str, args: list[ast.Expr], l: int, c: int, sb:
 	# this it reads as a struct constructor and emits a compound literal of a type nothing
 	# declared — which cc rejects, loudly but a long way from the source that meant it.
 	if c_err_kind(name) > 0 {
-		raise c_diag(em, rule.Rule.TestableNotConstructible, f"`{name}` is testable but not constructible: a sender able to raise the end-of-stream sentinel would close its channel wearing it, and its consumer would read the crash as a clean finish") if not c_err_constructible(name)
+		raise c_diag(em, rule.Rule.TestableNotConstructible, f"`{name}` is testable but not constructible: {c_err_unconstructible_why(name)}") if not c_err_constructible(name)
 		em.used_rt = true
 		return f"zrt_err_own({c_err_kind(name)}, {c_err_msg(em, args[0], sb)})" if args.len() == 1
 		return f"zrt_err_own({c_err_kind(name)}, {c_args(em, args, sb)})"
@@ -13847,6 +13867,7 @@ fn c_call(mut &em: Emitter, name: str, args: list[ast.Expr], l: int, c: int, sb:
 			mut cd := em.cl_decls[cl]
 			return c_cl_call(em, name, bt, row, cd, args, sb) if c_cl_fills(cd.params.len(), args)
 		}
+		em.fn_indirect = true
 		return f"({c_fnptr_cast(bt)}({c_ident_val(em, name, 0, 0, sb)}).fn)({c_ident_val(em, name, 0, 0, sb)}.env{c_args_after(em, bt, args, sb)})"
 	}
 
@@ -15642,6 +15663,7 @@ fn c_cl_call(mut &em: Emitter, name: str, bt: ast.Ty, row: int, mut &cd: ClDecl,
 	mut cf := ClFill(cd, name, filled, need, lo, hi, scope, strs, 0, cd.view.refs)
 
 	fv := c_ident_val(em, name, 0, 0, sb)
+	em.fn_indirect = true
 	return f"({c_fnptr_cast(bt)}({fv}).fn)({fv}.env, {c_args_typed(em, ftys, es, sb, need or c_needs_order(es, 0), cf)})"
 }
 
@@ -16067,6 +16089,7 @@ pub fn c_ty_is_ref(t: ast.Ty) -> bool {
 fn c_fnfield_call(mut &em: Emitter, recv: str, meth: str, target: ast.Expr, args: list[ast.Expr], sb: Subst) -> str {
 	fty := c_field_ty(em, recv, meth)
 	tv := c_expr(em, target, sb)
+	em.fn_indirect = true
 	return f"({c_fnptr_cast(fty)}({tv}.zg_{meth}).fn)({tv}.zg_{meth}.env{c_args_after(em, fty, args, sb)})"
 }
 
@@ -16290,6 +16313,7 @@ fn c_spec_call_check(mut &em: Emitter, sp: str, meth: str, key: str) {
 # the box; it is what the payload pointer comes out of, and the slot takes that pointer where
 # the member's `this` is.
 fn c_spec_disp_register(mut &em: Emitter, sp: str, meth: str) -> str {
+	em.fn_indirect = true
 	c_spec_no_impl(em, sp, f"a call to `{meth}` through")
 
 	dn := c_spec_cname(f"specdisp${sp}${meth}")
@@ -25327,8 +25351,11 @@ fn c_is_err_ctor(mut &em: Emitter, x: ast.Expr) -> bool {
 # reading a message as a protocol. `assert` (GRAMMAR#assert-stmt) raises this one and nothing
 # else does.
 #
-# AliasError is the last: the run-time half of the `mut &` no-alias rule, raised by
-# zrt_alias_check when two arguments drawn from one collection name the same element (#474).
+# AliasError is the run-time half of the `mut &` no-alias rule, raised by zrt_alias_check
+# when two arguments drawn from one collection name the same element (#474).
+#
+# StackOverflowError is the last: the runtime raises it when a call cannot fit on the stack
+# (#480). A new kind is appended, never inserted, so no number shifts against the runtime.
 fn c_err_kinds() -> list[str] {
 	return [
 		"ValueError",
@@ -25342,7 +25369,8 @@ fn c_err_kinds() -> list[str] {
 		"StopIteration",
 		"DivideByZeroError",
 		"AssertionError",
-		"AliasError"
+		"AliasError",
+		"StackOverflowError"
 	]
 }
 
@@ -25371,8 +25399,19 @@ fn c_err_kind(name: str) -> int {
 # clean close carries, so a program able to build one could hand a consumer a crash wearing
 # the marker for an ordinary ending — and `err is StopIteration` would answer yes. Testing
 # by kind is only worth more than comparing the message because this asymmetry holds.
+# StackOverflowError is the runtime's alone for the same reason: `e is StackOverflowError`
+# answers that a call did not fit, and a program that could raise one would make it a lie.
 fn c_err_constructible(name: str) -> bool {
-	return name != "StopIteration"
+	return c_err_unconstructible_why(name) == ""
+}
+
+# c_err_unconstructible_why is the sentence E4063 gives for a kind a program cannot build,
+# and "" for one it can.
+fn c_err_unconstructible_why(name: str) -> str {
+	return "a sender able to raise the end-of-stream sentinel would close its channel wearing it, and its consumer would read the crash as a clean finish" if name == "StopIteration"
+	return "a stack overflow is raised by the runtime when a call cannot fit, never by a program" if name == "StackOverflowError"
+
+	return ""
 }
 
 # c_scope_open starts a scope and answers the one to go back to. Every construct that
@@ -25606,6 +25645,10 @@ fn c_fn(mut &em: Emitter, fn_d: ast.FnDecl) -> str {
 	outer_loop_env_outer := em.loop_env_outer
 	outer_loop_lo_next := em.loop_lo_next
 	c_reset_env(em)
+	outer_indirect := em.fn_indirect
+	outer_frame := em.fn_frame
+	em.fn_indirect = false
+	em.fn_frame = 0
 
 	# and PUT THE DECLARATION'S PLACE BACK, because the pre-pass moves the marker: it walks
 	# the body's SAt markers so its own refusal points at the `break` rather than at the
@@ -25638,9 +25681,11 @@ fn c_fn(mut &em: Emitter, fn_d: ast.FnDecl) -> str {
 	fmark := c_new_mark(em)
 	em.fn_mark = fmark
 	em.fn_mark_used = false
+
 	mut pdefer := ""
 
-	mut sig := f"{c_ret_type(fn_d)} {c_fn_cname_in(em, fn_d.path, fn_d.recv, fn_d.name)}("
+	cname := c_fn_cname_in(em, fn_d.path, fn_d.recv, fn_d.name)
+	mut sig := f"{c_ret_type(fn_d)} {cname}("
 	if fn_d.params.len() == 0 {
 		sig = sig + "void"
 	} else {
@@ -25650,6 +25695,7 @@ fn c_fn(mut &em: Emitter, fn_d: ast.FnDecl) -> str {
 				sig = sig + ", "
 			}
 			pm := fn_d.params[i]
+			frame0 := em.fn_frame
 			c_add_var(em, pm.name, pm.ty, pm.is_ref, false)
 			pc := c_var_cname(em, pm.name)
 			if em.want_index {
@@ -25675,6 +25721,8 @@ fn c_fn(mut &em: Emitter, fn_d: ast.FnDecl) -> str {
 				pdefer = pdefer + c_pend_drop(em, pm.ty, pc, "    ")
 			}
 			if pm.is_ref {
+				# the caller's storage, a pointer on this frame and not the array behind it
+				em.fn_frame = frame0
 				em.ref_rows.append(c_live_idx(em, pm.name))
 				sig = sig + c_type(pm.ty) + "* " + pc
 			} else {
@@ -25739,7 +25787,14 @@ fn c_fn(mut &em: Emitter, fn_d: ast.FnDecl) -> str {
 			at_end = at_end + "__builtin_unreachable();\n"
 		}
 	}
-	out := sig + at_fn + head + pdefer + rendered + tail + at_end + "}\n\n"
+
+	# the probe's place is after the parameters are registered for release and before the body:
+	# a hit there unwinds what the call was handed, as every other abort does
+	pre := at_fn + head + pdefer
+	c_probe_books(em, fn_d, cname, bytearray(pre).len())
+	em.fn_indirect = outer_indirect
+	em.fn_frame = outer_frame
+	out := sig + pre + rendered + tail + at_end + "}\n\n"
 	em.fn_ret = saved_ret
 	em.in_unsafe_fn = saved_unsafe
 	em.cur_fn = outer_fn
@@ -28566,6 +28621,938 @@ fn c_emit_max() -> int {
 	return n
 }
 
+# --- the stack probe (#480) ------------------------------------------------------------
+#
+# A function that can be entered again before it returns opens with `ZRT_PROBE`: a frame that
+# starts below the stack's limit raises StackOverflowError as an ordinary abort, so its defers
+# run and a `guard` catches it. A function that cannot is left alone, because the probe is a
+# load and a compare on every call.
+#
+# WHICH ONES IS READ OFF THE UNIT'S OWN C, not off the Zerg, because the cycles that matter
+# pass through code no Zerg declaration spells: a defer thunk the runtime runs, a drop thunk
+# behind `zrt_release`, a lambda's wrapper, a spec's dispatcher. Every C definition is a node;
+# a defined name followed by `(` is an edge from the definition it sits in; a defined name
+# anywhere else is its address taken. A function c_fn wrote is probed when it is on a cycle
+# (its own strongly connected component has one), when its address is taken, or when it calls
+# through a function value or a dispatcher itself (c_probe_books) — and when a GENERATED
+# function whose address is taken calls it, because what calls that one is C: a cycle through
+# `zrt_release` or `zrt_unwind_to` comes back through the thunk into the Zerg function it calls.
+# The thunk carries no probe of its own (c_probe_unit says why). Imports cannot form a cycle
+# (E5014), so a direct-call cycle never leaves the unit; one that crosses through a function
+# value passes a function that holds the indirect call.
+#
+# A NAME THE TEXT HAPPENS TO SPELL — a field, a string — can only ADD an edge or an address, and
+# so a probe; it cannot take one away.
+
+# C_FRAME_MAX mirrors ZRT_STACK_FLOOR in zergrt.h: the stack an overflow leaves to unwind in.
+# C_FRAME_CAP is where counting a frame stops: a sum or a product past it is reported as past
+# the floor, and never overflows on the way.
+const C_FRAME_MAX := 16384
+const C_FRAME_CAP := 1099511627776
+
+fn c_frame_add(a: int, b: int) -> int {
+	return C_FRAME_CAP if a >= C_FRAME_CAP - b
+
+	return a + b
+}
+
+# c_frame_bytes is a lower bound on what a binding of type `t` keeps on its frame, counting
+# arrays only: everything else is a scalar or a handle, and small beside the floor.
+fn c_frame_bytes(t: ast.Ty) -> int {
+	return match t {
+		Ty.TArr(e, n) => c_frame_arr_bytes(e, n)
+		_             => 0
+	}
+}
+
+# c_frame_arr_bytes is `[e; n]` at no less than each element's scalar width, saturating at
+# C_FRAME_CAP.
+fn c_frame_arr_bytes(e: ast.Ty, n: str) -> int {
+	k := ast.ty_arr_len(n)
+	return 0 if k <= 0
+
+	mut each := c_frame_bytes(e)
+	if each == 0 {
+		each = c_scalar_min_bytes(e)
+	}
+	return C_FRAME_CAP if k >= C_FRAME_CAP / each
+
+	return k * each
+}
+
+fn c_scalar_min_bytes(t: ast.Ty) -> int {
+	return match t {
+		Ty.TRune  => 4
+		Ty.TInt   => 8
+		Ty.TUint  => 8
+		Ty.TFloat => 8
+		Ty.TStr   => 8
+		_         => 1
+	}
+}
+
+# c_probe_books records one function c_fn wrote, for c_probe_unit: its C name, whether it holds
+# an indirect call, and — when its arrays outgrow C_FRAME_MAX — the E4127 it is refused by if it
+# lies on a direct recursion cycle. That is a question about the whole unit, so the
+# refusal waits for the answer.
+fn c_probe_books(mut &em: Emitter, fn_d: ast.FnDecl, cname: str, at: int) {
+	em.zfn_names.append(cname)
+	em.zfn_at.append(at)
+	em.zfn_ind.append(em.fn_indirect or c_vref_of(em, fn_d.recv, fn_d.name))
+	if em.fn_frame > C_FRAME_MAX {
+		mut who := f"`{fn_d.name}`"
+		if fn_d.recv != "" {
+			who = f"`{fn_d.recv}.{fn_d.name}`"
+		}
+		if parser.strings_has_prefix(fn_d.name, "lambda__") {
+			who = "this closure"
+		}
+		mut size := f"{em.fn_frame} bytes"
+		if em.fn_frame >= C_FRAME_CAP {
+			size = f"more than {C_FRAME_MAX} bytes"
+		}
+		em.big_zi.append(em.zfn_names.len() - 1)
+		em.big_at.append(ast.Diag(fn_d.path, fn_d.line, fn_d.col, 0, 0, "", f"{who} keeps {size} of arrays on its stack frame and is on a recursion cycle, so a stack overflow may land in it — and an overflow leaves {C_FRAME_MAX} bytes to unwind in, which this frame does not fit. Hold the array in a `list`, or take it by `mut &`", "", ""))
+	}
+}
+
+# ProbeGraph is the unit's definitions by C name: each name's bytes in `pool`, an open-addressed
+# table of node ids (-1 empty) hashed over those bytes, and `pre` when it is asked for, which of
+# the 65536 two-byte openings any name has — the test a token fails before it is hashed, which
+# is almost always.
+pub struct ProbeGraph {
+	pub pool: list[byte]
+	pub noff: list[int]
+	pub nlen: list[int]
+	pub tab: list[int]
+	pub pre: list[bool]
+}
+
+fn c_pg_new(with_pre: bool) -> ProbeGraph {
+	mut g := c_pg_none()
+	if with_pre {
+		mut i := 0
+		for i < 65536 {
+			g.pre.append(false)
+			i = i + 1
+		}
+	}
+	c_pg_rehash(g, 4093)
+	return g
+}
+
+# c_pg_none is the graph with no table, the Emitter's `vrefs` until c_vrefs answers them.
+fn c_pg_none() -> ProbeGraph {
+	return ProbeGraph([], [], [], [], [])
+}
+
+fn c_pg_key(mut &b: list[byte], lo: int, hi: int) -> int {
+	return int(b[lo]) * 256 if hi - lo < 2
+
+	return int(b[lo]) * 256 + int(b[lo + 1])
+}
+
+fn c_pg_hash(mut &b: list[byte], lo: int, hi: int, m: int) -> int {
+	mut h := 0
+	mut i := lo
+	for i < hi {
+		h = (h * 31 + int(b[i])) % m
+		i = i + 1
+	}
+	return h
+}
+
+# c_pg_find is the node `b[lo:hi]` names, or -1.
+fn c_pg_find(mut &g: ProbeGraph, mut &b: list[byte], lo: int, hi: int) -> int {
+	m := g.tab.len()
+	mut h := c_pg_hash(b, lo, hi, m)
+	mut tries := 0
+	for tries < m {
+		id := g.tab[h]
+
+		return -1 if id < 0
+		return id if c_pg_same(g, id, b, lo, hi)
+
+		h = (h + 1) % m
+		tries = tries + 1
+	}
+	return -1
+}
+
+fn c_pg_same(mut &g: ProbeGraph, id: int, mut &b: list[byte], lo: int, hi: int) -> bool {
+	return false if g.nlen[id] != hi - lo
+
+	o := g.noff[id]
+	mut i := 0
+	for i < hi - lo {
+		return false if g.pool[o + i] != b[lo + i]
+
+		i = i + 1
+	}
+	return true
+}
+
+fn c_pg_intern(mut &g: ProbeGraph, mut &b: list[byte], lo: int, hi: int) -> int {
+	found := c_pg_find(g, b, lo, hi)
+	return found if found >= 0
+
+	id := g.noff.len()
+	g.noff.append(g.pool.len())
+	g.nlen.append(hi - lo)
+	mut i := lo
+	for i < hi {
+		g.pool.append(b[i])
+		i = i + 1
+	}
+	if g.pre.len() > 0 {
+		g.pre[c_pg_key(b, lo, hi)] = true
+	}
+	if (id + 1) * 2 > g.tab.len() {
+		c_pg_rehash(g, g.tab.len() * 4 + 1)
+	} else {
+		c_pg_put(g, id)
+	}
+	return id
+}
+
+fn c_pg_rehash(mut &g: ProbeGraph, m: int) {
+	g.tab = []
+	mut i := 0
+	for i < m {
+		g.tab.append(-1)
+		i = i + 1
+	}
+	i = 0
+	for i < g.noff.len() {
+		c_pg_put(g, i)
+		i = i + 1
+	}
+}
+
+fn c_pg_put(mut &g: ProbeGraph, id: int) {
+	m := g.tab.len()
+	o := g.noff[id]
+	mut h := c_pg_hash(g.pool, o, o + g.nlen[id], m)
+	for g.tab[h] >= 0 {
+		h = (h + 1) % m
+	}
+	g.tab[h] = id
+}
+
+fn c_pg_intern_str(mut &g: ProbeGraph, s: str) -> int {
+	mut b := bytearray(s)
+	return c_pg_intern(g, b, 0, b.len())
+}
+
+fn c_pg_find_str(mut &g: ProbeGraph, s: str) -> int {
+	mut b := bytearray(s)
+	return c_pg_find(g, b, 0, b.len())
+}
+
+# c_pg_header is the end of the name a C function DEFINITION opens with on the line at `p`, its
+# start left in `name_lo` and its body's `{` in `brace`, or -1 for any other line: two or more
+# words and stars, the last one touching the `(`, and ` {` right after the parameter list closes. A body's own lines that start
+# at the margin are a statement (`if (…) {`), a place marker (`ZRT_AT(…)`) or a declaration with
+# an `=`, and none of them has that shape.
+fn c_pg_header(mut &b: list[byte], p: int, mut &name_lo: int, mut &brace: int) -> int {
+	n := b.len()
+	return -1 if p >= n or not lexer.is_ident(b[p]) or ascii.is_digit(b[p])
+
+	mut i := p
+	mut words := 0
+	mut lo := -1
+	mut hi := -1
+	for i < n and b[i] != b'(' {
+		c := b[i]
+		if lexer.is_ident(c) {
+			lo = i
+			for i < n and lexer.is_ident(b[i]) {
+				i = i + 1
+			}
+			hi = i
+			words = words + 1
+		} else if c == b' ' or c == b'*' {
+			i = i + 1
+		} else {
+			return -1
+		}
+	}
+	return -1 if i >= n or words < 2 or hi != i or ascii.is_digit(b[lo]) or c_pg_keyword(b, lo, hi)
+
+	mut depth := 0
+	for i < n {
+		c := b[i]
+		return -1 if c == byte(10)
+
+		if c == b'(' {
+			depth = depth + 1
+		} else if c == b')' {
+			depth = depth - 1
+			break if depth == 0
+		}
+		i = i + 1
+	}
+	return -1 if i + 2 >= n or b[i + 1] != b' ' or b[i + 2] != b'{'
+
+	name_lo = lo
+	brace = i + 2
+	return hi
+}
+
+# c_pg_keyword is whether `b[lo:hi]` is a C keyword that can stand before a `(` — `else if (`
+# opens a line with two words, as a definition does.
+fn c_pg_keyword(mut &b: list[byte], lo: int, hi: int) -> bool {
+	n := hi - lo
+	c := b[lo]
+
+	return c == b'i' and b[lo + 1] == b'f' if n == 2
+	return c == b'f' and b[lo + 1] == b'o' and b[lo + 2] == b'r' if n == 3
+	return c == b'w' and c_pg_word(b, lo, "while") if n == 5
+	return (c == b's' and (c_pg_word(b, lo, "switch") or c_pg_word(b, lo, "sizeof"))) or (c == b'r' and c_pg_word(b, lo, "return")) if n == 6
+
+	return false
+}
+
+# c_pg_word is whether `b` spells `w` from `lo`, its length already known to match.
+fn c_pg_word(mut &b: list[byte], lo: int, w: str) -> bool {
+	mut k := bytearray(w)
+	mut i := 0
+	for i < k.len() {
+		return false if k[i] != b[lo + i]
+
+		i = i + 1
+	}
+	return true
+}
+
+# c_probe_unit gives `ZRT_PROBE` to each function of this unit that can be entered again before
+# it returns, after its parameters are registered for release and before its body, and refuses
+# a function whose arrays an overflow would have no room to unwind past (E4127) — one on a
+# DIRECT recursion cycle. A function probed for its address or for an indirect call is not
+# refused: a cycle through it passes another probed function, and past that the guard page and
+# cc's own frame probing stay behind it, a named fault and never a silent one. The prototypes
+# are not read: a name one spells is neither a call nor an address.
+#
+# Every text is rewritten in place. Under `check` nothing is, and the walk is made only when a
+# function has the frame E4127 asks about, so a check reports what a build reports.
+fn c_probe_unit(mut &em: Emitter, mut &def_parts: list[str], mut &types: str, mut &globals: str, mut &mainw: str, checking: bool) {
+	mut chs: list[str] = [types, globals]
+	mut ends: list[int] = [1, 2]
+	for d in em.res_decls {
+		chs.append(d)
+	}
+	ends.append(chs.len())
+	for d in em.mvt_decls {
+		chs.append(d)
+	}
+	ends.append(chs.len())
+	for d in em.rnd_decls {
+		chs.append(d)
+	}
+	ends.append(chs.len())
+	for d in em.svt_decls {
+		chs.append(d)
+	}
+	ends.append(chs.len())
+	for d in em.rcv_decls {
+		chs.append(d)
+	}
+	ends.append(chs.len())
+	for d in em.dfn_decls {
+		chs.append(d)
+	}
+	ends.append(chs.len())
+	for d in em.lam_defs {
+		chs.append(d)
+	}
+	ends.append(chs.len())
+	for d in def_parts {
+		chs.append(d)
+	}
+	ends.append(chs.len())
+	chs.append(mainw)
+	ends.append(chs.len())
+
+	mut g := c_pg_new(true)
+	mut zat: list[int] = []
+	mut zind: list[bool] = []
+	mut zid: list[int] = []
+	mut zi := 0
+	for zi < em.zfn_names.len() {
+		id := c_pg_intern_str(g, em.zfn_names[zi])
+		zid.append(id)
+		if id == zat.len() {
+			zat.append(em.zfn_at[zi])
+			zind.append(em.zfn_ind[zi])
+		} else {
+			zat[id] = em.zfn_at[zi]
+			zind[id] = zind[id] or em.zfn_ind[zi]
+		}
+		zi = zi + 1
+	}
+	nz := g.noff.len()
+
+	# THE DEFINITIONS. A text c_fn wrote is one function, so only its first line is a header:
+	# its body may put anything at the margin. A generated text may hold several.
+	mut hdr_ch: list[int] = []
+	mut hdr_lo: list[int] = []
+	mut hdr_id: list[int] = []
+	mut hdr_brace: list[int] = []
+	mut bs: list[list[byte]] = []
+	mut k := 0
+	for k < chs.len() {
+		bs.append(bytearray(chs[k]))
+		n := bs[k].len()
+		mut p := 0
+		for p < n {
+			mut nlo := 0
+			mut br := 0
+			nhi := c_pg_header(bs[k], p, nlo, br)
+			mut one := false
+			if nhi >= 0 {
+				id := c_pg_intern(g, bs[k], nlo, nhi)
+				hdr_ch.append(k)
+				hdr_lo.append(nlo)
+				hdr_id.append(id)
+				hdr_brace.append(br)
+				one = p == 0 and id < nz
+			}
+			break if one
+
+			for p < n and bs[k][p] != byte(10) {
+				p = p + 1
+			}
+			p = p + 1
+		}
+		k = k + 1
+	}
+
+	# THE USES. A token after `.` or `->` is a field, whatever it is spelled like.
+	nn := g.noff.len()
+	mut addr: list[bool] = []
+	mut i := 0
+	for i < nn {
+		addr.append(false)
+		i = i + 1
+	}
+
+	mut efrom: list[int] = []
+	mut eto: list[int] = []
+	mut h := 0
+	k = 0
+	for k < chs.len() {
+		n := bs[k].len()
+		mut cur := -1
+		i = 0
+		for i < n {
+			c := bs[k][i]
+			if not lexer.is_ident(c) {
+				i = i + 1
+				continue
+			}
+			lo := i
+			for i < n and lexer.is_ident(bs[k][i]) {
+				i = i + 1
+			}
+			if h < hdr_lo.len() and hdr_ch[h] == k and hdr_lo[h] == lo {
+				cur = hdr_id[h]
+				h = h + 1
+			} else if not ascii.is_digit(c) and g.pre[c_pg_key(bs[k], lo, i)] and not (lo > 0 and bs[k][lo - 1] == b'.') and not (lo > 1 and bs[k][lo - 1] == b'>' and bs[k][lo - 2] == b'-') {
+				id := c_pg_find(g, bs[k], lo, i)
+				if id >= 0 {
+					if i < n and bs[k][i] == b'(' {
+						if cur >= 0 {
+							efrom.append(cur)
+							eto.append(id)
+						}
+					} else {
+						addr[id] = true
+					}
+				}
+			}
+		}
+		k = k + 1
+	}
+
+	cyc := c_pg_cyclic(nn, efrom, eto)
+	i = 0
+	for i < em.big_zi.len() {
+		if cyc[zid[em.big_zi[i]]] {
+			d := em.big_at[i]
+			check.chk_at_place(em, d.path, d.line, d.col, rule.Rule.FrameTooLargeToUnwind, d.msg)
+		}
+		i = i + 1
+	}
+	return if checking
+
+	# A GENERATED FUNCTION WHOSE ADDRESS IS TAKEN PROBES THROUGH ITS CALLEE. It is handed what it
+	# passes on — a payload, an element, an argument — and owns nothing it could give back on a
+	# hit, so a probe at its own entry would drop that on the floor. The Zerg function it calls
+	# probes after it has registered its parameters, and a hit there releases them.
+	mut probed: list[bool] = []
+	i = 0
+	for i < nz {
+		probed.append(cyc[i] or addr[i] or zind[i])
+		i = i + 1
+	}
+	i = 0
+	for i < efrom.len() {
+		if efrom[i] >= nz and addr[efrom[i]] and eto[i] < nz {
+			probed[eto[i]] = true
+		}
+		i = i + 1
+	}
+
+	# THE PROBES, each body opened after its parameters are on the cleanup stack
+	mut j := 0
+	k = 0
+	for k < chs.len() {
+		for j < hdr_ch.len() and hdr_ch[j] == k {
+			id := hdr_id[j]
+			if id < nz and probed[id] {
+				em.used_rt = true
+				c_probe_put(em, def_parts, types, globals, mainw, ends, k, c_probed_text(bs[k], hdr_brace[j] + 2 + zat[id]))
+			}
+			j = j + 1
+		}
+		k = k + 1
+	}
+}
+
+# c_probe_put writes text `k` of c_probe_unit's list back where it came from; `ends` is where
+# each of its runs ends, in the order the list was gathered.
+fn c_probe_put(mut &em: Emitter, mut &def_parts: list[str], mut &types: str, mut &globals: str, mut &mainw: str, mut &ends: list[int], k: int, s: str) {
+	if k < ends[0] {
+		types = s
+	} else if k < ends[1] {
+		globals = s
+	} else if k < ends[2] {
+		em.res_decls[k - ends[1]] = s
+	} else if k < ends[3] {
+		em.mvt_decls[k - ends[2]] = s
+	} else if k < ends[4] {
+		em.rnd_decls[k - ends[3]] = s
+	} else if k < ends[5] {
+		em.svt_decls[k - ends[4]] = s
+	} else if k < ends[6] {
+		em.rcv_decls[k - ends[5]] = s
+	} else if k < ends[7] {
+		em.dfn_decls[k - ends[6]] = s
+	} else if k < ends[8] {
+		em.lam_defs[k - ends[7]] = s
+	} else if k < ends[9] {
+		def_parts[k - ends[8]] = s
+	} else {
+		mainw = s
+	}
+}
+
+# c_probed_text is one function's C with the probe as a line of its own at byte `at`.
+fn c_probed_text(mut &b: list[byte], at: int) -> str {
+	mut out: list[byte] = []
+	mut i := 0
+	for i < at {
+		out.append(b[i])
+		i = i + 1
+	}
+	for c in bytearray("    ZRT_PROBE\n") {
+		out.append(c)
+	}
+	for i < b.len() {
+		out.append(b[i])
+		i = i + 1
+	}
+	return str(out)
+}
+
+# c_pg_cyclic is, per node, whether it lies on a cycle of the call graph `efrom[i] -> eto[i]`: a
+# strongly connected component of two or more, or a call to itself. It is Tarjan's walk with the
+# recursion kept in lists — the compiler's own graph has components of hundreds, and a walk
+# that recursed per node is exactly the depth this change is about.
+fn c_pg_cyclic(nn: int, mut &efrom: list[int], mut &eto: list[int]) -> list[bool] {
+	mut off: list[int] = []
+	mut cyc: list[bool] = []
+	mut idx: list[int] = []
+	mut low: list[int] = []
+	mut onst: list[bool] = []
+	mut stk: list[int] = []
+	mut csv: list[int] = []
+	mut cse: list[int] = []
+	mut i := 0
+	for i < nn {
+		off.append(0)
+		cyc.append(false)
+		idx.append(-1)
+		low.append(0)
+		onst.append(false)
+		stk.append(0)
+		csv.append(0)
+		cse.append(0)
+		i = i + 1
+	}
+	off.append(0)
+
+	# the edges grouped by source, each source's run starting at off[v]
+	i = 0
+	for i < efrom.len() {
+		off[efrom[i] + 1] = off[efrom[i] + 1] + 1
+		i = i + 1
+	}
+	i = 0
+	for i < nn {
+		off[i + 1] = off[i + 1] + off[i]
+		i = i + 1
+	}
+	mut fill: list[int] = []
+	mut adj: list[int] = []
+	i = 0
+	for i < nn {
+		fill.append(off[i])
+		i = i + 1
+	}
+	i = 0
+	for i < efrom.len() {
+		adj.append(0)
+		i = i + 1
+	}
+	i = 0
+	for i < efrom.len() {
+		v := efrom[i]
+		adj[fill[v]] = eto[i]
+		fill[v] = fill[v] + 1
+		i = i + 1
+	}
+
+	mut sp := 0
+	mut cp := 0
+	mut count := 0
+	mut s := 0
+	for s < nn {
+		if idx[s] < 0 {
+			idx[s] = count
+			low[s] = count
+			count = count + 1
+			stk[sp] = s
+			sp = sp + 1
+			onst[s] = true
+			csv[cp] = s
+			cse[cp] = off[s]
+			cp = cp + 1
+			for cp > 0 {
+				v := csv[cp - 1]
+				e := cse[cp - 1]
+				if e < off[v + 1] {
+					cse[cp - 1] = e + 1
+					w := adj[e]
+					if w == v {
+						cyc[v] = true
+					}
+					if idx[w] < 0 {
+						idx[w] = count
+						low[w] = count
+						count = count + 1
+						stk[sp] = w
+						sp = sp + 1
+						onst[w] = true
+						csv[cp] = w
+						cse[cp] = off[w]
+						cp = cp + 1
+					} else if onst[w] and idx[w] < low[v] {
+						low[v] = idx[w]
+					}
+				} else {
+					cp = cp - 1
+					if cp > 0 and low[v] < low[csv[cp - 1]] {
+						low[csv[cp - 1]] = low[v]
+					}
+					if low[v] == idx[v] {
+						mut lo := sp - 1
+						for stk[lo] != v {
+							lo = lo - 1
+						}
+						mut j := lo
+						for j < sp {
+							onst[stk[j]] = false
+							if sp - lo > 1 {
+								cyc[stk[j]] = true
+							}
+							j = j + 1
+						}
+						sp = lo
+					}
+				}
+			}
+		}
+		s = s + 1
+	}
+	return cyc
+}
+
+# --- functions the program holds as values (#480) ------------------------------------------
+#
+# A FUNCTION ANOTHER UNIT MAY CALL FROM C IS PROBED IN ITS OWN UNIT. c_probe_unit reads one unit's
+# C, and a generic body or a spec's table is emitted in the unit that USES it: `Ref(x, shut)` in
+# a generic `wrap` of module m puts the drop thunk, and so the only address of `zg_shut`, in the
+# caller's unit, while `zg_shut` is defined in m's with nothing there calling it from C. So the
+# defining unit asks the SOURCE instead — the whole program, templates included, whether or not
+# this unit instantiates them: a free function named anywhere but a call's callee, a name read
+# as a field (a method value, a qualified function), and every member a spec declares.
+# Over-approximating is the safe direction: a name that is only ever called costs one probe.
+
+# c_vrefs answers those names, a function's as itself and a field's or a spec member's as
+# `.name`, each once.
+fn c_vrefs(f: ast.File) -> ProbeGraph {
+	mut fns := c_pg_new(false)
+	for fd in f.fns {
+		c_pg_intern_str(fns, fd.name)
+	}
+	mut got := c_pg_new(false)
+	for sp in f.specs {
+		for r in sp.reqs {
+			c_pg_intern_str(got, "." + r.name)
+		}
+	}
+	for fd in f.fns {
+		c_vr_params(fns, got, fd.params)
+		c_vr_block(fns, got, fd.body)
+	}
+	return got
+}
+
+# c_vref_of is whether c_vrefs named the function `name` (a method when `recv` is set).
+fn c_vref_of(mut &em: Emitter, recv: str, name: str) -> bool {
+	return false if em.vrefs.tab.len() == 0
+
+	return c_pg_find_str(em.vrefs, "." + name) >= 0 or (recv == "" and c_pg_find_str(em.vrefs, name) >= 0)
+}
+
+fn c_vr_name(mut &fns: ProbeGraph, mut &got: ProbeGraph, n: str, field: bool) {
+	return if c_pg_find_str(fns, n) < 0
+
+	if field {
+		c_pg_intern_str(got, "." + n)
+	} else {
+		c_pg_intern_str(got, n)
+	}
+}
+
+fn c_vr_params(mut &fns: ProbeGraph, mut &got: ProbeGraph, ps: list[ast.Param]) {
+	for pm in ps {
+		c_vr_expr(fns, got, pm.def)
+	}
+}
+
+fn c_vr_block(mut &fns: ProbeGraph, mut &got: ProbeGraph, b: list[ast.Stmt]) {
+	for s in b {
+		c_vr_stmt(fns, got, s)
+	}
+}
+
+fn c_vr_exprs(mut &fns: ProbeGraph, mut &got: ProbeGraph, xs: list[ast.Expr]) {
+	for x in xs {
+		c_vr_expr(fns, got, x)
+	}
+}
+
+# every arm generic.zg's ment_stmt names, and no catch-all
+fn c_vr_stmt(mut &fns: ProbeGraph, mut &got: ProbeGraph, s: ast.Stmt) {
+	match s {
+		Stmt.SLet(_, _, _, _, _, v, _, _) => c_vr_expr(fns, got, v)
+		Stmt.SDestructure(t, v, _, _, _) => {
+			c_vr_target(fns, got, t)
+			c_vr_expr(fns, got, v)
+		}
+		Stmt.SAssign(l, r) => {
+			c_vr_expr(fns, got, l)
+			c_vr_expr(fns, got, r)
+		}
+		Stmt.SPrint(v)     => c_vr_expr(fns, got, v)
+		Stmt.SReturn(_, v) => c_vr_expr(fns, got, v)
+		Stmt.SReturnIf(v, c) => {
+			c_vr_expr(fns, got, v)
+			c_vr_expr(fns, got, c)
+		}
+		Stmt.SExpr(v) => c_vr_expr(fns, got, v)
+		Stmt.SIf(c, tb, _, eb) => {
+			c_vr_expr(fns, got, c)
+			c_vr_block(fns, got, tb)
+			c_vr_block(fns, got, eb)
+		}
+		Stmt.SFor(_, c, b) => {
+			c_vr_expr(fns, got, c)
+			c_vr_block(fns, got, b)
+		}
+		Stmt.SForIn(_, _, it, b, _, _) => {
+			c_vr_expr(fns, got, it)
+			c_vr_block(fns, got, b)
+		}
+		Stmt.SForSelect(arms) => c_vr_sel(fns, got, arms)
+		Stmt.SRaise(e, _, cause) => {
+			c_vr_expr(fns, got, e)
+			c_vr_expr(fns, got, cause)
+		}
+		Stmt.SDefer(v) => c_vr_expr(fns, got, v)
+		Stmt.SSpawn(v) => c_vr_expr(fns, got, v)
+		Stmt.SSend(ch, v) => {
+			c_vr_expr(fns, got, ch)
+			c_vr_expr(fns, got, v)
+		}
+		Stmt.SSelect(arms) => c_vr_sel(fns, got, arms)
+		Stmt.SClose(ch, _) => c_vr_expr(fns, got, ch)
+		Stmt.SIfLet(_, v, tb, _, eb, _, _) => {
+			c_vr_expr(fns, got, v)
+			c_vr_block(fns, got, tb)
+			c_vr_block(fns, got, eb)
+		}
+		Stmt.SAssert(b)   => c_vr_block(fns, got, b)
+		Stmt.SScope(b, _) => c_vr_block(fns, got, b)
+		Stmt.SBreak => {
+		}
+		Stmt.SContinue => {
+		}
+		Stmt.SNop => {
+		}
+		Stmt.SDel(_, _, _) => {
+		}
+		Stmt.SAt(_, _, _, _) => {
+		}
+	}
+}
+
+fn c_vr_sel(mut &fns: ProbeGraph, mut &got: ProbeGraph, arms: list[ast.SelArm]) {
+	for a in arms {
+		c_vr_expr(fns, got, a.ch)
+		c_vr_expr(fns, got, a.val)
+		c_vr_block(fns, got, a.body)
+	}
+}
+
+fn c_vr_target(mut &fns: ProbeGraph, mut &got: ProbeGraph, t: ast.Target) {
+	match t {
+		Target.TgtWild => {
+		}
+		Target.TgtPlace(e) => c_vr_expr(fns, got, e)
+		Target.TgtTuple(ts) => {
+			for x in ts {
+				c_vr_target(fns, got, x)
+			}
+		}
+		Target.TgtStruct(_, _, ts, _) => {
+			for x in ts {
+				c_vr_target(fns, got, x)
+			}
+		}
+	}
+}
+
+# every arm generic.zg's ment_expr names, and no catch-all. A callee's own name is the one place
+# a function is named and not held.
+fn c_vr_expr(mut &fns: ProbeGraph, mut &got: ProbeGraph, e: ast.Expr) {
+	match e {
+		Expr.EUnary(_, x) => c_vr_expr(fns, got, x)
+		Expr.EBinary(_, a, b) => {
+			c_vr_expr(fns, got, a)
+			c_vr_expr(fns, got, b)
+		}
+		Expr.ECall(_, xs, _, _, _) => c_vr_exprs(fns, got, xs)
+		Expr.ECallVal(c, xs) => {
+			c_vr_expr(fns, got, c)
+			c_vr_exprs(fns, got, xs)
+		}
+		Expr.ENamedArg(_, x, _, _) => c_vr_expr(fns, got, x)
+		Expr.EField(x, n, _, _) => {
+			c_vr_name(fns, got, n, true)
+			c_vr_expr(fns, got, x)
+		}
+		Expr.EOptChain(x, n, _, _) => {
+			c_vr_name(fns, got, n, true)
+			c_vr_expr(fns, got, x)
+		}
+		Expr.EOptMethod(x, _, xs, _, _) => {
+			c_vr_expr(fns, got, x)
+			c_vr_exprs(fns, got, xs)
+		}
+		Expr.ETry(x) => c_vr_expr(fns, got, x)
+		Expr.EIndex(x, i) => {
+			c_vr_expr(fns, got, x)
+			c_vr_expr(fns, got, i)
+		}
+		Expr.EMethod(x, _, xs, _, _) => {
+			c_vr_expr(fns, got, x)
+			c_vr_exprs(fns, got, xs)
+		}
+		Expr.EListLit(xs)   => c_vr_exprs(fns, got, xs)
+		Expr.EConv(_, x, _) => c_vr_expr(fns, got, x)
+		Expr.EFmt(x, _, _)  => c_vr_expr(fns, got, x)
+		Expr.EIf(c, a, b) => {
+			c_vr_expr(fns, got, c)
+			c_vr_expr(fns, got, a)
+			c_vr_expr(fns, got, b)
+		}
+		Expr.EIfLet(_, v, a, b, _, _) => {
+			c_vr_expr(fns, got, v)
+			c_vr_expr(fns, got, a)
+			c_vr_expr(fns, got, b)
+		}
+		Expr.EMatch(x, arms) => {
+			c_vr_expr(fns, got, x)
+			for a in arms {
+				c_vr_expr(fns, got, a.guard_expr)
+				c_vr_expr(fns, got, a.body)
+			}
+		}
+		Expr.ERange(a, b, _) => {
+			c_vr_expr(fns, got, a)
+			c_vr_expr(fns, got, b)
+		}
+		Expr.ETuple(xs) => c_vr_exprs(fns, got, xs)
+		Expr.EMapLit(ks, vs) => {
+			c_vr_exprs(fns, got, ks)
+			c_vr_exprs(fns, got, vs)
+		}
+		Expr.EFn(ps, _, _, b) => {
+			c_vr_params(fns, got, ps)
+			c_vr_block(fns, got, b)
+		}
+		Expr.EChanNew(_, cap) => c_vr_expr(fns, got, cap)
+		Expr.ERecv(x)         => c_vr_expr(fns, got, x)
+		Expr.EForce(x)        => c_vr_expr(fns, got, x)
+		Expr.ECoalesce(a, b, jump) => {
+			c_vr_expr(fns, got, a)
+			c_vr_expr(fns, got, b)
+			c_vr_block(fns, got, jump)
+		}
+		Expr.EGuard(b)  => c_vr_block(fns, got, b)
+		Expr.EBlock(b)  => c_vr_block(fns, got, b)
+		Expr.EUnsafe(b) => c_vr_block(fns, got, b)
+		Expr.EAsm(_, ops) => {
+			for o in ops {
+				c_vr_expr(fns, got, o.expr)
+			}
+		}
+		Expr.EIs(x, _) => c_vr_expr(fns, got, x)
+		Expr.EIn(x, s) => {
+			c_vr_expr(fns, got, x)
+			c_vr_expr(fns, got, s)
+		}
+		Expr.EFill(v, n) => {
+			c_vr_expr(fns, got, v)
+			c_vr_expr(fns, got, n)
+		}
+		Expr.EInt(_, _, _) => {
+		}
+		Expr.EFloat(_) => {
+		}
+		Expr.EStr(_) => {
+		}
+		Expr.EBool(_) => {
+		}
+		Expr.ENil => {
+		}
+		Expr.EIdent(n, _, _) => c_vr_name(fns, got, n, false)
+	}
+}
+
 # c_section is c_join that also COUNTS, and refuses the moment the running total passes the
 # ceiling. The two are one function because the count is free exactly here: this loop already
 # walks every byte, so `out.len()` is the answer with nothing added.
@@ -29329,7 +30316,7 @@ fn c_emit_unit_as(prog0: ast.File, own0: ast.File, ft: FileTypes, ms: Mods, whol
 	# is what makes that invariant hold for a multi-unit program, at the place it already lives,
 	# and it is what lets the declaration passes below go back to reading the WHOLE program.
 	seen := diags.len()
-	mut em := Emitter([], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], false, false, false, false, [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], 0, [], 0, [], [], false, "", "", [], [], ast.Ty.TVoid, 0, "", 0, 0, 0, 0, "", diags, 0, 0, [], [], [], [], [], false, 0, false, "", 0, false, false, [], [], [], [], [], [], [], [], [], [], [], "", want_lints, [], [], [], [], [], [], [], [], [], [], [], [], false, 0, [], [], "", c_nosub(), [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], false, ast.no_index(), [], [], [], [], [], [], [], [], [], [], [], [], false, [], [], [], [], [], [], [], [], [], [], [], "", [], [], 0, 0, [], -1, 0, -1, -1, [])
+	mut em := Emitter([], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], false, false, false, false, [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], 0, [], 0, [], [], false, "", "", [], [], ast.Ty.TVoid, 0, "", 0, 0, 0, 0, "", diags, 0, 0, [], [], [], [], [], false, 0, false, "", 0, false, false, [], [], [], [], [], [], [], [], [], [], [], "", want_lints, [], [], [], [], [], [], [], [], [], [], [], [], false, 0, [], [], "", c_nosub(), [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], false, ast.no_index(), [], [], [], [], [], [], [], [], [], [], [], [], false, [], [], [], [], [], [], [], [], [], [], [], "", [], [], 0, 0, [], -1, 0, -1, -1, [], false, 0, [], [], [], c_pg_none(), [], [])
 
 	# ASSIGNED, NOT PASSED. Every argument above is a zero value, and `layering` asserts that
 	# — it lines the call up with the fields by KIND, which only works while nothing in it
@@ -29343,6 +30330,9 @@ fn c_emit_unit_as(prog0: ast.File, own0: ast.File, ft: FileTypes, ms: Mods, whol
 	em.want_index = want_index
 	em.ft_to = ft.to
 	em.ft_name = ft.name
+	if not checking {
+		em.vrefs = c_vrefs(f0)
+	}
 
 	# THE TEMPLATES ARE RECORDED AND THEN REMOVED, before any other pass sees the program.
 	# A template is not a function, and this is the honest way to say so: from here down —
@@ -29453,18 +30443,18 @@ fn c_emit_unit_as(prog0: ast.File, own0: ast.File, ft: FileTypes, ms: Mods, whol
 
 	# A SPEC'S BOX IS A C TYPE, and it comes ahead of every declaration that may name one — a
 	# struct field, a parameter, a `list[…]` element.
-	types = types + c_lowered(checking, c_spec_typedefs(f))
+	types = types + c_spec_typedefs(f)
 
-	types = types + c_lowered(checking, c_type_decls(em, f, carriers, tuples))
+	types = types + c_type_decls(em, f, carriers, tuples)
 	mut i := 0
 	for i < f.enums.len() {
-		types = types + c_lowered(checking, c_refbox_helpers(f.enums[i]))
+		types = types + c_refbox_helpers(f.enums[i])
 		i = i + 1
 	}
 
 	# after the typedefs, because a helper names the struct it copies, and before the
 	# prototypes and bodies, which are what call them
-	types = types + c_lowered(checking, c_copy_helpers(em, f))
+	types = types + c_copy_helpers(em, f)
 
 	# the top level is immutable: a `mut` module binding is refused at its own declaration
 	# (over `own`, so a multi-unit build reports it once), before c_const_globals walks
@@ -29476,7 +30466,7 @@ fn c_emit_unit_as(prog0: ast.File, own0: ast.File, ft: FileTypes, ms: Mods, whol
 	check.chk_top_stmts(em, own)
 
 	# the constants are declared before the prototypes, so a body may name one
-	globals := c_lowered(checking, c_const_globals(em, f, own, whole))
+	mut globals := c_const_globals(em, f, own, whole)
 
 	# COLLECTED AND JOINED ONCE, not rebound per function. `defs = defs + c_fn(…)` over ~1500
 	# functions allocates a fresh buffer holding everything emitted so far on every step: the
@@ -29484,8 +30474,9 @@ fn c_emit_unit_as(prog0: ast.File, own0: ast.File, ft: FileTypes, ms: Mods, whol
 	# of 0.36 GB. `c_join` appends into one growing `list[byte]`, so the bytes are
 	# written once. #10.
 	#
-	# The parts are still `c_lowered`, which answers `""` under `check` — so a checking walk
-	# collects 1500 empty strings and joins them, which is the cheap end of cheap.
+	# The prototypes are still `c_lowered`, which answers `""` under `check`. The bodies, the
+	# types, the constants and the entry are kept as they were written in both modes, because
+	# c_probe_unit reads them for a finding (E4127) that `check` owes too; only a build joins them.
 	mut proto_parts: list[str] = []
 	i = 0
 	for i < f.fns.len() {
@@ -29495,7 +30486,7 @@ fn c_emit_unit_as(prog0: ast.File, own0: ast.File, ft: FileTypes, ms: Mods, whol
 	mut def_parts: list[str] = []
 	i = 0
 	for i < own.fns.len() {
-		def_parts.append(c_lowered(checking, c_fn_told(em, own.fns[i], diags)))
+		def_parts.append(c_fn_told(em, own.fns[i], diags))
 		i = i + 1
 	}
 
@@ -29520,16 +30511,9 @@ fn c_emit_unit_as(prog0: ast.File, own0: ast.File, ft: FileTypes, ms: Mods, whol
 		# costs, and it is paid only by the units that actually use one.
 		inst := em.inst_fns[done]
 		proto_parts.append(c_lowered(checking, "static " + c_proto(em, inst)))
-		def_parts.append(c_lowered(checking, "static " + c_fn_told(em, inst, diags)))
+		def_parts.append("static " + c_fn_told(em, inst, diags))
 		done = done + 1
 	}
-
-	# THE BUDGET IS ON THE UNIT, so one running total crosses both sections.
-	budget := c_emit_max()
-	unit_at := c_unit_path(own, em)
-	mut nbytes := 0
-	protos := c_section(proto_parts, budget, unit_at, nbytes)
-	defs := c_section(def_parts, budget, unit_at, nbytes)
 
 	# every `init()` runs before main, in the order it was declared — GRAMMAR's FIFO,
 	# each once
@@ -29566,7 +30550,27 @@ fn c_emit_unit_as(prog0: ast.File, own0: ast.File, ft: FileTypes, ms: Mods, whol
 
 	mut mainw := ""
 	if c_has_main(own) {
-		mainw = c_lowered(checking, c_main_entry(em, own, inits))
+		mainw = c_main_entry(em, own, inits)
+	}
+
+	# THE PROBES, once every definition of the unit is written and before any of it is joined:
+	# the bodies, the lambdas and the thunks are all in, and the entry is the last of them.
+	#
+	# OVER RAW TEXT IN BOTH MODES, which is why the parts below are not c_lowered until they are
+	# joined: `check` reports E4127 exactly as a build does. And only over a program that is
+	# otherwise clean, since a refusal already collected is the one the reader is owed first.
+	if em.diags.len() == seen and (not checking or em.big_at.len() > 0) {
+		c_probe_unit(em, def_parts, types, globals, mainw, checking)
+	}
+
+	# THE BUDGET IS ON THE UNIT, so one running total crosses both sections.
+	budget := c_emit_max()
+	unit_at := c_unit_path(own, em)
+	mut nbytes := 0
+	protos := c_section(proto_parts, budget, unit_at, nbytes)
+	mut defs := ""
+	if not checking {
+		defs = c_section(def_parts, budget, unit_at, nbytes)
 	}
 
 	# A separately-compiled unit declares the WHOLE program's prototypes, and any of them

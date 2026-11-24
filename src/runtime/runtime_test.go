@@ -31,7 +31,7 @@ func findCC() string {
 // spelling them out each time buries what the test is actually about.
 func buildConcurrent(t *testing.T, name, src string) string {
 	t.Helper()
-	return buildUnits(t, name, src, true)
+	return buildUnits(t, name, src, true, "")
 }
 
 // buildCore is buildConcurrent without the scheduler: a driver that runs on the one thread
@@ -40,10 +40,11 @@ func buildConcurrent(t *testing.T, name, src string) string {
 // shims — which is what the stack-overflow tests need in order to fault there.
 func buildCore(t *testing.T, name, src string) string {
 	t.Helper()
-	return buildUnits(t, name, src, false)
+	return buildUnits(t, name, src, false, "")
 }
 
-func buildUnits(t *testing.T, name, src string, conc bool) string {
+// buildUnits links every materialized unit but `except` (none when it is "").
+func buildUnits(t *testing.T, name, src string, conc bool, except string) string {
 	t.Helper()
 	cc := findCC()
 	if cc == "" {
@@ -62,7 +63,7 @@ func buildUnits(t *testing.T, name, src string, conc bool) string {
 		t.Fatalf("write driver: %v", err)
 	}
 	bin := filepath.Join(dir, name+".bin")
-	args := append([]string{"-std=c11", "-I", dir, "-o", bin, driver}, cfiles...)
+	args := append([]string{"-std=c11", "-I", dir, "-o", bin, driver}, coreUnitsExcept(cfiles, except)...)
 	if out, err := exec.Command(cc, args...).CombinedOutput(); err != nil {
 		t.Fatalf("cc failed: %v\n%s", err, out)
 	}
@@ -1825,6 +1826,181 @@ static void prog(void) {
 int main(void) { return zrt_sched_main_nil(prog); }
 `
 
+// TestStackOverflowUnwindDefersContainerDrain is #486: a list, map or channel a stack
+// overflow's unwind frees holds Refs whose drop releases the next link through the same kind
+// of container, each drop entered by a probed thunk the way the emitted one is. A drain run in
+// place on the deep stack nests a thunk per link and hits the probe a second time, which is
+// the hard fault (exit 1). Under the fix the release in the cleanup only pushes — no drop has
+// run when it returns — and land_drain's flat loop drops every link once, so the handler
+// lands with the StackOverflowError. Only relations are printed, never a depth, so the
+// stack's size does not matter.
+func TestStackOverflowUnwindDefersContainerDrain(t *testing.T) {
+	const want = "kind=13 deep=1 deferred=1 drops=1 once=1 bad=0 flag=0 live=0\n"
+	cases := []struct {
+		name, cont string
+		conc       bool
+	}{
+		{"list", unwindListC, false},
+		{"map", unwindMapC, false},
+		{"chan", unwindChanC, true},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			main := unwindCoreMainC
+			if c.conc {
+				main = unwindSchedMainC
+			}
+			bin := buildCounted(t, "unwind_"+c.name, unwindHeadC+c.cont+unwindTailC+main, c.conc)
+			workers := ""
+			if c.conc {
+				workers = "1"
+			}
+			out, errOut, code := runBoundedStreams(t, bin, workers, 60*time.Second)
+			if code != 0 || out != want || errOut != "" {
+				t.Fatalf("%s freed in an overflow's unwind: exit=%d stdout %q stderr %q, want exit 0 stdout %q",
+					c.name, code, out, errOut, want)
+			}
+		})
+	}
+}
+
+// unwindHeadC is the counting allocator (atomic: the channel case links the scheduler's
+// workers) and the element drop every container case shares: releasing the Ref it holds.
+const unwindHeadC = `
+#include "zergrt.h"
+#include <stdio.h>
+#include <stdlib.h>
+
+#define HEADS 3
+#define CHAIN 20000
+#define CELLS (HEADS * CHAIN)
+
+static long g_live;
+void *zrt_alloc(size_t n) { void *p = malloc(n); if (p != NULL) { __atomic_add_fetch(&g_live, 1, __ATOMIC_RELAXED); } return p; }
+void zrt_free(void *p) { if (p != NULL) { __atomic_sub_fetch(&g_live, 1, __ATOMIC_RELAXED); free(p); } }
+
+static void cell_elem_drop(void *e) { zrt_release(*(void **)e); }
+`
+
+// unwindListC, unwindMapC and unwindChanC are the container a link holds its successor in.
+const unwindListC = `
+typedef zrt_list cont;
+static const zrt_elem_vt vt_cell = { NULL, cell_elem_drop };
+static void cont_init(cont *c) { zrt_list_init(c, sizeof(void *), &vt_cell); }
+static void cont_put(cont *c, void *cell) { zrt_list_push(c, &cell); }
+static void cont_drop(cont *c) { zrt_list_drop(c); }
+`
+
+const unwindMapC = `
+typedef zrt_map cont;
+static const zrt_map_vt vt_cell = { zrt_hash_int, zrt_eq_int, NULL, NULL, NULL, cell_elem_drop };
+static int64_t g_key;
+static void cont_init(cont *c) { zrt_map_init(c, sizeof(int64_t), sizeof(void *), &vt_cell); }
+static void cont_put(cont *c, void *cell) { int64_t k = g_key++; zrt_map_set(c, &k, &cell); }
+static void cont_drop(cont *c) { zrt_map_drop(c); }
+`
+
+const unwindChanC = `
+typedef zrt_chan *cont;
+static void cont_init(cont *c) { *c = zrt_chan_new(sizeof(void *), HEADS, cell_elem_drop); }
+static void cont_put(cont *c, void *cell) { zrt_chan_send(*c, &cell); }
+static void cont_drop(cont *c) { zrt_chan_release(*c); }
+`
+
+// unwindTailC builds HEADS chains of CHAIN links into a root container, and a probed
+// recursion whose level-0 cleanup releases that root. The cleanup records whether the
+// release returned with no drop run and entries pushed, while overflow_unwind was set.
+const unwindTailC = `
+typedef struct { int64_t id; cont c; } link;
+
+static unsigned char seen[CELLS];
+static long g_drops, g_bad;
+static int depth, deferred;
+static cont g_root;
+
+static void link_drop(link *l) {
+    if (l->id < 0 || l->id >= CELLS || seen[l->id]++ != 0) { g_bad++; }
+    g_drops++;
+    cont_drop(&l->c);
+}
+static void link_thunk(void *p) {
+    ZRT_PROBE
+    zrt_drain_scope ds = zrt_drain_open();
+    link_drop((link *)p);
+    zrt_drain_close(ds);
+}
+
+static void build(void) {
+    cont_init(&g_root);
+    for (int h = 0; h < HEADS; h++) {
+        void *prev = NULL;
+        for (int i = 0; i < CHAIN; i++) {
+            void *c = zrt_ref_alloc(sizeof(link), link_thunk);
+            link *l = (link *)zrt_ref_payload(c);
+            l->id = (int64_t)h * CHAIN + i;
+            cont_init(&l->c);
+            if (prev != NULL) { cont_put(&l->c, prev); }
+            prev = c;
+        }
+        cont_put(&g_root, prev);
+    }
+}
+
+static void root_cleanup(void *env) {
+    (void)env;
+    size_t before = zrt_tls_cur()->plen;
+    long d0 = g_drops;
+    cont_drop(&g_root);
+    zrt_tls *t = zrt_tls_cur();
+    deferred = t->overflow_unwind && g_drops == d0 && t->plen > before;
+}
+
+static int rec(int n) {
+    ZRT_PROBE
+    volatile char pad[256];
+    pad[0] = (char)n;
+    if (n == 0) { zrt_defer(root_cleanup, NULL); }
+    depth++;
+    return rec(n + 1) + pad[0];
+}
+
+static long g_live0;
+static void run(void) {
+    g_live0 = g_live;
+    build();
+    zrt_frame f;
+    zrt_handler_push_catch(&f);
+    if (setjmp(f.buf) == 0) { rec(0); puts("no overflow"); return; }
+    zrt_handler_pop(&f);
+    zrt_err e = zrt_taken_err();
+    long once = 0;
+    for (long i = 0; i < CELLS; i++) { once += seen[i] == 1; }
+    printf("kind=%d deep=%d deferred=%d drops=%d once=%d bad=%ld flag=%d ", e.kind, depth > 100, deferred,
+           g_drops == CELLS, once == CELLS, g_bad, zrt_tls_cur()->overflow_unwind);
+    zrt_err_drop(e);
+    printf("live=%ld\n", g_live - g_live0);
+}
+`
+
+const unwindCoreMainC = `
+int main(void) { zrt_fault_init(); run(); return 0; }
+`
+
+// unwindSchedMainC runs the case on a spawned coroutine, its own probed stack, and waits. It
+// runs with ZRT_WORKERS=1: an idle worker frees scheduler blocks of its own during the window,
+// which the global live count cannot tell from a cell, and the drain here is one thread's.
+const unwindSchedMainC = `
+static zrt_chan *g_done;
+static void co(void *env) { (void)env; run(); fflush(stdout); long v = 1; zrt_chan_send(g_done, &v); }
+static void prog(void) {
+    g_done = zrt_chan_new(sizeof(long), 1, NULL);
+    zrt_spawn(co, NULL, NULL);
+    long v = 0;
+    zrt_chan_recv(g_done, &v);
+}
+int main(void) { return zrt_sched_main_nil(prog); }
+`
+
 // TestGenuineSegvUndisguised is the other edge of the naming: a wild pointer is NOT a
 // stack overflow, and the handler must not dress it as one. It puts back the action that
 // was installed before it and lets the fault re-fire, so the process still dies by the
@@ -2097,7 +2273,7 @@ func TestReleaseDrainsWithoutRecursion(t *testing.T) {
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			bin := buildCounted(t, "drain_"+c.name, drainPreludeC+c.body)
+			bin := buildCounted(t, "drain_"+c.name, drainPreludeC+c.body, false)
 			out, code := runBounded(t, bin, "", 60*time.Second)
 			if code != 0 || out != c.want {
 				t.Fatalf("%s exit=%d output %q, want exit 0 and %q", c.name, code, out, c.want)
@@ -2106,29 +2282,11 @@ func TestReleaseDrainsWithoutRecursion(t *testing.T) {
 	}
 }
 
-// buildCounted compiles a driver against the core runtime with alloc.c left out: the driver
-// defines zrt_alloc/zrt_free itself.
-func buildCounted(t *testing.T, name, src string) string {
+// buildCounted compiles a driver against the core runtime, plus the concurrency units when
+// conc is set, with alloc.c left out: the driver defines zrt_alloc/zrt_free itself.
+func buildCounted(t *testing.T, name, src string, conc bool) string {
 	t.Helper()
-	cc := findCC()
-	if cc == "" {
-		t.Skip("no C compiler found")
-	}
-	dir := t.TempDir()
-	cfiles, err := Materialize(dir)
-	if err != nil {
-		t.Fatalf("materialize: %v", err)
-	}
-	driver := filepath.Join(dir, name+".c")
-	if err := os.WriteFile(driver, []byte(src), 0o644); err != nil {
-		t.Fatalf("write driver: %v", err)
-	}
-	bin := filepath.Join(dir, name+".bin")
-	args := append([]string{"-std=c11", "-I", dir, "-o", bin, driver}, coreUnitsExcept(cfiles, "alloc.c")...)
-	if out, err := exec.Command(cc, args...).CombinedOutput(); err != nil {
-		t.Fatalf("cc failed: %v\n%s", err, out)
-	}
-	return bin
+	return buildUnits(t, name, src, conc, "alloc.c")
 }
 
 // drainPreludeC is what every drain driver shares: the counting allocator, an id log, and a

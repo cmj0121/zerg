@@ -276,13 +276,15 @@ static void zrt_stack_land(const zrt_frame *h) {
  * handler's floor: a drain loop the longjmp is about to skip would otherwise leave them
  * owed, and a list whose first element's drop aborted would never drop the rest. Then the
  * scope the handler was pushed in gets its own drain state and probe state back — the
- * probe state last, so a drop an overflow queued still drains while overflow_unwind is
- * set. A further abort inside this drain lands on the same handler and resumes the entries
- * it left. */
+ * probe state last, so a drop an overflow queued drains while overflow_unwind is still set.
+ * It runs on the deep stack, not at the handler's depth: under an overflow every nested
+ * drain only pushes, so this ungated loop is the one that runs them, each one drop deep. A
+ * further abort inside this drain lands on the same handler and resumes the entries it
+ * left. */
 static void land_drain(const zrt_frame *h) {
 	g_tls.pbase = h->pmark;
 	g_tls.dactive = false;
-	zrt_drain();
+	zrt_drain_run();
 	/* the drain can park and resume on another worker: re-read the bundle */
 	zrt_tls *t = zrt_tls_cur();
 	t->pbase = h->pbase;

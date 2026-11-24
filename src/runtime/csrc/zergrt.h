@@ -598,20 +598,24 @@ zrt_tls *zrt_tls_cur(void);
 
 /* A drain scope: the emitted-C-facing bracket around code whose releases must finish before
  * it goes on (a user drop action, D4). open sets pbase = plen and dactive = false and
- * returns the old pair; close restores it (plen == pbase here). */
+ * returns the old pair; close restores it (plen == pbase here, except during an overflow's
+ * unwind, when the scope's releases stay pushed above it for land_drain, #486). */
 typedef struct { size_t pbase; bool dactive; } zrt_drain_scope;
 zrt_drain_scope zrt_drain_open(void);
 void            zrt_drain_close(zrt_drain_scope s);
 
-/* runtime-internal (ref.c owns the drain; list.c / map.c / unwind.c / sched.c call it).
+/* runtime-internal (ref.c owns the drain; list.c / map.c / chan.c / unwind.c call it).
  * The zrt_pend_* push one entry; zrt_drain runs the loop to plen == pbase unless one is
- * already running for this scope, in which case the running loop reaches the entry. */
+ * already running for this scope, in which case the running loop reaches the entry, or an
+ * overflow is unwinding, in which case land_drain does. zrt_drain_run is that loop without
+ * either gate: only land_drain calls it. */
 void zrt_pend_cell(zrt_ref_hdr *h);
 void zrt_pend_list(void *hdr, uint8_t *data, size_t len, size_t elemsz,
                    const zrt_elem_vt *vt);     /* hdr: the buffer's zrt_buf_hdr*, list.c-private type */
 void zrt_pend_map(uint8_t *entries, int64_t *buckets, size_t len, size_t entrysz, size_t koff,
                   size_t voff, const zrt_map_vt *vt);
 void zrt_drain(void);
+void zrt_drain_run(void);
 /* zrt_tls_detach zeroes the mounted bundle's pending fields WITHOUT freeing: the array now
  * belongs to the bundle zrt_tls_save copied it into (D7). */
 void zrt_tls_detach(void);

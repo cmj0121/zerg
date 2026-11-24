@@ -53,12 +53,17 @@ live allocations as five rounds do (`make mem-check`).
 > — runs each link's action inside the previous one, and its depth is bounded by the stack.
 > Reaching it is an ordinary abort, `StackOverflowError`, raised in the link that did not fit, and a `guard`
 > around the scope that let the chain go catches it ([Errors](../code/errors.md)). It is still a full
-> teardown: a `Ref` the overflow's unwind releases is queued rather than dropped in place, and its `drop`
-> action runs once the unwind lands — after the `guard` that caught it, or, when nothing does, after the
-> `StackOverflowError` line and before the process exits with status 1 — so no link is leaked. A `list`,
-> `map` or channel the unwind frees still drains in place; a chain that re-enters a `drop` action through
-> one of those ends in the overflow's named fault. Resources that deep need a shape the language has for
-> them — a `list` of `Ref`s indexed by position, rather than a chain.
+> teardown: a `Ref`, `list`, `map` or channel the overflow's unwind releases is queued rather than dropped
+> in place, and its drops run once the unwind lands — on the `guard` that catches it, before the `guard`'s
+> value is seen, or, when nothing does, after the `StackOverflowError` line and before the process exits
+> with status 1 — so no link's storage is leaked, whether the chain runs through `Ref`s alone or through a
+> container. The order shows: a `drop` action and an element's drop the unwind queued run after every
+> `defer` it still had to run, not interleaved with them. The depth of the chain is still bounded by the
+> stack, so resources that deep want a `list` of `Ref`s indexed by position rather than a chain.
+>
+> **[deviation]** A chain's teardown after a stack overflow skips one `drop` action: every released `Ref`
+> should have its `drop` action run exactly once, but the link whose drop hit the overflow never runs its
+> action (#487). Its storage is still freed, and every other link's action still runs.
 >
 > **[implementation-defined]** HOW a value is torn down is this implementation's, not the language's: an
 > explicit worklist is one way and a recursive free is another, and a program cannot tell them apart except

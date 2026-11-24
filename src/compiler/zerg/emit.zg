@@ -3676,41 +3676,16 @@ fn c_is_mangled(name: str) -> bool {
 	return false
 }
 
+# A KEY IS SPELLED WITH TYPE NAMES, and a type name may hold `_` as well as every byte C has no
+# place for: `$` and a spec key's brackets, `,` and spaces between arguments, a function type's
+# `(`, `)`, `-` and `>` (#339), an optional's `?`. Mapping each to `_` gave a generic `Box[P]` and
+# a struct `Box_P_` one name, and cc reported `zgg_elemcopy_Ref_Box_P__` defined twice. So the
+# escape is c_file_cname's, under the specialization's own prefix: `zgg_` and `zgf_` differ at
+# their third byte and `zg_` names at it too, so the three spaces never meet.
 fn c_spec_cname(name: str) -> str {
 	return c_file_cname(name) if c_is_filed(name)
 
-	mut out := "zgg_"
-	for b in bytearray(name) {
-		out = out + c_cname_byte(b)
-	}
-	return out
-}
-
-# EVERY BYTE A KEY MAY HOLD AND C MAY NOT. `$` came first, from a generic specialization; a
-# parameterized spec's method key adds the four a spec key is spelled with — `into$Into[Meters]`
-# — and a `,` or a space between two arguments. Each becomes `_`, which cannot collide with a
-# Zerg name: the whole result lives under the `zgg_` prefix, off the flat space a program can
-# reach.
-#
-# THOSE FIVE WERE A LIST OF THE KEYS SEEN SO FAR, and a key is spelled with a TYPE's name: a
-# function type adds `(`, `)`, `-` and `>`, an optional `?`, an array `;`, and each passed
-# through into a C identifier — `zgg_elemcopy_Ref_fn(int)_->_int_` (#339). So the rule is
-# stated the other way round: a byte C allows in an identifier is kept, and any other is
-# spelled by its code, which keeps `int?` and `int;` apart where a second `_` would not.
-fn c_cname_byte(b: byte) -> str {
-	return "_" if b == b'$' or b == b'[' or b == b']' or b == b',' or b == b' '
-	return "_x" + strconv.to_string(int(b), 16) if not c_is_cident_byte(b)
-
-	mut one: list[byte] = [b]
-	return str(one)
-}
-
-fn c_is_cident_byte(b: byte) -> bool {
-	return true if b >= b'a' and b <= b'z'
-	return true if b >= b'A' and b <= b'Z'
-	return true if b >= b'0' and b <= b'9'
-
-	return b == b'_'
+	return c_cname_escape("zgg_", name)
 }
 
 # c_sig_seen is `c_name_in(em.sig_names, key)` without the copy. `c_name_in` takes its list
@@ -22702,19 +22677,9 @@ fn c_render_fn(mut &em: Emitter, t: ast.Ty) -> str {
 # one renderer — and the outer one then recursed into itself, rendering nonsense for a nested
 # composite. What a renderer is keyed on is what it renders, which is the Zerg type.
 fn c_render_key(mut &em: Emitter, t: ast.Ty) -> str {
-	# a file's new type name keys by its injective C spelling, which no other key can meet
-	# (c_file_cname) — the bytes below map `P'1` and `P_1` alike
-	return c_file_cname(ast.ty_name(t)) if c_is_filed(ast.ty_name(t))
-
-	mut out: list[byte] = []
-	for c in bytearray(ast.ty_name(t)) {
-		if ascii.is_alpha(c) or ascii.is_digit(c) or c == b'_' {
-			out.append(c)
-		} else {
-			out.append(b'_')
-		}
-	}
-	return str(out)
+	# the key is escaped injectively (c_cname_escape): mapping each byte C cannot hold to `_`
+	# gave `Box[P]` and a struct `Box_P_` one renderer, and `P'1` and `P_1` too
+	return c_cname_escape("", ast.ty_name(t))
 }
 
 fn c_render_body(mut &em: Emitter, name: str, t: ast.Ty) -> str {
@@ -29776,11 +29741,16 @@ fn c_is_filed(nm: str) -> bool {
 }
 
 # c_file_cname is the C name of anything spelled with a file's new type name: `zgf_` and the
-# name escaped byte for byte — `_` doubles, a byte C cannot hold becomes `_<hex>_` — so two
-# distinct names never meet. Nothing else is spelled under the prefix but a Ref's drop thunk
-# (c_ref_drop_thunk), whose key holds a `$` no name has.
+# name escaped (c_cname_escape). Nothing else is spelled under the prefix but a Ref's drop
+# thunk (c_ref_drop_thunk), whose key holds a `$` no name has.
 fn c_file_cname(nm: str) -> str {
-	mut out := "zgf_"
+	return c_cname_escape("zgf_", nm)
+}
+
+# c_cname_escape is `pre` and the name escaped byte for byte — `_` doubles, a byte C cannot hold
+# becomes `_<hex>_` — so two distinct names never meet.
+fn c_cname_escape(pre: str, nm: str) -> str {
+	mut out := pre
 	for b in bytearray(nm) {
 		if b == b'_' {
 			out = out + "__"

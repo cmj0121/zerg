@@ -297,6 +297,7 @@ static void land_drain(const zrt_frame *h) {
  * the Err-carrying zrt_raise_err funnel through it; the only difference is whether
  * an Err value was stashed in g_tls.taken first (Decision D). */
 static _Noreturn void zrt_unwind_abort(zrt_err e, bool place) {
+	g_tls.darm = NULL; /* an abort before the action's probe (#487) leaves no stale arm */
 	zrt_frame *h = g_tls.handler;
 	/* A `guard` handler demotes this abort to a Result value, so it is not an error
 	 * the program failed to handle: land on it WITHOUT reporting the message (the Err
@@ -333,13 +334,41 @@ _Noreturn void zrt_abort_cell(int kind, const char *msg) {
 	zrt_unwind_abort(g_tls.taken, true);
 }
 
+void zrt_drop_arm(void *payload) {
+	zrt_tls *t = zrt_tls_cur();
+	if (t->darm != NULL) {
+		zrt_abort("internal: drop arm already set");
+	}
+	t->darm = (zrt_ref_hdr *)payload - 1;
+	t->darm_mark = t->len;
+}
+
+/* drop_unarm takes back a drop action the probe stopped at its entry (#487): the entries above
+ * the arm's mark are exactly its parameter registrations, forgotten unrun because the payload
+ * is still the cell's, and the cell's entry — the top one, marked dropped before the call — is
+ * un-marked, so the landing's drain runs the action. Anything else on top is a broken arm, and
+ * the hard fault rather than an action skipped. */
+static void drop_unarm(zrt_tls *t) {
+	zrt_pending *e = t->plen > 0 ? &t->pend[t->plen - 1] : NULL;
+	if (e == NULL || e->kind != ZRT_PEND_CELL || e->block != (void *)t->darm || !e->dropped) {
+		zrt_overflow_exit();
+	}
+	t->len = t->darm_mark;
+	e->dropped = false;
+	t->darm = NULL;
+}
+
 /* zrt_stack_overflow is ZRT_PROBE's hit (#480): the first one lowers the limit to FLOOR,
  * which is the room the unwind's defers and drops run in, and aborts like any other error.
- * A hit while that unwind runs has no reserve left to give, so it is the hard fault. */
+ * A hit while that unwind runs has no reserve left to give, so it is the hard fault. A hit
+ * at an armed drop action's entry first gives the action back to its cell (#487). */
 _Noreturn void zrt_stack_overflow(void) {
 	zrt_tls *t = zrt_tls_cur();
 	if (t->overflow_unwind) {
 		zrt_overflow_exit();
+	}
+	if (t->darm != NULL) {
+		drop_unarm(t);
 	}
 	t->overflow_unwind = true;
 	zrt_stack_limit_put(t->stack_lim - (ZRT_STACK_RESERVE - ZRT_STACK_FLOOR));

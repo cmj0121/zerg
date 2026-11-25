@@ -15979,7 +15979,7 @@ fn c_ident_val(mut &em: Emitter, n: str, l: int, c: int, sb: Subst) -> str {
 			c_nx_use(em, l, c, n, c_nx_var(em, vr))
 		}
 		c_bare_variant(em, n)
-		return "(zg_" + em.var_enum[vr] + "){.tag = " + strconv.to_string(em.var_tag[vr], 10) + "}"
+		return "(" + c_ty_cname(em.var_enum[vr]) + "){.tag = " + strconv.to_string(em.var_tag[vr], 10) + "}"
 	}
 
 	# EVERY READ OF A BINDING FUNNELS THROUGH HERE, which is what makes this the one place a

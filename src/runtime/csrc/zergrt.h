@@ -457,6 +457,26 @@ zrt_fn_end_:;                                                                   
 			&&zrt_fn_end_, NULL, 0, 0, __COUNTER__};                              \
 	}
 
+/* zrt_err is the Zerg runtime's minimal error value (Decision D): a message and an
+ * optional chained cause. It is INTERNAL — never FFI-frozen — so a later phase may
+ * add fields without breaking any ABI (a Result is never FFI-safe). `raise e`,
+ * `x!`, and an abort carry one; a surrounding `guard`/`?` reads it back. */
+/* AN ERR OWNS WHAT IT HOLDS, when it says so. `owned` is set on an Err built with
+ * zrt_err_own: its msg is a counted or immortal str cell, and the Err holds one count on it.
+ * That is every Err the shipping compiler or the runtime's own aborts build (#405), so a
+ * reader that binds `e.msg` retains a cell. zrt_err_new borrows a plain C string and leaves
+ * the flag clear; only the seed builds with it. zrt_err_copy and zrt_err_drop read the
+ * flag; nothing else may retain or release an Err's msg.
+ *
+ * `cause` is the payload of a counted cell (zrt_err_chain) and is counted whatever the
+ * flag says: a copy shares the chain and the last holder frees it. */
+typedef struct zrt_err {
+	const char     *msg;
+	struct zrt_err *cause;
+	int             kind; /* a zrt_err_kind (ZRT_ERR_*); ZRT_ERR_NONE for a generic Err */
+	int             owned; /* nonzero: msg is a counted cell this Err holds a count on */
+} zrt_err;
+
 /* zrt_frame is an abort handler: a setjmp landing pad plus the cleanup-stack
  * height to unwind to on abort. Frames form a stack via `prev`. The setjmp
  * itself must be evaluated in the frame owner's own activation (see zrt_run),
@@ -480,6 +500,11 @@ typedef struct zrt_frame {
 	 * lowered limit and its flag end where its unwind does */
 	char             *stack_lim;       /* g_tls.stack_lim at push */
 	bool              overflow_unwind; /* g_tls.overflow_unwind at push */
+	/* the Err an abort is unwinding to this frame with (#483), held here and not in
+	 * g_tls.taken while its cleanups run: one of them may abort too, and that later Err
+	 * lands here with this one as its cause. The landing moves it back into taken. */
+	bool              unwinding;
+	zrt_err          inflight;
 } zrt_frame;
 
 /* one release the drain still owes (#479). Kept by value in zrt_tls.pend; refer by INDEX
@@ -511,10 +536,6 @@ typedef struct {
  * stack. Moving this state does NOT change any emitted C: the cleanup-stack API
  * (zrt_scope_mark / zrt_defer / zrt_unwind_to / zrt_handler_push / …) is unchanged;
  * only where it reads its state from moved. */
-/* zrt_err is the Zerg runtime's minimal error value (Decision D): a message and an
- * optional chained cause. It is INTERNAL — never FFI-frozen — so a later phase may
- * add fields without breaking any ABI (a Result is never FFI-safe). `raise e`,
- * `x!`, and an abort carry one; a surrounding `guard`/`?` reads it back. */
 /* zrt_err_kind is the FIXED, built-in error taxonomy (docs/code/errors.md, GRAMMAR group
  * 8). Users choose from these named kinds but cannot define their own this phase. The
  * kind lets a `guard`/`?`-recovered Err be distinguished at the language surface (the
@@ -539,29 +560,14 @@ enum {
 	ZRT_ERR_STACK_OVERFLOW = 13, /* StackOverflowError: a call that could not fit (#480) */
 };
 
-/* AN ERR OWNS WHAT IT HOLDS, when it says so. `owned` is set on an Err built with
- * zrt_err_own: its msg is a counted or immortal str cell, and the Err holds one count on it.
- * That is every Err the shipping compiler or the runtime's own aborts build (#405), so a
- * reader that binds `e.msg` retains a cell. zrt_err_new borrows a plain C string and leaves
- * the flag clear; only the seed builds with it. zrt_err_copy and zrt_err_drop read the
- * flag; nothing else may retain or release an Err's msg.
- *
- * `cause` is the payload of a counted cell (zrt_err_chain) and is counted whatever the
- * flag says: a copy shares the chain and the last holder frees it. */
-typedef struct zrt_err {
-	const char     *msg;
-	struct zrt_err *cause;
-	int             kind; /* a zrt_err_kind (ZRT_ERR_*); ZRT_ERR_NONE for a generic Err */
-	int             owned; /* nonzero: msg is a counted cell this Err holds a count on */
-} zrt_err;
-
 typedef struct {
 	zrt_cleanup *stack; /* the cleanup(defer) stack (was the file-static g_stack) */
 	size_t       len;   /* its live height (was g_len) */
 	size_t       cap;   /* its allocated capacity (was g_cap) */
 	zrt_frame   *handler; /* the innermost abort handler (was g_handler) */
-	zrt_err      taken;   /* the in-flight Err an abort/raise carries; a `guard` reads
-	                       * it with zrt_taken_err on the abort landing (Decision D). */
+	zrt_err      taken;   /* the Err an abort/raise carries; a `guard` reads it with
+	                       * zrt_taken_err on the abort landing (Decision D). While the
+	                       * abort unwinds it is the target frame's `inflight` (#483). */
 
 	/* crashing is true only while THIS coroutine unwinds an unhandled crash, which is
 	 * what makes a channel auto-closed by its last sender carry a crash Err rather than
@@ -773,9 +779,9 @@ _Noreturn void zrt_raise_fault(zrt_err e);
 
 /* zrt_taken_err MOVES OUT the Err the current abort/raise carried, read on a `guard`
  * setjmp!=0 landing: the caller owns what it is handed and the stash is left empty. It is
- * an empty Err (msg NULL) when nothing was stashed. zrt_taken_err_copy is a second holder
- * of the in-flight Err that leaves it in flight — what a channel a crashing sender closes
- * keeps. */
+ * an empty Err (msg NULL) when nothing was stashed. zrt_taken_err_copy, read only during a
+ * crash, is a second holder of the crash's Err — the in-flight one of the coroutine's
+ * outermost frame — that leaves it in flight: what a channel a crashing sender closes keeps. */
 zrt_err zrt_taken_err(void);
 zrt_err zrt_taken_err_copy(void);
 
@@ -1929,7 +1935,7 @@ void zrt_chan_close(zrt_chan *ch);
 
 /* zrt_crash_active reports whether the abort currently unwinding is an unhandled
  * coroutine crash (unwind.c sets it while running the crashing coroutine's cleanup
- * stack). zrt_chan_sender_release reads it, alongside zrt_taken_err for the Err itself,
+ * stack). zrt_chan_sender_release reads it, alongside zrt_taken_err_copy for the Err itself,
  * so a channel auto-closed by a crashing last sender carries that crash rather than the
  * ordinary StopIteration. Always false on a normal path. */
 bool zrt_crash_active(void);

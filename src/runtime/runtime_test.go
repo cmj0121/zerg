@@ -138,13 +138,13 @@ func TestEmbedShipsTree(t *testing.T) {
 	for _, c := range cfiles {
 		got[filepath.Base(c)] = true
 	}
-	for _, want := range []string{"alloc.c", "ref.c", "list.c", "map.c", "unwind.c", "entry.c", "sys.c", "fmt.c", "conv.c", "str.c"} {
+	for _, want := range []string{"alloc.c", "ref.c", "list.c", "map.c", "unwind.c", "entry.c", "sys.c", "fmt.c", "conv.c", "str.c", "walk.c"} {
 		if !got[want] {
 			t.Errorf("materialized C files missing %s (got %v)", want, cfiles)
 		}
 	}
-	if len(cfiles) != len(got) || len(got) != 10 {
-		t.Errorf("expected 10 C units, got %v", cfiles)
+	if len(cfiles) != len(got) || len(got) != 11 {
+		t.Errorf("expected 11 C units, got %v", cfiles)
 	}
 }
 
@@ -2867,6 +2867,155 @@ int main(void) {
     }
     zrt_handler_pop(&fr);
     printf("caught=%d order=%s live=%ld\n", caught, g_log, g_live);
+    return 0;
+}
+`
+
+// TestEqWalkIsIterative drives walk.c's `==` walker over chains far deeper than a C stack
+// holds, through both container steps: each cell keeps its one child in a list at an odd
+// depth and in a map at an even one, the shape of a derived `==` on an enum whose payload
+// is a container of itself. It holds the walker to its four answers — equal, a leaf that
+// differs, a list and a map whose lengths differ, a key the other map lacks — and to its
+// `held` contract: a step that aborts 100000 frames down (the program's own `eq`) leaves the
+// heap where it was once the chains are freed.
+func TestEqWalkIsIterative(t *testing.T) {
+	bin := buildCounted(t, "eqwalk", eqWalkC, false)
+	out, code := runBounded(t, bin, "", 60*time.Second)
+	want := "same=1 leaf=0 listlen=0 maplen=0 key=0 caught=1 live=0\n"
+	if code != 0 || out != want {
+		t.Fatalf("eqwalk exit=%d output %q, want exit 0 and %q", code, out, want)
+	}
+}
+
+const eqWalkC = `
+#include "zergrt.h"
+#include <setjmp.h>
+#include <stdio.h>
+#include <stdlib.h>
+
+#define DEEP 200000
+
+static long g_live;
+void *zrt_alloc(size_t n) { void *p = malloc(n); if (p != NULL) { g_live++; } return p; }
+void zrt_free(void *p) { if (p != NULL) { g_live--; free(p); } }
+
+static const zrt_map_vt vt_int = { zrt_hash_int, zrt_eq_int, NULL, NULL, NULL, NULL };
+
+typedef struct cell { int64_t v; zrt_list l; zrt_map m; } cell;
+static int64_t g_abort_v = -1;
+
+static int step_cell(zrt_eqw *w, const void *pa, const void *pb, size_t *at);
+static int step_ptr(zrt_eqw *w, const void *pa, const void *pb, size_t *at) {
+    if (*at > 0) { return ZRT_EQ_YES; }
+    *at = 1;
+    zrt_eqw_push(w, step_cell, *(cell *const *)pa, *(cell *const *)pb);
+    return ZRT_EQ_PUSHED;
+}
+static int step_list(zrt_eqw *w, const void *pa, const void *pb, size_t *at) {
+    return zrt_eqstep_list(w, step_ptr, (const zrt_list *)pa, (const zrt_list *)pb, at);
+}
+static int step_map(zrt_eqw *w, const void *pa, const void *pb, size_t *at) {
+    return zrt_eqstep_map(w, step_ptr, (const zrt_map *)pa, (const zrt_map *)pb, at);
+}
+static int step_cell(zrt_eqw *w, const void *pa, const void *pb, size_t *at) {
+    const cell *a = (const cell *)pa;
+    const cell *b = (const cell *)pb;
+    switch (*at) {
+    case 0:
+        if (a->v == g_abort_v) { zrt_abort("eq aborts"); }
+        if (a->v != b->v) { return ZRT_EQ_NO; }
+        *at = 1;
+        zrt_eqw_push(w, step_list, &a->l, &b->l);
+        return ZRT_EQ_PUSHED;
+    case 1:
+        *at = 2;
+        zrt_eqw_push(w, step_map, &a->m, &b->m);
+        return ZRT_EQ_PUSHED;
+    default:
+        return ZRT_EQ_YES;
+    }
+}
+
+static cell *mk(int64_t v) {
+    cell *c = (cell *)zrt_alloc(sizeof(cell));
+    c->v = v;
+    zrt_list_init(&c->l, sizeof(cell *), NULL);
+    zrt_map_init(&c->m, sizeof(int64_t), sizeof(cell *), &vt_int);
+    return c;
+}
+
+/* build: DEEP cells, the child of depth d in the list when d is odd, else the map under key */
+static cell *build(int64_t last, int64_t key) {
+    cell *root = mk(0), *c = root;
+    for (int64_t d = 1; d <= DEEP; d++) {
+        cell *n = mk(d == DEEP ? last : d);
+        if (d % 2) { zrt_list_push(&c->l, &n); } else { zrt_map_set(&c->m, &key, &n); }
+        c = n;
+    }
+    return root;
+}
+
+static cell *at_depth(cell *c, int64_t d) {
+    for (int64_t i = 0; i < d; i++) {
+        c = zrt_list_len(&c->l) ? *(cell **)zrt_list_at_ref(&c->l, 0) : *(cell **)zrt_map_val_at(&c->m, 0);
+    }
+    return c;
+}
+
+static void drop(cell *c) {
+    while (c != NULL) {
+        cell *n = NULL;
+        if (zrt_list_len(&c->l)) { n = *(cell **)zrt_list_at_ref(&c->l, 0); }
+        else if (zrt_map_len(&c->m)) { n = *(cell **)zrt_map_val_at(&c->m, 0); }
+        zrt_list_drop(&c->l);
+        zrt_map_drop(&c->m);
+        zrt_free(c);
+        c = n;
+    }
+}
+
+static int eq(cell *a, cell *b, bool held) { return zrt_eq_walk(step_cell, a, b, held) ? 1 : 0; }
+
+int main(void) {
+    long base = g_live;
+    cell *a = build(7, 0), *b = build(7, 0);
+    int same = eq(a, b, false);
+    cell *c = build(8, 0);
+    int leaf = eq(a, c, false);
+    drop(c);
+    c = build(7, 0);
+    cell *extra = mk(DEEP + 1);
+    zrt_list_push(&at_depth(c, DEEP - 2)->l, &extra);
+    int listlen = eq(a, c, false);
+    drop(extra);
+    drop(c);
+    c = build(7, 0);
+    int64_t k2 = 2;
+    extra = mk(DEEP + 1);
+    zrt_map_set(&at_depth(c, DEEP - 1)->m, &k2, &extra);
+    int maplen = eq(a, c, false);
+    drop(extra);
+    drop(c);
+    c = build(7, 1);
+    int key = eq(a, c, false);
+    drop(c);
+
+    g_abort_v = DEEP / 2;
+    int caught = 0;
+    long before = g_live;
+    zrt_frame fr;
+    zrt_handler_push_catch(&fr);
+    if (setjmp(fr.buf) == 0) {
+        (void)eq(a, b, true);
+    } else {
+        caught = 1;
+        zrt_err_drop(zrt_taken_err());
+    }
+    zrt_handler_pop(&fr);
+    caught = caught && g_live == before;
+    drop(a);
+    drop(b);
+    printf("same=%d leaf=%d listlen=%d maplen=%d key=%d caught=%d live=%ld\n", same, leaf, listlen, maplen, key, caught, g_live - base);
     return 0;
 }
 `

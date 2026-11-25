@@ -881,6 +881,11 @@ pub struct Emitter {
 	pub vrefs: ProbeGraph
 	pub big_zi: list[int]
 	pub big_at: list[ast.Diag]
+
+	# owned_cnames is the C symbol of every method and associated value in the program —
+	# `zg_<Type>_<name>`, the rows c_check_cnames calls owned — kept from that walk so
+	# c_fresh_cname can spell a local apart from them without a second one.
+	pub owned_cnames: list[str]
 }
 
 # Subst is an active set of identifier substitutions: an EIdent whose name appears in
@@ -3241,14 +3246,19 @@ fn c_no_shadow_sub(mut &em: Emitter, name: str) {
 # of its block: `g := g() + 1` called the local, and so did a default lowered into that block
 # that spells `g()` (#197) — the Zerg name was never in scope there, the C one was. Every
 # candidate is asked, not only the first: beside a `fn g__1`, `zg_g__1` hides that one.
+#
+# OR BY A METHOD OR AN ASSOCIATED VALUE, whose symbol `zg_<Type>_<name>` is no Zerg name at the
+# top level: `Foo_bar := 3` hid `zg_Foo_bar`, and `Foo(1).bar()` called the int (#489).
 fn c_fresh_cname(mut &em: Emitter, name: str) -> str {
 	mut stem := name
+	mut cand := "zg_" + stem
 	mut n := 0
-	for c_cname_taken(em, "zg_" + stem) or c_name_in(em.top_names, stem) {
+	for c_cname_taken(em, cand) or c_name_in(em.top_names, stem) or c_free_has(em.owned_cnames, cand) {
 		n = n + 1
 		stem = f"{name}__{n}"
+		cand = "zg_" + stem
 	}
-	return "zg_" + stem
+	return cand
 }
 
 # c_in_scope is whether a binding's block is still open. A closed block's bindings stay in
@@ -7511,6 +7521,9 @@ fn c_check_cnames(mut &em: Emitter, f: ast.File) {
 			f"module constant `{c.name}`"
 		}
 		c_cname_note(em, t, c_const_cname(em, c), says, c.path, c.line, c.col, c.recv != "")
+	}
+	for i in t.owned {
+		em.owned_cnames.append(t.cn[i])
 	}
 }
 
@@ -30580,7 +30593,7 @@ fn c_emit_unit_as(prog0: ast.File, own0: ast.File, ft: FileTypes, ms: Mods, whol
 	# is what makes that invariant hold for a multi-unit program, at the place it already lives,
 	# and it is what lets the declaration passes below go back to reading the WHOLE program.
 	seen := diags.len()
-	mut em := Emitter([], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], false, false, false, false, [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], 0, [], 0, [], [], false, "", "", [], [], ast.Ty.TVoid, 0, "", 0, 0, 0, 0, "", diags, 0, 0, [], [], [], [], [], false, 0, false, "", 0, false, false, [], [], [], [], [], [], [], [], [], [], [], "", want_lints, [], [], [], [], [], [], [], [], [], [], [], [], false, 0, [], [], "", c_nosub(), [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], false, ast.no_index(), [], [], [], [], [], [], [], [], [], [], [], [], false, [], [], [], [], [], [], [], [], [], [], [], "", [], [], 0, 0, [], -1, 0, -1, -1, [], false, 0, [], [], [], [], c_pg_none(), [], [])
+	mut em := Emitter([], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], false, false, false, false, [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], 0, [], 0, [], [], false, "", "", [], [], ast.Ty.TVoid, 0, "", 0, 0, 0, 0, "", diags, 0, 0, [], [], [], [], [], false, 0, false, "", 0, false, false, [], [], [], [], [], [], [], [], [], [], [], "", want_lints, [], [], [], [], [], [], [], [], [], [], [], [], false, 0, [], [], "", c_nosub(), [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], false, ast.no_index(), [], [], [], [], [], [], [], [], [], [], [], [], false, [], [], [], [], [], [], [], [], [], [], [], "", [], [], 0, 0, [], -1, 0, -1, -1, [], false, 0, [], [], [], [], c_pg_none(), [], [], [])
 
 	# ASSIGNED, NOT PASSED. Every argument above is a zero value, and `layering` asserts that
 	# — it lines the call up with the fields by KIND, which only works while nothing in it

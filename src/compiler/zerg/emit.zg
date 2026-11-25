@@ -3470,6 +3470,10 @@ pub fn c_sig_key(recv: str, name: str) -> str {
 # modules both declare. Each needs a symbol per declaration. Everything else keeps
 # `zg_<name>`, so the change costs nothing anywhere it is not needed.
 #
+# A tagged name is `zgm_<tag>_<name>`, off the `zg_` space every user name is spelled in: as
+# `zg_m<tag>_<name>` it was the C name of a root `fn m<tag>_<name>` (#489). The tag is digits,
+# so the first `_` after it ends it.
+#
 # The module tag is the module's position in a SORTED list of the program's modules, and a
 # file's is its place among the files keying the name, sorted too (c_fn_key_index). Sorted
 # rather than first-seen because `fixpoint` compares emitted C byte for byte, and a tag that
@@ -3485,7 +3489,7 @@ fn c_fn_cname_in(mut &em: Emitter, scope: str, recv: str, name: str) -> str {
 	mod := check.c_mod_of(em, scope)
 	return c_fn_cname(recv, name) if mod == ""
 
-	return f"zg_m{strconv.to_string(c_mod_tag(em, mod), 10)}_{name}"
+	return f"zgm_{strconv.to_string(c_mod_tag(em, mod), 10)}_{name}"
 }
 
 # c_fn_keyed_file is the FILE whose declaration of the free function `name` a reader in `scope`
@@ -19821,7 +19825,7 @@ fn c_main_shim(mut &em: Emitter, conc: str, plain: str) -> str {
 # ordinary function named `init__<n>`, where n is its position among the functions of ITS OWN
 # FILE — so two modules whose init sits at the same position are two declarations of one name,
 # and the collision rule in c_build_sigs already sees them: both are private, so both get a
-# module tag and are DEFINED as `zg_m1_init__1` and `zg_m2_init__1`. This line spelled the
+# module tag and are DEFINED as `zgm_1_init__1` and `zgm_2_init__1`. This line spelled the
 # untagged name by hand, so the calls main opened with named a symbol nothing defined:
 #
 #     error: call to undeclared function 'zg_init__1'

@@ -1009,8 +1009,8 @@ fn c_type(t: ast.Ty) -> str {
 # both `zrt_list` — share one carrier. That is harmless: the C is identical, and the
 # tuple carriers have behaved this way since they existed.
 fn c_carrier_cname(left: ast.Ty, right: ast.Ty) -> str {
-	return c_helper_name("res", c_ident_safe(c_type(left))) if c_is_err_ty(right)
-	return c_helper_name("eit", f"{c_ident_safe(c_type(left))}_{c_ident_safe(c_type(right))}")
+	return c_helper_of("res", c_type(left)) if c_is_err_ty(right)
+	return c_helper_of2("eit", c_type(left), c_type(right))
 }
 
 # c_opt_cname is the C name of `T?`'s carrier. It is DISTINCT from the Result's even
@@ -1018,7 +1018,7 @@ fn c_carrier_cname(left: ast.Ty, right: ast.Ty) -> str {
 # forcing one does, and giving them one name would make `Result[int]` and `int?` the same
 # type to every check that compares C names.
 fn c_opt_cname(elem: ast.Ty) -> str {
-	return c_helper_name("opt", c_ident_safe(c_type(elem)))
+	return c_helper_of("opt", c_type(elem))
 }
 
 # c_opt_name registers the carrier for `T?` and answers its C name — the optional's half of
@@ -3683,16 +3683,15 @@ fn c_ty_helper(what: str, nm: str) -> str {
 # `zgf_`, `zga_` and `zgt_` at a byte no declaration can fill. Not spelled here: the block-local
 # `zgt_`/`zgk_` temporaries, and `zgh_dt<n>`, which c_tmp numbers onto `zgh_dt`.
 #
-# `what` holds no `_`, so the first single `_` after it ends it. A `key` is a counter's digits,
-# a kind word (`list`, `fnptr`), or names each escaped by c_cname_escape and joined by single
-# `_`s (c_helper_of, c_helper_ofs). A key naming a type is its C name escaped, never its Zerg
-# name, where one family keys both declared and generated types: a `struct zg_opt_constcharp`
-# and a `str?` carrier gave one drop. Escaped, a declared type's key starts `zg__` and a
-# generated one's `zgh__`, `zgt__` or `zgg__`, and a kind word starts with neither.
+# `what` holds no `_`, so the first `_` after it ends it. A `key` is a counter's digits or a tag,
+# or parts each spelled by c_key (c_helper_of, c_helper_ofs). A key naming a type is its C name,
+# never its Zerg name, where one family keys both declared and generated types: a `struct
+# zg_opt_constcharp` and a `str?` carrier gave one drop. The carrier, map-vtable, receive and
+# key-hash keys (`opt`, `res`, `eit`, `mapvt`, `recv`, `keyhash`, `keyeq`) are the C TYPE, `*`
+# and spaces included: a filter that dropped them spelled `ptr[Foo]` and a `struct Foop` alike,
+# and their tuples were one typedef to cc.
 #
-# THE EXCEPTIONS. The carrier, map-vtable, receive and key-hash keys (`opt`, `res`, `eit`,
-# `mapvt`, `recv`, `keyhash`, `keyeq`) are c_ident_safe's spelling of the C type, which is not
-# injective yet. `render` keys on the escaped ZERG type name, because `list[int]` and
+# THE EXCEPTIONS. `render` keys on the ZERG type name, because `list[int]` and
 # `list[list[int]]` share a C type and not a renderer; `refcell` and `refdrop` key on the
 # payload's Zerg name too. Each of those families keys only that one way, so its names still
 # differ from every other family's by `what`.
@@ -3702,28 +3701,59 @@ fn c_helper_name(what: str, key: str) -> str {
 	return f"zgh_{what}_{key}"
 }
 
-# c_helper_of is a helper keyed by one C name, escaped.
-fn c_helper_of(what: str, cname: str) -> str {
-	return c_helper_name(what, c_cname_escape("", cname))
-}
-
-# c_helper_ofs is a helper keyed by several names, each escaped and joined by `_`; c_helper_of2 is
-# the pair. The join is injective because every name after the first is a C name, which begins
-# with `z`, or is empty: an escape writes a `_` only as `__` or `_<hex>_`, and a hex code begins
-# with a digit for every byte these names can hold, so reading a key left to right meets a single
-# `_` before a `z` or the end only where two names were joined. A method is keyed by its C name
-# (c_fn_cname) for that reason, never by its bare name, which may begin with any byte.
-fn c_helper_ofs(what: str, names: list[str]) -> str {
-	mut key := ""
+# c_key spells one part of a generated name so that a run of parts reads back exactly. A part of
+# identifier bytes is `<L>_` and the part; any other is `<L>x`, the part with those bytes
+# removed, then `<K>s` and, per removed byte, `<pos>p<hh>` — its index in the part and its two
+# hex digits. A decoder reads digits up to `_` or `x`, then L bytes, then digits up to `s` and K
+# `<digits>p<2 hex>` pairs, so each part ends where its own count says, with no separator to
+# meet. Every part starts with a digit, so `zga_`/`zgt_` temporaries (`zga_l3c9`, `zgt_oc3`)
+# never meet a keyed name.
+#
+# THE LENGTH, NOT AN ESCAPE. A part is often a name this function already spelled (a tuple in a
+# tuple, a drop of a carrier), and an escape that doubles `_` doubled it again per level: a
+# left-nested tuple fifteen deep was a 262 KB identifier. A length prefix adds its digits once.
+fn c_key(part: str) -> str {
+	b := bytearray(part)
+	mut body: list[byte] = []
+	mut rest := ""
+	mut k := 0
 	mut i := 0
-	for i < names.len() {
-		if i > 0 {
-			key = key + "_"
+	for i < b.len() {
+		if lexer.is_ident(b[i]) {
+			body.append(b[i])
+		} else {
+			mut hx := strconv.to_string(int(b[i]), 16)
+			if int(b[i]) < 16 {
+				hx = "0" + hx
+			}
+			rest = rest + strconv.to_string(i, 10) + "p" + hx
+			k = k + 1
 		}
-		key = key + c_cname_escape("", names[i])
 		i = i + 1
 	}
-	return c_helper_name(what, key)
+	return f"{b.len()}_{part}" if k == 0
+
+	return f"{body.len()}x{str(body)}{k}s{rest}"
+}
+
+# c_keys is each part spelled by c_key, run together.
+fn c_keys(parts: list[str]) -> str {
+	mut out := ""
+	for p in parts {
+		out = out + c_key(p)
+	}
+	return out
+}
+
+# c_helper_of is a helper keyed by one part.
+fn c_helper_of(what: str, part: str) -> str {
+	return c_helper_ofs(what, [part])
+}
+
+# c_helper_ofs is a helper keyed by several parts; c_helper_of2 is the pair. A method is keyed
+# by its C name (c_fn_cname), never by its bare name, so two receivers never share a key.
+fn c_helper_ofs(what: str, parts: list[str]) -> str {
+	return f"zgh_{what}_{c_keys(parts)}"
 }
 
 fn c_helper_of2(what: str, a: str, b: str) -> str {
@@ -20080,7 +20110,7 @@ fn c_recv(mut &em: Emitter, ch: ast.Expr, sb: Subst) -> str {
 # do not arrive by the same route.
 fn c_recv_helper(mut &em: Emitter, elem: ast.Ty) -> str {
 	cn := c_opt_name(em, elem)
-	name := c_helper_name("recv", c_ident_safe(c_type(elem)))
+	name := c_helper_of("recv", c_type(elem))
 	return name if c_name_in(em.rcv_names, name)
 	em.rcv_names.append(name)
 	mut d := "static " + cn + " " + name + "(zrt_chan *ch) {\n"
@@ -21795,9 +21825,8 @@ fn c_is_decl_key_name(mut &em: Emitter, nm: str) -> bool {
 # method; the vtable that names them sits before the prototypes, so it is given a forward
 # declaration of each instead.
 fn c_key_thunks(mut &em: Emitter, kt: ast.Ty) -> list[str] {
-	id := c_ident_safe(c_type(kt))
-	hn := c_helper_name("keyhash", id)
-	en := c_helper_name("keyeq", id)
+	hn := c_helper_of("keyhash", c_type(kt))
+	en := c_helper_of("keyeq", c_type(kt))
 	pk := c_helper_name("k", "")
 	pa := c_helper_name("a", "")
 	pb := c_helper_name("b", "")
@@ -21818,7 +21847,7 @@ fn c_key_thunks(mut &em: Emitter, kt: ast.Ty) -> list[str] {
 }
 
 fn c_map_vt(mut &em: Emitter, kt: ast.Ty, vt: ast.Ty) -> str {
-	name := c_helper_name("mapvt", f"{c_ident_safe(c_type(kt))}_{c_ident_safe(c_type(vt))}")
+	name := c_helper_of2("mapvt", c_type(kt), c_type(vt))
 	for n in em.mvt_names {
 		return name if n == name
 	}
@@ -22787,9 +22816,9 @@ fn c_render_fn(mut &em: Emitter, t: ast.Ty) -> str {
 # one renderer — and the outer one then recursed into itself, rendering nonsense for a nested
 # composite. What a renderer is keyed on is what it renders, which is the Zerg type.
 fn c_render_key(mut &em: Emitter, t: ast.Ty) -> str {
-	# the key is escaped injectively (c_cname_escape): mapping each byte C cannot hold to `_`
-	# gave `Box[P]` and a struct `Box_P_` one renderer, and `P'1` and `P_1` too
-	return c_cname_escape("", ast.ty_name(t))
+	# the key is spelled injectively (c_key): mapping each byte C cannot hold to `_` gave
+	# `Box[P]` and a struct `Box_P_` one renderer, and `P'1` and `P_1` too
+	return c_key(ast.ty_name(t))
 }
 
 fn c_render_body(mut &em: Emitter, name: str, t: ast.Ty) -> str {
@@ -23323,9 +23352,10 @@ fn c_arr_lit(mut &em: Emitter, where: str, want: ast.Ty, e: ast.Expr, sb: Subst)
 # and a copy/drop pair emitted only when the element owes one.
 
 # c_arr_cname is the C name of `[T; N]`. It is pure, for the reason c_tuple_cname is: c_type
-# has to be able to spell it, and one shape must get one name in every translation unit.
+# has to be able to spell it, and one shape must get one name in every translation unit. The
+# length and the element are each a c_key part.
 pub fn c_arr_cname(e: ast.Ty, n: str) -> str {
-	return f"zga_{c_ident_safe(c_type(e))}_{n}"
+	return "zga_" + c_keys([n, c_type(e)])
 }
 
 # c_arr_decl registers one array shape and answers its declaration text, or "" for a shape
@@ -23423,15 +23453,15 @@ fn c_arr_len_said(mut &em: Emitter, key: str) -> bool {
 }
 
 fn c_tuple_cname(tys: list[ast.Ty]) -> str {
-	mut name := "zgt_tup"
+	mut name := "zgt_tup_"
 	for t in tys {
-		name = name + "_" + c_ident_safe(c_type(t))
+		name = name + c_key(c_type(t))
 	}
 	return name
 }
 
 # c_tuple_name is c_tuple_cname plus the typedef it needs. A C identifier cannot hold `*`
-# or a space, so each element type is flattened into one.
+# or a space, so each element type is a c_key part.
 # c_tuple_decl registers a tuple shape and answers its DECLARATION TEXT — the typedef, plus
 # the copy helper a tuple owes when it holds a list, a map or another such tuple (without
 # it the tuple's field named the source's buffer). A shape already registered answers "".
@@ -23479,18 +23509,6 @@ fn c_tuple_decl(mut &em: Emitter, tys: list[ast.Ty]) -> str {
 fn c_tuple_name(mut &em: Emitter, tys: list[ast.Ty]) -> str {
 	c_spelled_register(em, ast.Ty.TTuple(tys))
 	return c_tuple_cname(tys)
-}
-
-fn c_ident_safe(s: str) -> str {
-	mut out: list[byte] = []
-	for c in bytearray(s) {
-		if ascii.is_alpha(c) or ascii.is_digit(c) or c == b'_' {
-			out.append(c)
-		} else if c == b'*' {
-			out.append(b'p')
-		}
-	}
-	return str(out)
 }
 
 fn c_tuple_lit(mut &em: Emitter, elems: list[ast.Expr], sb: Subst) -> str {

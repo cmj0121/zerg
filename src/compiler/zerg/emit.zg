@@ -334,7 +334,7 @@ pub struct Emitter {
 	pub loop_mark: str
 
 	# res_names / res_decls are the `Result[T]` CARRIERS — one C struct per distinct
-	# payload shape, plus the `zg_force_*` helper that reads it back. They are registered
+	# payload shape, plus the `zgh_force_*` helper that reads it back. They are registered
 	# exactly the way tup_names are, and for the same reason: the name is a pure function
 	# of the shape, so two modules of one program spell it alike. res_decls is the one
 	# on-demand stream — carrier AND tuple declarations, in the order they were met.
@@ -965,8 +965,8 @@ fn c_type(t: ast.Ty) -> str {
 		# `'a'..'z'` share a layout the way two `zrt_list`s do. The ZERG type keeps the element
 		# (`range[rune]`), which is what decides what a walk BINDS and what a membership test
 		# compares; the C type does not have to repeat it.
-		Ty.TRange(_) => "zg_range"
-		Ty.TFn(_, _) => "zg_fnptr"
+		Ty.TRange(_) => c_helper_name("range", "")
+		Ty.TFn(_, _) => c_helper_name("fnptr", "")
 
 		# a `mut &T` is the caller's own storage lent for one call, which is a POINTER to it —
 		# the same C parameter a `mut &` on a declaration has always lowered to
@@ -1009,8 +1009,8 @@ fn c_type(t: ast.Ty) -> str {
 # both `zrt_list` — share one carrier. That is harmless: the C is identical, and the
 # tuple carriers have behaved this way since they existed.
 fn c_carrier_cname(left: ast.Ty, right: ast.Ty) -> str {
-	return "zg_res_" + c_ident_safe(c_type(left)) if c_is_err_ty(right)
-	return f"zg_eit_{c_ident_safe(c_type(left))}_{c_ident_safe(c_type(right))}"
+	return c_helper_name("res", c_ident_safe(c_type(left))) if c_is_err_ty(right)
+	return c_helper_name("eit", f"{c_ident_safe(c_type(left))}_{c_ident_safe(c_type(right))}")
 }
 
 # c_opt_cname is the C name of `T?`'s carrier. It is DISTINCT from the Result's even
@@ -1018,7 +1018,7 @@ fn c_carrier_cname(left: ast.Ty, right: ast.Ty) -> str {
 # forcing one does, and giving them one name would make `Result[int]` and `int?` the same
 # type to every check that compares C names.
 fn c_opt_cname(elem: ast.Ty) -> str {
-	return "zg_opt_" + c_ident_safe(c_type(elem))
+	return c_helper_name("opt", c_ident_safe(c_type(elem)))
 }
 
 # c_opt_name registers the carrier for `T?` and answers its C name — the optional's half of
@@ -1052,7 +1052,7 @@ fn c_opt_wrap(mut &em: Emitter, where: str, elem: ast.Ty, e: ast.Expr, sb: Subst
 	# bytes land, not who owns them.
 	v := c_fit_copied(em, where, elem, e, sb)
 	ot := ast.Ty.TOpt(elem)
-	return f"({cn}){{ .tag = 0, .ok = zg_boxnew_{c_carrier_ty_cname(ot)}({v}) }}" if c_carrier_boxed(em, ot)
+	return f"({cn}){{ .tag = 0, .ok = {c_helper_of("boxnew", c_carrier_ty_cname(ot))}({v}) }}" if c_carrier_boxed(em, ot)
 
 	return "(" + cn + "){ .tag = 0, .ok = " + v + " }"
 }
@@ -1179,7 +1179,7 @@ fn c_fit_copied(mut &em: Emitter, where: str, want: ast.Ty, e: ast.Expr, sb: Sub
 	# struct-field path alone, so a field got it and an argument did not.
 	if c_is_list(want) and c_is_empty_listlit(e) {
 		em.used_rt = true
-		return f"zg_empty_list(sizeof({c_type(c_list_elem(want))}), &{c_elem_vt(em, c_list_elem(want))})"
+		return f"{c_helper_name("emptylist", "")}(sizeof({c_type(c_list_elem(want))}), &{c_elem_vt(em, c_list_elem(want))})"
 	}
 
 	# A LIST LITERAL IS BUILT AT THE DECLARED ELEMENT TYPE, element by element — the same
@@ -1838,7 +1838,7 @@ pub fn c_res_val(mut &em: Emitter, cty: ast.Ty, r: str) -> str {
 # because those are two different statements, not one lvalue written two ways.
 pub fn c_res_put(mut &em: Emitter, cty: ast.Ty, r: str, v: str) -> str {
 	return f"{c_res_ok(r)} = {v};" if not c_carrier_boxed(em, cty)
-	return f"{c_res_ok(r)} = zg_boxnew_{c_carrier_ty_cname(cty)}({v});"
+	return f"{c_res_ok(r)} = {c_helper_of("boxnew", c_carrier_ty_cname(cty))}({v});"
 }
 
 # c_carrier_temp_drop names the drop for a carrier THIS EXPRESSION OWNS, or "" for one it
@@ -1884,7 +1884,7 @@ fn c_carrier_owns(mut &em: Emitter, t: ast.Ty) -> bool {
 # same words, because the two are one question asked from either side.
 fn c_carrier_drop_fn(mut &em: Emitter, t: ast.Ty) -> str {
 	return "" if not c_carrier_owns(em, t)
-	return "zg_drop_" + c_carrier_of(em, t)
+	return c_helper_of("drop", c_carrier_of(em, t))
 }
 
 fn c_res_err(r: str) -> str {
@@ -1935,7 +1935,7 @@ fn c_spelled_register(mut &em: Emitter, t: ast.Ty) {
 # c_carrier_emit is the ONE gate a carrier's declaration text comes through: it marks the
 # shape emitted and answers its text, or "" for a shape already out. Every placer — the
 # on-demand register above, the declaration sweep, and a tuple typedef that spells a
-# carrier element inline — asks here, so no path can write the same `zg_force_…` twice.
+# carrier element inline — asks here, so no path can write the same `zgh_force_…` twice.
 fn c_carrier_emit(mut &em: Emitter, c: ast.Ty) -> str {
 	name := c_carrier_ty_cname(c)
 	return "" if c_name_in(em.res_names, name)
@@ -2051,7 +2051,7 @@ fn c_carrier_decl(mut &em: Emitter, c: ast.Ty) -> str {
 		d = d + c_spelled_pre(em, c_either_right(c))
 		d = d + f"typedef struct {{ int32_t tag; {ct} ok; {c_type(c_either_right(c))} err; }} {name};\n"
 	}
-	d = d + "static " + ct + " zg_force_" + name + "(" + name + " r) {\n"
+	d = d + "static " + ct + " " + c_helper_of("force", name) + "(" + name + " r) {\n"
 
 	# forcing a Right RE-RAISES it when it is an Err — the reason it is there is in it. An
 	# optional's absent side and a general Either's Right carry no abort, so forcing one
@@ -2120,8 +2120,8 @@ fn c_carrier_decl(mut &em: Emitter, c: ast.Ty) -> str {
 		}
 	}
 
-	d = d + "static void zg_drop_" + name + "(" + name + " *r) {\n" + df + "}\n"
-	d = d + "static " + name + " zg_copy_" + name + "(" + name + " v) {\n" + cf + "    return v;\n}\n"
+	d = d + "static void " + c_helper_of("drop", name) + "(" + name + " *r) {\n" + df + "}\n"
+	d = d + "static " + name + " " + c_helper_of("copy", name) + "(" + name + " v) {\n" + cf + "    return v;\n}\n"
 
 	# and the ELEMENT VTABLE, because a `list[str?]`, a map value and a struct field of
 	# carrier type all reach the pair through a thunk rather than by name — and so does
@@ -2155,7 +2155,7 @@ fn c_carrier_decl(mut &em: Emitter, c: ast.Ty) -> str {
 # of the same sweep writes ITS copy/drop prototypes there, so what a boxed carrier's body
 # calls is already declared — while nothing emitted between the two points calls a carrier
 # helper, because the only things emitted there are typedefs and prototypes. A prototype for
-# these could not have been written anyway: `zg_force_` returns the payload BY VALUE, and at
+# these could not have been written anyway: `zgh_force_` returns the payload BY VALUE, and at
 # the typedef the payload is not yet a name cc knows.
 fn c_carrier_boxed_head(name: str) -> str {
 	return f"typedef struct {{ int32_t tag; void *ok; }} {name};\n"
@@ -2166,15 +2166,15 @@ fn c_carrier_boxed_body(mut &em: Emitter, c: ast.Ty, name: str, left: ast.Ty, ct
 
 	# the payload comes out as a value of its own, exactly as the inline form's does — the
 	# cell is shared, so what is handed back is a copy of what is in it
-	d = d + f"static {ct} zg_force_{name}({name} r) {{\n"
+	d = d + f"static {ct} {c_helper_of("force", name)}({name} r) {{\n"
 	nil_err := f"zrt_err_own(0, {c_str_cell(em, "force-unwrap of nil")})"
 	d = d + "    if (" + c_res_is_right("r") + ") { zrt_raise_fault(" + nil_err + "); }\n"
 	d = d + f"    return {c_copy_of(em, left, f"(*({ct}*)zrt_ref_payload(r.ok))")};\n}}\n"
 
-	d = d + f"static void zg_drop_{name}({name} *r) {{\n"
+	d = d + f"static void {c_helper_of("drop", name)}({name} *r) {{\n"
 	d = d + "    if (" + c_res_is_left("(*r)") + ") { zrt_release(r->ok); }\n}\n"
 
-	d = d + f"static {name} zg_copy_{name}({name} v) {{\n"
+	d = d + f"static {name} {c_helper_of("copy", name)}({name} v) {{\n"
 	d = d + "    if (" + c_res_is_left("v") + ") { v.ok = zrt_ref_copy(v.ok); }\n    return v;\n}\n"
 
 	# the CELL'S OWN drop, and the allocator that fills one. They are the enum's
@@ -2184,9 +2184,10 @@ fn c_carrier_boxed_body(mut &em: Emitter, c: ast.Ty, name: str, left: ast.Ty, ct
 	# THE CELL'S PAYLOAD IS AN LVALUE HERE, spelled `*(T*)p` and not `(T*)p`: c_drop_stmt
 	# takes the VALUE to give back and writes the `&` itself, so handing it the pointer asked
 	# cc for the address of a cast.
-	d = d + f"static void zg_dropbox_{name}(void *p) {{ {c_drop_stmt(em, left, f"(*({ct}*)p)")} }}\n"
-	d = d + f"static void *zg_boxnew_{name}({ct} v) {{\n"
-	d = d + f"    void *r = zrt_ref_alloc(sizeof({ct}), &zg_dropbox_{name});\n"
+	dropbox := c_helper_of("dropbox", name)
+	d = d + f"static void {dropbox}(void *p) {{ {c_drop_stmt(em, left, f"(*({ct}*)p)")} }}\n"
+	d = d + f"static void *{c_helper_of("boxnew", name)}({ct} v) {{\n"
+	d = d + f"    void *r = zrt_ref_alloc(sizeof({ct}), &{dropbox});\n"
 	d = d + f"    *({ct}*)zrt_ref_payload(r) = v;\n    return r;\n}}\n"
 
 	return d + c_elem_vt_helper(em, c)
@@ -2204,7 +2205,7 @@ fn c_carrier_left(c: ast.Ty) -> ast.Ty {
 	return c_either_left(c)
 }
 
-# A held function is stored as ONE C type, `zg_fnptr` — a generic function pointer PLUS an
+# A held function is stored as ONE C type, `zgh_fnptr` — a generic function pointer PLUS an
 # environment slot — and the pointer is cast back to its real signature at the call. C
 # guarantees exactly that round trip between function pointer types and no more, which is
 # why the code half is a function pointer rather than `void*`: converting a function pointer
@@ -2223,7 +2224,7 @@ fn c_carrier_left(c: ast.Ty) -> ast.Ty {
 # in this emitter is a string that gets a name appended to it. A typedef sidesteps that
 # for every function type at once, with no table of them to build and keep.
 fn c_fnptr_typedef() -> str {
-	return "typedef struct { void (*fn)(void); const void *env; } zg_fnptr;\n"
+	return "typedef struct { void (*fn)(void); const void *env; } " + c_helper_name("fnptr", "") + ";\n"
 }
 
 # c_range_typedef is the ONE C shape every range value has: its two bounds widened to the
@@ -2233,7 +2234,7 @@ fn c_fnptr_typedef() -> str {
 # type with different contents — a function taking a `range[int]` takes either, which is what
 # lets a caller choose and a callee not care.
 fn c_range_typedef() -> str {
-	return "typedef struct { int64_t lo; int64_t hi; bool incl; } zg_range;\n"
+	return "typedef struct { int64_t lo; int64_t hi; bool incl; } " + c_helper_name("range", "") + ";\n"
 }
 
 # c_fnptr_helpers is the (copy, drop) pair for a held function — ONE pair for the whole
@@ -2253,15 +2254,30 @@ fn c_range_typedef() -> str {
 # BOTH ARE NULL-GUARDED, so a NAMED function held as a value — `{thunk, NULL}` — costs a
 # branch and nothing else. That is why one pair serves both and the type never has to ask
 # which kind of fn value it is holding.
+# c_prelude_vt is the element trio of one kind every runtime-using unit carries — a list, a map, a
+# str — given its copy and drop bodies.
+fn c_prelude_vt(k: str, cp: str, dr: str) -> str {
+	ec := c_helper_of("elemcopy", k)
+	ed := c_helper_of("elemdrop", k)
+	mut out := f"static void {ec}(void *dst, const void *src) {{ {cp} }}\n"
+	out = out + f"static void {ed}(void *elem) {{ {dr} }}\n"
+	return out + f"static const zrt_elem_vt {c_helper_of("listvt", k)} = {{{ec}, {ed}}};\n"
+}
+
 fn c_fnptr_helpers() -> str {
-	mut out := "static zg_fnptr zg_copy_fnptr(zg_fnptr v) {\n"
+	fp := c_helper_name("fnptr", "")
+	cp := c_helper_of("copy", "fnptr")
+	dr := c_helper_of("drop", "fnptr")
+	ec := c_helper_of("elemcopy", "fnptr")
+	ed := c_helper_of("elemdrop", "fnptr")
+	mut out := f"static {fp} {cp}({fp} v) {{\n"
 	out = out + "    if (v.env != NULL) { zrt_retain((zrt_ref_hdr *)v.env - 1); }\n    return v;\n}\n"
-	out = out + "static void zg_drop_fnptr(zg_fnptr *v) {\n"
+	out = out + f"static void {dr}({fp} *v) {{\n"
 	out = out + "    if (v->env != NULL) { zrt_release((zrt_ref_hdr *)v->env - 1); v->env = NULL; }\n}\n"
-	out = out + "static void zg_elemcopy_fnptr(void *dst, const void *src) {\n"
-	out = out + "    *(zg_fnptr*)dst = zg_copy_fnptr(*(const zg_fnptr*)src);\n}\n"
-	out = out + "static void zg_elemdrop_fnptr(void *elem) { zg_drop_fnptr((zg_fnptr*)elem); }\n"
-	return out + "static const zrt_elem_vt zg_listvt_fnptr = {zg_elemcopy_fnptr, zg_elemdrop_fnptr};\n"
+	out = out + f"static void {ec}(void *dst, const void *src) {{\n"
+	out = out + f"    *({fp}*)dst = {cp}(*(const {fp}*)src);\n}}\n"
+	out = out + f"static void {ed}(void *elem) {{ {dr}(({fp}*)elem); }}\n"
+	return out + f"static const zrt_elem_vt {c_helper_of("listvt", "fnptr")} = {{{ec}, {ed}}};\n"
 }
 
 # c_fnptr_cast is the cast back to a real signature, `(R (*)(const void *, P, ...))`.
@@ -3624,6 +3640,7 @@ fn c_fn_cname(recv: str, name: str) -> str {
 	# parameter types, in a file under `.zerg-cache`.
 	return c_spec_cname(f"{recv}${name}") if c_is_mangled(name) and recv != ""
 	return c_spec_cname(name) if c_is_mangled(name)
+	return c_helper_name("lambda", c_lambda_tag(name)) if recv == "" and c_is_lambda_name(name)
 	return "zg_" + name if recv == ""
 
 	# AN APPLIED RECEIVER carries the characters C has no place for, the same way the type
@@ -3635,7 +3652,7 @@ fn c_fn_cname(recv: str, name: str) -> str {
 }
 
 # c_ty_cname is a declared type's C name, and c_ty_helper the C name of a function generated
-# FOR one — its drop, its copy. Both are here because an APPLIED name (`Box[int]`) holds
+# FOR one — its drop, its copy — keyed by that C name (c_helper_name). Both are here because an APPLIED name (`Box[int]`) holds
 # characters C has no place for, and every site that spelled `"zg_" + name` by hand would
 # otherwise have had to learn that separately or write a name nobody declared. cc caught the
 # first one, as `} zg_Box[int];`.
@@ -3655,9 +3672,78 @@ pub fn c_ty_cname(nm: str) -> str {
 }
 
 fn c_ty_helper(what: str, nm: str) -> str {
-	return c_spec_cname(f"{what}${nm}") if c_is_applied(nm) or c_is_filed(nm)
+	return c_helper_of(what, c_ty_cname(nm))
+}
 
-	return f"zg_{what}_{nm}"
+# c_helper_name is the C name of a file-scope symbol the emitter GENERATES for itself — a
+# carrier, a drop, a vtable, a thunk — and of a parameter of a generated function. `zg_` is the
+# program's space: every declaration takes `zg_<name>` there, and that is the `--emit lib` ABI
+# (docs/runtime/ffi.md), so a generated `zg_render_Foo` met a `fn render_Foo` and cc reported it
+# against generated C (#489). The generated space is `zgh_`, which differs from `zg_`, `zgg_`,
+# `zgf_`, `zga_` and `zgt_` at a byte no declaration can fill. Not spelled here: the block-local
+# `zgt_`/`zgk_` temporaries, and `zgh_dt<n>`, which c_tmp numbers onto `zgh_dt`.
+#
+# `what` holds no `_`, so the first single `_` after it ends it. A `key` is a counter's digits,
+# a kind word (`list`, `fnptr`), or names each escaped by c_cname_escape and joined by single
+# `_`s (c_helper_of, c_helper_ofs). A key naming a type is its C name escaped, never its Zerg
+# name, where one family keys both declared and generated types: a `struct zg_opt_constcharp`
+# and a `str?` carrier gave one drop. Escaped, a declared type's key starts `zg__` and a
+# generated one's `zgh__`, `zgt__` or `zgg__`, and a kind word starts with neither.
+#
+# THE EXCEPTIONS. The carrier, map-vtable, receive and key-hash keys (`opt`, `res`, `eit`,
+# `mapvt`, `recv`, `keyhash`, `keyeq`) are c_ident_safe's spelling of the C type, which is not
+# injective yet. `render` keys on the escaped ZERG type name, because `list[int]` and
+# `list[list[int]]` share a C type and not a renderer; `refcell` and `refdrop` key on the
+# payload's Zerg name too. Each of those families keys only that one way, so its names still
+# differ from every other family's by `what`.
+fn c_helper_name(what: str, key: str) -> str {
+	return "zgh_" + what if key == ""
+
+	return f"zgh_{what}_{key}"
+}
+
+# c_helper_of is a helper keyed by one C name, escaped.
+fn c_helper_of(what: str, cname: str) -> str {
+	return c_helper_name(what, c_cname_escape("", cname))
+}
+
+# c_helper_ofs is a helper keyed by several names, each escaped and joined by `_`; c_helper_of2 is
+# the pair. The join is injective because every name after the first is a C name, which begins
+# with `z`, or is empty: an escape writes a `_` only as `__` or `_<hex>_`, and a hex code begins
+# with a digit for every byte these names can hold, so reading a key left to right meets a single
+# `_` before a `z` or the end only where two names were joined. A method is keyed by its C name
+# (c_fn_cname) for that reason, never by its bare name, which may begin with any byte.
+fn c_helper_ofs(what: str, names: list[str]) -> str {
+	mut key := ""
+	mut i := 0
+	for i < names.len() {
+		if i > 0 {
+			key = key + "_"
+		}
+		key = key + c_cname_escape("", names[i])
+		i = i + 1
+	}
+	return c_helper_name(what, key)
+}
+
+fn c_helper_of2(what: str, a: str, b: str) -> str {
+	return c_helper_ofs(what, [a, b])
+}
+
+# A LIFTED CLOSURE is a function the program never declared, so its Zerg name holds a byte no
+# identifier may: `lambda%<n>`. A `fn lambda__0` beside the first closure of a file was one C
+# function to cc while its name was `lambda__0`. Its C name is the generated one.
+fn c_lambda_name(tag: str) -> str {
+	return "lambda%" + tag
+}
+
+fn c_is_lambda_name(name: str) -> bool {
+	return parser.strings_has_prefix(name, "lambda%")
+}
+
+fn c_lambda_tag(name: str) -> str {
+	b := bytearray(name)
+	return parser.fstr_slice(b, bytearray("lambda%").len(), b.len())
 }
 
 # c_is_mangled / c_spec_cname are the SPECIALIZATION's C name. A mangled name carries `$`,
@@ -3680,8 +3766,9 @@ fn c_is_mangled(name: str) -> bool {
 # place for: `$` and a spec key's brackets, `,` and spaces between arguments, a function type's
 # `(`, `)`, `-` and `>` (#339), an optional's `?`. Mapping each to `_` gave a generic `Box[P]` and
 # a struct `Box_P_` one name, and cc reported `zgg_elemcopy_Ref_Box_P__` defined twice. So the
-# escape is c_file_cname's, under the specialization's own prefix: `zgg_` and `zgf_` differ at
-# their third byte and `zg_` names at it too, so the three spaces never meet.
+# escape is c_file_cname's, under the specialization's own prefix: `zgg_`, `zgf_` and the generated
+# `zgh_` (c_helper_name) differ at their third byte and `zg_` names at it too, so no two spaces
+# meet. A helper generated FOR a specialization is in `zgh_`, keyed by this name escaped again.
 fn c_spec_cname(name: str) -> str {
 	return c_file_cname(name) if c_is_filed(name)
 
@@ -4745,7 +4832,7 @@ fn c_ref_new_with(mut &em: Emitter, el: ast.Ty, x: str, user_drop: str) -> str {
 	# THE KEY CARRIES THE DROP, because two boxes of one payload type with different actions are
 	# two allocators. Without the action in it a `Ref(h, close_a)` and a `Ref(h, close_b)` were
 	# one helper and the second was silently the first.
-	nm := c_spec_cname(f"refnew${ast.ty_name(el)}${user_drop}")
+	nm := c_helper_of2("refcell", ast.ty_name(el), user_drop)
 	if not c_name_in(em.refnew_done, nm) {
 		em.refnew_done.append(nm)
 		ct := c_type(el)
@@ -4917,7 +5004,7 @@ fn c_ref_drop_fn(mut &em: Emitter, e: ast.Expr) -> str {
 # c_ref_drop_thunk gives that function the shape the cell's drop slot has: the payload by
 # ADDRESS, because the runtime hands it what it allocated, and the user's function takes the
 # value. One thunk per (payload type, action), emitted once — the action by its C name, since two
-# modules may each have a private one of the same name, and the pair escaped (c_file_cname), since
+# modules may each have a private one of the same name, and the pair escaped (c_helper_of2), since
 # `_` is in both halves and a plain join would let `(P, zg_x)` and `(P_zg, x)` meet. The call runs in an IMMEDIATE drain
 # scope: the action is program code, so a release it makes finishes before its next statement.
 # An action with a Zerg body is ARMED first (#487): an overflow at its probe gives it back to the
@@ -4925,7 +5012,7 @@ fn c_ref_drop_fn(mut &em: Emitter, e: ast.Expr) -> str {
 # and no probe, so nothing would disarm it, and it is called unarmed.
 fn c_ref_drop_thunk(mut &em: Emitter, el: ast.Ty, callee: str) -> str {
 	cn := c_fn_cname_in(em, em.at_path, "", callee)
-	nm := c_file_cname(f"refdrop${ast.ty_name(el)}${cn}")
+	nm := c_helper_of2("refdrop", ast.ty_name(el), cn)
 	return nm if c_name_in(em.refnew_done, nm)
 
 	em.refnew_done.append(nm)
@@ -5982,8 +6069,8 @@ fn c_type_decls(mut &em: Emitter, f: ast.File, carriers: list[ast.Ty], tuples: l
 
 				# the copy and drop PROTOTYPES, here and not with their bodies, for the
 				# reason the struct arm below gives and for one more of its own: the ref-box
-				# helpers are emitted before the bodies are, and `zg_refnew_<E>` now hands
-				# the cell a drop that runs `zg_drop_<E>`. A prototype needs only the typedef
+				# helpers are emitted before the bodies are, and `zgh_refnew_<key>` now hands
+				# the cell a drop that runs `zgh_drop_<key>`. A prototype needs only the typedef
 				# just written, which keeps that order from deciding whether the C compiles —
 				# and an enum whose payload is another enum is the same problem one level in.
 				if c_needs_copy(em, ast.Ty.TNamed(ed.name)) {
@@ -6024,7 +6111,7 @@ fn c_type_decls(mut &em: Emitter, f: ast.File, carriers: list[ast.Ty], tuples: l
 			if c_deps_done(c_carrier_deps_of(em, c), done, all) {
 				# through the emit gate, not c_carrier_decl directly: a carrier already
 				# written inline by a tuple that spells it answers "" here instead of a
-				# second `zg_force_…` definition
+				# second `zgh_force_…` definition
 				out = out + c_carrier_emit(em, c)
 				done.append(cn)
 			} else {
@@ -6251,7 +6338,7 @@ fn c_stuck_name(es: list[ast.EnumDecl], ss: list[ast.StructDecl], cs: list[ast.T
 # The list exists because three passes asked this one question and each answered it with a
 # walk of its own over f.structs, f.enums and f.fns — c_decl_types for the typedefs a site
 # needs written first, c_check_named_types for a name that resolves to nothing, and
-# c_scan_fnptr for whether `zg_fnptr` is spelled anywhere. Three enumerations of one list is
+# c_scan_fnptr for whether `zgh_fnptr` is spelled anywhere. Three enumerations of one list is
 # three chances to be short an entry, and every one of them has been: the enum-payload site
 # was missing from the tuple sweep, then from the carrier sweep, then from c_scan_fnptr —
 # where an enum holding a function and never constructed emitted `zg_fnptr` with no typedef
@@ -6426,7 +6513,7 @@ fn c_decl_types(sites: list[Site], mut &tups: list[ast.Ty], mut &cars: list[ast.
 # tuple-only walk let it reach cc.
 #
 # A FUNCTION TYPE is opaque, which is where this walk and c_check_named_ty's part company
-# on purpose rather than by drift: every function type is one C type, `zg_fnptr`, so
+# on purpose rather than by drift: every function type is one C type, `zgh_fnptr`, so
 # nothing a `fn(int?) -> …` mentions is ever spelled in the C and nothing inside it needs a
 # typedef. c_check_named_ty descends into it because an unresolvable NAME in there is still
 # a name the reader wrote and is owed an answer about.
@@ -6993,7 +7080,7 @@ fn c_is_struct_name(mut &em: Emitter, nm: str) -> bool {
 
 # c_scan_fnptr decides up front whether the program spells a function type anywhere in a
 # DECLARATION. It has to run before anything is emitted, because those declarations are
-# written out before any body is: a struct or enum typedef naming `zg_fnptr` would otherwise
+# written out before any body is: a struct or enum typedef naming `zgh_fnptr` would otherwise
 # reach the C compiler ahead of the typedef that defines it. (A body that merely holds a
 # function in a local sets the flag as it goes; by then the header has not been assembled
 # yet, which is why only the declaration sites need a sweep of their own.)
@@ -7622,12 +7709,12 @@ fn c_copy_of(mut &em: Emitter, t: ast.Ty, x: str) -> str {
 		ct := c_type(t)
 		return "({ " + ct + " zgt_cs = (" + x + "); " + ct + " zgt_cp; " + ct + "_copy(&zgt_cp, &zgt_cs); zgt_cp; })"
 	}
-	return f"{c_tuple_cname(ast.ty_tuple_elems(t))}_copy({x})" if c_is_tuple(t)
+	return f"{c_helper_of("copy", c_tuple_cname(ast.ty_tuple_elems(t)))}({x})" if c_is_tuple(t)
 
 	# an array's, named after its SHAPE the way a tuple's is — c_arr_decl generates the pair
 	# under this same question asked as c_needs_copy, so a POD array has neither and is copied
 	# by the C struct assignment alone
-	return f"{c_arr_cname(c_arr_elem(t), c_arr_key(t))}_copy({x})" if c_is_arr(t)
+	return f"{c_helper_of("copy", c_arr_cname(c_arr_elem(t), c_arr_key(t)))}({x})" if c_is_arr(t)
 	if c_is_str(t) {
 		em.used_rt = true
 		return f"zrt_str_retain({x})"
@@ -7640,10 +7727,10 @@ fn c_copy_of(mut &em: Emitter, t: ast.Ty, x: str) -> str {
 	# a carrier's helper is named after the carrier's own C name, which is not `zg_` plus a
 	# declared name — so it is spelled here rather than falling into the line below, which
 	# would render `zg_copy_(x)` and leave cc to explain it
-	return f"zg_copy_{c_carrier_of(em, t)}({x})" if c_is_carrier(t)
+	return f"{c_helper_of("copy", c_carrier_of(em, t))}({x})" if c_is_carrier(t)
 
 	# and a function's is the one global pair, for the reason c_fnptr_helpers gives
-	return f"zg_copy_fnptr({x})" if c_is_fn(t)
+	return f"{c_helper_of("copy", "fnptr")}({x})" if c_is_fn(t)
 
 	# a channel end's count, by its own direction. The vtable a list of them reads is emitted
 	# where the kind is asked (c_chan_vt); this is the copy a field, a deref and a carrier
@@ -7658,7 +7745,7 @@ fn c_copy_of(mut &em: Emitter, t: ast.Ty, x: str) -> str {
 	return c_ty_helper("copy", c_named_of(t)) + "(" + x + ")"
 }
 
-# c_copy_helpers emits one `zg_copy_<T>` per struct that holds a list, after the typedefs
+# c_copy_helpers emits one `zgh_copy_<key>` per struct that holds a list, after the typedefs
 # and before anything that calls them, and the ELEMENT VTABLE that lets a list of that
 # struct use it.
 fn c_copy_helpers(mut &em: Emitter, f: ast.File) -> str {
@@ -7770,7 +7857,7 @@ fn c_enum_variant_drop(mut &em: Emitter, en: str, vd: ast.VariantDef) -> str {
 # c_elem_vt is the element vtable a `list[T]` is built with — how the runtime duplicates
 # one element when it copies a buffer.
 #
-# Every list was built with `zg_listvt`, which is {NULL, NULL} — the memcpy fast path,
+# Every list was built with `zgh_listvt`, which is {NULL, NULL} — the memcpy fast path,
 # correct for a scalar and wrong for anything holding a heap buffer. A `list[Row]` where
 # `Row` holds a `list[int]` copied its Rows bit for bit, so both lists' Rows named ONE
 # inner buffer and `h[0].ys[0] = 8` was read back through `g`. The mechanism to say
@@ -7782,9 +7869,9 @@ fn c_enum_variant_drop(mut &em: Emitter, en: str, vd: ast.VariantDef) -> str {
 fn c_elem_vt(mut &em: Emitter, t: ast.Ty) -> str {
 	k := c_elem_kind(em, t)
 
-	return "zg_listvt" if k == ""
+	return c_helper_name("listvt", "") if k == ""
 
-	return c_ty_helper("listvt", k)
+	return c_helper_of("listvt", k)
 }
 
 # c_elem_copy_fn is the thunk itself, for a table that takes one rather than a whole
@@ -7796,7 +7883,7 @@ fn c_elem_copy_fn(mut &em: Emitter, t: ast.Ty) -> str {
 
 	return "NULL" if k == ""
 
-	return c_ty_helper("elemcopy", k)
+	return c_helper_of("elemcopy", k)
 }
 
 # c_elem_drop_fn is the same question asked of teardown, and it asks `c_drop_thunk` rather than
@@ -7812,8 +7899,8 @@ fn c_elem_drop_fn(mut &em: Emitter, t: ast.Ty) -> str {
 }
 
 # c_elem_kind is the one dispatch behind both: which FAMILY of thunk a type needs, or ""
-# for a POD that takes the memcpy path. The two above spell it — `zg_listvt_` and
-# `zg_elemcopy_` — and had the four-way decision written out twice, so a kind added to one
+# for a POD that takes the memcpy path. The two above spell it — `zgh_listvt_` and
+# `zgh_elemcopy_` — and had the four-way decision written out twice, so a kind added to one
 # gave maps a memcpy copy of a type lists copied properly, which is the bug this whole
 # mechanism exists to prevent.
 fn c_elem_kind(mut &em: Emitter, t: ast.Ty) -> str {
@@ -7857,7 +7944,12 @@ fn c_elem_kind(mut &em: Emitter, t: ast.Ty) -> str {
 	# and a function's is the one kind every function type shares
 	return "fnptr" if c_is_fn(t)
 
-	return c_named_of(t)
+	# A DECLARED TYPE'S KIND IS ITS C NAME, as a carrier's and a tuple's are: keyed by the Zerg
+	# name, a `struct fnptr` took the vtable every function type shares (c_helper_name).
+	nm := c_named_of(t)
+	return "" if nm == ""
+
+	return c_ty_cname(nm)
 }
 
 # c_chan_vt emits the element trio for one channel direction, once. It lives in the on-demand
@@ -7880,10 +7972,13 @@ fn c_chan_vt(mut &em: Emitter, k: str) {
 		cp = "zrt_chan_copy"
 		dr = "zrt_chan_release"
 	}
-	mut out := "static void " + c_ty_helper("elemcopy", k) + "(void *dst, const void *src) {\n"
+
+	ec := c_helper_of("elemcopy", k)
+	ed := c_helper_of("elemdrop", k)
+	mut out := "static void " + ec + "(void *dst, const void *src) {\n"
 	out = out + "    *(zrt_chan**)dst = " + cp + "((zrt_chan*)*(const zrt_chan* const*)src);\n}\n"
-	out = out + "static void " + c_ty_helper("elemdrop", k) + "(void *elem) { " + dr + "(*(zrt_chan**)elem); }\n"
-	out = out + "static const zrt_elem_vt " + c_ty_helper("listvt", k) + " = {" + c_ty_helper("elemcopy", k) + ", " + c_ty_helper("elemdrop", k) + "};\n\n"
+	out = out + "static void " + ed + "(void *elem) { " + dr + "(*(zrt_chan**)elem); }\n"
+	out = out + "static const zrt_elem_vt " + c_helper_of("listvt", k) + " = {" + ec + ", " + ed + "};\n\n"
 	em.res_decls.append(out)
 }
 
@@ -7914,7 +8009,9 @@ fn c_elem_vt_helper(mut &em: Emitter, t: ast.Ty) -> str {
 	ct := c_type(t)
 	cp := c_copy_of(em, t, f"*(const {ct}*)src")
 	dr := c_drop_fn(em, t)
-	mut out := "static void " + c_ty_helper("elemcopy", k) + "(void *dst, const void *src) {\n"
+	ec := c_helper_of("elemcopy", k)
+	ed := c_helper_of("elemdrop", k)
+	mut out := "static void " + ec + "(void *dst, const void *src) {\n"
 	out = out + "    *(" + ct + "*)dst = " + cp + ";\n}\n"
 
 	# THROUGH c_drop_arg's CONVENTION, which this wrote by hand and got right only for the
@@ -7926,8 +8023,8 @@ fn c_elem_vt_helper(mut &em: Emitter, t: ast.Ty) -> str {
 	if c_drop_arg(em, t, "x") == "x" {
 		arg = f"*({ct}*)elem"
 	}
-	out = out + "static void " + c_ty_helper("elemdrop", k) + "(void *elem) { " + dr + "(" + arg + "); }\n"
-	return out + "static const zrt_elem_vt " + c_ty_helper("listvt", k) + " = {" + c_ty_helper("elemcopy", k) + ", " + c_ty_helper("elemdrop", k) + "};\n\n"
+	out = out + "static void " + ed + "(void *elem) { " + dr + "(" + arg + "); }\n"
+	return out + "static const zrt_elem_vt " + c_helper_of("listvt", k) + " = {" + ec + ", " + ed + "};\n\n"
 }
 
 # c_drop_helper is c_copy_helper read backwards, and the two are written next to each other
@@ -7972,7 +8069,7 @@ fn c_drop_stmt(mut &em: Emitter, t: ast.Ty, place: str) -> str {
 # of), so `(int, str)` leaked its str, and `(int, str)?` — whose carrier decides what to
 # emit from HERE and is read through c_needs_copy — reached cc as an undefined symbol.
 #
-# A STRUCT AND AN ENUM ARE THE SAME ANSWER, `zg_drop_<name>`, because they are the same
+# A STRUCT AND AN ENUM ARE THE SAME ANSWER, `zgh_drop_<key>`, because they are the same
 # question: a declared type that owns what its parts own. The enum was excluded here and
 # nowhere else, which is why a recursive chain had a boxed cell nobody released — the
 # registration points were all in place and this dispatch turned every one of them away.
@@ -7993,8 +8090,8 @@ fn c_drop_fn(mut &em: Emitter, t: ast.Ty) -> str {
 
 	# the tuple's, named after the SHAPE the way its copy is — c_tuple_decl generates the
 	# pair together, under this same question asked as c_needs_copy
-	return f"{c_tuple_cname(ast.ty_tuple_elems(t))}_drop" if c_is_tuple(t) and c_needs_copy(em, t)
-	return f"{c_arr_cname(c_arr_elem(t), c_arr_key(t))}_drop" if c_is_arr(t) and c_needs_copy(em, t)
+	return c_helper_of("drop", c_tuple_cname(ast.ty_tuple_elems(t))) if c_is_tuple(t) and c_needs_copy(em, t)
+	return c_helper_of("drop", c_arr_cname(c_arr_elem(t), c_arr_key(t))) if c_is_arr(t) and c_needs_copy(em, t)
 
 	# the carrier's, which c_carrier_decl generates beside its copy and answers "" for when
 	# the payload owns nothing
@@ -8002,7 +8099,7 @@ fn c_drop_fn(mut &em: Emitter, t: ast.Ty) -> str {
 
 	# and the one release every held function shares, which reaches the per-site teardown
 	# through the environment cell's own drop rather than through this name
-	return "zg_drop_fnptr" if c_is_fn(t)
+	return c_helper_of("drop", "fnptr") if c_is_fn(t)
 
 	nm := c_named_of(t)
 
@@ -9615,7 +9712,8 @@ fn c_force(mut &em: Emitter, x: ast.Expr, sb: Subst) -> str {
 	# not — a receive, a call's result — is this expression's own, and the force copies its
 	# payload out and leaves the carrier holding a second reference nothing will ever give
 	# back. The drop is after the force, because the force is what raises on a Right.
-	return f"zg_force_{name}({rendered})" if df == ""
+	force := c_helper_of("force", name)
+	return f"{force}({rendered})" if df == ""
 
 	cn := c_tmp(em, "zgt_t")
 	vn := c_tmp(em, "zgt_t")
@@ -9627,7 +9725,7 @@ fn c_force(mut &em: Emitter, x: ast.Expr, sb: Subst) -> str {
 	if c_is_result(t) {
 		mv = f"if ({c_res_is_right(cn)}) {{ zrt_raise_err({c_res_err(cn)}); }} "
 	}
-	return f"({{ {name} {cn} = {rendered}; {mv}{et} {vn} = zg_force_{name}({cn}); {df}(&{cn}); {vn}; }})"
+	return f"({{ {name} {cn} = {rendered}; {mv}{et} {vn} = {force}({cn}); {df}(&{cn}); {vn}; }})"
 }
 
 # c_coalesce lowers `a ?? b`: the Left of `a`, or the fallback. The operand is bound to a
@@ -11410,7 +11508,7 @@ fn c_in_range_val(mut &em: Emitter, x: ast.Expr, set: ast.Expr, st: ast.Ty, sb: 
 	em.used_range = true
 	xv := c_tmp(em, "zgt_rx")
 	rv := c_tmp(em, "zgt_rr")
-	return f"({{ int64_t {xv} = (int64_t)({c_expr(em, x, sb)}); zg_range {rv} = {c_expr(em, set, sb)}; {xv} >= {rv}.lo && ({rv}.incl ? {xv} <= {rv}.hi : {xv} < {rv}.hi); }})"
+	return f"({{ int64_t {xv} = (int64_t)({c_expr(em, x, sb)}); {c_helper_name("range", "")} {rv} = {c_expr(em, set, sb)}; {xv} >= {rv}.lo && ({rv}.incl ? {xv} <= {rv}.hi : {xv} < {rv}.hi); }})"
 }
 
 # c_range_cmp is the comparison the UPPER bound is made with, which is the only thing `..` and
@@ -13137,7 +13235,7 @@ fn c_assoc_fn_value(mut &em: Emitter, target: ast.Expr, tn: str, key: str, l: in
 
 	em.used_fnptr = true
 	callee := c_fn_cname(c_nx_until(key, b'#', b'#'), c_sig_meth_of(key))
-	return f"((zg_fnptr){{(void (*)(void))zg_{c_fnval_thunk_to(em, callee, c_fn_ty_of(em, key))}, NULL}})"
+	return f"(({c_helper_name("fnptr", "")}){{(void (*)(void)){c_fnval_thunk_to(em, callee, c_fn_ty_of(em, key))}, NULL}})"
 }
 
 # c_assoc_type is the TYPE a `Type.f` names, or "" when what stands left of the dot is not one.
@@ -13549,7 +13647,7 @@ fn c_fill_lit(mut &em: Emitter, v: ast.Expr, n: ast.Expr, sb: Subst) -> str {
 		return c_list_lit(em, elems, sb) if c_is_unknown(ety)
 
 		em.used_rt = true
-		return f"zg_empty_list(sizeof({c_type(ety)}), &{c_elem_vt(em, ety)})"
+		return f"{c_helper_name("emptylist", "")}(sizeof({c_type(ety)}), &{c_elem_vt(em, ety)})"
 	}
 
 	# one copy is a literal of one element, which evaluates v exactly once already
@@ -13560,7 +13658,7 @@ fn c_fill_lit(mut &em: Emitter, v: ast.Expr, n: ast.Expr, sb: Subst) -> str {
 	ety := c_infer(em, v)
 	et := c_type(ety)
 
-	mut out := "({ zrt_list zgt_ll = zg_empty_list(sizeof(" + et + "), &" + c_elem_vt(em, ety) + ");"
+	mut out := "({ zrt_list zgt_ll = " + c_helper_name("emptylist", "") + "(sizeof(" + et + "), &" + c_elem_vt(em, ety) + ");"
 	out = out + " " + et + " zgt_fv = " + c_expr(em, v, sb) + ";"
 
 	mut i := 0
@@ -13648,7 +13746,7 @@ fn c_list_build(mut &em: Emitter, ety: ast.Ty, elems: list[ast.Expr], typed: boo
 	et := c_type(ety)
 	keep := em.rel_cnames.len()
 	later := c_needs_order(elems, 1)
-	mut out := "({ zrt_list zgt_ll = zg_empty_list(sizeof(" + et + "), &" + c_elem_vt(em, ety) + "); "
+	mut out := "({ zrt_list zgt_ll = " + c_helper_name("emptylist", "") + "(sizeof(" + et + "), &" + c_elem_vt(em, ety) + "); "
 	mut i := 0
 	for i < elems.len() {
 		mut val := ""
@@ -13718,7 +13816,7 @@ fn c_infer_call_written(mut &em: Emitter, name: str, args: list[ast.Expr], ts: l
 #
 # WHAT IS REFUSED HERE is a callee that is not a function at all. It is checked before the
 # cast rather than after, because the cast is what would otherwise make it cc's finding: a
-# `zg_fnptr` cast over an `int64_t` is a diagnostic about generated C, at a line the reader
+# `zgh_fnptr` cast over an `int64_t` is a diagnostic about generated C, at a line the reader
 # did not write.
 # c_named_arg_misplaced is `name: value` written where there are no parameters to name — a
 # list element, an operand, an index. Every call and every construction reorders and unwraps
@@ -13749,7 +13847,7 @@ fn c_call_val(mut &em: Emitter, callee: ast.Expr, args: list[ast.Expr], sb: Subs
 	}
 
 	v := c_tmp(em, "zgt_cv")
-	bind := f"zg_fnptr {v} = {c_expr(em, callee, sb)}; "
+	bind := f"{c_helper_name("fnptr", "")} {v} = {c_expr(em, callee, sb)}; "
 	return f"({{ {bind}{c_call_through(em, v, fty, args, sb)}; }})" if not c_owns_value(callee)
 
 	# AN OWNED CALLEE IS A BINDING NOBODY NAMED (#305). `adder(1)(7)` is handed the closure
@@ -15788,7 +15886,7 @@ fn c_ident_val(mut &em: Emitter, n: str, l: int, c: int, sb: Subst) -> str {
 		# call through the value is the checked thing and the binding is ordinary code, which
 		# is what makes an unsafe function storable in a table at all.
 		em.used_fnptr = true
-		return f"((zg_fnptr){{(void (*)(void))zg_{c_fnval_thunk(em, n, c_fn_ty_of(em, n))}, NULL}})"
+		return f"(({c_helper_name("fnptr", "")}){{(void (*)(void)){c_fnval_thunk(em, n, c_fn_ty_of(em, n))}, NULL}})"
 	}
 
 	# NOTHING IN SCOPE ANSWERS TO THIS NAME. It used to be spelled `zg_<n>` and handed to
@@ -15893,7 +15991,8 @@ fn c_fnval_thunk(mut &em: Emitter, target: str, t: ast.Ty) -> str {
 # c_fnval_thunk_to is the thunk around a callee already spelled in C — an associated fn's,
 # whose name is its type's and not the reader's module's (c_fn_cname).
 fn c_fnval_thunk_to(mut &em: Emitter, callee: str, t: ast.Ty) -> str {
-	name := f"fnval__{strconv.to_string(em.lam_n, 10)}"
+	name := c_helper_name("fnval", strconv.to_string(em.lam_n, 10))
+	envp := c_helper_name("envp", "")
 	em.lam_n = em.lam_n + 1
 
 	ps := c_fn_params(t)
@@ -15914,7 +16013,7 @@ fn c_fnval_thunk_to(mut &em: Emitter, callee: str, t: ast.Ty) -> str {
 		ret = ""
 	}
 
-	em.lam_defs.append(f"static {c_type(c_fn_ret(t))} zg_{name}(const void *zg_envp{sig}) {{ (void)zg_envp; {ret}{callee}({call}); }}\n")
+	em.lam_defs.append(f"static {c_type(c_fn_ret(t))} {name}(const void *{envp}{sig}) {{ (void){envp}; {ret}{callee}({call}); }}\n")
 	return name
 }
 
@@ -16303,7 +16402,7 @@ fn c_spec_disp_register(mut &em: Emitter, sp: str, meth: str) -> str {
 	em.fn_indirect = true
 	c_spec_no_impl(em, sp, f"a call to `{meth}` through")
 
-	dn := c_spec_cname(f"specdisp${sp}${meth}")
+	dn := c_helper_of2("specdisp", c_ty_cname(sp), c_fn_cname(sp, meth))
 	for n in em.svt_names {
 		return dn if n == dn
 	}
@@ -16328,18 +16427,20 @@ fn c_spec_disp_register(mut &em: Emitter, sp: str, meth: str) -> str {
 	# table: one count too many off every buffer the copy shared with the caller's own box,
 	# which is the caller's box read after free on its next use.
 	byref := em.pr_ref[c_param_row(em, key, 0)]
-	mut cell := "zg_self"
-	mut ps := f"{c_ty_cname(sp)} zg_self"
+	sv := c_helper_name("self", "")
+	mut cell := sv
+	mut ps := f"{c_ty_cname(sp)} {sv}"
 	if byref {
-		cell = "(*zg_self)"
-		ps = f"{c_ty_cname(sp)} *zg_self"
+		cell = f"(*{sv})"
+		ps = f"{c_ty_cname(sp)} *{sv}"
 	}
 	mut xs := f"zrt_dyn_payload({cell})"
 	mut i := 1
 	for i < np {
 		pr := c_param_row(em, key, i)
-		ps = ps + f", {c_type(em.pr_ty[pr])} zg_a{strconv.to_string(i, 10)}"
-		xs = xs + f", zg_a{strconv.to_string(i, 10)}"
+		ai := c_helper_name("a", strconv.to_string(i, 10))
+		ps = ps + f", {c_type(em.pr_ty[pr])} {ai}"
+		xs = xs + f", {ai}"
 		i = i + 1
 	}
 
@@ -16352,12 +16453,13 @@ fn c_spec_disp_register(mut &em: Emitter, sp: str, meth: str) -> str {
 	mut hold := ""
 	mut give := ""
 	if not byref {
-		hold = "    zrt_defer(zrt_defer_dyn_free, &zg_self);\n"
-		give = "    zrt_forget(1);\n    zrt_dyn_free(zg_self);\n"
+		hold = f"    zrt_defer(zrt_defer_dyn_free, &{sv});\n"
+		give = f"    zrt_forget(1);\n    zrt_dyn_free({sv});\n"
 	}
 	mut out := f"static {c_type(rty)} {dn}({ps}) {{\n" + hold
 	if em.sig_hasret[row] {
-		out = out + f"    {c_type(rty)} zg_r = {call};\n" + give + "    return zg_r;\n"
+		rv := c_helper_name("r", "")
+		out = out + f"    {c_type(rty)} {rv} = {call};\n" + give + f"    return {rv};\n"
 	}
 	if not em.sig_hasret[row] {
 		out = out + f"    {call};\n" + give
@@ -18486,7 +18588,7 @@ fn c_fill_elems(mut &em: Emitter, v: ast.Expr, n: ast.Expr) -> list[ast.Expr] {
 # optimisation, it is the meaning: `(a, b) = (b, a)` is a swap, and a lowering that assigned
 # leaf by leaf out of the source expression would read `b` after it had already been written.
 fn c_destructure(mut &em: Emitter, t: ast.Target, v: ast.Expr, is_bind: bool, is_mut: bool, is_const: bool, ind: str) -> str {
-	tmp := c_tmp(em, "zg_dt")
+	tmp := c_tmp(em, c_helper_name("dt", ""))
 	mut body: list[ast.Stmt] = [ast.Stmt.SLet(tmp, ast.Ty.TUnknown, false, false, false, v, 0, 0)]
 	c_target_stmts(em, t, ast.Expr.EIdent(tmp, 0, 0), c_infer(em, v), is_bind, is_mut, is_const, body)
 
@@ -19633,7 +19735,7 @@ fn c_main_entry(mut &em: Emitter, own: ast.File, inits: str) -> str {
 		if has_args {
 			callargs = "__zerg_args"
 		}
-		mut body := f"    {rcn} zgt_r = zg_main({callargs});\n"
+		mut body := f"    {rcn} zgt_r = {c_fn_cname("", "main")}({callargs});\n"
 		body = body + "    if (" + c_res_is_right("zgt_r") + ") { zrt_raise_err(" + c_res_err("zgt_r") + "); }\n    return 0;\n"
 		if has_args {
 			wrap := "static int64_t __zerg_entry(zrt_list __zerg_args) {\n" + inits + body + "}\n\n"
@@ -19645,9 +19747,9 @@ fn c_main_entry(mut &em: Emitter, own: ast.File, inits: str) -> str {
 	}
 
 	if not has_args and not c_needs_runtime(em) and not em.used_rt {
-		return "int main(void) {\n" + inits + "    return (int)zg_main();\n}\n" if ret_int
+		return "int main(void) {\n" + inits + "    return (int)" + c_fn_cname("", "main") + "();\n}\n" if ret_int
 
-		return "int main(void) {\n" + inits + "    zg_main();\n    return 0;\n}\n"
+		return "int main(void) {\n" + inits + "    " + c_fn_cname("", "main") + "();\n    return 0;\n}\n"
 	}
 
 	em.used_rt = true
@@ -19656,18 +19758,18 @@ fn c_main_entry(mut &em: Emitter, own: ast.File, inits: str) -> str {
 		# code — `fn main(args) -> int` returning 2 exited 0 — because the entry called
 		# main for effect and answered 0 itself.
 		if ret_int {
-			wrap := "static int64_t __zerg_entry(zrt_list __zerg_args) {\n" + inits + "    return zg_main(__zerg_args);\n}\n\n"
+			wrap := "static int64_t __zerg_entry(zrt_list __zerg_args) {\n" + inits + "    return " + c_fn_cname("", "main") + "(__zerg_args);\n}\n\n"
 			return wrap + "int main(int argc, char** argv) {\n    return zrt_main_run_args_int(__zerg_entry, zrt_os_args(argc, argv));\n}\n"
 		}
-		wrap := "static void __zerg_entry(zrt_list __zerg_args) {\n" + inits + "    zg_main(__zerg_args);\n}\n\n"
+		wrap := "static void __zerg_entry(zrt_list __zerg_args) {\n" + inits + "    " + c_fn_cname("", "main") + "(__zerg_args);\n}\n\n"
 		return wrap + "int main(int argc, char** argv) {\n    return zrt_main_run_args(__zerg_entry, zrt_os_args(argc, argv));\n}\n"
 	}
 	if ret_int {
-		wrap := "static int64_t __zerg_entry(void) {\n" + inits + "    return zg_main();\n}\n\n"
+		wrap := "static int64_t __zerg_entry(void) {\n" + inits + "    return " + c_fn_cname("", "main") + "();\n}\n\n"
 		shim := c_main_shim(em, "zrt_sched_main_int", "zrt_main_run_int")
 		return wrap + "int main(void) {\n    return " + shim + "(__zerg_entry);\n}\n"
 	}
-	wrap := "static void __zerg_entry(void) {\n" + inits + "    zg_main();\n}\n\n"
+	wrap := "static void __zerg_entry(void) {\n" + inits + "    " + c_fn_cname("", "main") + "();\n}\n\n"
 	shim := c_main_shim(em, "zrt_sched_main_nil", "zrt_main_run_nil")
 	return wrap + "int main(void) {\n    return " + shim + "(__zerg_entry);\n}\n"
 }
@@ -19978,7 +20080,7 @@ fn c_recv(mut &em: Emitter, ch: ast.Expr, sb: Subst) -> str {
 # do not arrive by the same route.
 fn c_recv_helper(mut &em: Emitter, elem: ast.Ty) -> str {
 	cn := c_opt_name(em, elem)
-	name := "zg_recv_" + c_ident_safe(c_type(elem))
+	name := c_helper_name("recv", c_ident_safe(c_type(elem)))
 	return name if c_name_in(em.rcv_names, name)
 	em.rcv_names.append(name)
 	mut d := "static " + cn + " " + name + "(zrt_chan *ch) {\n"
@@ -20053,8 +20155,8 @@ fn c_spawn(mut &em: Emitter, x: ast.Expr, ind: str) -> str {
 	em.dfn_n = idx + 1
 	tag := strconv.to_string(idx, 10)
 	if args.len() == 0 {
-		em.dfn_decls.append("static void zg_spawn_" + tag + "(void *p) { (void)p; " + cal.cname + "(); }\n")
-		return f"{ind}zrt_spawn(zg_spawn_{tag}, NULL, NULL);\n"
+		em.dfn_decls.append("static void " + c_helper_name("spawn", tag) + "(void *p) { (void)p; " + cal.cname + "(); }\n")
+		return f"{ind}zrt_spawn({c_helper_name("spawn", tag)}, NULL, NULL);\n"
 	}
 
 	# ONE pass over the arguments for everything the env struct needs to know: each one's
@@ -20112,7 +20214,8 @@ fn c_spawn(mut &em: Emitter, x: ast.Expr, ind: str) -> str {
 		dirs.append(dir)
 		i = i + 1
 	}
-	em.dfn_decls.append("typedef struct {" + fields + " } zg_spawnenv_" + tag + ";\n")
+	senv := c_helper_name("spawnenv", tag)
+	em.dfn_decls.append("typedef struct {" + fields + " } " + senv + ";\n")
 
 	# The teardown is a DEFER, not a statement after the call, because a coroutine can
 	# leave without returning. An unhandled abort longjmps straight past everything
@@ -20123,15 +20226,16 @@ fn c_spawn(mut &em: Emitter, x: ast.Expr, ind: str) -> str {
 	# A defer runs on both exits, which is exactly the difference: on the ordinary one it
 	# is the coroutine giving up its handles, and on the crash one it is what lets the
 	# close carry the crash Err a receiver is meant to see (Fork-C).
-	dropfn := "zg_spawndrop_" + tag
-	mut dd := "static void " + dropfn + "(void *p) { zg_spawnenv_" + tag + " *e = (zg_spawnenv_" + tag + "*)p; (void)e;"
+	dropfn := c_helper_name("spawndrop", tag)
+	mut dd := "static void " + dropfn + "(void *p) { " + senv + " *e = (" + senv + "*)p; (void)e;"
 	dd = dd + drops + " zrt_free(p); }\n"
 	em.dfn_decls.append(dd)
-	abandonfn := "zg_spawnabandon_" + tag
-	mut ad := "static void " + abandonfn + "(void *p) { zg_spawnenv_" + tag + " *e = (zg_spawnenv_" + tag + "*)p; (void)e;"
+	abandonfn := c_helper_name("spawnabandon", tag)
+	mut ad := "static void " + abandonfn + "(void *p) { " + senv + " *e = (" + senv + "*)p; (void)e;"
 	ad = ad + abandons + " zrt_free(p); }\n"
 	em.dfn_decls.append(ad)
-	mut th := "static void zg_spawn_" + tag + "(void *p) { zg_spawnenv_" + tag + " *e = (zg_spawnenv_" + tag + "*)p;"
+	spawnfn := c_helper_name("spawn", tag)
+	mut th := "static void " + spawnfn + "(void *p) { " + senv + " *e = (" + senv + "*)p;"
 	th = th + " zrt_defer(" + dropfn + ", p);"
 	th = th + " " + cal.cname + "(" + call + "); }\n"
 	em.dfn_decls.append(th)
@@ -20174,7 +20278,7 @@ fn c_spawn(mut &em: Emitter, x: ast.Expr, ind: str) -> str {
 	if unhold != "" {
 		out = out + ind + unhold + "\n"
 	}
-	out = out + f"{ind}zg_spawnenv_{tag} *zgt_se{tag} = (zg_spawnenv_{tag}*)zrt_alloc(sizeof(zg_spawnenv_{tag}));\n"
+	out = out + f"{ind}{senv} *zgt_se{tag} = ({senv}*)zrt_alloc(sizeof({senv}));\n"
 	j = 0
 	for j < args.len() {
 		out = out + ind + "zgt_se" + tag + "->f" + strconv.to_string(j, 10) + " = zgt_se" + tag + "_a" + strconv.to_string(j, 10) + ";\n"
@@ -20186,7 +20290,7 @@ fn c_spawn(mut &em: Emitter, x: ast.Expr, ind: str) -> str {
 	# this one covers the third, which is a coroutine that never runs at all — where there
 	# are no by-value parameters to give the captures back. The scheduler drops its copy of
 	# the pointer the moment the trampoline starts, so exactly one of the two runs.
-	return f"{out}{ind}zrt_spawn(zg_spawn_{tag}, zgt_se{tag}, {abandonfn});\n"
+	return f"{out}{ind}zrt_spawn({spawnfn}, zgt_se{tag}, {abandonfn});\n"
 }
 
 # c_close lowers `close(ch)` — the one built-in a channel has. It marks the CHANNEL
@@ -20470,7 +20574,7 @@ fn c_select(mut &em: Emitter, arms: list[ast.SelArm], ind: str, loop: bool) -> s
 			idx = idx + 1
 		}
 	}
-	out = out + in2 + "int zg_pick" + tag + " = zrt_select(" + cs + ", " + strconv.to_string(n, 10) + ", " + has_def + ", " + has_exit + ");\n"
+	out = out + in2 + "int " + c_helper_name("pick", tag) + " = zrt_select(" + cs + ", " + strconv.to_string(n, 10) + ", " + has_def + ", " + has_exit + ");\n"
 
 	# the dispatch. Each recv arm's binding is already in scope, so its body just runs.
 	#
@@ -20486,10 +20590,10 @@ fn c_select(mut &em: Emitter, arms: list[ast.SelArm], ind: str, loop: bool) -> s
 	for a in arms {
 		mut cond := ""
 		if a.op == 0 or a.op == 1 {
-			cond = f"zg_pick{tag} == {k}"
+			cond = f"{c_helper_name("pick", tag)} == {k}"
 			k = k + 1
 		} else {
-			cond = f"zg_pick{tag} == ZRT_SEL_DEFAULT"
+			cond = f"{c_helper_name("pick", tag)} == ZRT_SEL_DEFAULT"
 		}
 		mut kw := "} else if ("
 		if first {
@@ -20563,7 +20667,7 @@ fn c_select(mut &em: Emitter, arms: list[ast.SelArm], ind: str, loop: bool) -> s
 	}
 	if loop {
 		# an exhausted `for select` leaves the loop: every watched receive channel has ended
-		out = out + in2 + f"if (zg_pick{tag} == ZRT_SEL_DONE) {{ break; }}\n"
+		out = out + in2 + f"if ({c_helper_name("pick", tag)} == ZRT_SEL_DONE) {{ break; }}\n"
 	}
 	return out + ind + "}\n"
 }
@@ -20612,7 +20716,7 @@ fn c_for_select(mut &em: Emitter, arms: list[ast.SelArm], ind: str) -> str {
 #
 # A `fn(x: T) -> R { … }` in expression position is LIFTED to a top-level C function and
 # the expression becomes a pointer to it. That works because this compiler already carries
-# a held function as one type — `zg_fnptr`, cast back to its real signature at the call —
+# a held function as one type — `zgh_fnptr`, cast back to its real signature at the call —
 # so a lambda with nothing captured is indistinguishable from a named function used as a
 # value, which already worked.
 #
@@ -20688,7 +20792,7 @@ fn c_lambda(mut &em: Emitter, ps: list[ast.Param], has_ret: bool, ret: ast.Ty, b
 
 	tag := strconv.to_string(em.lam_n, 10)
 	em.lam_n = em.lam_n + 1
-	name := "lambda__" + tag
+	name := c_lambda_name(tag)
 
 	# the lambda's body is emitted with its OWN environment; the one belonging to the
 	# function being emitted is put back afterwards, since the lambda is in the middle of
@@ -20738,7 +20842,7 @@ fn c_lambda(mut &em: Emitter, ps: list[ast.Param], has_ret: bool, ret: ast.Ty, b
 	# NOTHING CAPTURED is the case that already worked: the lifted function is an ordinary
 	# one, and it reaches the fn-value shape the same way a named function does — through a
 	# thunk that takes the environment and ignores it.
-	return f"((zg_fnptr){{(void (*)(void))zg_{c_fnval_thunk(em, name, c_lambda_ty(ps, has_ret, ret))}, NULL}})" if caps.len() == 0
+	return f"(({c_helper_name("fnptr", "")}){{(void (*)(void)){c_fnval_thunk(em, name, c_lambda_ty(ps, has_ret, ret))}, NULL}})" if caps.len() == 0
 
 	return c_closure(em, name, cps, ps, has_ret, ret, cvals)
 }
@@ -20769,7 +20873,8 @@ fn c_closure(mut &em: Emitter, name: str, cps: list[ast.Param], ps: list[ast.Par
 	tag := strconv.to_string(em.lam_n, 10)
 	em.lam_n = em.lam_n + 1
 
-	envty := f"zg_lamenv_{tag}"
+	envty := c_helper_name("lamenv", tag)
+	envp := c_helper_name("envp", "")
 
 	mut fields := ""
 	mut unpack := ""
@@ -20802,8 +20907,8 @@ fn c_closure(mut &em: Emitter, name: str, cps: list[ast.Param], ps: list[ast.Par
 
 	# the cell's own drop, which zrt_release runs at zero. It does NOT free the block —
 	# zrt_release does that, and a zrt_free here would be the second one.
-	dropfn := f"lamdrop_{tag}"
-	em.lam_defs.append(f"static void zg_{dropfn}(void *zg_envp) {{ {envty} *e = ({envty} *)zg_envp; (void)e; {teardown}}}\n")
+	dropfn := c_helper_name("lamdrop", tag)
+	em.lam_defs.append(f"static void {dropfn}(void *{envp}) {{ {envty} *e = ({envty} *){envp}; (void)e; {teardown}}}\n")
 
 	mut sig := ""
 	mut call := unpack
@@ -20819,8 +20924,8 @@ fn c_closure(mut &em: Emitter, name: str, cps: list[ast.Param], ps: list[ast.Par
 	if not has_ret {
 		retkw = ""
 	}
-	thunk := f"lamcall_{tag}"
-	em.lam_defs.append(f"static {c_ret_of(has_ret, ret)} zg_{thunk}(const void *zg_envp{sig}) {{ const {envty} *e = (const {envty} *)zg_envp; {retkw}zg_{name}({call}); }}\n")
+	thunk := c_helper_name("lamcall", tag)
+	em.lam_defs.append(f"static {c_ret_of(has_ret, ret)} {thunk}(const void *{envp}{sig}) {{ const {envty} *e = (const {envty} *){envp}; {retkw}{c_fn_cname("", name)}({call}); }}\n")
 
 	mut fill := ""
 	mut k := 0
@@ -20829,7 +20934,7 @@ fn c_closure(mut &em: Emitter, name: str, cps: list[ast.Param], ps: list[ast.Par
 		k = k + 1
 	}
 	em.used_rt = true
-	return f"({{ {envty} *zgt_ce{tag} = ({envty}*)zrt_ref_payload(zrt_ref_alloc(sizeof({envty}), &zg_{dropfn}));{fill} (zg_fnptr){{(void (*)(void))zg_{thunk}, zgt_ce{tag}}}; }})"
+	return f"({{ {envty} *zgt_ce{tag} = ({envty}*)zrt_ref_payload(zrt_ref_alloc(sizeof({envty}), &{dropfn}));{fill} ({c_helper_name("fnptr", "")}){{(void (*)(void)){thunk}, zgt_ce{tag}}}; }})"
 }
 
 fn c_ret_of(has_ret: bool, ret: ast.Ty) -> str {
@@ -21218,8 +21323,8 @@ fn c_defer_of(mut &em: Emitter, cal: Callee, ind: str) -> str {
 	if args.len() == 0 {
 		# a C brace in an f-string has to be doubled, and a line that is mostly braces reads
 		# better as concatenation
-		em.dfn_decls.append("static void zg_dfn_" + tag + "(void *p) { (void)p; " + cal.cname + "(); }\n")
-		return f"{ind}zrt_defer(zg_dfn_{tag}, NULL);\n"
+		em.dfn_decls.append("static void " + c_helper_name("dfn", tag) + "(void *p) { (void)p; " + cal.cname + "(); }\n")
+		return f"{ind}zrt_defer({c_helper_name("dfn", tag)}, NULL);\n"
 	}
 
 	# ONE STATEMENT PER FIELD, in order, rather than one initializer list: C leaves the order of
@@ -21259,10 +21364,12 @@ fn c_defer_of(mut &em: Emitter, cal: Callee, ind: str) -> str {
 	if unhold != "" {
 		vals = vals + ind + unhold + "\n"
 	}
-	em.dfn_decls.append("typedef struct {" + fields + " } zg_denv_" + tag + ";\n")
-	em.dfn_decls.append("static void zg_dfn_" + tag + "(void *p) { zg_denv_" + tag + " *e = (zg_denv_" + tag + "*)p; " + cal.cname + "(" + call + "); }\n")
-	mut out := f"{ind}zg_denv_{tag} zgt_de{tag};\n{vals}"
-	return f"{out}{ind}zrt_defer(zg_dfn_{tag}, &zgt_de{tag});\n"
+	denv := c_helper_name("denv", tag)
+	dfn := c_helper_name("dfn", tag)
+	em.dfn_decls.append("typedef struct {" + fields + " } " + denv + ";\n")
+	em.dfn_decls.append("static void " + dfn + "(void *p) { " + denv + " *e = (" + denv + "*)p; " + cal.cname + "(" + call + "); }\n")
+	mut out := f"{ind}{denv} zgt_de{tag};\n{vals}"
+	return f"{out}{ind}zrt_defer({dfn}, &zgt_de{tag});\n"
 }
 
 # Callee is the three things a `spawn` and a `defer` each need about what they are about
@@ -21405,7 +21512,7 @@ fn c_callee_free(mut &em: Emitter, mod: str, name: str, args: list[ast.Expr], wh
 #
 # A BINDING HOLDING A FUNCTION IS THE ONE CASE THE ORDINARY CALL CAN DO AND THIS CANNOT.
 # `f()` on a `f := fn () { … }` calls through the stored pointer; a `spawn` and a `defer`
-# both lower to a C THUNK — `static void zg_spawn_1(void *p) { … }` — whose body names a C
+# both lower to a C THUNK — `static void zgh_spawn_1(void *p) { … }` — whose body names a C
 # symbol, and a value has none. The environment a closure carries has nowhere to go either:
 # the thunk's one `void *` is already the argument snapshot. So it is refused where it is
 # ASKED FOR rather than emitted as a call to a symbol nobody declared, which is what
@@ -21689,8 +21796,11 @@ fn c_is_decl_key_name(mut &em: Emitter, nm: str) -> bool {
 # declaration of each instead.
 fn c_key_thunks(mut &em: Emitter, kt: ast.Ty) -> list[str] {
 	id := c_ident_safe(c_type(kt))
-	hn := f"zg_keyhash_{id}"
-	en := f"zg_keyeq_{id}"
+	hn := c_helper_name("keyhash", id)
+	en := c_helper_name("keyeq", id)
+	pk := c_helper_name("k", "")
+	pa := c_helper_name("a", "")
+	pb := c_helper_name("b", "")
 	if not c_name_in(em.svt_names, hn) {
 		em.svt_names.append(hn)
 		ct := c_type(kt)
@@ -21700,15 +21810,15 @@ fn c_key_thunks(mut &em: Emitter, kt: ast.Ty) -> list[str] {
 		h := c_expr(em, ast.Expr.EMethod(ast.Expr.EIdent("zgk_a", 0, 0), "hash", [], 0, 0), c_nosub())
 		e := c_expr(em, ast.Expr.EBinary("==", ast.Expr.EIdent("zgk_a", 0, 0), ast.Expr.EIdent("zgk_b", 0, 0)), c_nosub())
 		c_scope_close(em, outer)
-		em.mvt_decls.append(f"static size_t {hn}(const void *zg_k);\nstatic bool {en}(const void *zg_a, const void *zg_b);\n")
-		em.svt_decls.append(f"static size_t {hn}(const void *zg_k) {{\n    {ct} zgk_a = *(const {ct} *)zg_k;\n    return (size_t)({h});\n}}\n")
-		em.svt_decls.append(f"static bool {en}(const void *zg_a, const void *zg_b) {{\n    {ct} zgk_a = *(const {ct} *)zg_a;\n    {ct} zgk_b = *(const {ct} *)zg_b;\n    return {e};\n}}\n")
+		em.mvt_decls.append(f"static size_t {hn}(const void *{pk});\nstatic bool {en}(const void *{pa}, const void *{pb});\n")
+		em.svt_decls.append(f"static size_t {hn}(const void *{pk}) {{\n    {ct} zgk_a = *(const {ct} *){pk};\n    return (size_t)({h});\n}}\n")
+		em.svt_decls.append(f"static bool {en}(const void *{pa}, const void *{pb}) {{\n    {ct} zgk_a = *(const {ct} *){pa};\n    {ct} zgk_b = *(const {ct} *){pb};\n    return {e};\n}}\n")
 	}
 	return [hn, en]
 }
 
 fn c_map_vt(mut &em: Emitter, kt: ast.Ty, vt: ast.Ty) -> str {
-	name := f"zg_mapvt_{c_ident_safe(c_type(kt))}_{c_ident_safe(c_type(vt))}"
+	name := c_helper_name("mapvt", f"{c_ident_safe(c_type(kt))}_{c_ident_safe(c_type(vt))}")
 	for n in em.mvt_names {
 		return name if n == name
 	}
@@ -22400,7 +22510,7 @@ fn c_tuple_ty(mut &em: Emitter, elems: list[ast.Expr]) -> ast.Ty {
 # THE FIELDS ARE RELEASED IN REVERSE, which is the order docs/core/memory.md pins inside an
 # aggregate and the order c_enum_variant_drop already walks.
 fn c_tuple_helpers(mut &em: Emitter, name: str, tys: list[ast.Ty]) -> str {
-	mut out := f"static {name} {name}_copy({name} v) {{\n    {name} r = v;\n"
+	mut out := f"static {name} {c_helper_of("copy", name)}({name} v) {{\n    {name} r = v;\n"
 	mut i := 0
 	for i < tys.len() {
 		fi := f"f{strconv.to_string(i, 10)}"
@@ -22411,7 +22521,7 @@ fn c_tuple_helpers(mut &em: Emitter, name: str, tys: list[ast.Ty]) -> str {
 	}
 	out = out + "    return r;\n}\n"
 
-	out = out + f"static void {name}_drop({name} *v) {{\n"
+	out = out + f"static void {c_helper_of("drop", name)}({name} *v) {{\n"
 	mut j := tys.len() - 1
 	for j >= 0 {
 		fj := f"f{strconv.to_string(j, 10)}"
@@ -22655,7 +22765,7 @@ fn c_renders_fresh(mut &em: Emitter, t: ast.Ty) -> bool {
 # first, depth first, for the reason a typedef's do: the function about to be written calls
 # theirs by name.
 fn c_render_fn(mut &em: Emitter, t: ast.Ty) -> str {
-	name := "zg_render_" + c_render_key(em, t)
+	name := c_helper_name("render", c_render_key(em, t))
 	for n in em.rnd_names {
 		return name if n == name
 	}
@@ -23244,11 +23354,11 @@ fn c_arr_decl(mut &em: Emitter, t: ast.Ty) -> str {
 # for the same reason a tuple holding a list does: without them the copy's slots named the
 # source's buffers.
 fn c_arr_helpers(mut &em: Emitter, name: str, e: ast.Ty, key: str) -> str {
-	mut out := f"static {name} {name}_copy({name} v) {{\n    {name} r = v;\n"
+	mut out := f"static {name} {c_helper_of("copy", name)}({name} v) {{\n    {name} r = v;\n"
 	out = out + f"    for (int64_t i = 0; i < {key}; i++) {{ r.v[i] = " + c_copy_of(em, e, "v.v[i]") + f"; }}\n"
 	out = out + "    return r;\n}\n"
 
-	out = out + f"static void {name}_drop({name} *v) {{\n"
+	out = out + f"static void {c_helper_of("drop", name)}({name} *v) {{\n"
 	out = out + f"    for (int64_t i = {key} - 1; i >= 0; i--) {{ " + c_drop_stmt(em, e, "v->v[i]") + f" }}\n"
 	return out + "}\n"
 }
@@ -23802,7 +23912,7 @@ fn c_range_value(mut &em: Emitter, lo: ast.Expr, hi: ast.Expr, incl: bool, sb: S
 	seq := c_needs_order([lo, hi], 1)
 	slo := c_ordered(em, seq, c_expr(em, lo, sb))
 	shi := c_ordered(em, seq, c_expr(em, hi, sb))
-	return f"((zg_range){{ (int64_t)({slo}), (int64_t)({shi}), {c_bool_lit(incl)} }})"
+	return f"(({c_helper_name("range", "")}){{ (int64_t)({slo}), (int64_t)({shi}), {c_bool_lit(incl)} }})"
 }
 
 # c_range_value_offender names the first bound a range VALUE cannot hold: the membership test's
@@ -24165,7 +24275,7 @@ fn c_forrangeval(mut &em: Emitter, var: str, iter: ast.Expr, ct: ast.Ty, body: l
 	c_add_var(em, var, elem, false, false)
 	cv := c_var_cname(em, var)
 
-	mut out := f"{ind}{{\n{ind}    zg_range {rv} = {c_expr(em, iter, c_nosub())};\n"
+	mut out := f"{ind}{{\n{ind}    {c_helper_name("range", "")} {rv} = {c_expr(em, iter, c_nosub())};\n"
 	out = out + f"{ind}    for ({c_type(elem)} {cv} = ({c_type(elem)}){rv}.lo; {rv}.incl ? (int64_t){cv} <= {rv}.hi : (int64_t){cv} < {rv}.hi; {cv}++) {{\n"
 	out = out + c_block(em, body, ind + "        ")
 	out = out + f"{ind}    }}\n{ind}}}\n"
@@ -24201,7 +24311,7 @@ fn c_forin(mut &em: Emitter, var: str, iter: ast.Expr, body: list[ast.Stmt], ind
 
 	# A RANGE VALUE walks the same counted loop the literal above does, reading its bounds out
 	# of the struct instead of out of the syntax. It is a separate arm because the literal form
-	# never materialises a value at all — `for i in 0..n` has no `zg_range` in it — and giving
+	# never materialises a value at all — `for i in 0..n` has no `zgh_range` in it — and giving
 	# the common loop both spellings would make every `for` over a range pay for a struct the
 	# overwhelmingly common one does not need.
 	return c_forrangeval(em, var, iter, ct, body, ind) if c_is_range_ty(ct)
@@ -24604,7 +24714,7 @@ fn c_part_bind(mut &em: Emitter, mut &pre: str, t: ast.Ty, rendered: str, held: 
 # shape zrt_defer takes, which no release has: some take an address and some the value.
 #
 # Every one of them already exists, because a list ELEMENT vtable needs exactly this
-# signature: `zg_elemdrop_<kind>` is emitted in the prelude for list, map and str, and
+# signature: `zgh_elemdrop_<kind>` is emitted in the prelude for list, map and str, and
 # beside the generated drop for a struct. So this is not a fourth dispatch — it is
 # c_elem_kind, the one that exists so the decision is not written out twice, plus a prefix.
 # It was a longhand copy, and the copy is how a kind gets added to one and not the other.
@@ -24617,7 +24727,7 @@ fn c_drop_thunk(mut &em: Emitter, t: ast.Ty) -> str {
 
 	return "" if k == ""
 
-	return c_ty_helper("elemdrop", k)
+	return c_helper_of("elemdrop", k)
 }
 
 # c_scope_forget drops the pending-release ENTRIES for a scope that has ended. Nothing is
@@ -27267,11 +27377,11 @@ fn c_is_this_ty(t: ast.Ty) -> bool {
 }
 
 fn c_spec_vt_type(sp: str) -> str {
-	return f"zg_specvt_{c_spec_cname(sp)}"
+	return c_helper_of("specvt", c_ty_cname(sp))
 }
 
 fn c_spec_vt_name(sp: str, target: str) -> str {
-	return f"zg_specvt_{c_spec_cname(sp)}_{c_spec_cname(target)}"
+	return c_helper_of2("specvt", c_ty_cname(sp), c_ty_cname(target))
 }
 
 # c_spec_vt_decl writes the struct a spec's tables have: the payload's copy and drop first —
@@ -27365,7 +27475,7 @@ fn c_spec_slot_ret(sp: ast.SpecDecl, ip: ast.ImplDecl, req: ast.FnDecl, m: ast.F
 # concrete type, through `c_render_of` — the generator every other structural rendering in this
 # file goes through, so a boxed struct renders exactly as an unboxed one does.
 fn c_spec_render_register(mut &em: Emitter, key: str, target: str) -> str {
-	rn := c_spec_cname(f"specrender${key}${target}")
+	rn := c_helper_of2("specrender", c_ty_cname(key), c_ty_cname(target))
 	for n in em.svt_names {
 		return rn if n == rn
 	}
@@ -27376,8 +27486,9 @@ fn c_spec_render_register(mut &em: Emitter, key: str, target: str) -> str {
 	# THE TARGET'S TYPE, not a name that spells it, and the const goes AFTER: a built-in target
 	# gives `ct` a `const char*`, so `const {ct} *` is `const const char* *` and `TNamed("str")`
 	# is not the str `c_render_of` knows how to render.
-	body := c_render_of(em, parser.p_ty_of_name(target), f"(*({ct} const *)zg_p)", true)
-	em.svt_decls.append(f"static const char *{rn}(const void *zg_p) {{\n    return {body};\n}}\n")
+	pp := c_helper_name("p", "")
+	body := c_render_of(em, parser.p_ty_of_name(target), f"(*({ct} const *){pp})", true)
+	em.svt_decls.append(f"static const char *{rn}(const void *{pp}) {{\n    return {body};\n}}\n")
 	return rn
 }
 
@@ -27391,7 +27502,7 @@ fn c_spec_render_register(mut &em: Emitter, key: str, target: str) -> str {
 fn c_spec_render_disp(mut &em: Emitter, sp: str, inner: str) -> str {
 	c_spec_no_impl(em, sp, "rendering a value of")
 
-	dn := c_spec_cname(f"specrenderdisp${sp}")
+	dn := c_helper_of("specrenderdisp", c_ty_cname(sp))
 	for n in em.svt_names {
 		return f"{dn}({inner})" if n == dn
 	}
@@ -27402,10 +27513,11 @@ fn c_spec_render_disp(mut &em: Emitter, sp: str, inner: str) -> str {
 	# boxes, a struct holding one — and those are written ahead of every table. Without the
 	# prototype only a site inside a function body saw the definition, and cc reported an
 	# implicit declaration for any composite holding the box.
-	em.rnd_protos.append(f"static const char *{dn}({c_ty_cname(sp)} zg_self);\n")
+	sv := c_helper_name("self", "")
+	em.rnd_protos.append(f"static const char *{dn}({c_ty_cname(sp)} {sv});\n")
 
-	mut out := f"static const char *{dn}({c_ty_cname(sp)} zg_self) {{\n"
-	out = out + f"    return ((const {c_spec_vt_type(sp)} *)zrt_dyn_vt(zg_self))->render(zrt_dyn_payload(zg_self));\n}}\n"
+	mut out := f"static const char *{dn}({c_ty_cname(sp)} {sv}) {{\n"
+	out = out + f"    return ((const {c_spec_vt_type(sp)} *)zrt_dyn_vt({sv}))->render(zrt_dyn_payload({sv}));\n}}\n"
 	em.svt_decls.append(out)
 	return f"{dn}({inner})"
 }
@@ -27437,7 +27549,7 @@ fn c_target_ctype(nm: str) -> str {
 # already says WHICH, where a type carrying two of them has no name-resolution answer to give.
 fn c_spec_shim_register(mut &em: Emitter, sp: ast.SpecDecl, ip: ast.ImplDecl, req: ast.FnDecl) -> str {
 	key := ast.spec_key(sp.name, ip.args)
-	sn := c_spec_cname(f"specshim${key}${ip.target}${req.name}")
+	sn := c_helper_ofs("specshim", [c_ty_cname(key), c_ty_cname(ip.target), c_fn_cname(ip.target, req.name)])
 	for n in em.svt_names {
 		return sn if n == sn
 	}
@@ -27448,19 +27560,21 @@ fn c_spec_shim_register(mut &em: Emitter, sp: ast.SpecDecl, ip: ast.ImplDecl, re
 	# shim's C signature and the slot's cannot come apart.
 	m := c_default_method(sp, ip, req)
 	ct := c_target_ctype(ip.target)
-	mut ps := "void *zg_p"
+	pp := c_helper_name("p", "")
+	mut ps := f"void *{pp}"
 
 	# A `mut &this` RECEIVER IS ALREADY A POINTER, and the payload pointer is the one it wants
 	# — the cell is where the value lives, so a mutation through a box mutates the boxed value.
 	# Dereferencing unconditionally passed a `Cat` where `zg_Cat_add` takes a `Cat *`.
-	mut xs := f"*({ct} *)zg_p"
+	mut xs := f"*({ct} *){pp}"
 	if m.params[0].is_ref {
-		xs = f"({ct} *)zg_p"
+		xs = f"({ct} *){pp}"
 	}
 	mut i := 1
 	for i < m.params.len() {
-		ps = f"{ps}, {c_param_ctype(m.params[i])} zg_a{strconv.to_string(i, 10)}"
-		xs = f"{xs}, zg_a{strconv.to_string(i, 10)}"
+		ai := c_helper_name("a", strconv.to_string(i, 10))
+		ps = f"{ps}, {c_param_ctype(m.params[i])} {ai}"
+		xs = f"{xs}, {ai}"
 		i = i + 1
 	}
 
@@ -27504,7 +27618,7 @@ fn c_spec_box(mut &em: Emitter, want: ast.Ty, e: ast.Expr, sb: Subst) -> str {
 
 # c_spec_box_register names the thunk and emits it once.
 fn c_spec_box_register(mut &em: Emitter, key: str, target: str) -> str {
-	bn := c_spec_cname(f"specbox${key}${target}")
+	bn := c_helper_of2("specbox", c_ty_cname(key), c_ty_cname(target))
 	for n in em.svt_names {
 		return bn if n == bn
 	}
@@ -27512,10 +27626,12 @@ fn c_spec_box_register(mut &em: Emitter, key: str, target: str) -> str {
 
 	ct := c_target_ctype(target)
 	vn := c_spec_vt_name(key, target)
-	mut out := f"static void *{bn}({ct} zg_v) {{\n"
-	out = out + f"    void *zg_c = zrt_dyn_alloc(sizeof({ct}), &{vn});\n"
-	out = out + f"    *({ct} *)zrt_dyn_payload(zg_c) = zg_v;\n"
-	out = out + "    return zg_c;\n}\n"
+	pv := c_helper_name("v", "")
+	pc := c_helper_name("c", "")
+	mut out := f"static void *{bn}({ct} {pv}) {{\n"
+	out = out + f"    void *{pc} = zrt_dyn_alloc(sizeof({ct}), &{vn});\n"
+	out = out + f"    *({ct} *)zrt_dyn_payload({pc}) = {pv};\n"
+	out = out + f"    return {pc};\n}}\n"
 	em.svt_decls.append(out)
 	return bn
 }
@@ -28682,7 +28798,7 @@ fn c_probe_books(mut &em: Emitter, fn_d: ast.FnDecl, cname: str, at: int) {
 		if fn_d.recv != "" {
 			who = f"`{fn_d.recv}.{fn_d.name}`"
 		}
-		if parser.strings_has_prefix(fn_d.name, "lambda__") {
+		if c_is_lambda_name(fn_d.name) {
 			who = "this closure"
 		}
 		mut size := f"{em.fn_frame} bytes"
@@ -29741,8 +29857,8 @@ fn c_is_filed(nm: str) -> bool {
 }
 
 # c_file_cname is the C name of anything spelled with a file's new type name: `zgf_` and the
-# name escaped (c_cname_escape). Nothing else is spelled under the prefix but a Ref's drop
-# thunk (c_ref_drop_thunk), whose key holds a `$` no name has.
+# name escaped (c_cname_escape). Nothing else is spelled under the prefix: a Ref's drop thunk
+# was, and is a generated helper now (c_helper_name).
 fn c_file_cname(nm: str) -> str {
 	return c_cname_escape("zgf_", nm)
 }
@@ -30616,22 +30732,16 @@ fn c_emit_unit_as(prog0: ast.File, own0: ast.File, ft: FileTypes, ms: Mods, whol
 	hdr = hdr + "\n"
 
 	# after the include, because the pair is zrt_retain and zrt_release — the typedef above
-	# goes before it so that a prototype naming `zg_fnptr` has a type to name
+	# goes before it so that a prototype naming `zgh_fnptr` has a type to name
 	if em.used_fnptr {
 		hdr = hdr + c_fnptr_helpers()
 	}
 	if em.used_rt {
-		hdr = hdr + "static const zrt_elem_vt zg_listvt = {NULL, NULL};\n"
-		hdr = hdr + "static void zg_elemcopy_list(void *dst, const void *src) { zrt_list_copy((zrt_list*)dst, (const zrt_list*)src); }\n"
-		hdr = hdr + "static void zg_elemdrop_list(void *elem) { zrt_list_drop((zrt_list*)elem); }\n"
-		hdr = hdr + "static const zrt_elem_vt zg_listvt_list = {zg_elemcopy_list, zg_elemdrop_list};\n"
-		hdr = hdr + "static void zg_elemcopy_map(void *dst, const void *src) { zrt_map_copy((zrt_map*)dst, (const zrt_map*)src); }\n"
-		hdr = hdr + "static void zg_elemdrop_map(void *elem) { zrt_map_drop((zrt_map*)elem); }\n"
-		hdr = hdr + "static const zrt_elem_vt zg_listvt_map = {zg_elemcopy_map, zg_elemdrop_map};\n"
-		hdr = hdr + "static void zg_elemcopy_str(void *dst, const void *src) { *(const char**)dst = zrt_str_retain(*(const char* const*)src); }\n"
-		hdr = hdr + "static void zg_elemdrop_str(void *elem) { zrt_str_release(*(const char**)elem); }\n"
-		hdr = hdr + "static const zrt_elem_vt zg_listvt_str = {zg_elemcopy_str, zg_elemdrop_str};\n"
-		hdr = hdr + "static zrt_list zg_empty_list(size_t esz, const zrt_elem_vt *vt) { zrt_list l; zrt_list_init(&l, esz, vt); return l; }\n\n"
+		hdr = hdr + "static const zrt_elem_vt " + c_helper_name("listvt", "") + " = {NULL, NULL};\n"
+		hdr = hdr + c_prelude_vt("list", "zrt_list_copy((zrt_list*)dst, (const zrt_list*)src);", "zrt_list_drop((zrt_list*)elem);")
+		hdr = hdr + c_prelude_vt("map", "zrt_map_copy((zrt_map*)dst, (const zrt_map*)src);", "zrt_map_drop((zrt_map*)elem);")
+		hdr = hdr + c_prelude_vt("str", "*(const char**)dst = zrt_str_retain(*(const char* const*)src);", "zrt_str_release(*(const char**)elem);")
+		hdr = hdr + "static zrt_list " + c_helper_name("emptylist", "") + "(size_t esz, const zrt_elem_vt *vt) { zrt_list l; zrt_list_init(&l, esz, vt); return l; }\n\n"
 	}
 
 	# the tuples and carriers found while the bodies were lowered, ONE stream in the order
@@ -30658,7 +30768,7 @@ fn c_emit_unit_as(prog0: ast.File, own0: ast.File, ft: FileTypes, ms: Mods, whol
 	# THE SPEC WITNESS TABLES go with them, and for the same reason twice over: a table's
 	# slots are program functions, so it has to follow the prototypes that declare them.
 	# THE RENDERERS COME FIRST of the two, because a witness table's rendering slot is filled
-	# by a thunk that CALLS one: a boxed `Fd` renders through `zg_render_Fd`. The tables used
+	# by a thunk that CALLS one: a boxed `Fd` renders through `zgh_render_Fd`. The tables used
 	# to lead, and cc reported an implicit declaration against generated C.
 	mut rnds := ""
 	for d in em.rnd_protos {

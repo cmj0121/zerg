@@ -868,7 +868,7 @@ int zrt_select(zrt_sel_case *cases, size_t n, bool has_default, bool has_exit) {
 
 /* The two channel adapters for the cleanup stack. zrt_defer takes a `void (*)(void *)` and
  * a release does not have that shape, so every owning type needs one — but for a list, a
- * map, a str and a struct the EMITTER already generates it (`zg_elemdrop_<kind>`), because
+ * map, a str and a struct the EMITTER already generates it (`zgh_elemdrop_<kind>`), because
  * a list element vtable takes the same signature. A channel is never a list element, so
  * these two have no generated counterpart and live here instead. They stay in chan.c and
  * not in unwind.c so a program that links no channels does not pull this unit in through

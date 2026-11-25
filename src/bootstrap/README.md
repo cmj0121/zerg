@@ -271,6 +271,10 @@ the program, which is what the assertion exists to catch.
   against generated code: both flatten to one top-level namespace and one C symbol. `zerg`
   refuses the collision at the constant's declaration. (A LOCAL named after a function
   stays legal in both compilers — it shadows, which is the ordinary scoping rule.)
+- **A type named `fnptr` meets the seed's fn-value type.** A held function is stored as
+  `zg_fnptr` (`typedef void (*zg_fnptr)(void)`), the C name a user `struct fnptr` takes too,
+  so a program holding both a fn value and that struct reaches cc as "typedef redefinition".
+  `zerg` spells every name it makes up under `zgh_`, apart from every user name.
 - **`match` of an optional against a range is accepted.** `zerg` refuses the arm.
 - **An `int` narrowed to a `byte` parameter is accepted.** `take(1000)` on a `fn take(b:
 byte)` compiles to a truncation and cc warns about the generated C. `zerg` refuses it: a

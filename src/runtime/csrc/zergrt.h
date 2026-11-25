@@ -1893,7 +1893,7 @@ void zrt_chan_sender_release(zrt_chan *ch);
  * time — a reassigned binding gives back what it ends up with.
  *
  * Only channels. Every other owning type is a list ELEMENT somewhere, so the emitter
- * already generates a thunk of this shape for it (`zg_elemdrop_<kind>`) and registers that. */
+ * already generates a thunk of this shape for it (`zgh_elemdrop_<kind>`) and registers that. */
 void zrt_defer_chan_release(void *p);
 void zrt_defer_chan_sender_release(void *p);
 

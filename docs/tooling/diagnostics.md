@@ -493,6 +493,7 @@ shipping compiler rather than a part of it (the line
 | `E4125` | `#[derive(Encode)]` / `#[derive(Decode)]` in a file that does not import `codec`                      |
 | `E4126` | a pattern binds each name once, and this one binds `…` twice                                          |
 | `E4127` | a function on a direct recursion cycle whose array-typed locals exceed what an overflow unwinds in    |
+| `E4128` | `…` and `…` are both … in C — two declarations share one C name; rename one                           |
 | `E5001` | this entry file declares no `fn main`                                                                 |
 | `E5002` | cannot resolve import `…`, and where it was looked for                                                |
 | `E5007` | `…` is a module this build compiles and this module did not import                                    |

@@ -290,8 +290,12 @@ Zerg program links, since the object's own bodies call into them.
 
 **Symbol names are stable and unmangled.** C's symbol space is flat and a stable ABI forbids mangling, so
 an exported name is deterministic: it is the declaration name under a fixed prefix, and a method also
-carries its type. A clash on the flat exported surface is a compile error in library mode. (The exact
-scheme, and any per-declaration link-name override, are open questions — see below.)
+carries its type. A method or associated item whose C name another declaration also spells (`fn Foo_bar`
+beside `Foo.bar`, both `zg_Foo_bar`) is refused in every build, _E4128_ (see
+[Diagnostics](../tooling/diagnostics.md)); a name declared twice is reported as a duplicate. The names
+the compiler generates for itself never share the `zg_` space, so a declaration's symbol can only ever meet
+another declaration's. (The exact scheme, and any per-declaration link-name override, are open questions —
+see below.)
 
 **The prefix is `zg_`, and it carries no package segment** — `pub fn add` in a `--emit lib` build exports
 `zg_add`, which `nm` will show you. That is not a placeholder for `zg_<pkg>_add`: there is no package

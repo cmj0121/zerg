@@ -251,19 +251,19 @@ reporting nothing at all. The first honest run named it.
 
 So the discipline is emitted now. What each owner does today, and what is left:
 
-| owner          | today                                             | what is left                |
-| -------------- | ------------------------------------------------- | --------------------------- |
-| `chan`         | binding, and a handle nobody binds                | —                           |
-| `list` / `map` | binding, parameter, element vtable, rvalue temp   | —                           |
-| `str`          | refcounted cell; binding, parameter, every join   | —                           |
-| struct         | `zg_drop_<T>` beside `zg_copy_<T>`, same fields   | —                           |
-| carrier        | copy + drop, binding, parameter, element vtable   | the Right of an `Either`    |
-| enum           | `zg_drop_<E>` beside `zg_copy_<E>`, per variant   | —                           |
-| ref-box        | the cell's drop is the enum's own                 | an ITERATIVE chain teardown |
-| fn value       | the environment is a cell; one pair, `zg_*_fnptr` | —                           |
-| tuple          | `_drop` beside `_copy`, per shape, element vtable | —                           |
-| assignment     | the old value is dropped for an enum, a carrier   | every other owning type     |
-| all of them    | registered where declared, given back by unwind   | —                           |
+| owner          | today                                              | what is left                |
+| -------------- | -------------------------------------------------- | --------------------------- |
+| `chan`         | binding, and a handle nobody binds                 | —                           |
+| `list` / `map` | binding, parameter, element vtable, rvalue temp    | —                           |
+| `str`          | refcounted cell; binding, parameter, every join    | —                           |
+| struct         | `zgh_drop_<T>` beside `zgh_copy_<T>`, same fields  | —                           |
+| carrier        | copy + drop, binding, parameter, element vtable    | the Right of an `Either`    |
+| enum           | `zgh_drop_<E>` beside `zgh_copy_<E>`, per variant  | —                           |
+| ref-box        | the cell's drop is the enum's own                  | an ITERATIVE chain teardown |
+| fn value       | the environment is a cell; one pair, `zgh_*_fnptr` | —                           |
+| tuple          | `_drop` beside `_copy`, per shape, element vtable  | —                           |
+| assignment     | the old value is dropped for an enum, a carrier    | every other owning type     |
+| all of them    | registered where declared, given back by unwind    | —                           |
 
 The concurrency corpus is at **0 leak reports**, from 39, and `scripts/sanitize-conc.sh`
 runs with `detect_leaks=1` — a leak there is now a regression rather than a known debt. The

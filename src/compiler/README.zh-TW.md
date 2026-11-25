@@ -223,19 +223,19 @@ emit **重用 runtime 的資料結構原語**（`zrt_list_*`、用 `zrt_ref_allo
 
 所以那套紀律現在是會被 emit 出來的。每個擁有者今天做到哪裡，還剩下什麼：
 
-| 擁有者         | 今天                                                   | 還剩下什麼         |
-| -------------- | ------------------------------------------------------ | ------------------ |
-| `chan`         | binding，以及沒被 bind 的 handle                       | ——                 |
-| `list` / `map` | binding、參數、元素 vtable、rvalue 暫存值              | ——                 |
-| `str`          | refcount cell；binding、參數、每一次 join              | ——                 |
-| struct         | `zg_drop_<T>` 就寫在 `zg_copy_<T>` 旁邊，走同一組欄位  | ——                 |
-| carrier        | copy 加 drop；binding、參數、元素 vtable               | `Either` 的 Right  |
-| enum           | `zg_drop_<E>` 就寫在 `zg_copy_<E>` 旁邊，逐個 variant  | ——                 |
-| ref-box        | cell 的 drop 就是 enum 自己的 drop                     | 改成迭代式的鏈拆解 |
-| fn value       | 捕獲環境是一個 cell；一組 `zg_*_fnptr`                 | ——                 |
-| tuple          | `_drop` 就寫在 `_copy` 旁邊，按形狀產生，含元素 vtable | ——                 |
-| assignment     | enum 與 carrier 的舊值會被 drop                        | 其他每一種擁有型別 |
-| 以上全部       | 在宣告處註冊，靠 unwind 還回去                         | ——                 |
+| 擁有者         | 今天                                                    | 還剩下什麼         |
+| -------------- | ------------------------------------------------------- | ------------------ |
+| `chan`         | binding，以及沒被 bind 的 handle                        | ——                 |
+| `list` / `map` | binding、參數、元素 vtable、rvalue 暫存值               | ——                 |
+| `str`          | refcount cell；binding、參數、每一次 join               | ——                 |
+| struct         | `zgh_drop_<T>` 就寫在 `zgh_copy_<T>` 旁邊，走同一組欄位 | ——                 |
+| carrier        | copy 加 drop；binding、參數、元素 vtable                | `Either` 的 Right  |
+| enum           | `zgh_drop_<E>` 就寫在 `zgh_copy_<E>` 旁邊，逐個 variant | ——                 |
+| ref-box        | cell 的 drop 就是 enum 自己的 drop                      | 改成迭代式的鏈拆解 |
+| fn value       | 捕獲環境是一個 cell；一組 `zgh_*_fnptr`                 | ——                 |
+| tuple          | `_drop` 就寫在 `_copy` 旁邊，按形狀產生，含元素 vtable  | ——                 |
+| assignment     | enum 與 carrier 的舊值會被 drop                         | 其他每一種擁有型別 |
+| 以上全部       | 在宣告處註冊，靠 unwind 還回去                          | ——                 |
 
 concurrency corpus 現在是 **0 筆洩漏報告**（從 39 筆），而 `scripts/sanitize-conc.sh` 已經打開
 `detect_leaks=1`——那裡再出現洩漏就是 regression，不是已知欠債。`str` 那一列本來不是「多 emit

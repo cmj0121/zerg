@@ -221,6 +221,10 @@ chan[int]() }`——或任何不是字面值、模組常數，或它們之間算
   emit 出去，然後 cc 對著產生的程式碼報 "redefinition of 'zg_f'"：兩者都攤平進同一個頂層命名空間、同一個
   C 符號。`zerg` 在常數的宣告處拒絕這個衝突。（以函式為名的**區域**變數在兩個編譯器裡都仍然合法——那是
   遮蔽，屬於一般的作用域規則。）
+- **名為 `fnptr` 的型別會撞上 seed 的 fn 值型別。** 被持有的函式存成 `zg_fnptr`
+  （`typedef void (*zg_fnptr)(void)`），使用者的 `struct fnptr` 也取這個 C 名稱，所以同時持有 fn
+  值與該 struct 的程式會帶著 "typedef redefinition" 抵達 cc。`zerg` 把自己造出的每個名稱都拼在 `zgh_`
+  之下，與所有使用者名稱分開。
 - **拿 optional 去 `match` 一個 range 會被接受。** `zerg` 拒絕該 arm。
 - **收窄成 `byte` 參數的 `int` 會被接受。** 對 `fn take(b: byte)` 呼叫 `take(1000)` 會編成一次截斷，cc 則
   對著產生的 C 發出警告。`zerg` 拒絕它：`byte` 會**加寬**成 `int`，反方向則什麼都不成立，因為 byte 的算術

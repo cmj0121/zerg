@@ -290,6 +290,12 @@ jobs:
       - name: A C file includes a library's header, links, and runs
         run: make ffi-export
 
+      # A declaration's C name is `zg_<name>`, which is that header's ABI; a name the emitter
+      # makes for itself is `zgh_`, and grows linearly with its key. The compiler's own lexer
+      # reads its sources and a nested fixture is built, so it rides with the toolchain.
+      - name: The program's names alone are spelled under zg_, and generated names stay linear
+        run: make cname-space
+
       # --- 7b-stop. the place a stop names ---------------------------------------
       # What the goldens read past, and `zerg build -g`: lldb on macOS, objdump on Linux.
       - name: A stop names its statement, and -g resolves a Zerg line

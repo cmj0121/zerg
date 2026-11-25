@@ -10985,6 +10985,248 @@ fn c_eq_pair(mut &em: Emitter, t: ast.Ty, xa: str, xb: str) -> str {
 	return out
 }
 
+# --- a derived `==` over a deep value (#481) ---------------------------------------------
+#
+# A derived `eq` recursed through the type's own `eq`, one C frame per level, so comparing a
+# value built 200000 deep overflowed the stack. On a type that reaches itself the derived
+# method's C body is swapped for a walk (walk.c): one STEP per type on the cycle, which
+# compares a shallow part inline and PUSHES a deep one for the walker's loop to visit. The
+# Zerg source of the derived impl is unchanged, so every reader of it sees the same method.
+
+# c_walk_deep is whether a type reaches itself through its parts — the types its renderer
+# renders, which are every part a structural operation visits — and so whether an operation
+# over it walks instead of recursing.
+fn c_walk_deep(mut &em: Emitter, t: ast.Ty) -> bool {
+	return false if not c_has_parts(em, t)
+
+	for p in c_render_parts(em, t) {
+		return true if c_walk_part_deep(em, p, t)
+	}
+	return false
+}
+
+# c_walk_part_deep is whether one part of `root` reaches `root` again: the part is on root's
+# cycle, so a value can nest it without bound.
+fn c_walk_part_deep(mut &em: Emitter, part: ast.Ty, root: ast.Ty) -> bool {
+	mut seen: list[str] = []
+	return c_walk_reaches(em, part, c_render_key(em, root), seen)
+}
+
+# A KNOWN LIMIT: a box (a spec-typed part) has no parts to read here, so a cycle that closes
+# only through one is answered shallow, and that operation still recurses through the box.
+fn c_walk_reaches(mut &em: Emitter, t: ast.Ty, root: str, mut &seen: list[str]) -> bool {
+	return false if c_is_spec_name(em, c_named_of(t)) or not c_has_parts(em, t)
+
+	key := c_render_key(em, t)
+	return true if key == root
+
+	for n in seen {
+		return false if n == key
+	}
+	seen.append(key)
+
+	for p in c_render_parts(em, t) {
+		return true if c_walk_reaches(em, p, root, seen)
+	}
+	return false
+}
+
+# c_eq_walked is whether a function is a derived `eq` whose body is the walk: the method an
+# `Eq` derive writes, on a type that reaches itself.
+fn c_eq_walked(mut &em: Emitter, fn_d: ast.FnDecl) -> bool {
+	return false if fn_d.name != "eq" or fn_d.recv == "" or fn_d.params.len() != 2
+	return false if ast.derive_origin(fn_d.path) == fn_d.path
+
+	return c_walk_deep(em, fn_d.params[0].ty)
+}
+
+# c_eq_walk_body is that body: the walk from the receiver's step, then the return every other
+# body makes — the unwind that gives back the two by-value operands, and the answer.
+fn c_eq_walk_body(mut &em: Emitter, fn_d: ast.FnDecl, fmark: str) -> str {
+	t := fn_d.params[0].ty
+	step := c_eq_step_fn(em, t)
+	mut seen: list[str] = []
+	mut held := "false"
+	for p in c_render_parts(em, t) {
+		if c_eq_runs(em, p, seen) {
+			held = "true"
+		}
+	}
+	ca := c_var_cname(em, fn_d.params[0].name)
+	cb := c_var_cname(em, fn_d.params[1].name)
+	em.fn_mark_used = true
+	return f"    {{ bool zgt_rv = zrt_eq_walk({step}, &{ca}, &{cb}, {held});\n    zrt_unwind_to({fmark});\n    return zgt_rv; }}\n"
+}
+
+# c_eq_user is whether a type's `==` is the program's own `eq` — an impl somebody wrote, not
+# one a derive did. A walk calls it as a leaf, which is where its recursion stays bounded only
+# by the stack (D3), and where it can abort.
+fn c_eq_user(mut &em: Emitter, t: ast.Ty) -> bool {
+	return c_has_eq(em, t) and c_user_method(em, t, "eq")
+}
+
+# c_user_method is whether a type's method is one the program wrote rather than a derive's.
+fn c_user_method(mut &em: Emitter, t: ast.Ty, meth: str) -> bool {
+	row := c_sig_row(em, c_sig_key(c_named_of(t), meth))
+	return true if row < 0
+
+	path := em.sig_path[row]
+	return ast.derive_origin(path) == path
+}
+
+# c_eq_runs is whether comparing a value of this type can run the program's own code, and so
+# abort — c_render_runs' question asked of `==`. A map's keys and a set's members count: a
+# lookup hashes them with the key type's `hash` and compares them with its `eq`.
+fn c_eq_runs(mut &em: Emitter, t: ast.Ty, mut &seen: list[str]) -> bool {
+	return true if c_is_spec_name(em, c_named_of(t)) or c_eq_user(em, t)
+	return true if c_impls(em, c_named_of(t), "Hash") and c_user_method(em, t, "hash")
+	return false if c_is_str(t) or not c_has_parts(em, t)
+
+	key := c_render_key(em, t)
+	for n in seen {
+		return false if n == key
+	}
+	seen.append(key)
+
+	for p in c_render_parts(em, t) {
+		return true if c_eq_runs(em, p, seen)
+	}
+	return false
+}
+
+# c_eq_step_fn names one type's step and emits it once, the prototype registered before the
+# body is built for the reason c_render_fn's is: a part on the cycle names this step back.
+# The steps share the renderers' streams, whose names they cannot meet (c_helper_name).
+fn c_eq_step_fn(mut &em: Emitter, t: ast.Ty) -> str {
+	name := c_helper_name("eqstep", c_render_key(em, t))
+	for n in em.rnd_names {
+		return name if n == name
+	}
+
+	em.rnd_names.append(name)
+	em.used_rt = true
+	sig := f"static int {name}(zrt_eqw *w, const void *pa, const void *pb, size_t *at)"
+	em.rnd_protos.append(sig + ";\n")
+	em.rnd_decls.append(sig + " {\n" + c_eq_step_body(em, t) + "}\n\n")
+	return name
+}
+
+# c_eq_step_body compares the parts in declaration order, as the derived `==` does. A type
+# off the cycle, or of a kind c_eq_steps does not walk, is one LEAF: the whole `==` inline. A
+# list and a map are the runtime's container steps.
+fn c_eq_step_body(mut &em: Emitter, t: ast.Ty) -> str {
+	ct := c_type(t)
+	if not c_eq_steps(em, t) or not c_walk_deep(em, t) {
+		xa := c_tmp(em, "zgt_eqs")
+		xb := xa + "b"
+		cmp := c_eq_pair(em, t, xa, xb)
+		return f"    (void)w; (void)at;\n    {ct} {xa} = *({ct} const *)pa;\n    {ct} {xb} = *({ct} const *)pb;\n    return ({cmp}) ? ZRT_EQ_YES : ZRT_EQ_NO;\n"
+	}
+
+	return f"    return zrt_eqstep_list(w, {c_eq_step_fn(em, c_list_elem(t))}, (const zrt_list *)pa, (const zrt_list *)pb, at);\n" if c_is_list(t)
+	return f"    return zrt_eqstep_map(w, {c_eq_step_fn(em, c_map_val_ty(t))}, (const zrt_map *)pa, (const zrt_map *)pb, at);\n" if c_is_map(t)
+
+	head := f"    {ct} const *a = ({ct} const *)pa;\n    {ct} const *b = ({ct} const *)pb;\n"
+	return head + c_eq_step_arr(em, t) if c_is_arr(t)
+
+	mut tys: list[ast.Ty] = []
+	mut slots: list[str] = []
+	mut boxed: list[bool] = []
+	if c_is_tuple(t) {
+		for et in c_tuple_tys(t) {
+			slots.append(f"->f{strconv.to_string(tys.len(), 10)}")
+			tys.append(et)
+			boxed.append(false)
+		}
+		return head + c_eq_step_parts(em, t, tys, slots, boxed, "    ")
+	}
+
+	nm := c_named_of(t)
+	mut i := 0
+	if c_is_enum_ty(em, t) {
+		mut out := head + "    if (*at == 0 && a->tag != b->tag) { return ZRT_EQ_NO; }\n    switch (a->tag) {\n"
+		for i < em.var_name.len() {
+			if em.var_enum[i] == nm {
+				vn := em.var_name[i]
+				tys = []
+				slots = []
+				boxed = []
+				mut j := 0
+				for j < em.vf_variant.len() {
+					if em.vf_enum[j] == nm and em.vf_variant[j] == vn {
+						tys.append(em.vf_ty[j])
+						slots.append(f"->u.{vn}.f{strconv.to_string(em.vf_index[j], 10)}")
+						boxed.append(em.vf_boxed[j])
+					}
+					j = j + 1
+				}
+				out = out + f"    case {strconv.to_string(em.var_tag[i], 10)}: {{\n" + c_eq_step_parts(em, t, tys, slots, boxed, "        ") + "    }\n"
+			}
+			i = i + 1
+		}
+		return out + "    default: break;\n    }\n    return ZRT_EQ_YES;\n"
+	}
+
+	for i < em.fld_struct.len() {
+		if em.fld_struct[i] == nm {
+			tys.append(em.fld_ty[i])
+			slots.append(f"->zg_{em.fld_name[i]}")
+			boxed.append(false)
+		}
+		i = i + 1
+	}
+	return head + c_eq_step_parts(em, t, tys, slots, boxed, "    ")
+}
+
+# c_eq_steps is the kinds a step walks part by part. Every other kind — a set (whose members
+# are found, not walked), a type with its own `eq`, a carrier — is one leaf compared inline,
+# so a kind nobody taught the walk is still compared by the rule `==` already has.
+fn c_eq_steps(mut &em: Emitter, t: ast.Ty) -> bool {
+	return false if c_eq_user(em, t) or c_is_carrier(t)
+	return true if c_is_list(t) or c_is_map(t) or c_is_arr(t) or c_is_tuple(t)
+
+	return c_is_enum_ty(em, t) or c_is_struct_name(em, c_named_of(t))
+}
+
+# c_eq_step_parts is a run of parts, resumable: a deep part records where to come back, is
+# pushed, and the walker re-enters at the `case` after it once the part answered equal. A
+# slot is the access written after an operand (`->f0`), and a BOXED payload is read out of
+# its cell, which is where the pair is pushed from.
+fn c_eq_step_parts(mut &em: Emitter, t: ast.Ty, tys: list[ast.Ty], slots: list[str], boxed: list[bool], ind: str) -> str {
+	mut out := f"{ind}switch (*at) {{\n{ind}case 0:;\n"
+	mut k := 0
+	mut i := 0
+	for i < tys.len() {
+		pt := tys[i]
+		pct := c_type(pt)
+		mut pa := f"&a{slots[i]}"
+		mut pb := f"&b{slots[i]}"
+		if boxed[i] {
+			pa = f"zrt_ref_payload(a{slots[i]})"
+			pb = f"zrt_ref_payload(b{slots[i]})"
+		}
+		if c_eq_steps(em, pt) and c_walk_part_deep(em, pt, t) {
+			k = k + 1
+			ks := strconv.to_string(k, 10)
+			out = out + f"{ind}    *at = {ks}; zrt_eqw_push(w, {c_eq_step_fn(em, pt)}, {pa}, {pb}); return ZRT_EQ_PUSHED;\n{ind}case {ks}:;\n"
+		} else {
+			xa := c_tmp(em, "zgt_eqs")
+			xb := xa + "b"
+			cmp := c_eq_pair(em, pt, xa, xb)
+			out = out + f"{ind}    {{ {pct} {xa} = *({pct} const *)({pa}); {pct} {xb} = *({pct} const *)({pb}); if (!({cmp})) {{ return ZRT_EQ_NO; }} }}\n"
+		}
+		i = i + 1
+	}
+	return out + f"{ind}}}\n{ind}return ZRT_EQ_YES;\n"
+}
+
+# c_eq_step_arr is an array on the cycle, its index the resume point: each element pushed in
+# turn, after the last one equal.
+fn c_eq_step_arr(mut &em: Emitter, t: ast.Ty) -> str {
+	step := c_eq_step_fn(em, c_arr_elem(t))
+	return f"    if (*at == (size_t)({c_arr_key(t)})) {{ return ZRT_EQ_YES; }}\n    size_t i = (*at)++;\n    zrt_eqw_push(w, {step}, &a->v[i], &b->v[i]);\n    return ZRT_EQ_PUSHED;\n"
+}
+
 # c_eq_call lowers `a == b` / `a != b` on a type with an Eq impl as the CALL THE PROGRAMMER
 # COULD HAVE WRITTEN. `eq` and `ne` are ordinary methods, so rewriting the expression and
 # handing it back to c_expr gets the receiver copy, the name mangling and the argument rules
@@ -22029,7 +22271,8 @@ fn c_map_vt(mut &em: Emitter, kt: ast.Ty, vt: ast.Ty) -> str {
 	#
 	# Three explanations the reports ruled out, kept because each cost a measurement: it is
 	# not the BINDING read (`v := m[k]` deep-copies), not the insert (`m[k] = v` calls
-	# zrt_list_copy, which retains), and not `zrt_map_copy` (which deep-copies per entry).
+	# zrt_list_copy, which retains), and not `zrt_map_copy` (which shares the buffer, copying
+	# per entry only at the first write).
 	kc := c_elem_copy_fn(em, kt)
 	vc := c_elem_copy_fn(em, vt)
 	kd := c_elem_drop_fn(em, kt)
@@ -25980,7 +26223,13 @@ fn c_fn(mut &em: Emitter, fn_d: ast.FnDecl) -> str {
 		}
 	}
 
-	rendered := c_block(em, body, "    ")
+	# THE DERIVED BODY IS STILL LOWERED when the walk replaces it: lowering it is what refuses a
+	# part `==` means nothing on (an optional, a carrier), and the walk compares only what the
+	# body was allowed to.
+	mut rendered := c_block(em, body, "    ")
+	if c_eq_walked(em, fn_d) {
+		rendered = c_eq_walk_body(em, fn_d, fmark)
+	}
 
 	# Falling off the end is the one exit that renders nothing of its own, so it is the one
 	# that needs the unwind written out — but only when a parameter put something on the

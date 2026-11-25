@@ -386,6 +386,35 @@ void zrt_eqw_push(zrt_eqw *w, zrt_eq_step step, const void *a, const void *b);
 int zrt_eqstep_list(zrt_eqw *w, zrt_eq_step elem, const zrt_list *a, const zrt_list *b, size_t *at);
 int zrt_eqstep_map(zrt_eqw *w, zrt_eq_step val, const zrt_map *a, const zrt_map *b, size_t *at);
 
+/* A derived `Hash` on a type that reaches itself is the same kind of walk. A step hashes x's
+ * parts from part *at on, folding each into *acc, and answers ZRT_H_DONE (*acc is x's whole
+ * hash) or ZRT_H_PUSHED (it pushed one possibly-deep part with zrt_hw_push and set *at to the
+ * part to resume at). A DONE frame is popped and its hash folded into its parent's acc as the
+ * derive's fold does, `(acc ^ h) * 1099511628211`, so the value is the recursion's exactly. */
+enum { ZRT_H_DONE = 0, ZRT_H_PUSHED = 1 };
+typedef struct zrt_hw zrt_hw;
+typedef int (*zrt_hash_step)(zrt_hw *w, const void *x, uint64_t *acc, size_t *at);
+typedef struct {
+	zrt_hash_step step;
+	const void   *x;
+	uint64_t      acc;
+	size_t        at;
+} zrt_hf;
+struct zrt_hw {
+	zrt_hf *f;
+	size_t  len;
+	size_t  cap;
+	bool    held;
+	zrt_hf  inl[16];
+};
+
+/* zrt_hash_walk answers x's hash by driving `step` and every step it pushes; `held` is
+ * zrt_eq_walk's (a part's hand-written `hash` can abort). */
+uint64_t zrt_hash_walk(zrt_hash_step step, const void *x, bool held);
+
+/* zrt_hw_push puts one part on the walk, to be hashed from its first part. */
+void zrt_hw_push(zrt_hw *w, zrt_hash_step step, const void *x);
+
 /* --- abort / unwind + cleanup(defer) stack (unwind.c) -------------------- */
 
 /* zrt_cleanup is one pending deferred action on the cleanup stack: a thunk and

@@ -11045,17 +11045,20 @@ fn c_eq_walked(mut &em: Emitter, fn_d: ast.FnDecl) -> bool {
 fn c_eq_walk_body(mut &em: Emitter, fn_d: ast.FnDecl, fmark: str) -> str {
 	t := fn_d.params[0].ty
 	step := c_eq_step_fn(em, t)
-	mut seen: list[str] = []
-	mut held := "false"
-	for p in c_render_parts(em, t) {
-		if c_eq_runs(em, p, seen) {
-			held = "true"
-		}
-	}
 	ca := c_var_cname(em, fn_d.params[0].name)
 	cb := c_var_cname(em, fn_d.params[1].name)
 	em.fn_mark_used = true
-	return f"    {{ bool zgt_rv = zrt_eq_walk({step}, &{ca}, &{cb}, {held});\n    zrt_unwind_to({fmark});\n    return zgt_rv; }}\n"
+	return f"    {{ bool zgt_rv = zrt_eq_walk({step}, &{ca}, &{cb}, {c_walk_held(em, t)});\n    zrt_unwind_to({fmark});\n    return zgt_rv; }}\n"
+}
+
+# c_walk_held is a walk's `held` argument: whether some part can run the program's own code,
+# which can abort with the walk's frames on the heap.
+fn c_walk_held(mut &em: Emitter, t: ast.Ty) -> str {
+	mut seen: list[str] = []
+	for p in c_render_parts(em, t) {
+		return "true" if c_eq_runs(em, p, seen)
+	}
+	return "false"
 }
 
 # c_eq_user is whether a type's `==` is the program's own `eq` — an impl somebody wrote, not
@@ -11099,16 +11102,52 @@ fn c_eq_runs(mut &em: Emitter, t: ast.Ty, mut &seen: list[str]) -> bool {
 # The steps share the renderers' streams, whose names they cannot meet (c_helper_name).
 fn c_eq_step_fn(mut &em: Emitter, t: ast.Ty) -> str {
 	name := c_helper_name("eqstep", c_render_key(em, t))
+	sig := c_walk_step_sig(em, name, "zrt_eqw *w, const void *pa, const void *pb, size_t *at")
+	if sig != "" {
+		em.rnd_decls.append(sig + " {\n" + c_eq_step_body(em, t) + "}\n\n")
+	}
+	return name
+}
+
+# c_walk_step_sig registers a walk step's prototype the first time its name is asked for and
+# answers its signature, the caller then appending the body; a step already emitted is "".
+fn c_walk_step_sig(mut &em: Emitter, name: str, params: str) -> str {
 	for n in em.rnd_names {
-		return name if n == name
+		return "" if n == name
 	}
 
 	em.rnd_names.append(name)
 	em.used_rt = true
-	sig := f"static int {name}(zrt_eqw *w, const void *pa, const void *pb, size_t *at)"
+	sig := f"static int {name}({params})"
 	em.rnd_protos.append(sig + ";\n")
-	em.rnd_decls.append(sig + " {\n" + c_eq_step_body(em, t) + "}\n\n")
-	return name
+	return sig
+}
+
+# c_walk_variant_parts gathers one enum variant's payload for a step: each part's type, its
+# slot after an operand (`->u.V.f0`), and whether it is boxed in a cell.
+fn c_walk_variant_parts(mut &em: Emitter, nm: str, vn: str, mut &tys: list[ast.Ty], mut &slots: list[str], mut &boxed: list[bool]) {
+	mut j := 0
+	for j < em.vf_variant.len() {
+		if em.vf_enum[j] == nm and em.vf_variant[j] == vn {
+			tys.append(em.vf_ty[j])
+			slots.append(f"->u.{vn}.f{strconv.to_string(em.vf_index[j], 10)}")
+			boxed.append(em.vf_boxed[j])
+		}
+		j = j + 1
+	}
+}
+
+# c_walk_struct_parts gathers a struct's fields for a step, in declaration order.
+fn c_walk_struct_parts(mut &em: Emitter, nm: str, mut &tys: list[ast.Ty], mut &slots: list[str], mut &boxed: list[bool]) {
+	mut i := 0
+	for i < em.fld_struct.len() {
+		if em.fld_struct[i] == nm {
+			tys.append(em.fld_ty[i])
+			slots.append(f"->zg_{em.fld_name[i]}")
+			boxed.append(false)
+		}
+		i = i + 1
+	}
 }
 
 # c_eq_step_body compares the parts in declaration order, as the derived `==` does. A type
@@ -11147,19 +11186,10 @@ fn c_eq_step_body(mut &em: Emitter, t: ast.Ty) -> str {
 		mut out := head + "    if (*at == 0 && a->tag != b->tag) { return ZRT_EQ_NO; }\n    switch (a->tag) {\n"
 		for i < em.var_name.len() {
 			if em.var_enum[i] == nm {
-				vn := em.var_name[i]
 				tys = []
 				slots = []
 				boxed = []
-				mut j := 0
-				for j < em.vf_variant.len() {
-					if em.vf_enum[j] == nm and em.vf_variant[j] == vn {
-						tys.append(em.vf_ty[j])
-						slots.append(f"->u.{vn}.f{strconv.to_string(em.vf_index[j], 10)}")
-						boxed.append(em.vf_boxed[j])
-					}
-					j = j + 1
-				}
+				c_walk_variant_parts(em, nm, em.var_name[i], tys, slots, boxed)
 				out = out + f"    case {strconv.to_string(em.var_tag[i], 10)}: {{\n" + c_eq_step_parts(em, t, tys, slots, boxed, "        ") + "    }\n"
 			}
 			i = i + 1
@@ -11167,14 +11197,7 @@ fn c_eq_step_body(mut &em: Emitter, t: ast.Ty) -> str {
 		return out + "    default: break;\n    }\n    return ZRT_EQ_YES;\n"
 	}
 
-	for i < em.fld_struct.len() {
-		if em.fld_struct[i] == nm {
-			tys.append(em.fld_ty[i])
-			slots.append(f"->zg_{em.fld_name[i]}")
-			boxed.append(false)
-		}
-		i = i + 1
-	}
+	c_walk_struct_parts(em, nm, tys, slots, boxed)
 	return head + c_eq_step_parts(em, t, tys, slots, boxed, "    ")
 }
 
@@ -11225,6 +11248,134 @@ fn c_eq_step_parts(mut &em: Emitter, t: ast.Ty, tys: list[ast.Ty], slots: list[s
 fn c_eq_step_arr(mut &em: Emitter, t: ast.Ty) -> str {
 	step := c_eq_step_fn(em, c_arr_elem(t))
 	return f"    if (*at == (size_t)({c_arr_key(t)})) {{ return ZRT_EQ_YES; }}\n    size_t i = (*at)++;\n    zrt_eqw_push(w, {step}, &a->v[i], &b->v[i]);\n    return ZRT_EQ_PUSHED;\n"
+}
+
+# --- a derived `Hash` over a deep value (#481) -------------------------------------------
+#
+# The same swap for `hash`: a derived hash recursed through each part's own `hash`. Its walk
+# (zrt_hash_walk) folds a pushed part's hash into the parent once the part is DONE, the fold
+# c_derive_hash_mix writes, so a walked hash is the value the recursion answered.
+
+# c_hash_walked is whether a function is a derived `hash` whose body is the walk.
+fn c_hash_walked(mut &em: Emitter, fn_d: ast.FnDecl) -> bool {
+	return false if fn_d.name != "hash" or fn_d.recv == "" or fn_d.params.len() != 1
+	return false if ast.derive_origin(fn_d.path) == fn_d.path
+
+	return c_walk_deep(em, fn_d.params[0].ty)
+}
+
+fn c_hash_walk_body(mut &em: Emitter, fn_d: ast.FnDecl, fmark: str) -> str {
+	t := fn_d.params[0].ty
+	step := c_hash_step_fn(em, t)
+	cx := c_var_cname(em, fn_d.params[0].name)
+	em.fn_mark_used = true
+	return f"    {{ uint64_t zgt_rv = zrt_hash_walk({step}, &{cx}, {c_walk_held(em, t)});\n    zrt_unwind_to({fmark});\n    return zgt_rv; }}\n"
+}
+
+# c_hash_step_fn names one type's hash step and emits it once, as c_eq_step_fn does.
+fn c_hash_step_fn(mut &em: Emitter, t: ast.Ty) -> str {
+	name := c_helper_name("hashstep", c_render_key(em, t))
+	sig := c_walk_step_sig(em, name, "zrt_hw *w, const void *px, uint64_t *acc, size_t *at")
+	if sig != "" {
+		em.rnd_decls.append(sig + " {\n" + c_hash_step_body(em, t) + "}\n\n")
+	}
+	return name
+}
+
+# c_hash_step_body folds the parts in declaration order from the start the derive writes: a
+# struct's 0, a variant's position among the enum's variants. A type off the cycle, or one
+# c_hash_steps does not walk, is one LEAF: its whole hash inline.
+fn c_hash_step_body(mut &em: Emitter, t: ast.Ty) -> str {
+	ct := c_type(t)
+	if not c_hash_steps(em, t) or not c_walk_deep(em, t) {
+		x := c_tmp(em, "zgt_hs")
+		return f"    (void)w; (void)at;\n    {ct} {x} = *({ct} const *)px;\n    *acc = {c_hash_leaf(em, t, x)};\n    return ZRT_H_DONE;\n"
+	}
+
+	head := f"    {ct} const *x = ({ct} const *)px;\n"
+	nm := c_named_of(t)
+	mut tys: list[ast.Ty] = []
+	mut slots: list[str] = []
+	mut boxed: list[bool] = []
+	mut i := 0
+	if c_is_enum_ty(em, t) {
+		mut out := head + "    switch (x->tag) {\n"
+		mut vi := 0
+		for i < em.var_name.len() {
+			if em.var_enum[i] == nm {
+				tys = []
+				slots = []
+				boxed = []
+				c_walk_variant_parts(em, nm, em.var_name[i], tys, slots, boxed)
+				out = out + f"    case {strconv.to_string(em.var_tag[i], 10)}: {{\n" + c_hash_step_parts(em, t, strconv.to_string(vi, 10), tys, slots, boxed, "        ") + "    }\n"
+				vi = vi + 1
+			}
+			i = i + 1
+		}
+		return out + "    default: break;\n    }\n    return ZRT_H_DONE;\n"
+	}
+
+	c_walk_struct_parts(em, nm, tys, slots, boxed)
+	return head + c_hash_step_parts(em, t, "0", tys, slots, boxed, "    ")
+}
+
+# c_hash_steps is the kinds a hash step walks part by part: a declared struct or enum whose
+# `hash` a derive wrote. A hand-written `hash` is called as a leaf.
+fn c_hash_steps(mut &em: Emitter, t: ast.Ty) -> bool {
+	nm := c_named_of(t)
+	return false if c_is_carrier(t) or not c_impls(em, nm, "Hash") or c_user_method(em, t, "hash")
+
+	return c_is_enum_ty(em, t) or c_is_struct_name(em, nm)
+}
+
+# c_hash_step_parts is a run of parts, resumable as c_eq_step_parts' is: a part on the cycle
+# is pushed and folded in by the walker, every other part is folded in here.
+fn c_hash_step_parts(mut &em: Emitter, t: ast.Ty, start: str, tys: list[ast.Ty], slots: list[str], boxed: list[bool], ind: str) -> str {
+	mut out := f"{ind}switch (*at) {{\n{ind}case 0:;\n{ind}    *acc = (uint64_t){start};\n"
+	mut k := 0
+	mut i := 0
+	for i < tys.len() {
+		pt := tys[i]
+		pct := c_type(pt)
+		mut px := f"&x{slots[i]}"
+		if boxed[i] {
+			px = f"zrt_ref_payload(x{slots[i]})"
+		}
+		if c_hash_steps(em, pt) and c_walk_part_deep(em, pt, t) {
+			k = k + 1
+			ks := strconv.to_string(k, 10)
+			out = out + f"{ind}    *at = {ks}; zrt_hw_push(w, {c_hash_step_fn(em, pt)}, {px}); return ZRT_H_PUSHED;\n{ind}case {ks}:;\n"
+		} else {
+			xv := c_tmp(em, "zgt_hs")
+			out = out + f"{ind}    {{ {pct} {xv} = *({pct} const *)({px}); *acc = (*acc ^ ({c_hash_leaf(em, pt, xv)})) * 1099511628211ull; }}\n"
+		}
+		i = i + 1
+	}
+	return out + f"{ind}}}\n{ind}return ZRT_H_DONE;\n"
+}
+
+# c_hash_leaf is one part's hash, lowered from the leaf c_derive_hash_of writes for its type:
+# the runtime's word or text hash for a scalar, and the part's own `hash()` for the rest.
+fn c_hash_leaf(mut &em: Emitter, t: ast.Ty, x: str) -> str {
+	outer := c_scope_open(em)
+	c_env_row(em, x, t, x, false, false)
+	xe := ast.Expr.EIdent(x, 0, 0)
+	e := match t {
+		Ty.TInt  => ast.Expr.ECall("__zrt_hash_word", [xe], [], 0, 0)
+		Ty.TByte => c_hash_word_of_int(xe)
+		Ty.TRune => c_hash_word_of_int(xe)
+		Ty.TBool => c_hash_word_of_int(xe)
+		Ty.TUint => xe
+		Ty.TStr  => ast.Expr.ECall("__zrt_hash_text", [xe], [], 0, 0)
+		_        => ast.Expr.EMethod(xe, "hash", [], 0, 0)
+	}
+	out := c_expr(em, e, c_nosub())
+	c_scope_close(em, outer)
+	return out
+}
+
+fn c_hash_word_of_int(x: ast.Expr) -> ast.Expr {
+	return ast.Expr.ECall("__zrt_hash_word", [ast.Expr.EConv(ast.Ty.TInt, x, "int")], [], 0, 0)
 }
 
 # c_eq_call lowers `a == b` / `a != b` on a type with an Eq impl as the CALL THE PROGRAMMER
@@ -26224,11 +26375,13 @@ fn c_fn(mut &em: Emitter, fn_d: ast.FnDecl) -> str {
 	}
 
 	# THE DERIVED BODY IS STILL LOWERED when the walk replaces it: lowering it is what refuses a
-	# part `==` means nothing on (an optional, a carrier), and the walk compares only what the
-	# body was allowed to.
+	# part `==` or `hash` means nothing on (an optional, a carrier), and the walk reads only what
+	# the body was allowed to.
 	mut rendered := c_block(em, body, "    ")
 	if c_eq_walked(em, fn_d) {
 		rendered = c_eq_walk_body(em, fn_d, fmark)
+	} else if c_hash_walked(em, fn_d) {
+		rendered = c_hash_walk_body(em, fn_d, fmark)
 	}
 
 	# Falling off the end is the one exit that renders nothing of its own, so it is the one

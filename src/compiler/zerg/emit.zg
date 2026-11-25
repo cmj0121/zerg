@@ -25795,6 +25795,13 @@ fn c_fn(mut &em: Emitter, fn_d: ast.FnDecl) -> str {
 
 	cname := c_fn_cname_in(em, fn_d.path, fn_d.recv, fn_d.name)
 	mut sig := f"{c_ret_type(fn_d)} {cname}("
+
+	# A LIFTED CLOSURE IS ITS UNIT'S OWN. Its tag counts the unit's closures, so two modules that
+	# each hold one spelled the same extern `zgh_lambda_0` and the link refused the pair; nothing
+	# outside the unit names it, since a closure leaves only as a fn value.
+	if fn_d.recv == "" and c_is_lambda_name(fn_d.name) {
+		sig = "static " + sig
+	}
 	if fn_d.params.len() == 0 {
 		sig = sig + "void"
 	} else {

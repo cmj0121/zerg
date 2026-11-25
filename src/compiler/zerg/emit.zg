@@ -868,7 +868,8 @@ pub struct Emitter {
 	# and restores both around a lambda. zfn_names is the C name of every function c_fn wrote,
 	# zfn_at where in its body the probe goes (bytes past the line its `{` ends), zfn_ind
 	# whether it holds an indirect call or another unit may call it from C (vrefs, the names
-	# c_vrefs reads off the whole program's source), and big_zi / big_at the ones whose arrays
+	# c_vrefs reads off the whole program's source), zfn_drop whether the program names it as a
+	# `Ref`'s drop action (its probe disarms the drop, #487), and big_zi / big_at the ones whose arrays
 	# outgrow C_FRAME_MAX, as indexes into zfn_names, with the E4127 each is refused by if it is
 	# on a cycle.
 	pub fn_indirect: bool
@@ -876,6 +877,7 @@ pub struct Emitter {
 	pub zfn_names: list[str]
 	pub zfn_at: list[int]
 	pub zfn_ind: list[bool]
+	pub zfn_drop: list[bool]
 	pub vrefs: ProbeGraph
 	pub big_zi: list[int]
 	pub big_at: list[ast.Diag]
@@ -3674,41 +3676,16 @@ fn c_is_mangled(name: str) -> bool {
 	return false
 }
 
+# A KEY IS SPELLED WITH TYPE NAMES, and a type name may hold `_` as well as every byte C has no
+# place for: `$` and a spec key's brackets, `,` and spaces between arguments, a function type's
+# `(`, `)`, `-` and `>` (#339), an optional's `?`. Mapping each to `_` gave a generic `Box[P]` and
+# a struct `Box_P_` one name, and cc reported `zgg_elemcopy_Ref_Box_P__` defined twice. So the
+# escape is c_file_cname's, under the specialization's own prefix: `zgg_` and `zgf_` differ at
+# their third byte and `zg_` names at it too, so the three spaces never meet.
 fn c_spec_cname(name: str) -> str {
 	return c_file_cname(name) if c_is_filed(name)
 
-	mut out := "zgg_"
-	for b in bytearray(name) {
-		out = out + c_cname_byte(b)
-	}
-	return out
-}
-
-# EVERY BYTE A KEY MAY HOLD AND C MAY NOT. `$` came first, from a generic specialization; a
-# parameterized spec's method key adds the four a spec key is spelled with — `into$Into[Meters]`
-# — and a `,` or a space between two arguments. Each becomes `_`, which cannot collide with a
-# Zerg name: the whole result lives under the `zgg_` prefix, off the flat space a program can
-# reach.
-#
-# THOSE FIVE WERE A LIST OF THE KEYS SEEN SO FAR, and a key is spelled with a TYPE's name: a
-# function type adds `(`, `)`, `-` and `>`, an optional `?`, an array `;`, and each passed
-# through into a C identifier — `zgg_elemcopy_Ref_fn(int)_->_int_` (#339). So the rule is
-# stated the other way round: a byte C allows in an identifier is kept, and any other is
-# spelled by its code, which keeps `int?` and `int;` apart where a second `_` would not.
-fn c_cname_byte(b: byte) -> str {
-	return "_" if b == b'$' or b == b'[' or b == b']' or b == b',' or b == b' '
-	return "_x" + strconv.to_string(int(b), 16) if not c_is_cident_byte(b)
-
-	mut one: list[byte] = [b]
-	return str(one)
-}
-
-fn c_is_cident_byte(b: byte) -> bool {
-	return true if b >= b'a' and b <= b'z'
-	return true if b >= b'A' and b <= b'Z'
-	return true if b >= b'0' and b <= b'9'
-
-	return b == b'_'
+	return c_cname_escape("zgg_", name)
 }
 
 # c_sig_seen is `c_name_in(em.sig_names, key)` without the copy. `c_name_in` takes its list
@@ -4939,20 +4916,30 @@ fn c_ref_drop_fn(mut &em: Emitter, e: ast.Expr) -> str {
 
 # c_ref_drop_thunk gives that function the shape the cell's drop slot has: the payload by
 # ADDRESS, because the runtime hands it what it allocated, and the user's function takes the
-# value. One thunk per (payload type, action), emitted once. The call runs in an IMMEDIATE drain
+# value. One thunk per (payload type, action), emitted once — the action by its C name, since two
+# modules may each have a private one of the same name, and the pair escaped (c_file_cname), since
+# `_` is in both halves and a plain join would let `(P, zg_x)` and `(P_zg, x)` meet. The call runs in an IMMEDIATE drain
 # scope: the action is program code, so a release it makes finishes before its next statement.
+# An action with a Zerg body is ARMED first (#487): an overflow at its probe gives it back to the
+# cell, and its ZRT_PROBE_VALUE disarms once that probe has passed. A foreign binding has no body
+# and no probe, so nothing would disarm it, and it is called unarmed.
 fn c_ref_drop_thunk(mut &em: Emitter, el: ast.Ty, callee: str) -> str {
-	nm := c_spec_cname(f"refdrop${ast.ty_name(el)}${callee}")
+	cn := c_fn_cname_in(em, em.at_path, "", callee)
+	nm := c_file_cname(f"refdrop${ast.ty_name(el)}${cn}")
 	return nm if c_name_in(em.refnew_done, nm)
 
 	em.refnew_done.append(nm)
 	ct := c_type(el)
-	cn := c_fn_cname_in(em, em.at_path, "", callee)
 
 	# INTO THE DEFER STREAM and not the on-demand one: this thunk CALLS A PROGRAM FUNCTION, and
 	# `res_decls` is emitted ahead of the prototypes. cc reported `zg_closed` undeclared against
 	# generated C. `dfn_decls` is placed after them for exactly this reason, and says so.
-	em.dfn_decls.append(f"static void {nm}(void* p) {{ zrt_drain_scope zgt_ds = zrt_drain_open(); {cn}(*({ct}*)p); zrt_drain_close(zgt_ds); }}\n")
+	mut arm := "zrt_drop_arm(p); "
+	r := c_sig_row(em, callee)
+	if r >= 0 and c_vref_foreign(em, em.sig_path[r], callee) {
+		arm = ""
+	}
+	em.dfn_decls.append(f"static void {nm}(void* p) {{ {arm}zrt_drain_scope zgt_ds = zrt_drain_open(); {cn}(*({ct}*)p); zrt_drain_close(zgt_ds); }}\n")
 	return nm
 }
 
@@ -22690,19 +22677,9 @@ fn c_render_fn(mut &em: Emitter, t: ast.Ty) -> str {
 # one renderer — and the outer one then recursed into itself, rendering nonsense for a nested
 # composite. What a renderer is keyed on is what it renders, which is the Zerg type.
 fn c_render_key(mut &em: Emitter, t: ast.Ty) -> str {
-	# a file's new type name keys by its injective C spelling, which no other key can meet
-	# (c_file_cname) — the bytes below map `P'1` and `P_1` alike
-	return c_file_cname(ast.ty_name(t)) if c_is_filed(ast.ty_name(t))
-
-	mut out: list[byte] = []
-	for c in bytearray(ast.ty_name(t)) {
-		if ascii.is_alpha(c) or ascii.is_digit(c) or c == b'_' {
-			out.append(c)
-		} else {
-			out.append(b'_')
-		}
-	}
-	return str(out)
+	# the key is escaped injectively (c_cname_escape): mapping each byte C cannot hold to `_`
+	# gave `Box[P]` and a struct `Box_P_` one renderer, and `P'1` and `P_1` too
+	return c_cname_escape("", ast.ty_name(t))
 }
 
 fn c_render_body(mut &em: Emitter, name: str, t: ast.Ty) -> str {
@@ -28699,6 +28676,7 @@ fn c_probe_books(mut &em: Emitter, fn_d: ast.FnDecl, cname: str, at: int) {
 	em.zfn_names.append(cname)
 	em.zfn_at.append(at)
 	em.zfn_ind.append(em.fn_indirect or c_vref_of(em, fn_d.recv, fn_d.name))
+	em.zfn_drop.append(fn_d.recv == "" and c_vref_drop(em, fn_d.name))
 	if em.fn_frame > C_FRAME_MAX {
 		mut who := f"`{fn_d.name}`"
 		if fn_d.recv != "" {
@@ -28976,6 +28954,7 @@ fn c_probe_unit(mut &em: Emitter, mut &def_parts: list[str], mut &types: str, mu
 	mut g := c_pg_new(true)
 	mut zat: list[int] = []
 	mut zind: list[bool] = []
+	mut zdrop: list[bool] = []
 	mut zid: list[int] = []
 	mut zi := 0
 	for zi < em.zfn_names.len() {
@@ -28984,9 +28963,11 @@ fn c_probe_unit(mut &em: Emitter, mut &def_parts: list[str], mut &types: str, mu
 		if id == zat.len() {
 			zat.append(em.zfn_at[zi])
 			zind.append(em.zfn_ind[zi])
+			zdrop.append(em.zfn_drop[zi])
 		} else {
 			zat[id] = em.zfn_at[zi]
 			zind[id] = zind[id] or em.zfn_ind[zi]
+			zdrop[id] = zdrop[id] or em.zfn_drop[zi]
 		}
 		zi = zi + 1
 	}
@@ -29111,7 +29092,14 @@ fn c_probe_unit(mut &em: Emitter, mut &def_parts: list[str], mut &types: str, mu
 			id := hdr_id[j]
 			if id < nz and probed[id] {
 				em.used_rt = true
-				c_probe_put(em, def_parts, types, globals, mainw, ends, k, c_probed_text(bs[k], hdr_brace[j] + 2 + zat[id]))
+
+				# A REF'S DROP ACTION DISARMS (#487): its probe passing is where the action has
+				# started. The program names it, so c_vrefs has it and it is probed (zind).
+				mut line := "    ZRT_PROBE\n"
+				if zdrop[id] {
+					line = "    ZRT_PROBE_VALUE\n"
+				}
+				c_probe_put(em, def_parts, types, globals, mainw, ends, k, c_probed_text(bs[k], hdr_brace[j] + 2 + zat[id], line))
 			}
 			j = j + 1
 		}
@@ -29147,15 +29135,15 @@ fn c_probe_put(mut &em: Emitter, mut &def_parts: list[str], mut &types: str, mut
 	}
 }
 
-# c_probed_text is one function's C with the probe as a line of its own at byte `at`.
-fn c_probed_text(mut &b: list[byte], at: int) -> str {
+# c_probed_text is one function's C with the probe `line` as a line of its own at byte `at`.
+fn c_probed_text(mut &b: list[byte], at: int, line: str) -> str {
 	mut out: list[byte] = []
 	mut i := 0
 	for i < at {
 		out.append(b[i])
 		i = i + 1
 	}
-	for c in bytearray("    ZRT_PROBE\n") {
+	for c in bytearray(line) {
 		out.append(c)
 	}
 	for i < b.len() {
@@ -29313,10 +29301,25 @@ fn c_vrefs(f: ast.File) -> ProbeGraph {
 		}
 	}
 	for fd in f.fns {
+		if fd.foreign != "" {
+			c_pg_intern_str(got, f"ffi {fd.path} {fd.name}")
+		}
 		c_vr_params(fns, got, fd.params)
 		c_vr_block(fns, got, fd.body)
 	}
 	return got
+}
+
+# c_vref_drop is whether the program names the free function `name` as a `Ref`'s drop action, and
+# c_vref_foreign whether the `name` file `path` declares is a foreign binding (c_vrefs keys both
+# apart from any identifier; the second by its declaration, since a name alone may be another
+# module's Zerg function).
+fn c_vref_drop(mut &em: Emitter, name: str) -> bool {
+	return em.vrefs.tab.len() > 0 and c_pg_find_str(em.vrefs, "drop " + name) >= 0
+}
+
+fn c_vref_foreign(mut &em: Emitter, path: str, name: str) -> bool {
+	return em.vrefs.tab.len() > 0 and c_pg_find_str(em.vrefs, f"ffi {path} {name}") >= 0
 }
 
 # c_vref_of is whether c_vrefs named the function `name` (a method when `recv` is set).
@@ -29334,6 +29337,12 @@ fn c_vr_name(mut &fns: ProbeGraph, mut &got: ProbeGraph, n: str, field: bool) {
 	} else {
 		c_pg_intern_str(got, n)
 	}
+}
+
+fn c_vr_drop(mut &fns: ProbeGraph, mut &got: ProbeGraph, n: str) {
+	return if c_pg_find_str(fns, n) < 0
+
+	c_pg_intern_str(got, "drop " + n)
 }
 
 fn c_vr_params(mut &fns: ProbeGraph, mut &got: ProbeGraph, ps: list[ast.Param]) {
@@ -29454,7 +29463,12 @@ fn c_vr_expr(mut &fns: ProbeGraph, mut &got: ProbeGraph, e: ast.Expr) {
 			c_vr_expr(fns, got, a)
 			c_vr_expr(fns, got, b)
 		}
-		Expr.ECall(_, xs, _, _, _) => c_vr_exprs(fns, got, xs)
+		Expr.ECall(n, xs, _, _, _) => {
+			c_vr_exprs(fns, got, xs)
+			if n == "Ref" and xs.len() == 2 {
+				c_vr_drop(fns, got, c_ident_name(xs[1]))
+			}
+		}
 		Expr.ECallVal(c, xs) => {
 			c_vr_expr(fns, got, c)
 			c_vr_exprs(fns, got, xs)
@@ -29727,10 +29741,16 @@ fn c_is_filed(nm: str) -> bool {
 }
 
 # c_file_cname is the C name of anything spelled with a file's new type name: `zgf_` and the
-# name escaped byte for byte — `_` doubles, a byte C cannot hold becomes `_<hex>_` — so two
-# distinct names never meet, and nothing else is spelled under the prefix.
+# name escaped (c_cname_escape). Nothing else is spelled under the prefix but a Ref's drop
+# thunk (c_ref_drop_thunk), whose key holds a `$` no name has.
 fn c_file_cname(nm: str) -> str {
-	mut out := "zgf_"
+	return c_cname_escape("zgf_", nm)
+}
+
+# c_cname_escape is `pre` and the name escaped byte for byte — `_` doubles, a byte C cannot hold
+# becomes `_<hex>_` — so two distinct names never meet.
+fn c_cname_escape(pre: str, nm: str) -> str {
+	mut out := pre
 	for b in bytearray(nm) {
 		if b == b'_' {
 			out = out + "__"
@@ -30316,7 +30336,7 @@ fn c_emit_unit_as(prog0: ast.File, own0: ast.File, ft: FileTypes, ms: Mods, whol
 	# is what makes that invariant hold for a multi-unit program, at the place it already lives,
 	# and it is what lets the declaration passes below go back to reading the WHOLE program.
 	seen := diags.len()
-	mut em := Emitter([], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], false, false, false, false, [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], 0, [], 0, [], [], false, "", "", [], [], ast.Ty.TVoid, 0, "", 0, 0, 0, 0, "", diags, 0, 0, [], [], [], [], [], false, 0, false, "", 0, false, false, [], [], [], [], [], [], [], [], [], [], [], "", want_lints, [], [], [], [], [], [], [], [], [], [], [], [], false, 0, [], [], "", c_nosub(), [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], false, ast.no_index(), [], [], [], [], [], [], [], [], [], [], [], [], false, [], [], [], [], [], [], [], [], [], [], [], "", [], [], 0, 0, [], -1, 0, -1, -1, [], false, 0, [], [], [], c_pg_none(), [], [])
+	mut em := Emitter([], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], false, false, false, false, [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], 0, [], 0, [], [], false, "", "", [], [], ast.Ty.TVoid, 0, "", 0, 0, 0, 0, "", diags, 0, 0, [], [], [], [], [], false, 0, false, "", 0, false, false, [], [], [], [], [], [], [], [], [], [], [], "", want_lints, [], [], [], [], [], [], [], [], [], [], [], [], false, 0, [], [], "", c_nosub(), [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], false, ast.no_index(), [], [], [], [], [], [], [], [], [], [], [], [], false, [], [], [], [], [], [], [], [], [], [], [], "", [], [], 0, 0, [], -1, 0, -1, -1, [], false, 0, [], [], [], [], c_pg_none(), [], [])
 
 	# ASSIGNED, NOT PASSED. Every argument above is a zero value, and `layering` asserts that
 	# — it lines the call up with the fields by KIND, which only works while nothing in it

@@ -280,7 +280,8 @@ void zrt_drain(void) {
 /* release_cell is the drain's first step run in place (D6): outside any loop, with nothing
  * owed in this scope, the cell's drop runs directly and the loop starts only for what that
  * drop released. The cell sits in pend marked dropped while its drop runs, with dactive set,
- * exactly as the loop's own CELL step leaves it, so an abort's landing drain frees it. */
+ * exactly as the loop's own CELL step leaves it, so an abort's landing drain frees it — unless
+ * an overflow stopped the drop at its action's entry, which un-marks it to run there (#487). */
 static void release_cell(zrt_ref_hdr *h) {
 	zrt_tls *t = zrt_tls_cur();
 	/* DURING A STACK OVERFLOW'S UNWIND (#480) a cell's drop is QUEUED, not run: the unwind is

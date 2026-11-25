@@ -2001,6 +2001,200 @@ static void prog(void) {
 int main(void) { return zrt_sched_main_nil(prog); }
 `
 
+// TestStackOverflowAtADropActionEntry is #487: a Ref's drop thunk arms before it calls its
+// action, and the action's ZRT_PROBE_VALUE — after its parameter's registration, before its
+// body, as the emitted one sits — disarms once passed. An unprobed recursion releasing a cell
+// per level can hit only at an action's probe: that action, counted entering again, runs at
+// the landing instead, once, its payload released once. An action that started and
+// overflowed deeper is not run again; an abort on either side of the probe leaves no arm for
+// a later overflow to trip on; a foreign-style thunk calls a plain C function unarmed. Only
+// relations are printed, never a depth.
+func TestStackOverflowAtADropActionEntry(t *testing.T) {
+	const entry = "kind=13 deep=1 pre=1 acts=1 once=1 bad=0 flag=0 arm=0 live=0\n"
+	cases := []struct{ name, src, want string }{
+		{"entry", dropArmHeadC + dropArmEntryC, entry},
+		{"entry_large_payload", "#define PAD 512\n" + dropArmHeadC + dropArmEntryC, entry},
+		{"started", dropArmHeadC + dropArmStartedC, "kind=13 deep=1 made=1 acts=1 bad=0 flag=0 arm=0 live=0\n"},
+		{"stale_arm", dropArmHeadC + dropArmStaleC,
+			"before=1 after=1 arm=0 plain=-1 kind=13 acts=1 bad=0 flag=0 live=0\n"},
+		{"foreign", dropArmHeadC + dropArmForeignC, "ext=1 arm=0 kind=13 again=1 acts=1 flag=0 live=0\n"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			bin := buildCounted(t, "darm_"+c.name, c.src, false)
+			out, errOut, code := runBoundedStreams(t, bin, "", 60*time.Second)
+			if code != 0 || out != c.want || errOut != "" {
+				t.Fatalf("%s: exit=%d stdout %q stderr %q, want exit 0 stdout %q", c.name, code, out, errOut, c.want)
+			}
+		})
+	}
+}
+
+// dropArmHeadC is the counting allocator, a payload owning one block (PAD widens it past what
+// a register pair passes), the action and its arming thunk in the emitted shapes, and a
+// probed recursion for an overflow outside any action. g_pre counts entries before the probe.
+const dropArmHeadC = `
+#include "zergrt.h"
+#include <stdio.h>
+#include <stdlib.h>
+
+#ifndef PAD
+#define PAD 8
+#endif
+#define CAP (1 << 22)
+
+static long g_live;
+void *zrt_alloc(size_t n) { void *p = malloc(n); if (p != NULL) { g_live++; } return p; }
+void zrt_free(void *p) { if (p != NULL) { g_live--; free(p); } }
+
+typedef struct { int64_t id; void *res; char big[PAD]; } pay;
+static void pay_drop(void *e) { zrt_free(((pay *)e)->res); }
+
+static unsigned char seen[CAP];
+static long g_made, g_pre, g_acts, g_bad;
+static int g_abort_at;
+static void (*g_body)(void);
+
+static void act(pay a) {
+    ZRT_AT_FN
+    size_t mk = zrt_scope_mark();
+    zrt_defer(pay_drop, &a);
+    g_pre++;
+    if (g_abort_at == 1) { zrt_abort("drop aborts before its probe"); }
+    ZRT_PROBE_VALUE
+    if (g_abort_at == 2) { zrt_abort("drop aborts after its probe"); }
+    if (a.id < 0 || a.id >= CAP || seen[a.id]++ != 0) { g_bad++; }
+    g_acts++;
+    if (g_body != NULL) { g_body(); }
+    zrt_unwind_to(mk);
+ZRT_AT_END
+}
+static void act_thunk(void *p) { zrt_drop_arm(p); zrt_drain_scope ds = zrt_drain_open(); act(*(pay *)p); zrt_drain_close(ds); }
+
+static void *mk_cell(void (*drop)(void *)) {
+    void *c = zrt_ref_alloc(sizeof(pay), drop);
+    pay *p = (pay *)zrt_ref_payload(c);
+    p->id = g_made++;
+    p->res = zrt_alloc(16);
+    p->big[0] = 0;
+    return c;
+}
+static void release_one(void) { zrt_release(mk_cell(act_thunk)); }
+
+static int depth;
+static int rec(int n) {
+    ZRT_PROBE
+    volatile char pad[256];
+    pad[0] = (char)n;
+    depth++;
+    return rec(n + 1) + pad[0];
+}
+static void go_rec(void) { rec(0); }
+
+/* try_run runs fn under a catching handler: -1 when it returns, else the kind it aborted with. */
+static int try_run(void (*fn)(void)) {
+    zrt_frame f;
+    zrt_handler_push_catch(&f);
+    if (setjmp(f.buf) == 0) { fn(); zrt_handler_pop(&f); return -1; }
+    zrt_handler_pop(&f);
+    zrt_err e = zrt_taken_err();
+    int k = e.kind;
+    zrt_err_drop(e);
+    return k;
+}
+static int armed(void) { return zrt_tls_cur()->darm != NULL; }
+static int flag(void) { return zrt_tls_cur()->overflow_unwind; }
+`
+
+// dropArmEntryC overflows in a recursion with no probe of its own, releasing a cell per level,
+// so the only probe the stack can hit is an action's: pre says one action entered twice.
+const dropArmEntryC = `
+static int rec_cells(int n) {
+    volatile char pad[256];
+    pad[0] = (char)n;
+    depth++;
+    zrt_release(mk_cell(act_thunk));
+    return rec_cells(n + 1) + pad[0];
+}
+static void go_cells(void) { rec_cells(0); }
+int main(void) {
+    zrt_fault_init();
+    long live0 = g_live;
+    int k = try_run(go_cells);
+    long once = 0;
+    for (long i = 0; i < g_made && i < CAP; i++) { once += seen[i] == 1; }
+    printf("kind=%d deep=%d pre=%d acts=%d once=%d bad=%ld flag=%d arm=%d live=%ld\n", k, depth > 100,
+           g_pre == g_made + 1, g_acts == g_made, once == g_made, g_bad, flag(), armed(), g_live - live0);
+    return 0;
+}
+`
+
+// dropArmStartedC releases one cell whose action, past its probe, recurses until the probe
+// hits deeper: the action had started, so the landing only frees its cell. The body hook
+// clears itself, so a second run would count rather than overflow again.
+const dropArmStartedC = `
+static int deep(int n) {
+    ZRT_PROBE
+    volatile char pad[256];
+    pad[0] = (char)n;
+    depth++;
+    return deep(n + 1) + pad[0];
+}
+static void body_deep(void) { g_body = NULL; deep(0); }
+int main(void) {
+    zrt_fault_init();
+    long live0 = g_live;
+    g_body = body_deep;
+    int k = try_run(release_one);
+    printf("kind=%d deep=%d made=%ld acts=%ld bad=%ld flag=%d arm=%d live=%ld\n", k, depth > 100, g_made, g_acts,
+           g_bad, flag(), armed(), g_live - live0);
+    return 0;
+}
+`
+
+// dropArmStaleC aborts one action before its probe and one after it, then releases a cell
+// (the thunk would refuse an arm left set) and overflows a recursion that releases nothing
+// (a stale arm there would be the hard fault, not the catch).
+const dropArmStaleC = `
+int main(void) {
+    zrt_fault_init();
+    long live0 = g_live;
+    g_abort_at = 1;
+    int a1 = try_run(release_one);
+    int arm1 = armed();
+    g_abort_at = 2;
+    int a2 = try_run(release_one);
+    int arm2 = armed();
+    g_abort_at = 0;
+    int plain = try_run(release_one);
+    int k = try_run(go_rec);
+    printf("before=%d after=%d arm=%d plain=%d kind=%d acts=%ld bad=%ld flag=%d live=%ld\n",
+           a1 >= 0 && a1 != ZRT_ERR_STACK_OVERFLOW, a2 >= 0 && a2 != ZRT_ERR_STACK_OVERFLOW, arm1 || arm2, plain, k,
+           g_acts, g_bad, flag(), g_live - live0);
+    return 0;
+}
+`
+
+// dropArmForeignC is a foreign binding's thunk: no arm, a plain C function with no probe,
+// released repeatedly; a later overflow is still caught, and an armed action still runs.
+const dropArmForeignC = `
+#define EXT 3
+static long g_ext;
+static void ext_close(pay a) { g_ext++; zrt_free(a.res); }
+static void ext_thunk(void *p) { zrt_drain_scope ds = zrt_drain_open(); ext_close(*(pay *)p); zrt_drain_close(ds); }
+int main(void) {
+    zrt_fault_init();
+    long live0 = g_live;
+    for (int i = 0; i < EXT; i++) { zrt_release(mk_cell(ext_thunk)); }
+    int arm = armed();
+    int k = try_run(go_rec);
+    int again = try_run(release_one);
+    printf("ext=%d arm=%d kind=%d again=%d acts=%ld flag=%d live=%ld\n", g_ext == EXT, arm, k, again == -1, g_acts,
+           flag(), g_live - live0);
+    return 0;
+}
+`
+
 // TestGenuineSegvUndisguised is the other edge of the naming: a wild pointer is NOT a
 // stack overflow, and the handler must not dress it as one. It puts back the action that
 // was installed before it and lets the fault re-fire, so the process still dies by the

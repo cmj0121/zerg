@@ -439,6 +439,16 @@ extern ZRT_THREAD_LOCAL char *zrt_stack_lim_tls;
 #define ZRT_STACK_LIMIT() (zrt_stack_lim_tls)
 #endif
 #define ZRT_PROBE if (__builtin_expect((char *)__builtin_frame_address(0) < ZRT_STACK_LIMIT(), 0)) zrt_stack_overflow();
+/* THE DROP ARM (#487). A Ref's drop thunk arms before it calls an action with a Zerg body: the
+ * runtime has already marked the cell's pending entry dropped, so a hit at the action's own
+ * probe would skip the action for good. zrt_stack_overflow, finding the arm, forgets the
+ * action's parameter registrations and un-marks the entry, and the landing's drain runs the
+ * action. A function the program names as a Ref's drop action opens with ZRT_PROBE_VALUE, which
+ * disarms once the probe has passed: from there on the action has started. A foreign binding
+ * has no probe to disarm it and is called unarmed. */
+void zrt_drop_arm(void *payload); /* thunk, before zrt_drain_open: darm = hdr of payload, darm_mark = len */
+#define ZRT_DROP_DISARM zrt_tls_cur()->darm = NULL;
+#define ZRT_PROBE_VALUE ZRT_PROBE ZRT_DROP_DISARM
 void zrt_stack_limit_put(char *lim); /* the ONE writer: g_tls.stack_lim and this thread's mirror */
 #define ZRT_AT_END                                                                            \
 zrt_fn_end_:;                                                                                 \
@@ -480,7 +490,7 @@ typedef struct zrt_frame {
 #define ZRT_PEND_MAP  2   /* a dead map table: key_drop+val_drop entry `next`, ..., then free  */
 typedef struct {
 	uint8_t     kind;     /* ZRT_PEND_* */
-	bool        dropped;  /* CELL: h->drop already ran (set BEFORE the call) */
+	bool        dropped;  /* CELL: h->drop already ran (set BEFORE the call; #487 clears it) */
 	void       *block;    /* CELL: the zrt_ref_hdr*; LIST: the buffer's zrt_buf_hdr*; MAP: entries */
 	uint8_t    *data;     /* LIST: element 0; MAP: entry 0 (== block) */
 	size_t      len;      /* LIST/MAP: element / entry count */
@@ -573,6 +583,8 @@ typedef struct {
 	 * Written only through zrt_stack_limit_put, which keeps the thread's mirror in step. */
 	char        *stack_lim;
 	bool         overflow_unwind; /* a StackOverflowError is unwinding: a second hit is a hard fault */
+	zrt_ref_hdr *darm;      /* drop arm (#487): the cell whose action a thunk called and whose probe has not passed */
+	size_t       darm_mark; /* zrt_scope_mark() when armed: the action's parameter registrations sit above it */
 } zrt_tls;
 
 /* zrt_tls_save snapshots the current unwind state into out; zrt_tls_load makes in

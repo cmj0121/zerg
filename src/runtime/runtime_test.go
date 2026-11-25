@@ -244,6 +244,10 @@ func TestMapCompilesAndRuns(t *testing.T) {
 		"copy-indep=1/1000\n" +
 		"ref-sum=60\n" +
 		"nested=2:3\n" +
+		"cow-map=1/1:2:3\n" +
+		"cow-orig=0:3\n" +
+		"cow-list=6/16\n" +
+		"cow-struct=1,10/2,50\n" +
 		"key-miss-abort=1\n" +
 		"live=0\n"
 	if string(out) != want {
@@ -276,6 +280,26 @@ static const zrt_map_vt vt_int_ref = { zrt_hash_int, zrt_eq_int, NULL, NULL, ref
 static void map_val_copy(void *dst, const void *src) { zrt_map_copy((zrt_map *)dst, (const zrt_map *)src); }
 static void map_val_drop(void *v) { zrt_map_drop((zrt_map *)v); }
 static const zrt_map_vt vt_int_map = { zrt_hash_int, zrt_eq_int, NULL, NULL, map_val_copy, map_val_drop };
+
+static void list_val_copy(void *dst, const void *src) { zrt_list_copy((zrt_list *)dst, (const zrt_list *)src); }
+static void list_val_drop(void *v) { zrt_list_drop((zrt_list *)v); }
+static const zrt_map_vt vt_int_list = { zrt_hash_int, zrt_eq_int, NULL, NULL, list_val_copy, list_val_drop };
+
+/* a struct value { int64 n; list[int] xs }, copied and dropped field by field as the
+ * emitter's struct thunks do */
+typedef struct { int64_t n; zrt_list xs; } row;
+static void row_copy(void *dst, const void *src) {
+    ((row *)dst)->n = ((const row *)src)->n;
+    zrt_list_copy(&((row *)dst)->xs, &((const row *)src)->xs);
+}
+static void row_drop(void *v) { zrt_list_drop(&((row *)v)->xs); }
+static const zrt_map_vt vt_int_row = { zrt_hash_int, zrt_eq_int, NULL, NULL, row_copy, row_drop };
+
+static int64_t list_sum(const zrt_list *l) {
+    int64_t s = 0;
+    for (size_t i = 0; i < zrt_list_len(l); i++) { s += *(int64_t *)zrt_list_at_ref((zrt_list *)l, i); }
+    return s;
+}
 
 int main(void) {
     /* --- map[str,int]: insert 10 keys (grows past load factor 0.75 from nbuckets 8),
@@ -351,7 +375,69 @@ int main(void) {
     zrt_map *in0 = (zrt_map *)zrt_map_index(&outer, &o0);
     zrt_map *in1 = (zrt_map *)zrt_map_index(&outer, &o1);
     printf("nested=%zu:%zu\n", zrt_map_len(in0), zrt_map_len(in1)); /* 2:3 */
+
+    /* --- copy-on-write: a copy shares the table until written; a write to the copy (the
+     * emitted read-modify-store: copy the value out, change it, set it back) never shows
+     * through the original, nor one to the original through the copy. --- */
+    zrt_map oc;
+    zrt_map_copy(&oc, &outer);
+    int shared = oc.entries == outer.entries;
+    zrt_map v0;
+    zrt_map_copy(&v0, (zrt_map *)zrt_map_index(&oc, &o0));
+    int64_t nk = 50, nvv = 50;
+    zrt_map_set(&v0, &nk, &nvv);
+    zrt_map_set(&oc, &o0, &v0);
+    printf("cow-map=%d/%d:%zu:%zu\n", shared, oc.entries != outer.entries,
+        zrt_map_len((zrt_map *)zrt_map_index(&outer, &o0)), zrt_map_len((zrt_map *)zrt_map_index(&oc, &o0)));
+    zrt_map oc2;
+    zrt_map_copy(&oc2, &outer);
+    zrt_map fresh;
+    zrt_map_init(&fresh, sizeof(int64_t), sizeof(int64_t), &vt_int_int);
+    zrt_map_set(&outer, &o1, &fresh); /* the write lands on the original this time */
+    printf("cow-orig=%zu:%zu\n", zrt_map_len((zrt_map *)zrt_map_index(&outer, &o1)),
+        zrt_map_len((zrt_map *)zrt_map_index(&oc2, &o1))); /* 0:3 */
+    zrt_map_drop(&oc2);
+    zrt_map_drop(&oc);
     zrt_map_drop(&outer);
+
+    zrt_map lm;
+    zrt_map_init(&lm, sizeof(int64_t), sizeof(zrt_list), &vt_int_list);
+    zrt_list xs;
+    zrt_list_init(&xs, sizeof(int64_t), NULL);
+    for (int64_t j = 1; j <= 3; j++) { zrt_list_push(&xs, &j); }
+    zrt_map_set(&lm, &o0, &xs);
+    zrt_map lc;
+    zrt_map_copy(&lc, &lm);
+    zrt_list ys;
+    zrt_list_copy(&ys, (zrt_list *)zrt_map_index(&lc, &o0));
+    int64_t ten = 10;
+    zrt_list_push(&ys, &ten);
+    zrt_map_set(&lc, &o0, &ys);
+    printf("cow-list=%lld/%lld\n", (long long)list_sum((zrt_list *)zrt_map_index(&lm, &o0)),
+        (long long)list_sum((zrt_list *)zrt_map_index(&lc, &o0))); /* 6/16 */
+    zrt_map_drop(&lc);
+    zrt_map_drop(&lm);
+
+    zrt_map sm;
+    zrt_map_init(&sm, sizeof(int64_t), sizeof(row), &vt_int_row);
+    row r0;
+    r0.n = 1;
+    zrt_list_init(&r0.xs, sizeof(int64_t), NULL);
+    zrt_list_push(&r0.xs, &ten);
+    zrt_map_set(&sm, &o0, &r0);
+    zrt_map sc;
+    zrt_map_copy(&sc, &sm);
+    row r1;
+    row_copy(&r1, zrt_map_index(&sc, &o0));
+    r1.n = 2;
+    zrt_list_set(&r1.xs, 0, &nvv);
+    zrt_map_set(&sc, &o0, &r1);
+    row *ro = (row *)zrt_map_index(&sm, &o0);
+    row *rc2 = (row *)zrt_map_index(&sc, &o0);
+    printf("cow-struct=%lld,%lld/%lld,%lld\n", (long long)ro->n, (long long)list_sum(&ro->xs),
+        (long long)rc2->n, (long long)list_sum(&rc2->xs)); /* 1,10/2,50 */
+    zrt_map_drop(&sc);
+    zrt_map_drop(&sm);
 
     /* --- key-miss abort: m[k] on a miss raises KeyError; a guard handler catches it. --- */
     zrt_map km;

@@ -2548,6 +2548,192 @@ pub fn least[T: Ord](a: T, b: T) -> T {
 }
 EOF
 
+# TWO DECLARATIONS, ONE C SYMBOL (#489). A method is `zg_<Type>_<name>` in the flat `zg_` space
+# every free function, type and constant is spelled in, so a different Zerg name can arrive at
+# the same symbol — and cc used to say so against the cache. Each case is a different pair of
+# kinds; the names differ, which is what keeps it off the duplicate-declaration rules.
+expect "$ZERG" a-fn-spells-a-method E4128 '`fn Foo_bar` and method `Foo.bar` are both zg_Foo_bar in C' <<'EOF'
+struct Foo {
+	pub x: int
+}
+
+impl Foo {
+	fn bar() -> int {
+		return this.x
+	}
+}
+
+fn Foo_bar(n: int) -> int {
+	return n
+}
+
+fn main() {
+	print Foo(1).bar()
+	print Foo_bar(2)
+}
+EOF
+
+expect "$ZERG" a-method-spells-a-method E4128 'method `B_.x` and method `B._x` are both zg_B__x in C' <<'EOF'
+struct B {
+	pub v: int
+}
+
+struct B_ {
+	pub v: int
+}
+
+impl B {
+	fn _x() -> int {
+		return this.v
+	}
+}
+
+impl B_ {
+	fn x() -> int {
+		return this.v
+	}
+}
+
+fn main() {
+	print B(1)._x()
+	print B_(2).x()
+}
+EOF
+
+expect "$ZERG" a-method-spells-a-method-of-a-longer-type E4128 'method `A_b.c` and method `A.b_c` are both zg_A_b_c in C' <<'EOF'
+struct A {
+	pub v: int
+}
+
+struct A_b {
+	pub v: int
+}
+
+impl A {
+	fn b_c() -> int {
+		return this.v
+	}
+}
+
+impl A_b {
+	fn c() -> int {
+		return this.v
+	}
+}
+
+fn main() {
+	print A(1).b_c()
+	print A_b(2).c()
+}
+EOF
+
+expect "$ZERG" a-method-spells-a-type E4128 'method `Foo.bar` and struct `Foo_bar` are both zg_Foo_bar in C' <<'EOF'
+pub struct Foo_bar {
+	pub v: int
+}
+
+struct Foo {
+	pub x: int
+}
+
+impl Foo {
+	fn bar() -> int {
+		return this.x
+	}
+}
+
+fn main() {
+	print Foo(1).bar()
+	print Foo_bar(2).v
+}
+EOF
+
+expect "$ZERG" an-associated-value-spells-a-fn E4128 'associated value `P.LIMIT` and `fn P_LIMIT` are both zg_P_LIMIT in C' <<'EOF'
+struct P {
+	pub v: int
+}
+
+impl P {
+	LIMIT := 5
+}
+
+fn P_LIMIT() -> int {
+	return 3
+}
+
+fn main() {
+	print P.LIMIT
+	print P_LIMIT()
+}
+EOF
+
+expect "$ZERG" an-associated-value-spells-a-type E4128 'associated value `Foo.LIM` and struct `Foo_LIM` are both zg_Foo_LIM in C' <<'EOF'
+struct Foo {
+	pub x: int
+}
+
+impl Foo {
+	LIM := 4
+}
+
+struct Foo_LIM {
+	pub v: int
+}
+
+fn main() {
+	print Foo_LIM(3).v
+	print Foo.LIM
+}
+EOF
+
+expect "$ZERG" a-module-constant-spells-a-method E4128 'module constant `Foo_bar` and method `Foo.bar` are both zg_Foo_bar in C' <<'EOF'
+Foo_bar := 7
+
+struct Foo {
+	pub x: int
+}
+
+impl Foo {
+	fn bar() -> int {
+		return this.x
+	}
+}
+
+fn main() {
+	print Foo(1).bar()
+	print Foo_bar
+}
+EOF
+
+# ACROSS MODULES, which is where the flat space bites: neither file has both declarations, so
+# the check is over the program's names and not one file's.
+expect "$ZERG" a-module-fn-spells-a-method E4128 'method `Foo.bar` and `fn Foo_bar` are both zg_Foo_bar in C' <<'EOF'
+import "./m"
+
+struct Foo {
+	pub x: int
+}
+
+impl Foo {
+	fn bar() -> int {
+		return this.x
+	}
+}
+
+fn main() {
+	print Foo(1).bar()
+	print m.twice(2)
+}
+--- m/mod.zg
+fn Foo_bar(n: int) -> int {
+	return n
+}
+
+pub fn twice(n: int) -> int {
+	return Foo_bar(n) * 2
+}
+EOF
+
 
 # L301: the snapshot semantics of a captured argument. It is here rather than in the reject
 # list because the program is CORRECT — this is the one thing in the language a competent

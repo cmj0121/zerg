@@ -7446,6 +7446,105 @@ fn c_dup_report(mut &em: Emitter, name: str, prev: str, what: str, path: str, li
 	check.chk_at_place(em, path, line, col, rule.Rule.DeclaredTwiceSameKind, f"`{name}` is declared twice — a private struct, enum or `type` is its file's, and any other type name is one name across the program")
 }
 
+# CNames is every top-level declaration's final C symbol beside what a reader calls it and where
+# it is written, for c_check_cnames. `owned` lists the rows whose name carries a type — a method
+# or an associated value — which is the only way two different names reach one symbol.
+struct CNames {
+	pub cn: list[str]
+	pub says: list[str]
+	pub path: list[str]
+	pub line: list[int]
+	pub owned: list[int]
+}
+
+# c_check_cnames refuses two declarations whose C names are one symbol (#489). A free function,
+# a type and a module constant are `zg_<name>` and a method or an associated value
+# `zg_<Type>_<name>`, all in one flat space, so `impl Foo { fn bar }` beside `fn Foo_bar` — or
+# `B._x` beside `B_.x` — reached cc as a redefinition against the cache.
+#
+# OVER THE FINAL NAMES, the ones the emitter writes: a module-tagged private function and a
+# keyed file's are asked of c_fn_cname_in, so two names it has already told apart are not
+# refused. Across the whole program, because the space is the program's and a clash between two
+# modules is still one symbol at link.
+#
+# A PAIR WITH NO OWNER IS NOT ASKED: without a type in either name, one C name is one Zerg name,
+# and a name declared twice is the duplicate rules' finding (c_build_top_names, c_build_sigs).
+# So an owned name is compared with every row and any other only with the owned ones, which keeps
+# the walk to the methods and associated values times the program, not the program squared.
+#
+# The walk is the duplicate rule's order — types, functions, constants — and a clash is reported
+# at the second declaration it meets, naming where the first one is.
+fn c_check_cnames(mut &em: Emitter, f: ast.File) {
+	mut t := CNames([], [], [], [], [])
+	for sd in f.structs {
+		if sd.tparams.len() == 0 {
+			c_cname_note(em, t, c_ty_cname(sd.name), f"struct `{sd.name}`", sd.path, sd.line, sd.col, false)
+		}
+	}
+	for ed in f.enums {
+		if ed.tparams.len() == 0 {
+			c_cname_note(em, t, c_ty_cname(ed.name), f"enum `{ed.name}`", ed.path, ed.line, ed.col, false)
+		}
+	}
+	for td in f.types {
+		c_cname_note(em, t, c_ty_cname(td.name), f"type `{td.name}`", td.path, td.line, td.col, false)
+	}
+	for sp in f.specs {
+		if sp.params.len() == 0 {
+			c_cname_note(em, t, c_ty_cname(sp.name), f"spec `{sp.name}`", sp.path, sp.line, sp.col, false)
+		}
+	}
+	for fn_i in f.fns {
+		says := if fn_i.is_assoc {
+			f"associated fn `{fn_i.recv}.{fn_i.name}`"
+		} else if fn_i.recv != "" {
+			f"method `{fn_i.recv}.{fn_i.name}`"
+		} else {
+			f"`fn {fn_i.name}`"
+		}
+		c_cname_note(em, t, c_fn_cname_in(em, fn_i.path, fn_i.recv, fn_i.name), says, fn_i.path, fn_i.line, fn_i.col, fn_i.recv != "")
+	}
+	for c in f.consts {
+		says := if c.recv != "" {
+			f"associated value `{c.recv}.{c.name}`"
+		} else {
+			f"module constant `{c.name}`"
+		}
+		c_cname_note(em, t, c_const_cname(em, c), says, c.path, c.line, c.col, c.recv != "")
+	}
+}
+
+# c_cname_note records one declaration and reports the first earlier one it shares a symbol with.
+# The C name is written bare, outside backticks: a quoted `zg…_` name is what refuse-check reads
+# as a temporary the reader cannot find, and this one is in the `--emit lib` header.
+fn c_cname_note(mut &em: Emitter, mut &t: CNames, cn: str, says: str, path: str, line: int, col: int, owned: bool) {
+	mut k := 0
+	n := if owned {
+		t.cn.len()
+	} else {
+		t.owned.len()
+	}
+	for k < n {
+		i := if owned {
+			k
+		} else {
+			t.owned[k]
+		}
+		if t.cn[i] == cn and t.says[i] != says {
+			check.chk_at_place(em, path, line, col, rule.Rule.CNameClash, f"{says} and {t.says[i]} are both {cn} in C — rename one; {t.says[i]} is at {t.path[i]}:{strconv.to_string(t.line[i], 10)}")
+			break
+		}
+		k = k + 1
+	}
+	if owned {
+		t.owned.append(t.cn.len())
+	}
+	t.cn.append(cn)
+	t.says.append(says)
+	t.path.append(path)
+	t.line.append(line)
+}
+
 # c_build_typedefs registers the `type X = Y` declarations. It runs BEFORE the structs, so a
 # struct field declared `Celsius` finds the name already known.
 # c_build_specs registers every `spec` as a type name, so a name that fails to resolve as a
@@ -30530,6 +30629,10 @@ fn c_emit_unit_as(prog0: ast.File, own0: ast.File, ft: FileTypes, ms: Mods, whol
 	c_build_structs(em, f)
 	c_build_enums(em, f)
 	c_build_specs(em, f)
+
+	# AFTER THE SIGNATURES, because they are what decides a free function's final C name: the
+	# module tag and the keyed file are both settled there.
+	c_check_cnames(em, f)
 
 	# THE DECLARATION SITES, once. Four passes below ask the same question of them — what
 	# types a declaration spells — and the list answers all four (c_decl_sites says why it

@@ -571,6 +571,11 @@ pub enum Rule {
 	# firing, which is the silently wrong answer the probe exists to remove.
 	FrameTooLargeToUnwind = 4127
 
+	# two declarations whose C names are one symbol — a method is `zg_<Type>_<name>` in the one
+	# flat `zg_` space, so `impl Foo { fn bar }` and `fn Foo_bar` would meet in cc (#489). The
+	# same name declared twice is the duplicate-declaration rules' finding, not this one.
+	CNameClash = 4128
+
 	# building — the program as a set of files, which no single file's text answers: imports resolved
 	# before anything is lexed, and `fn main` looked for after everything is emitted
 	EntryHasNoMain = 5001

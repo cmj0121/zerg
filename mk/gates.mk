@@ -24,7 +24,7 @@
 	check-equal fmt-corpus fmt-self fmt-tokens fmt-roundtrip docs-links docs-mirror docs-zerg docs-refused \
 	grammar-cites grammar-cited grammar-keywords grammar-mirror refusal-cites docs-repeat generic-walks sha256 layering conformance productions \
 	counterexamples behaviour version-check cache-key-check error-codes-check seed-gaps lint-check \
-	deviation-check marker-codes \
+	deviation-check marker-codes cname-space \
 	chapter-codes method-gaps \
 	doc-check doc-serve stmt-walk entry-path examples-index mem-peak release-notes release-sums formula
 
@@ -478,7 +478,7 @@ gates:                          # every gate is on the board, and the board is r
 	./scripts/gates-check.sh
 
 # `version-check` sits straight after `build` because it reads bin/ rather than filling it.
-LINUX_GATES ?= build version-check suites test-runner stdlib-test compiler-test examples corpus desugar lsp editor-align treesitter install-check refuse reject ffi-export stop-place oracle reject-fuzz check-equal fmt-corpus fmt-tokens fmt-roundtrip fmt-self lint lint-check doc-check doc-serve fixpoint docs-links docs-mirror docs-repeat docs-zerg docs-refused generic-walks grammar-cites grammar-cited grammar-keywords grammar-mirror refusal-cites layering stmt-walk dead-code entry-path examples-index conformance productions counterexamples behaviour error-codes-check seed-gaps deviation-check marker-codes chapter-codes method-gaps build-deps-check cache-key-check sha256 gates mem-check mem-peak release-notes release-sums formula sanitize-conc sanitize-corpus
+LINUX_GATES ?= build version-check suites test-runner stdlib-test compiler-test examples corpus desugar lsp editor-align treesitter install-check refuse reject ffi-export stop-place oracle reject-fuzz check-equal fmt-corpus fmt-tokens fmt-roundtrip fmt-self lint lint-check doc-check doc-serve fixpoint docs-links docs-mirror docs-repeat docs-zerg docs-refused generic-walks grammar-cites grammar-cited grammar-keywords grammar-mirror refusal-cites layering stmt-walk cname-space dead-code entry-path examples-index conformance productions counterexamples behaviour error-codes-check seed-gaps deviation-check marker-codes chapter-codes method-gaps build-deps-check cache-key-check sha256 gates mem-check mem-peak release-notes release-sums formula sanitize-conc sanitize-corpus
 
 # The dead-code questions `zerg lint` cannot be asked, because neither is a question about one
 # program: a `pub` function of the COMPILER that nothing in the compiler calls, and a script
@@ -593,6 +593,14 @@ layering:                       # each stage knows only what it is allowed to kn
 # down here rather than left to the next reader to rediscover.
 stmt-walk:                      # a walk that reaches into a block reaches into a bare one
 	./scripts/stmt-walk-check.sh
+
+# A declaration is `zg_<name>` in C, and that is the `--emit lib` ABI; a name the emitter makes for
+# itself is `zgh_`, through one function. A generated `zg_render_Foo` met a `fn render_Foo` and cc
+# refused generated C (#489). The compiler's own lexer reads the sources, and a nested fixture holds
+# a generated name to linear growth: no test sees either until a program picks the name or the depth.
+cname-space:                    # a `zg_` name is the program's own; a generated one is `zgh_`, linear in its key
+	$(MAKE) build
+	./scripts/cname-space-check.sh
 
 # Thirty-three example programs sat here and no document linked to any of them; `examples/README.md`
 # is the door now, and an index of forty-six names is a list written twice. This is the direction

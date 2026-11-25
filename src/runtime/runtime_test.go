@@ -1044,6 +1044,116 @@ func TestRaisedErrRendersItsKind(t *testing.T) {
 	}
 }
 
+// TestAbortDuringUnwindChainsTheInFlightErr pins #483: an abort raised while another one
+// unwinds to the same handler does not lose the first. The later Err reaches the handler with
+// the in-flight one as its cause — below any cause it already had, without touching the
+// cell that cause lives in — and a `guard` inside the unwind catches its own raise and leaves
+// the outer Err where it was.
+func TestAbortDuringUnwindChainsTheInFlightErr(t *testing.T) {
+	bin := buildCore(t, "unwind_chain", unwindChainC)
+	out, errOut, code := runBoundedStreams(t, bin, "", 20*time.Second)
+	want := "defer: second > first\n" +
+		"drop: dropped > first\n" +
+		"third: second > third > first\n" +
+		"inner: caught: inner\n" +
+		"inner: first\n" +
+		"from: second > user > first\n" +
+		"from: user cell kept=1\n"
+	if code != 0 || out != want {
+		t.Errorf("exit=%d stdout=%q, want 0 and %q (stderr %q)", code, out, want, errOut)
+	}
+}
+
+// TestUnguardedDoubleAbortReportsBoth pins the report timing #483 leaves alone: each abort
+// is reported before its unwind, so a defer that aborts during an unhandled one adds a line.
+func TestUnguardedDoubleAbortReportsBoth(t *testing.T) {
+	bin := buildCore(t, "unwind_double", unwindDoubleC)
+	_, errOut, code := runBoundedStreams(t, bin, "", 20*time.Second)
+	if want := "ValueError: first\nIOError: second\n"; code != 1 || errOut != want {
+		t.Errorf("exit=%d stderr=%q, want 1 and %q", code, errOut, want)
+	}
+}
+
+// unwindChainC raises "first" under a guard, with cleanups that abort while it unwinds.
+const unwindChainC = `
+#include "zergrt.h"
+#include <stdio.h>
+
+static zrt_err g_user;
+static void *g_cell;
+
+static void raise_second(void *env) { (void)env; zrt_raise_err(zrt_err_new_kind(ZRT_ERR_IO, "second")); }
+static void raise_third(void *env) { (void)env; zrt_raise_err(zrt_err_new_kind(ZRT_ERR_KEY, "third")); }
+static void raise_from(void *env) { (void)env; zrt_raise_err(zrt_err_copy(g_user)); }
+static void cell_drop(void *p) { (void)p; zrt_raise_err(zrt_err_new_kind(ZRT_ERR_IO, "dropped")); }
+
+static void print_chain(const char *name, zrt_err e) {
+    printf("%s: %s", name, e.msg);
+    for (zrt_err *c = e.cause; c != NULL; c = c->cause) {
+        printf(" > %s", c->msg);
+    }
+    printf("\n");
+}
+
+static void guarded(void *env) {
+    (void)env;
+    zrt_frame fr;
+    zrt_handler_push_catch(&fr);
+    if (setjmp(fr.buf) == 0) {
+        zrt_raise_err(zrt_err_new_kind(ZRT_ERR_KEY, "inner"));
+    } else {
+        zrt_err e = zrt_taken_err();
+        print_chain("inner: caught", e);
+        zrt_err_drop(e);
+    }
+    zrt_handler_pop(&fr);
+}
+
+static void run(const char *name, void (*a)(void *), void (*b)(void *), void *env) {
+    zrt_frame fr;
+    zrt_handler_push_catch(&fr);
+    if (setjmp(fr.buf) == 0) {
+        if (b != NULL) {
+            zrt_defer(b, env);
+        }
+        zrt_defer(a, env);
+        zrt_raise_err(zrt_err_new_kind(ZRT_ERR_VALUE, "first"));
+    } else {
+        zrt_err e = zrt_taken_err();
+        print_chain(name, e);
+        zrt_err_drop(e);
+    }
+    zrt_handler_pop(&fr);
+}
+
+int main(void) {
+    run("defer", raise_second, NULL, NULL);
+    g_cell = zrt_ref_alloc(sizeof(int64_t), cell_drop);
+    run("drop", zrt_defer_release, NULL, &g_cell);
+    run("third", raise_third, raise_second, NULL);
+    run("inner", guarded, NULL, NULL);
+    g_user = zrt_err_chain(zrt_err_new_kind(ZRT_ERR_IO, "second"), zrt_err_new_kind(ZRT_ERR_VALUE, "user"));
+    run("from", raise_from, NULL, NULL);
+    printf("from: user cell kept=%d\n", g_user.cause->cause == NULL);
+    zrt_err_drop(g_user);
+    return 0;
+}
+`
+
+// unwindDoubleC is the same "first" with no guard: the root handler reports both aborts.
+const unwindDoubleC = `
+#include "zergrt.h"
+
+static void raise_second(void *env) { (void)env; zrt_raise_err(zrt_err_new_kind(ZRT_ERR_IO, "second")); }
+
+static void prog(void) {
+    zrt_defer(raise_second, NULL);
+    zrt_raise_err(zrt_err_new_kind(ZRT_ERR_VALUE, "first"));
+}
+
+int main(void) { return zrt_main_run_nil(prog); }
+`
+
 // abortLineC aborts once, with no handler anywhere: the last-resort arm of the abort core,
 // which is the shape a program that raises out of main has.
 const abortLineC = `

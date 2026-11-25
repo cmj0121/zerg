@@ -18,6 +18,7 @@ the compiler emits.
 
 - **`list.c`** — the built-in `list[T]`, a by-value growable sequence.
 - **`map.c`** — the built-in `map[K, V]`, a by-value insertion-ordered hash table.
+- **`walk.c`** — the walkers a derived `==` on a deep value runs over an explicit stack, not the C one.
 
 ### Text & conversion
 

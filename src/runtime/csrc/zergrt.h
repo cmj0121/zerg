@@ -341,6 +341,51 @@ bool   zrt_eq_str(const void *a, const void *b);
 uint64_t zrt_hash_word(int64_t v);
 uint64_t zrt_hash_text(const char *s);
 
+/* --- deep-value walkers (walk.c) ----------------------------------------- */
+
+/* A derived `==` on a type that reaches itself (a self-recursive enum, a struct holding a
+ * list of itself) is a WALK over an explicit stack rather than a recursion on the C one, so a
+ * value built 200000 deep compares like a shallow one. The compiler emits one STEP per type
+ * on the walk; zrt_eq_walk drives them.
+ *
+ * A step compares the parts of a and b from part *at on, in declaration order. It answers
+ * ZRT_EQ_NO (a part differs), ZRT_EQ_YES (every part from *at on is equal and nothing was
+ * pushed) or ZRT_EQ_PUSHED (it pushed one possibly-deep pair with zrt_eqw_push and set *at to
+ * the part to resume at). A shallow part it compares inline. Frames point INTO the operands,
+ * which is sound because a walk only reads and the caller holds both for its whole length. */
+enum { ZRT_EQ_NO = 0, ZRT_EQ_YES = 1, ZRT_EQ_PUSHED = 2 };
+typedef struct zrt_eqw zrt_eqw;
+typedef int (*zrt_eq_step)(zrt_eqw *w, const void *a, const void *b, size_t *at);
+typedef struct {
+	zrt_eq_step step;
+	const void *a;
+	const void *b;
+	size_t      at;
+} zrt_eqf;
+/* the walker's stack: sixteen frames inline, then a heap array doubled as it fills */
+struct zrt_eqw {
+	zrt_eqf *f;
+	size_t   len;
+	size_t   cap;
+	bool     held;
+	zrt_eqf  inl[16];
+};
+
+/* zrt_eq_walk answers whether a == b by driving `step` and every step it pushes. `held` says
+ * a step can run the program's own code (a part's hand-written `eq`), which can abort: the
+ * frame array is then on the cleanup stack for the walk's length, so an abort frees it. */
+bool zrt_eq_walk(zrt_eq_step step, const void *a, const void *b, bool held);
+
+/* zrt_eqw_push puts one pair on the walk, to be compared from its first part. */
+void zrt_eqw_push(zrt_eqw *w, zrt_eq_step step, const void *a, const void *b);
+
+/* zrt_eqstep_list / zrt_eqstep_map are the container steps an emitted step delegates to,
+ * naming the element's (the value's) step: a list compares in order and a map pair by pair,
+ * each value found in b under a's key. A length that differs answers NO before any element
+ * is read. *at is the element index. */
+int zrt_eqstep_list(zrt_eqw *w, zrt_eq_step elem, const zrt_list *a, const zrt_list *b, size_t *at);
+int zrt_eqstep_map(zrt_eqw *w, zrt_eq_step val, const zrt_map *a, const zrt_map *b, size_t *at);
+
 /* --- abort / unwind + cleanup(defer) stack (unwind.c) -------------------- */
 
 /* zrt_cleanup is one pending deferred action on the cleanup stack: a thunk and

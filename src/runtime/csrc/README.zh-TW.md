@@ -17,6 +17,7 @@ C 函式庫（libc / libSystem）之上，另有一小塊 per-architecture 組�
 
 - **`list.c`**——內建 `list[T]`，by-value 的可增長序列。
 - **`map.c`**——內建 `map[K, V]`，by-value 且保留插入順序的 hash table。
+- **`walk.c`**——derived `==` 走訪深層值時所用的 walker，走在明確的 stack 上，而非 C stack。
 
 ### Text & conversion
 

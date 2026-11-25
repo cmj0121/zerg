@@ -205,6 +205,7 @@ fn rt_units() -> list[str] {
 	units.append("str.c")
 	units.append("sys.c")
 	units.append("unwind.c")
+	units.append("walk.c")
 
 	# The concurrency floor. It is linked unconditionally rather than by inspecting the
 	# program because the driver decides the link line before it knows whether emit

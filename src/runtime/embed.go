@@ -30,7 +30,7 @@ const csrcDir = "csrc"
 // core but linked ONLY when the Manifest reports Concurrency, so a non-concurrent
 // program's link line — and its binary — is unchanged.
 //
-//go:embed csrc/zergrt.h csrc/alloc.c csrc/ref.c csrc/list.c csrc/map.c csrc/unwind.c csrc/entry.c csrc/sys.c csrc/fmt.c csrc/conv.c csrc/str.c
+//go:embed csrc/zergrt.h csrc/alloc.c csrc/ref.c csrc/list.c csrc/map.c csrc/unwind.c csrc/entry.c csrc/sys.c csrc/fmt.c csrc/conv.c csrc/str.c csrc/walk.c
 //go:embed csrc/sched.c csrc/chan.c csrc/ctx_arm64.S csrc/ctx_x86_64.S csrc/ctx_ucontext.c
 //go:embed csrc/thread_pthread.c csrc/thread_win32.c csrc/thread_none.c
 //go:embed csrc/zrt_test.h csrc/zrt_test.c
@@ -44,7 +44,7 @@ var Files embed.FS
 // ~9KB of unreachable code in every binary for nothing. The self-hosted compiler emits
 // one now — `map[K,V]`, `{k: v}` and `{:}` all lower to the zrt_map family — so the
 // unit has a caller again.
-var coreCUnits = []string{"alloc.c", "ref.c", "list.c", "map.c", "unwind.c", "entry.c", "sys.c", "fmt.c", "conv.c", "str.c"}
+var coreCUnits = []string{"alloc.c", "ref.c", "list.c", "map.c", "unwind.c", "entry.c", "sys.c", "fmt.c", "conv.c", "str.c", "walk.c"}
 
 // Materialize writes the whole embedded runtime tree (header, core units, and the
 // concurrency sources) into dir and returns the paths of the CORE C translation

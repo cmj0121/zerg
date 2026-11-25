@@ -7969,9 +7969,8 @@ fn c_enum_variant_copy(mut &em: Emitter, en: str, vd: ast.VariantDef) -> str {
 }
 
 # c_enum_drop_helper is that helper read backwards, slot by slot, in REVERSE declaration
-# order — the order docs/core/memory.md pins for an enum payload. (A struct's drop walks its
-# fields FORWARD, which the same page pins the other way; that is a gap of c_drop_helper's
-# and not a second reading of the rule.)
+# order — the order docs/core/memory.md pins for an enum payload, and the one c_drop_helper
+# walks a struct's fields in.
 fn c_enum_drop_helper(mut &em: Emitter, ed: ast.EnumDecl) -> str {
 	nm := c_ty_cname(ed.name)
 	mut out := "static void " + c_ty_helper("drop", ed.name) + "(" + nm + " *v) {\n    switch (v->tag) {\n"
@@ -8183,10 +8182,13 @@ fn c_elem_vt_helper(mut &em: Emitter, t: ast.Ty) -> str {
 fn c_drop_helper(mut &em: Emitter, sd: ast.StructDecl) -> str {
 	nm := c_ty_cname(sd.name)
 	mut out := "static void " + c_ty_helper("drop", sd.name) + "(" + nm + " *v) {\n"
-	for fd in sd.fields {
+	mut i := sd.fields.len() - 1
+	for i >= 0 {
+		fd := sd.fields[i]
 		if c_needs_copy(em, fd.ty) {
 			out = out + "    " + c_drop_stmt(em, fd.ty, "v->zg_" + fd.name) + "\n"
 		}
+		i = i - 1
 	}
 	return out + "}\n\n"
 }

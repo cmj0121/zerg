@@ -3019,3 +3019,113 @@ int main(void) {
     return 0;
 }
 `
+
+// TestHashWalkIsIterative drives walk.c's `Hash` walker over a chain far deeper than a C stack
+// holds. Each cell hashes like a derived enum payload — a start, its own value mixed in, then
+// a left and a right child, then a second value — and the walk must fold each child's hash
+// into its parent exactly as the recursion it replaces did: against a recursive reference on a
+// small tree, and against the chain's hashes computed bottom-up. A step that aborts 100000
+// frames down under a held walk leaves the heap where it was.
+func TestHashWalkIsIterative(t *testing.T) {
+	bin := buildCounted(t, "hashwalk", hashWalkC, false)
+	out, code := runBounded(t, bin, "", 60*time.Second)
+	want := "tree=1 chain=1 caught=1 live=0\n"
+	if code != 0 || out != want {
+		t.Fatalf("hashwalk exit=%d output %q, want exit 0 and %q", code, out, want)
+	}
+}
+
+const hashWalkC = `
+#include "zergrt.h"
+#include <setjmp.h>
+#include <stdio.h>
+#include <stdlib.h>
+
+#define DEEP 200000
+#define FNV 1099511628211ull
+
+static long g_live;
+void *zrt_alloc(size_t n) { void *p = malloc(n); if (p != NULL) { g_live++; } return p; }
+void zrt_free(void *p) { if (p != NULL) { g_live--; free(p); } }
+
+typedef struct cell { int64_t v; struct cell *l; struct cell *r; } cell;
+static int64_t g_abort_v = -1;
+
+static uint64_t mix(uint64_t acc, uint64_t h) { return (acc ^ h) * FNV; }
+
+static int step_cell(zrt_hw *w, const void *px, uint64_t *acc, size_t *at) {
+    const cell *c = (const cell *)px;
+    switch (*at) {
+    case 0:
+        if (c->v == g_abort_v) { zrt_abort("hash aborts"); }
+        *acc = 1;
+        *acc = mix(*acc, zrt_hash_word(c->v));
+        if (c->l != NULL) { *at = 1; zrt_hw_push(w, step_cell, c->l); return ZRT_H_PUSHED; }
+    case 1:
+        if (c->r != NULL) { *at = 2; zrt_hw_push(w, step_cell, c->r); return ZRT_H_PUSHED; }
+    case 2:;
+    }
+    *acc = mix(*acc, zrt_hash_word(c->v + 1));
+    return ZRT_H_DONE;
+}
+
+static uint64_t ref(const cell *c) {
+    uint64_t acc = mix(1, zrt_hash_word(c->v));
+    if (c->l != NULL) { acc = mix(acc, ref(c->l)); }
+    if (c->r != NULL) { acc = mix(acc, ref(c->r)); }
+    return mix(acc, zrt_hash_word(c->v + 1));
+}
+
+static cell *mk(int64_t v, cell *l, cell *r) {
+    cell *c = (cell *)zrt_alloc(sizeof(cell));
+    c->v = v;
+    c->l = l;
+    c->r = r;
+    return c;
+}
+
+static void drop_tree(cell *c) {
+    if (c == NULL) { return; }
+    drop_tree(c->l);
+    drop_tree(c->r);
+    zrt_free(c);
+}
+
+int main(void) {
+    long base = g_live;
+    cell *t = mk(1, mk(2, mk(3, NULL, NULL), NULL), mk(4, mk(5, NULL, mk(6, NULL, NULL)), mk(7, NULL, NULL)));
+    int tree = zrt_hash_walk(step_cell, t, false) == ref(t);
+    drop_tree(t);
+
+    cell **cs = (cell **)malloc((DEEP + 1) * sizeof(cell *));
+    cs[DEEP] = mk(DEEP, NULL, NULL);
+    for (int64_t d = DEEP - 1; d >= 0; d--) {
+        cs[d] = d % 2 ? mk(d, cs[d + 1], NULL) : mk(d, NULL, cs[d + 1]);
+    }
+    uint64_t want = 0;
+    for (int64_t d = DEEP; d >= 0; d--) {
+        uint64_t acc = mix(1, zrt_hash_word(d));
+        if (d < DEEP) { acc = mix(acc, want); }
+        want = mix(acc, zrt_hash_word(d + 1));
+    }
+    int chain = zrt_hash_walk(step_cell, cs[0], false) == want;
+
+    g_abort_v = DEEP / 2;
+    int caught = 0;
+    long before = g_live;
+    zrt_frame fr;
+    zrt_handler_push_catch(&fr);
+    if (setjmp(fr.buf) == 0) {
+        (void)zrt_hash_walk(step_cell, cs[0], true);
+    } else {
+        caught = 1;
+        zrt_err_drop(zrt_taken_err());
+    }
+    zrt_handler_pop(&fr);
+    caught = caught && g_live == before;
+    for (int64_t d = 0; d <= DEEP; d++) { zrt_free(cs[d]); }
+    free(cs);
+    printf("tree=%d chain=%d caught=%d live=%ld\n", tree, chain, caught, g_live - base);
+    return 0;
+}
+`

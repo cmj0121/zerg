@@ -286,6 +286,12 @@ void zrt_map_init(zrt_map *m, size_t keysz, size_t valsz, const zrt_map_vt *vt);
  * checked `.get(k)` path. */
 void *zrt_map_get(zrt_map *m, const void *key);
 
+/* zrt_map_unshare gives m a table of its own when its entries buffer is shared: a fresh
+ * buffer and bucket index, each non-POD key/value copied one level (vt->key_copy /
+ * vt->val_copy), the shared table released. A no-op on an empty or sole-owner map. Every
+ * write calls it first; the readers below do not (map.c states why that is sound). */
+void zrt_map_unshare(zrt_map *m);
+
 /* zrt_map_index returns the value pointer for key, aborting ("key not found", a
  * KeyError) on a miss — the force path `m[k]`. */
 void *zrt_map_index(zrt_map *m, const void *key);
@@ -307,13 +313,15 @@ size_t zrt_map_len(const zrt_map *m);
 void *zrt_map_key_at(zrt_map *m, size_t i);
 void *zrt_map_val_at(zrt_map *m, size_t i);
 
-/* zrt_map_copy deep-copies src into dst: fresh storage, the entry bits bit-copied, then
- * per-entry vt->key_copy / vt->val_copy for any non-POD side. It is the value-semantics
- * copy the compiler inserts wherever a map is bound/passed/returned by value. */
+/* zrt_map_copy makes dst a copy of src that SHARES src's entries buffer and bucket index
+ * (a refcount bump, O(1)); the first write to either one unshares it (zrt_map_unshare).
+ * It is the value-semantics copy the compiler inserts wherever a map is bound/passed/
+ * returned by value. */
 void zrt_map_copy(zrt_map *dst, const zrt_map *src);
 
-/* zrt_map_drop drops every live key/value (vt->key_drop / vt->val_drop) and frees both
- * buffers, leaving an empty header. It is the scope-exit teardown for a map. */
+/* zrt_map_drop releases m's table, leaving an empty header; the last holder drops every
+ * live key/value (vt->key_drop / vt->val_drop) and frees both buffers. It is the
+ * scope-exit teardown for a map. */
 void zrt_map_drop(zrt_map *m);
 
 /* zrt_hash_int / zrt_eq_int are the built-in Hash for an int key (a splitmix64 mix of
@@ -516,8 +524,8 @@ typedef struct zrt_frame {
 typedef struct {
 	uint8_t     kind;     /* ZRT_PEND_* */
 	bool        dropped;  /* CELL: h->drop already ran (set BEFORE the call; #487 clears it) */
-	void       *block;    /* CELL: the zrt_ref_hdr*; LIST: the buffer's zrt_buf_hdr*; MAP: entries */
-	uint8_t    *data;     /* LIST: element 0; MAP: entry 0 (== block) */
+	void       *block;    /* CELL: the zrt_ref_hdr*; LIST: the buffer's zrt_buf_hdr*; MAP: the rc prefix (zrt_mbuf_hdr*) */
+	uint8_t    *data;     /* LIST: element 0; MAP: entry 0 (just past block's rc prefix) */
 	size_t      len;      /* LIST/MAP: element / entry count */
 	size_t      next;     /* LIST/MAP cursor: next index to drop (advanced BEFORE the call) */
 	size_t      stride;   /* LIST: elemsz; MAP: entrysz */
@@ -630,8 +638,8 @@ void            zrt_drain_close(zrt_drain_scope s);
 void zrt_pend_cell(zrt_ref_hdr *h);
 void zrt_pend_list(void *hdr, uint8_t *data, size_t len, size_t elemsz,
                    const zrt_elem_vt *vt);     /* hdr: the buffer's zrt_buf_hdr*, list.c-private type */
-void zrt_pend_map(uint8_t *entries, int64_t *buckets, size_t len, size_t entrysz, size_t koff,
-                  size_t voff, const zrt_map_vt *vt);
+void zrt_pend_map(void *block, uint8_t *entries, int64_t *buckets, size_t len, size_t entrysz,
+                  size_t koff, size_t voff, const zrt_map_vt *vt); /* block: the buffer's rc prefix */
 void zrt_drain(void);
 void zrt_drain_run(void);
 /* zrt_tls_detach zeroes the mounted bundle's pending fields WITHOUT freeing: the array now

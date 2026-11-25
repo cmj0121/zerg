@@ -187,11 +187,11 @@ void zrt_pend_list(void *hdr, uint8_t *data, size_t len, size_t elemsz, const zr
 	e->vt = vt;
 }
 
-void zrt_pend_map(uint8_t *entries, int64_t *buckets, size_t len, size_t entrysz, size_t koff,
-                  size_t voff, const zrt_map_vt *vt) {
+void zrt_pend_map(void *block, uint8_t *entries, int64_t *buckets, size_t len, size_t entrysz,
+                  size_t koff, size_t voff, const zrt_map_vt *vt) {
 	zrt_pending *e = pend_push(zrt_tls_cur());
 	e->kind = ZRT_PEND_MAP;
-	e->block = entries;
+	e->block = block;
 	e->data = entries;
 	e->len = len;
 	e->stride = entrysz;

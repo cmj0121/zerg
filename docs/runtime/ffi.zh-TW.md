@@ -247,8 +247,11 @@ library 照樣建置。C 呼叫者連結這個 object，以及 Zerg program 會�
 呼叫它們。
 
 **符號名穩定且不 mangle。** C 的符號空間是扁平的,穩定 ABI 又不容 mangle,所以匯出名是決定性的:它是固定前綴底下的
-宣告名,method 再帶上它的型別。扁平匯出面上的名稱衝突在 library 模式下是編譯錯誤。(確切方案,以及是否提供逐宣告的
-link-name 覆寫,是待決問題——見下。)
+宣告名,method 再帶上它的型別。method 或 associated item 的 C 名若也被另一個宣告拼出(`fn Foo_bar` 與
+`Foo.bar` 都是 `zg_Foo_bar`),在任何建置下都會被拒絕,即 _E4128_(見
+[Diagnostics](../tooling/diagnostics.zh-TW.md));同一個名稱宣告兩次則回報為重複宣告。
+編譯器替自己產生的名稱從不落在 `zg_` 空間裡,所以一個宣告的符號只可能碰上另一個宣告的符號。(確切方案,以及是否
+提供逐宣告的 link-name 覆寫,是待決問題——見下。)
 
 **前綴是 `zg_`,而且不帶 package 那一段** —— 一次 `--emit lib` 建置裡的 `pub fn add` 匯出的是 `zg_add`,`nm` 看得到。
 那不是 `zg_<pkg>_add` 的暫代品:沒有 package 層可以讓那一段去命名(見 [package.md](package.zh-TW.md) 的〈四層〉),

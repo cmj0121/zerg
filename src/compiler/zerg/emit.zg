@@ -4352,13 +4352,20 @@ fn c_with_type_insts(mut &em: Emitter, f: ast.File) -> ast.File {
 	# `impl[T] Show for Box[T]` is ONE implementation standing for every instantiation of its
 	# target, which is what GRAMMAR#impl-decl puts the parameters there for — so it is
 	# materialized per instantiation, the way a generic `fn` is per call.
-	return c_with_impl_insts(em, out, true)
+	mut none: list[ast.FnDecl] = []
+	return c_with_impl_insts(em, out, true, false, none)
 }
 
 # c_with_impl_insts replaces each template `impl` with one ordinary impl per instantiation of
 # its target, and its methods with one set each. Nothing past this pass knows a template impl
 # existed: `c_impls` answers about `Box[int]`, and a method's receiver is a type.
-fn c_with_impl_insts(mut &em: Emitter, f: ast.File, record: bool) -> ast.File {
+#
+# `alone` is a build that emits this unit and no other (`--emit lib`): the unit that owns a
+# template is not compiled with it, so an instance only this unit asks for — `Box[P]`, with
+# `Box` in one module and `P` in another — would be defined nowhere. Those come back in
+# `others`, which the caller emits `static`, a copy per object the way a generic `fn`'s
+# specialization is (no `zgg_` name is ABI: an export is `zg_`, and a generic is never one).
+fn c_with_impl_insts(mut &em: Emitter, f: ast.File, record: bool, alone: bool, mut &others: list[ast.FnDecl]) -> ast.File {
 	# RECORDED ONCE AND APPLIED TWICE. The whole program is transformed and so is the ENTRY
 	# file, which carries the same declarations and is what the bodies are emitted from — but
 	# the templates are the same templates, so the second pass reads what the first wrote.
@@ -4378,12 +4385,22 @@ fn c_with_impl_insts(mut &em: Emitter, f: ast.File, record: bool) -> ast.File {
 	# THE METHODS COME OUT WITH THEM. A body written against `Box[T]` names a receiver that is
 	# not a type — `no type named Box[T]`, at the method rather than at the impl — so the
 	# template's own methods are removed here and the materialized ones put in their place.
+	#
+	# AND A UNIT DEFINES ONLY ITS OWN. The table is the whole program's, recorded once, and every
+	# unit materialized every method in it: `Box[P].get` was defined in each unit of a build
+	# with one import, and the LINKER refused the duplicate symbol. The unit that writes the
+	# template is the one that defines its instances — the instantiations are the declarations'
+	# (c_with_type_insts reads the whole program), so it sees every one; the other units only
+	# declare them, through the prototypes `f` gives every unit. One minted later is a `static`
+	# copy per unit (c_tpl_methods_late), as a generic `fn`'s specialization is.
 	mut fns: list[ast.FnDecl] = []
+	mut mine: list[str] = []
 	for fn_i in f.fns {
 		if c_is_tpl_method(em, f, fn_i) {
 			if record {
 				em.impl_tpl_fns.append(fn_i)
 			}
+			mine.append(c_tpl_method_key(fn_i))
 		} else {
 			fns.append(fn_i)
 		}
@@ -4400,18 +4417,25 @@ fn c_with_impl_insts(mut &em: Emitter, f: ast.File, record: bool) -> ast.File {
 	mut mi := 0
 	for mi < em.impl_tpl_fns.len() {
 		m := em.impl_tpl_fns[mi]
+		mi = mi + 1
+		owned := c_name_in(mine, c_tpl_method_key(m))
+		continue if not owned and not alone
+
 		mut ti := 0
 		for ti < em.inst_tys.len() {
 			applied := em.inst_tys[ti]
 			if c_app_base(applied) == c_app_base(m.recv) {
 				inst := c_tpl_method_for(em, f, m, applied)
 				if not c_seat_tpl_method(em, inst) {
-					fns.append(inst)
+					if owned {
+						fns.append(inst)
+					} else {
+						others.append(inst)
+					}
 				}
 			}
 			ti = ti + 1
 		}
-		mi = mi + 1
 	}
 
 	# AN INHERENT TEMPLATE IMPL RECORDS NO ImplDecl — there is no spec to record — so whether
@@ -4424,6 +4448,13 @@ fn c_with_impl_insts(mut &em: Emitter, f: ast.File, record: bool) -> ast.File {
 	out.impls = impls
 	out.fns = fns
 	return out
+}
+
+# c_tpl_method_key is one template method's identity across the two views of it — the whole
+# program's and a unit's — which parse the same text at the same place. The receiver tells two
+# derives apart: they share a `<derive:FILE>` path and each starts at its own line 1.
+fn c_tpl_method_key(m: ast.FnDecl) -> str {
+	return f"{m.path}:{strconv.to_string(m.line, 10)}:{strconv.to_string(m.col, 10)}:{m.recv}.{m.name}"
 }
 
 # c_tpl_methods_late gives a specialization minted AFTER the declaration sweep its template
@@ -31402,8 +31433,10 @@ fn c_emit_unit_as(prog0: ast.File, own0: ast.File, ft: FileTypes, ms: Mods, whol
 	# A template is not a function, and this is the honest way to say so: from here down —
 	# in these passes and in any added later — `f.fns` holds functions only.
 	c_build_generics(em, f0)
+
 	f := c_with_type_insts(em, c_with_spec_keys(c_without_templates(f0)))
-	own := c_with_impl_insts(em, c_with_spec_keys(c_without_templates(c_with_spec_defaults(f0, c_with_derived(ft, prog0, c_with_foreign(own0))))), false)
+	mut foreign_insts: list[ast.FnDecl] = []
+	own := c_with_impl_insts(em, c_with_spec_keys(c_without_templates(c_with_spec_defaults(f0, c_with_derived(ft, prog0, c_with_foreign(own0))))), false, ex.macro != "", foreign_insts)
 
 	# OVER `f0`, THE PROGRAM WITH ITS TEMPLATES STILL IN IT. A template is not a function
 	# to lower, which is what the removal above says, but it IS a name at the top level:
@@ -31545,10 +31578,21 @@ fn c_emit_unit_as(prog0: ast.File, own0: ast.File, ft: FileTypes, ms: Mods, whol
 	# The prototypes are still `c_lowered`, which answers `""` under `check`. The bodies, the
 	# types, the constants and the entry are kept as they were written in both modes, because
 	# c_probe_unit reads them for a finding (E4127) that `check` owes too; only a build joins them.
+	#
+	# AN INSTANCE ANOTHER MODULE OWNS, in a build that emits only this unit, is this unit's
+	# `static` copy (c_with_impl_insts' `alone`), so the extern prototype `f` carries for it
+	# gives way to the `static` one the specialization loop below writes.
+	mut static_keys: list[str] = []
+	for fi in foreign_insts {
+		static_keys.append(c_tpl_method_key(fi))
+		em.inst_fns.append(fi)
+	}
 	mut proto_parts: list[str] = []
 	i = 0
 	for i < f.fns.len() {
-		proto_parts.append(c_lowered(checking, c_proto(em, f.fns[i])))
+		if static_keys.len() == 0 or not c_name_in(static_keys, c_tpl_method_key(f.fns[i])) {
+			proto_parts.append(c_lowered(checking, c_proto(em, f.fns[i])))
+		}
 		i = i + 1
 	}
 	mut def_parts: list[str] = []

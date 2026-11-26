@@ -23336,6 +23336,7 @@ fn c_render_key(mut &em: Emitter, t: ast.Ty) -> str {
 fn c_render_body(mut &em: Emitter, name: str, t: ast.Ty) -> str {
 	head := f"static const char *{name}({c_type(t)} v) {{\n"
 
+	return head + c_render_walk_body(em, t) + "}\n\n" if c_walk_deep(em, t)
 	return head + c_render_list_body(em, t) + "}\n\n" if c_is_list(t) or c_is_arr(t)
 	return head + c_render_map_body(em, t) + "}\n\n" if c_is_map(t)
 	return head + c_render_set_body(em, t) + "}\n\n" if c_is_set(t)
@@ -23665,6 +23666,217 @@ fn c_render_struct_body(mut &em: Emitter, sn: str) -> str {
 	}
 	held := c_render_holds(em, tys)
 	return c_render_open(em, "    ", f"zrt_str_dup(\"{c_ft_written(em, sn)}(\")", held) + joins + c_render_close(")", held)
+}
+
+# --- printing a deep value (#481) ---------------------------------------------------------
+#
+# A renderer recursed through each part's renderer, one C frame per level, and concatenated
+# each level onto its child's whole text, so printing a value 200000 deep overflowed the stack
+# after copying quadratic bytes. On a type that reaches itself the renderer's body is a walk
+# (zrt_render_walk) over one STEP per type on the cycle, every step writing into one builder:
+# the pieces its c_render_*_body joins, in the same order and spelled the same, a shallow part
+# rendered inline through c_render_of and a deep one pushed. The renderer keeps its name and
+# its signature, so every site that renders the type reaches the walk.
+
+# c_render_walk_body is that body, held when a part can run the program's own code.
+fn c_render_walk_body(mut &em: Emitter, t: ast.Ty) -> str {
+	step := c_render_step_fn(em, t)
+	mut held := "false"
+	if c_render_holds(em, c_render_parts(em, t)) {
+		held = "true"
+	}
+	return f"    return zrt_render_walk({step}, &v, {held});\n"
+}
+
+# c_render_step_fn names one type's render step and emits it once, as c_eq_step_fn does.
+fn c_render_step_fn(mut &em: Emitter, t: ast.Ty) -> str {
+	name := c_helper_name("rstep", c_render_key(em, t))
+	sig := c_walk_step_sig(em, name, "zrt_rw *w, zrt_sb *b, const void *px, size_t *at")
+	if sig != "" {
+		em.rnd_decls.append(sig + " {\n" + c_render_step_body(em, t) + "}\n\n")
+	}
+	return name
+}
+
+# c_render_pushes is whether a step pushes a part rather than rendering it inline: the part is
+# on the cycle and renders structurally. A type that declares `display` or `debug` renders
+# through that method, and a box through its table, both inline (c_render_of).
+fn c_render_pushes(mut &em: Emitter, part: ast.Ty, t: ast.Ty) -> bool {
+	return not c_declares_rendering(em, part) and c_walk_part_deep(em, part, t)
+}
+
+# c_render_step_body writes one type's pieces, each kind as its c_render_*_body joins them and
+# asked in c_render_body's order.
+fn c_render_step_body(mut &em: Emitter, t: ast.Ty) -> str {
+	ct := c_type(t)
+	head := f"    {ct} *x = ({ct} *)px;\n"
+	if c_is_list(t) {
+		et := c_list_elem(t)
+		return head + c_render_step_loop("[", "zrt_list_len(x)", c_render_step_put(em, t, et, f"(*({c_type(et)}*)zrt_list_at_ref(x, i))", "zrt_list_at_ref(x, i)", "        "), "]")
+	}
+	return head + c_render_step_loop("[", strconv.to_string(c_arr_len(em, t), 10), c_render_step_put(em, t, c_arr_elem(t), "x->v[i]", "&x->v[i]", "        "), "]") if c_is_arr(t)
+
+	if c_is_map(t) {
+		kt := c_map_key_ty(t)
+		vt := c_map_val_ty(t)
+		mut out := head + "    if (*at == 0) { zrt_sb_put(b, \"{\"); }\n    while (*at < 2 * zrt_map_len(x)) {\n        size_t i = *at / 2;\n"
+		out = out + "        if (*at % 2 == 0) {\n            *at += 1;\n            if (i > 0) { zrt_sb_put(b, \", \"); }\n"
+		out = out + c_render_step_put(em, t, kt, f"(*({c_type(kt)}*)zrt_map_key_at(x, i))", "zrt_map_key_at(x, i)", "            ") + "        }\n"
+		out = out + "        *at += 1;\n        zrt_sb_put(b, \": \");\n"
+		out = out + c_render_step_put(em, t, vt, f"(*({c_type(vt)}*)zrt_map_val_at(x, i))", "zrt_map_val_at(x, i)", "        ")
+		return out + "    }\n    zrt_sb_put(b, \"}\");\n    return ZRT_R_DONE;\n"
+	}
+
+	if c_is_set(t) {
+		et := c_set_elem(t)
+		return head + c_render_step_loop("{", "zrt_map_len(x)", c_render_step_put(em, t, et, f"(*({c_type(et)}*)zrt_map_key_at(x, i))", "zrt_map_key_at(x, i)", "        "), "}")
+	}
+
+	mut labels: list[str] = []
+	mut tys: list[ast.Ty] = []
+	mut slots: list[str] = []
+	mut boxed: list[bool] = []
+	if c_is_tuple(t) {
+		for et in ast.ty_tuple_elems(t) {
+			labels.append(c_render_sep(tys.len()))
+			slots.append(f"->f{strconv.to_string(tys.len(), 10)}")
+			tys.append(et)
+			boxed.append(false)
+		}
+		return head + c_render_step_parts(em, t, "(", labels, tys, slots, boxed, ")", "    ")
+	}
+
+	if ast.ty_is_opt(t) {
+		el := c_opt_elem(t)
+		out := head + "    if (*at == 0 && x->tag != 0) { zrt_sb_put(b, \"nil\"); return ZRT_R_DONE; }\n"
+		return out + c_render_step_one(em, t, "", el, c_res_val(em, t, "(*x)"), "", "    ")
+	}
+
+	if c_is_carrier(t) {
+		mut out := head + "    if (x->tag != 0) {\n"
+		out = out + c_render_step_one(em, t, "Right(", c_either_right(t), "x->err", ")", "        ") + "    }\n"
+		return out + c_render_step_one(em, t, "Left(", c_either_left(t), c_res_val(em, t, "(*x)"), ")", "    ")
+	}
+
+	nm := c_named_of(t)
+	mut i := 0
+	if c_is_enum_ty(em, t) {
+		mut out := head + "    switch (x->tag) {\n"
+		for i < em.var_name.len() {
+			if em.var_enum[i] == nm {
+				vn := em.var_name[i]
+				labels = []
+				tys = []
+				slots = []
+				boxed = []
+				c_walk_variant_parts(em, nm, vn, tys, slots, boxed)
+				for labels.len() < tys.len() {
+					labels.append(c_render_sep(labels.len()))
+				}
+				lit := f"{c_ft_written(em, nm)}.{vn}"
+				mut body := f"        zrt_sb_put(b, \"{lit}\");\n        return ZRT_R_DONE;\n"
+				if tys.len() > 0 {
+					body = c_render_step_parts(em, t, lit + "(", labels, tys, slots, boxed, ")", "        ")
+				}
+				out = out + f"    case {strconv.to_string(em.var_tag[i], 10)}: {{\n" + body + "    }\n"
+			}
+			i = i + 1
+		}
+		return out + f"    default: break;\n    }}\n    zrt_sb_put(b, \"{c_ft_written(em, nm)}\");\n    return ZRT_R_DONE;\n"
+	}
+
+	c_walk_struct_parts(em, nm, tys, slots, boxed)
+	for i < em.fld_struct.len() {
+		if em.fld_struct[i] == nm {
+			labels.append(f"{c_render_sep(labels.len())}{em.fld_name[i]}: ")
+		}
+		i = i + 1
+	}
+	return head + c_render_step_parts(em, t, c_ft_written(em, nm) + "(", labels, tys, slots, boxed, ")", "    ")
+}
+
+# c_render_sep is the literal written before a run's part `i`: nothing before the first.
+fn c_render_sep(i: int) -> str {
+	return "" if i == 0
+	return ", "
+}
+
+# c_render_step_loop is a sequence's pieces with the element index as the resume point: the
+# opening literal once, a separator before every element but the first, the closing literal.
+fn c_render_step_loop(lead: str, n: str, elem: str, tail: str) -> str {
+	mut out := f"    if (*at == 0) {{ zrt_sb_put(b, \"{lead}\"); }}\n    while (*at < (size_t)({n})) {{\n"
+	out = out + "        size_t i = (*at)++;\n        if (i > 0) { zrt_sb_put(b, \", \"); }\n" + elem
+	return out + f"    }}\n    zrt_sb_put(b, \"{tail}\");\n    return ZRT_R_DONE;\n"
+}
+
+# c_render_step_put is one element in a loop: pushed, the index already past it, or rendered
+# into the builder inline.
+fn c_render_step_put(mut &em: Emitter, t: ast.Ty, pt: ast.Ty, val: str, addr: str, ind: str) -> str {
+	return f"{ind}zrt_rw_push(w, {c_render_step_fn(em, pt)}, {addr});\n{ind}return ZRT_R_PUSHED;\n" if c_render_pushes(em, pt, t)
+
+	return c_render_step_cell(em, pt, val, ind)
+}
+
+# c_render_step_cell is a shallow part, rendered where the joined body rendered it.
+fn c_render_step_cell(mut &em: Emitter, pt: ast.Ty, val: str, ind: str) -> str {
+	return f"{ind}zrt_sb_put_cell(b, {c_render_of(em, pt, val, true)});\n"
+}
+
+# c_render_step_run is a run of parts, resumable as c_eq_step_parts' is: the opening literal,
+# each part after its label, the closing literal. A deep part records where to come back and
+# is pushed, and the walker re-enters at the `case` after it once the part is written.
+fn c_render_step_run(mut &em: Emitter, t: ast.Ty, lead: str, labels: list[str], tys: list[ast.Ty], vals: list[str], addrs: list[str], tail: str, ind: str) -> str {
+	mut out := f"{ind}switch (*at) {{\n{ind}case 0:;\n" + c_render_step_lit(lead, ind + "    ")
+	mut k := 0
+	mut i := 0
+	for i < tys.len() {
+		out = out + c_render_step_lit(labels[i], ind + "    ")
+		if c_render_pushes(em, tys[i], t) {
+			k = k + 1
+			ks := strconv.to_string(k, 10)
+			out = out + f"{ind}    *at = {ks}; zrt_rw_push(w, {c_render_step_fn(em, tys[i])}, {addrs[i]}); return ZRT_R_PUSHED;\n{ind}case {ks}:;\n"
+		} else {
+			out = out + c_render_step_cell(em, tys[i], vals[i], ind + "    ")
+		}
+		i = i + 1
+	}
+	return out + f"{ind}}}\n" + c_render_step_lit(tail, ind) + f"{ind}return ZRT_R_DONE;\n"
+}
+
+# c_render_step_parts is a run over gathered parts (c_walk_variant_parts and its like).
+fn c_render_step_parts(mut &em: Emitter, t: ast.Ty, lead: str, labels: list[str], tys: list[ast.Ty], slots: list[str], boxed: list[bool], tail: str, ind: str) -> str {
+	mut vals: list[str] = []
+	mut addrs: list[str] = []
+	c_render_step_slots(tys, slots, boxed, vals, addrs)
+	return c_render_step_run(em, t, lead, labels, tys, vals, addrs, tail, ind)
+}
+
+# c_render_step_slots reads gathered parts after the operand `x`: each one's value and its
+# address. A slot is the access written after it (`->f0`); a BOXED payload is read out of its
+# cell, which is where the part is pushed from.
+fn c_render_step_slots(tys: list[ast.Ty], slots: list[str], boxed: list[bool], mut &vals: list[str], mut &addrs: list[str]) {
+	mut i := 0
+	for i < tys.len() {
+		if boxed[i] {
+			addrs.append(f"zrt_ref_payload(x{slots[i]})")
+			vals.append(f"(*({c_type(tys[i])}*)zrt_ref_payload(x{slots[i]}))")
+		} else {
+			addrs.append(f"&x{slots[i]}")
+			vals.append(f"x{slots[i]}")
+		}
+		i = i + 1
+	}
+}
+
+# c_render_step_one is a carrier's run: one payload, read at `val`, between two literals.
+fn c_render_step_one(mut &em: Emitter, t: ast.Ty, lead: str, pt: ast.Ty, val: str, tail: str, ind: str) -> str {
+	return c_render_step_run(em, t, lead, [""], [pt], [val], [f"&({val})"], tail, ind)
+}
+
+fn c_render_step_lit(lit: str, ind: str) -> str {
+	return "" if lit == ""
+
+	return f"{ind}zrt_sb_put(b, \"{lit}\");\n"
 }
 
 # --- an f-string hole with a tail (GRAMMAR#interp) ----------------------------------------

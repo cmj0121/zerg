@@ -4250,13 +4250,18 @@ expect "$ZERG" derive-decode-over-an-applied-generic E4124 'an applied generic t
 import "codec"
 
 #[derive(Encode, Decode)]
+struct Q {
+	pub n: int
+}
+
+#[derive(Encode, Decode)]
 struct B[T] {
 	pub x: T
 }
 
 #[derive(Encode, Decode)]
 struct P {
-	pub b: B[int]
+	pub b: B[Q]
 }
 
 fn main() {

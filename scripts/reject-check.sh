@@ -10085,6 +10085,86 @@ fn main() {
 }
 EOF
 
+# A DERIVED `Encode` ON A GENERIC TYPE is `impl[T: Encode]`, and a built-in type has no impl of
+# the spec, so `Bx[int]` has no `encode` and the call asking for one is the finding — at the
+# call, not inside the `<derive>` file the reader never wrote (docs/core/derive.md).
+reject a-derived-encode-at-a-built-in-argument E4010 '`int` does not implement `Encode`, which `Bx[T]`' at=12:2 <<'EOF'
+import "codec"
+
+#[derive(Encode)]
+struct Bx[T] {
+	pub v: T
+}
+
+fn main() {
+	mut o := codec.Encoder()
+	b: Bx[int] = Bx(3)
+	print b.v
+	b.encode(o)
+}
+EOF
+
+reject a-derived-encode-on-an-enum-at-a-built-in-argument E4010 '`str` does not implement `Encode`, which `M[T]`' at=12:2 <<'EOF'
+import "codec"
+
+#[derive(Encode)]
+enum M[T] {
+	A(T)
+	B(M[T])
+}
+
+fn main() {
+	mut o := codec.Encoder()
+	m: M[str] = M.B(M.A("a"))
+	m.encode(o)
+}
+EOF
+
+# and a DERIVED PARENT asks it of its field: `Bx[int]` has no `Encode` to delegate to, so the
+# field is refused at the parent's declaration (E4124, as a field of a type with no `Encode`
+# is), not as E4010 inside the body the derive generated.
+reject a-derived-encode-over-a-field-at-a-built-in-argument E4124 'the field `b` is a `Bx[int]`, and `int` has no `Encode`' at=9:1 <<'EOF'
+import "codec"
+
+#[derive(Encode)]
+struct Bx[T] {
+	pub v: T
+}
+
+#[derive(Encode)]
+struct W {
+	pub b: Bx[int]
+}
+
+fn main() {
+	mut o := codec.Encoder()
+	W(Bx(3)).encode(o)
+}
+EOF
+
+reject a-derived-encode-from-a-module-at-a-built-in-argument E4010 '`int` does not implement `Encode`, which `Bx[T]`' at=7:2 <<'EOF'
+import "./lib/ge"
+import "codec"
+
+fn main() {
+	mut o := codec.Encoder()
+	b := ge.Bx(3)
+	b.encode(o)
+}
+--- lib/ge.zg
+import "codec"
+
+#[derive(Encode)]
+pub struct Bx[T] {
+	pub v: T
+}
+
+pub fn unused() -> int {
+	o := codec.Encoder()
+	return o.bytes.len()
+}
+EOF
+
 # THE TWO SIDES ARE ONE TYPE. A literal is typed by its own elements and not by the operand
 # beside it, so a `list[byte]` and `[1, 2]` are two kinds of value, and an empty literal has
 # nothing to be typed by at all.

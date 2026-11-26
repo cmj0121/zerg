@@ -905,6 +905,10 @@ pub struct Emitter {
 	pub unmet_inst: list[int]
 	pub unmet_row: list[int]
 	pub unmet_why: list[str]
+
+	# spec_decls is the whole program's specs, kept from c_build_spec_vts so a witness table
+	# for an instantiation minted inside a body (c_spec_vt_late) is built from the same decl.
+	pub spec_decls: list[ast.SpecDecl]
 }
 
 # Subst is an active set of identifier substitutions: an EIdent whose name appears in
@@ -4842,6 +4846,10 @@ fn c_gen_enum_on_demand(mut &em: Emitter, tpl: ast.EnumDecl, applied: str, sol: 
 	ed := ast.EnumDecl(applied, generic.subst_variants(su, tpl.variants), notp, tpl.is_pub, tpl.path, tpl.line, tpl.col, tpl.name_line, tpl.name_col, tpl.end_line, tpl.end_col)
 
 	c_register_enum(em, ed)
+
+	# AND ITS TEMPLATE IMPLS, as c_gen_type_on_demand seats a struct's: `M.One(P(7))` minted
+	# `M[P]` in a body, and `impl[T: Sz] Sz for M[T]` was refused as a method it does not have.
+	c_tpl_methods_late(em, applied)
 	em.res_decls.append(c_enum_typedef(ed))
 	em.res_decls.append(c_refbox_helpers(ed))
 	if c_needs_copy(em, ast.Ty.TNamed(applied)) {
@@ -17414,7 +17422,15 @@ fn c_spec_disp_register(mut &em: Emitter, sp: str, meth: str) -> str {
 	for i < np {
 		pr := c_param_row(em, key, i)
 		ai := c_helper_name("a", strconv.to_string(i, 10))
-		ps = ps + f", {c_type(em.pr_ty[pr])} {ai}"
+
+		# A `mut &` PARAMETER ARRIVES AS THE CALLER'S ADDRESS, the pointer the slot's shim takes
+		# (c_param_ctype): spelled by value here, `encode(mut &out)` through a box was handed an
+		# `Encoder *` where this said `Encoder`, and cc refused both ends of it.
+		mut pt := c_type(em.pr_ty[pr])
+		if em.pr_ref[pr] {
+			pt = pt + "*"
+		}
+		ps = ps + f", {pt} {ai}"
 		xs = xs + f", {ai}"
 		i = i + 1
 	}
@@ -28829,6 +28845,13 @@ fn c_spec_box_register(mut &em: Emitter, key: str, target: str) -> str {
 	for n in em.svt_names {
 		return bn if n == bn
 	}
+
+	# THE TABLE FIRST, and asked again after: a `This`-returning shim of a table built here boxes
+	# through this same thunk, and that inner call is the one that must write it — ahead of the
+	# shim that calls it, which cc otherwise met as an implicit declaration.
+	c_spec_vt_late(em, key, target)
+	return bn if c_name_in(em.svt_names, bn)
+
 	em.svt_names.append(bn)
 
 	ct := c_target_ctype(target)
@@ -28841,6 +28864,32 @@ fn c_spec_box_register(mut &em: Emitter, key: str, target: str) -> str {
 	out = out + f"    return {pc};\n}}\n"
 	em.svt_decls.append(out)
 	return bn
+}
+
+# c_spec_vt_late is the table of a template impl's instantiation minted INSIDE A BODY. The
+# declaration sweep built one per impl it knew (c_build_spec_vts), and `Bx(P(5))` on a `Sz`
+# position is where `Bx[P]` first exists: c_tpl_methods_late seats its methods and its registry
+# row, and the box named a table no pass wrote, which cc reported. Registered from the box
+# thunk that names it, from the same spec decl and impl c_with_impl_insts would have made.
+fn c_spec_vt_late(mut &em: Emitter, key: str, target: str) {
+	return if not c_is_applied(target) or c_name_in(em.svt_names, c_spec_vt_name(key, target))
+
+	mut r := 0
+	for r < em.impl_tpls.len() {
+		ip := em.impl_tpls[r]
+		r = r + 1
+		continue if c_app_base(ip.target) != c_app_base(target) or ast.spec_key(ip.on, ip.args) != key or c_tpl_unmet_of(em, r - 1, target) != ""
+
+		mut si := 0
+		for si < em.spec_decls.len() {
+			sp := em.spec_decls[si]
+			si = si + 1
+			continue if sp.name != ip.on
+
+			c_spec_vt_register(em, sp, ast.ImplDecl(ip.on, ip.args, target, [], [], ip.path, ip.line, ip.col, ip.end_line, ip.end_col))
+			return
+		}
+	}
 }
 
 # c_spec_vt_register emits one spec's typedef (once) and one table per `impl S for T`.
@@ -29831,6 +29880,7 @@ fn c_build_impls(mut &em: Emitter, f: ast.File) {
 # `c_build_structs`, the field registry was still empty and every struct payload rendered
 # through the integer arm: `zrt_display_int((int64_t)(*(const zg_Fd *)p))`, which cc refused.
 fn c_build_spec_vts(mut &em: Emitter, f: ast.File) {
+	em.spec_decls = f.specs
 	for ip in f.impls {
 		at := c_derive_spec_at(f, ip.on)
 		if at >= 0 {
@@ -31707,7 +31757,7 @@ fn c_emit_unit_as(prog0: ast.File, own0: ast.File, ft: FileTypes, ms: Mods, whol
 	# is what makes that invariant hold for a multi-unit program, at the place it already lives,
 	# and it is what lets the declaration passes below go back to reading the WHOLE program.
 	seen := diags.len()
-	mut em := Emitter([], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], false, false, false, false, [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], 0, [], 0, [], [], false, "", "", [], [], ast.Ty.TVoid, 0, "", 0, 0, 0, 0, "", diags, 0, 0, [], [], [], [], [], false, 0, false, "", 0, false, false, [], [], [], [], [], [], [], [], [], [], [], "", want_lints, [], [], [], [], [], [], [], [], [], [], [], [], false, 0, [], [], "", c_nosub(), [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], false, ast.no_index(), [], [], [], [], [], [], [], [], [], [], [], [], false, [], [], [], [], [], [], [], [], [], [], [], "", [], [], 0, 0, [], -1, 0, -1, -1, [], false, 0, [], [], [], [], c_pg_none(), [], [], [], [], [], [], [], [], [])
+	mut em := Emitter([], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], false, false, false, false, [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], 0, [], 0, [], [], false, "", "", [], [], ast.Ty.TVoid, 0, "", 0, 0, 0, 0, "", diags, 0, 0, [], [], [], [], [], false, 0, false, "", 0, false, false, [], [], [], [], [], [], [], [], [], [], [], "", want_lints, [], [], [], [], [], [], [], [], [], [], [], [], false, 0, [], [], "", c_nosub(), [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], false, ast.no_index(), [], [], [], [], [], [], [], [], [], [], [], [], false, [], [], [], [], [], [], [], [], [], [], [], "", [], [], 0, 0, [], -1, 0, -1, -1, [], false, 0, [], [], [], [], c_pg_none(), [], [], [], [], [], [], [], [], [], [])
 
 	# ASSIGNED, NOT PASSED. Every argument above is a zero value, and `layering` asserts that
 	# — it lines the call up with the fields by KIND, which only works while nothing in it

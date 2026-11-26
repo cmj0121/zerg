@@ -10138,6 +10138,159 @@ fn main() {
 }
 EOF
 
+# A METHOD A SPEC DOES NOT DECLARE HAS NO SLOT, so a call on a box is the finding every type
+# gives for a method it lacks. `copy` is such a name: a box is copied by binding it, as every
+# value is (docs/core/specs.md). Until this stood the compiler stopped with "index out of
+# range" and no diagnostic, reading the arguments against a signature row that is not there.
+reject a-method-a-spec-lacks-on-a-box E3131 'the method `copy` on a Sz' <<'EOF'
+spec Sz {
+	fn sz() -> int
+}
+
+struct P {
+	pub x: int
+}
+
+impl Sz for P {
+	fn sz() -> int {
+		return this.x
+	}
+}
+
+fn main() {
+	e: Sz = P(1)
+	g := e.copy()
+	print g.sz()
+}
+EOF
+
+# TWO BOXES ARE NEVER COMPARED BY VALUE (docs/core/specs.md): erasure removed the concrete type
+# `Eq` needs. A box is a pointer in C, so before this `e == f` compared the two cells'
+# ADDRESSES — two boxes holding an equal `P(1)` answered false and `!=` true, a wrong answer
+# with nothing said. The two boxes here hold equal values, so the old answer was wrong rather
+# than merely unasked.
+reject eq-on-two-boxes E3155 '`==` on a Sz' <<'EOF'
+spec Sz {
+	fn sz() -> int
+}
+
+#[derive(Eq)]
+struct P {
+	pub x: int
+}
+
+impl Sz for P {
+	fn sz() -> int {
+		return this.x
+	}
+}
+
+fn main() {
+	e: Sz = P(1)
+	f: Sz = P(1)
+	print e == f
+}
+EOF
+
+reject ne-on-two-boxes E3155 '`!=` on a Sz' <<'EOF'
+spec Sz {
+	fn sz() -> int
+}
+
+#[derive(Eq)]
+struct P {
+	pub x: int
+}
+
+impl Sz for P {
+	fn sz() -> int {
+		return this.x
+	}
+}
+
+fn main() {
+	e: Sz = P(1)
+	f: Sz = P(1)
+	print e != f
+}
+EOF
+
+# and every spelling that compares a box as a part asks the same question: `in` compares with
+# `==`, and a list's `==` compares its parts — each of which answered by address before.
+reject in-over-a-list-of-boxes E3155 '`in` over a collection of Sz' <<'EOF'
+spec Sz {
+	fn sz() -> int
+}
+
+#[derive(Eq)]
+struct P {
+	pub x: int
+}
+
+impl Sz for P {
+	fn sz() -> int {
+		return this.x
+	}
+}
+
+fn main() {
+	e: Sz = P(1)
+	f: Sz = P(1)
+	print e in [f]
+}
+EOF
+
+reject eq-on-two-lists-of-boxes E3155 'on a list[Sz], which compares its Sz' <<'EOF'
+spec Sz {
+	fn sz() -> int
+}
+
+#[derive(Eq)]
+struct P {
+	pub x: int
+}
+
+impl Sz for P {
+	fn sz() -> int {
+		return this.x
+	}
+}
+
+fn main() {
+	e: Sz = P(1)
+	f: Sz = P(1)
+	print [e] == [f]
+}
+EOF
+
+# THE BOUND IS THE SAME QUESTION, asked at the call: a box does not meet `T: Eq`, or the
+# generic body's `==` would be the address comparison above.
+reject a-box-does-not-meet-the-eq-bound E4010 '`Sz` does not implement `Eq`' seed-gap <<'EOF'
+spec Sz {
+	fn sz() -> int
+}
+
+#[derive(Eq)]
+struct P {
+	pub x: int
+}
+
+impl Sz for P {
+	fn sz() -> int {
+		return this.x
+	}
+}
+
+fn same[T: Eq](a: T, b: T) -> bool {
+	return a == b
+}
+
+fn main() {
+	e: Sz = P(1)
+	print same(e, e)
+}
+EOF
+
 # A DERIVED `Encode` ON A GENERIC TYPE is `impl[T: Encode]`, and a built-in type has no impl of
 # the spec, so `Bx[int]` has no `encode` and the call asking for one is the finding — at the
 # call, not inside the `<derive>` file the reader never wrote (docs/core/derive.md).

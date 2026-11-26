@@ -453,6 +453,11 @@ byte(N)` and `byte(N * 3)` are compile errors. The seed folds the literal alone:
   position a type is written (`E9048`). The seed asks the question of a parameter and a result
   and not of a field, so `pub v: Tag` declares a field whose type nothing gives a
   representation and the program builds. One case in `reject-check.sh` carries the marker.
+- **A box at a `T: Eq` bound is accepted, and cc answers.** Two boxes are never comparable by
+  value ([specs](../../docs/core/specs.md)), so `zerg` refuses `same(e, e)` for an `e: Sz`
+  (`E4010`). The seed checks no bound against a spec-typed argument and emits a generic
+  instance whose parameters are `void`, which clang refuses. One case in `reject-check.sh`
+  carries the marker.
 - **A division by a constant `0` is accepted, and raises at run time.** `x := 1 / 0` is a
   value the compiler can work out, so `zerg` answers at the division rather than leaving the
   program to reach it — the same reasoning that folds a literal in a typed position. The

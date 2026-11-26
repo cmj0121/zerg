@@ -1094,6 +1094,19 @@ struct B {
 fn main() { print 1 }
 EOF
 
+# THE SAME CYCLE UNDER A `#[derive]`, between two enums: the derive asks whether a copy is
+# owed before the declaration sweep reaches the cycle, and that walk followed the cycle until
+# the compiler's own stack overflowed.
+expect "$ZERG" enum-cycle-by-value-derived E4026 'no edge of it is a carrier' <<'EOF'
+#[derive(Eq, Hash)]
+enum A { X(int, B, str); E }
+
+#[derive(Eq, Hash)]
+enum B { Y(A, bool); Z(int) }
+
+fn main() { print A.E == A.E }
+EOF
+
 # AND THE SAME CYCLE WITH A CARRIER ON IT IS NOT REFUSED — it is a linked list, and #171
 # builds it. There is no `expect` for that here, because this file is the refusals; what
 # holds the positive half is `codegen/struct_self_recursive` in the corpus, and the two

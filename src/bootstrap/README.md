@@ -368,6 +368,14 @@ byte)` compiles to a truncation and cc warns about the generated C. `zerg` refus
   same reason its gaps are its own contract: it is the oracle on programs that follow the
   rule, not the enforcer of it. (In PATTERN position there is no gap and no rule to enforce:
   a bare name binds in both compilers, which is what GRAMMAR#pattern says it is.)
+- **A generic enum's variant named THROUGH its enum is handed to cc.** `Box.Full(42)` on
+  `enum Box[T] { Full(T); Empty }` is the only spelling `zerg` takes (the bare `Full(42)` is
+  the `E3079` above), and the seed lowers it against the template rather than a
+  specialization: cc reports `struct { void f0; } Full;` as an incomplete type, with or
+  without an annotated binding, and `b: Box[int] = Box.Empty` is _cannot bind Box to a
+  Box[int] binding_. No spelling of such a construction builds in both compilers, so a corpus
+  program that writes one is an oracle skip. The compiler's own sources declare no generic
+  enum.
 - **`This` as a DECLARATION's name is accepted.** `This` is the self type, written by every
   `impl` and declared by none, so it is reserved the way `this` is — but it is the one
   reserved word the lexer reads as an ordinary identifier, and the seed has no rule about a

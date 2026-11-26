@@ -292,6 +292,11 @@ chan[int]() }`——或任何不是字面值、模組常數，或它們之間算
   `Red` 在這裡仍然解析得出來；`zerg` 指名拒絕它。種子自己的原始碼不需要為此遷移，理由與「它的落差就是它
   自己的契約」相同：對於遵守規則的程式，它是 oracle，而不是規則的執法者。（在 pattern 位置上沒有落差，也
   沒有規則要執行：裸名在兩個編譯器裡都是綁定，GRAMMAR#pattern 說的就是這件事。）
+- **透過 enum 具名的泛型 enum variant 會被交給 cc。** 對 `enum Box[T] { Full(T); Empty }` 而言，
+  `Box.Full(42)` 是 `zerg` 唯一接受的寫法（裸的 `Full(42)` 就是上面那條 `E3079`），而種子是對著樣板而不是
+  某個特化去 lowering 它：不論綁定有沒有標註型別，cc 都會把 `struct { void f0; } Full;` 報成不完整型別，
+  而 `b: Box[int] = Box.Empty` 則是「_cannot bind Box to a Box[int] binding_」。這種建構沒有任何寫法能在
+  兩個編譯器裡都建得起來，所以寫了它的語料程式是 oracle 的略過項。編譯器自己的原始碼沒有宣告任何泛型 enum。
 - **拿 `This` 當一份宣告的名字會被接受。** `This` 是 self 型別，每個 `impl` 都寫得到它，卻沒有人宣告它，
   所以它與 `this` 一樣是保留的——但它是唯一一個被 lexer 讀成普通識別字的保留字，而種子對關鍵字表以外的名字
   沒有任何規則。於是 `struct This`、`fn This()`、`type This = int`、一個參數，以及一個 `enum` variant，

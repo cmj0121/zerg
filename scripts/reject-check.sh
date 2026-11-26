@@ -4453,6 +4453,59 @@ fn main() {
 }
 EOF
 
+# --- a spec value and its implementer are two types ------------------------------------
+#
+# chk_fits lets an implementer into a spec SLOT, which builds a box, and the arm and branch rules
+# asked it, so a spec-first pair passed — and the unboxed implementer met the box in one C
+# conditional that cc refused. A sibling is not a slot: the pair is refused in either order.
+
+reject an-if-answering-a-spec-then-its-implementer E3020 'its branches give Sz and Q' <<'EOF'
+spec Sz {
+	fn sz() -> int
+}
+
+struct Q {
+	pub y: int
+}
+
+impl Sz for Q {
+	fn sz() -> int {
+		return this.y
+	}
+}
+
+fn main() {
+	e: Sz = Q(1)
+	f := if e.sz() == 1 { e } else { Q(3) }
+	print f.sz()
+}
+EOF
+
+reject a-match-answering-a-spec-then-its-implementer E3021 'its arms give Sz and Q' <<'EOF'
+spec Sz {
+	fn sz() -> int
+}
+
+struct Q {
+	pub y: int
+}
+
+impl Sz for Q {
+	fn sz() -> int {
+		return this.y
+	}
+}
+
+fn main() {
+	e: Sz = Q(1)
+	f := match e.sz() {
+		1 => e
+		_ => Q(3)
+	}
+	print f.sz()
+}
+EOF
+
 reject an-if-of-a-result-and-a-value E3020 'its branches give Result[int] and int' <<'EOF'
 fn r(n: int) -> Result[int] {
 	return n

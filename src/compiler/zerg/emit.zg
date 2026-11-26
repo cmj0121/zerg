@@ -198,6 +198,12 @@ pub struct Emitter {
 	# carrier is a structural type nobody declares, so the two are keyed differently and the
 	# one list that could hold both would be keyed by neither.
 	pub boxed_carriers: list[str]
+
+	# boxed_rights are the Eithers whose RIGHT sits in a counted cell, by the same C name. An
+	# Either has two payloads and the cycle runs through one of them, or both:
+	# `Node(Either[str, K])` breaks at the Right and holds its `str` inline. boxed_carriers is
+	# then the Left's half of the same answer, which is the only half an optional has.
+	pub boxed_rights: list[str]
 	pub used_rt: bool
 	pub used_str: bool
 
@@ -1057,9 +1063,7 @@ fn c_opt_wrap(mut &em: Emitter, where: str, elem: ast.Ty, e: ast.Expr, sb: Subst
 	# bytes land, not who owns them.
 	v := c_fit_copied(em, where, elem, e, sb)
 	ot := ast.Ty.TOpt(elem)
-	return f"({cn}){{ .tag = 0, .ok = {c_helper_of("boxnew", c_carrier_ty_cname(ot))}({v}) }}" if c_carrier_boxed(em, ot)
-
-	return "(" + cn + "){ .tag = 0, .ok = " + v + " }"
+	return f"({cn}){{ .tag = 0, .ok = {c_res_ok_init(em, ot, v)} }}"
 }
 
 fn c_is_block_expr(e: ast.Expr) -> bool {
@@ -1410,16 +1414,16 @@ fn c_either_wrap(mut &em: Emitter, where: str, want: ast.Ty, e: ast.Expr, sb: Su
 	side := c_ctor_side(em, e)
 	if side >= 0 {
 		inner := c_call_args_of(e)[0]
-		return "(" + cn + "){ .tag = 0, .ok = " + c_fit_copied(em, where, lt, inner, sb) + " }" if side == 0
-		return "(" + cn + "){ .tag = 1, .err = " + c_fit_copied(em, where, rt, inner, sb) + " }"
+		return "(" + cn + "){ .tag = 0, .ok = " + c_res_ok_init(em, want, c_fit_copied(em, where, lt, inner, sb)) + " }" if side == 0
+		return "(" + cn + "){ .tag = 1, .err = " + c_res_err_init(em, want, c_fit_copied(em, where, rt, inner, sb)) + " }"
 	}
 
 	et := c_infer(em, e)
 
-	return "(" + cn + "){ .tag = 1, .err = " + c_fit_copied(em, where, rt, e, sb) + " }" if ast.ty_name(et) == ast.ty_name(rt)
+	return "(" + cn + "){ .tag = 1, .err = " + c_res_err_init(em, want, c_fit_copied(em, where, rt, e, sb)) + " }" if ast.ty_name(et) == ast.ty_name(rt)
 	raise c_diag(em, rule.Rule.EitherBareValue, f"a {ast.ty_name(want)} takes a {ast.ty_name(lt)} or a {ast.ty_name(rt)}, and this is {ast.ty_name(et)} — say the side with `Either.Left(…)` or `Either.Right(…)`") if ast.ty_name(et) != ast.ty_name(lt) and not c_is_unknown(et)
 
-	return "(" + cn + "){ .tag = 0, .ok = " + c_fit_copied(em, where, lt, e, sb) + " }"
+	return "(" + cn + "){ .tag = 0, .ok = " + c_res_ok_init(em, want, c_fit_copied(em, where, lt, e, sb)) + " }"
 }
 
 # c_ctor_side is which side of an Either a `Left(v)` / `Right(e)` call names — 0, 1, or -1
@@ -1690,14 +1694,28 @@ fn c_try(mut &em: Emitter, x: ast.Expr, sb: Subst) -> str {
 	# IT IS TAKEN BEFORE THE UNWIND. One that names storage — `r?` on a binding — is copied,
 	# since the unwind below gives `r` back, and a carrier this expression made hands its own
 	# over. Read after the unwind, a named Result's Err was freed on the way out (#377).
+	#
+	# A RIGHT IN A CELL is handed over as the cell when both carriers box it, and as the value
+	# otherwise — copied out of a cell this expression owns before the cell is given back.
 	mut right := f"({rcn}){{ .tag = 1 }}"
 	if not ast.ty_is_opt(em.fn_ret) {
-		mut rv := c_res_err(tv)
-		if c_is_borrow(x) {
-			rv = c_taken(em, c_either_right(t), rv)
+		mut rv := c_res_err_val(em, t, tv)
+		if c_carrier_right_boxed(em, t) and c_carrier_right_boxed(em, em.fn_ret) {
+			rv = c_res_err(tv)
+			if c_is_borrow(x) {
+				rv = f"zrt_ref_copy({rv})"
+			}
+		} else {
+			if c_is_borrow(x) or c_carrier_right_boxed(em, t) {
+				rv = c_taken(em, c_either_right(t), rv)
+			}
+			rv = c_res_err_init(em, em.fn_ret, rv)
 		}
 		rn := "zgt_trr" + tag
 		out = out + f" {rcn} {rn} = ({rcn}){{ .tag = 1, .err = {rv} }};"
+		if c_carrier_right_boxed(em, t) and not c_carrier_right_boxed(em, em.fn_ret) and not c_is_borrow(x) {
+			out = out + f" zrt_release({c_res_err(tv)});"
+		}
 		right = rn
 	}
 	if c_needs_fn_unwind(em) {
@@ -1709,9 +1727,16 @@ fn c_try(mut &em: Emitter, x: ast.Expr, sb: Subst) -> str {
 	# its payload by being left behind undropped; one that NAMES storage — `r?` on a parameter —
 	# still holds it, so the payload is copied out, or every consumer that gives an owned value
 	# back freed it under `r` (#23).
+	#
+	# A LEFT IN A CELL this expression owns is copied out and the cell given back, the way the
+	# Right's is above: leaving the carrier undropped hands over the payload but not the cell.
 	mut left := c_res_val(em, t, tv)
 	if c_is_borrow(x) {
 		left = c_taken(em, c_carrier_elem(t), left)
+	} else if c_carrier_boxed(em, t) {
+		ln := "zgt_trl" + tag
+		out = out + f" return {right}; }} {c_type(c_carrier_elem(t))} {ln} = {c_taken(em, c_carrier_elem(t), left)};"
+		return out + f" zrt_release({c_res_ok(tv)}); {ln}; }})"
 	}
 	return out + " return " + right + "; } " + left + "; })"
 }
@@ -1829,10 +1854,11 @@ fn c_res_taken(mut &em: Emitter, cty: ast.Ty, r: str, elem: ast.Ty) -> str {
 	return c_copy_of(em, elem, v)
 }
 
-# c_res_val is the carrier's payload AS AN LVALUE — `r.ok` where the payload sits inline,
-# and the cell's contents where it is boxed. Every reader goes through it, which is what
-# makes the box a fact of the layout rather than a case each operator has to know: `??`,
-# `!`, `if let`, `match`, `?.` and the receive helper all ask for the payload and get one.
+# c_res_val is the carrier's LEFT payload AS AN LVALUE — `r.ok` where the payload sits
+# inline, and the cell's contents where it is boxed. Every reader of the Left goes through
+# it, and every reader of an Either's Right through c_res_err_val, which is what makes the
+# box a fact of the layout rather than a case each operator has to know: `??`, `!`,
+# `if let`, `match`, `?.` and the receive helper all ask for the payload and get one.
 pub fn c_res_val(mut &em: Emitter, cty: ast.Ty, r: str) -> str {
 	return c_res_ok(r) if not c_carrier_boxed(em, cty)
 	return f"(*({c_type(c_carrier_left(cty))}*)zrt_ref_payload({c_res_ok(r)}))"
@@ -1842,8 +1868,25 @@ pub fn c_res_val(mut &em: Emitter, cty: ast.Ty, r: str) -> str {
 # allocates the cell the pointer points at. It is a whole assignment rather than an lvalue
 # because those are two different statements, not one lvalue written two ways.
 pub fn c_res_put(mut &em: Emitter, cty: ast.Ty, r: str, v: str) -> str {
-	return f"{c_res_ok(r)} = {v};" if not c_carrier_boxed(em, cty)
-	return f"{c_res_ok(r)} = {c_helper_of("boxnew", c_carrier_ty_cname(cty))}({v});"
+	return f"{c_res_ok(r)} = {c_res_ok_init(em, cty, v)};"
+}
+
+# c_res_ok_init is what the Left's field is initialised with: the value itself, or the cell a
+# boxed carrier holds it in. c_res_err_init is the Right's.
+fn c_res_ok_init(mut &em: Emitter, cty: ast.Ty, v: str) -> str {
+	return v if not c_carrier_boxed(em, cty)
+	return f"{c_helper_of("boxnew", c_carrier_ty_cname(cty))}({v})"
+}
+
+fn c_res_err_init(mut &em: Emitter, cty: ast.Ty, v: str) -> str {
+	return v if not c_carrier_right_boxed(em, cty)
+	return f"{c_helper_of("boxnewr", c_carrier_ty_cname(cty))}({v})"
+}
+
+# c_res_err_val is c_res_val for an Either's Right: `r.err`, or the cell's contents.
+fn c_res_err_val(mut &em: Emitter, cty: ast.Ty, r: str) -> str {
+	return c_res_err(r) if not c_carrier_right_boxed(em, cty)
+	return f"(*({c_type(c_either_right(cty))}*)zrt_ref_payload({c_res_err(r)}))"
 }
 
 # c_carrier_temp_drop names the drop for a carrier THIS EXPRESSION OWNS, or "" for one it
@@ -1877,7 +1920,7 @@ fn c_carrier_owns(mut &em: Emitter, t: ast.Ty) -> bool {
 	# terminate: the payload is the struct that holds this carrier, so `c_needs_copy` would
 	# walk back into the field it came from. The counted cell is owned whatever is inside it,
 	# which is both the true answer and the one that stops.
-	return true if c_carrier_boxed(em, t)
+	return true if c_carrier_cut(em, t)
 
 	return c_needs_copy(em, c_carrier_elem(t)) if ast.ty_is_opt(t)
 
@@ -2048,7 +2091,7 @@ fn c_carrier_decl(mut &em: Emitter, c: ast.Ty) -> str {
 	# rather than threaded through the arms below: every line of the inline form reads the
 	# payload where it sits, and every line of this one reads it through the cell. The two
 	# agree on the TAG, which is the half the rest of the compiler touches.
-	return d + c_carrier_boxed_head(name) if c_carrier_boxed(em, c)
+	return d + c_carrier_boxed_head(em, c, name) if c_carrier_cut(em, c)
 
 	if ast.ty_is_opt(c) {
 		d = d + f"typedef struct {{ int32_t tag; {ct} ok; }} {name};\n"
@@ -2162,41 +2205,92 @@ fn c_carrier_decl(mut &em: Emitter, c: ast.Ty) -> str {
 # signatures spell only the carrier's own name, so the typedef is all they need. `zgh_force_`
 # gets none: it returns the payload BY VALUE, and at the typedef the payload is not yet a
 # name cc knows — nothing in the sweep forces one.
-fn c_carrier_boxed_head(name: str) -> str {
-	d := f"typedef struct {{ int32_t tag; void *ok; }} {name};\n"
+#
+# AN EITHER BOXES ONLY THE SIDE THE CYCLE RUNS THROUGH, and the other is a field as it always
+# was: `Either[str, K]` is a tag, a `str` and a pointer. That side's type is already out —
+# c_carrier_deps_of waited for it — so the typedef can spell it.
+fn c_carrier_boxed_head(mut &em: Emitter, c: ast.Ty, name: str) -> str {
+	mut d := ""
+	mut fields := "void *ok;"
+	if not ast.ty_is_opt(c) {
+		mut ls := "void *"
+		mut rs := "void *"
+		if not c_carrier_boxed(em, c) {
+			ls = c_type(c_either_left(c)) + " "
+		}
+		if not c_carrier_right_boxed(em, c) {
+			d = c_spelled_pre(em, c_either_right(c))
+			rs = c_type(c_either_right(c)) + " "
+		}
+		fields = f"{ls}ok; {rs}err;"
+	}
+	d = d + f"typedef struct {{ int32_t tag; {fields} }} {name};\n"
 	return d + f"static void {c_helper_of("drop", name)}({name} *r);\nstatic {name} {c_helper_of("copy", name)}({name} v);\n"
 }
 
-fn c_carrier_boxed_body(mut &em: Emitter, c: ast.Ty, name: str, left: ast.Ty, ct: str) -> str {
+fn c_carrier_boxed_body(mut &em: Emitter, c: ast.Ty, name: str) -> str {
+	left := c_carrier_left(c)
+	ct := c_type(left)
 	mut d := ""
 
 	# the payload comes out as a value of its own, exactly as the inline form's does — the
-	# cell is shared, so what is handed back is a copy of what is in it
+	# cell is shared, so what is handed back is a copy of what is in it. The Right fails the
+	# way it does inline: an Err re-raised, any other Right a message of its own.
+	mut fail := f"zrt_raise_fault(zrt_err_own(0, {c_str_cell(em, "force-unwrap of nil")}));"
+	if c_is_result(c) {
+		fail = "zrt_raise_err(zrt_err_copy(" + c_res_err("r") + "));"
+	} else if not ast.ty_is_opt(c) {
+		fail = f"zrt_raise_fault(zrt_err_own(0, {c_str_cell(em, "force-unwrap of a Right")}));"
+	}
 	d = d + f"static {ct} {c_helper_of("force", name)}({name} r) {{\n"
-	nil_err := f"zrt_err_own(0, {c_str_cell(em, "force-unwrap of nil")})"
-	d = d + "    if (" + c_res_is_right("r") + ") { zrt_raise_fault(" + nil_err + "); }\n"
-	d = d + f"    return {c_copy_of(em, left, f"(*({ct}*)zrt_ref_payload(r.ok))")};\n}}\n"
+	d = d + "    if (" + c_res_is_right("r") + ") { " + fail + " }\n"
+	d = d + f"    return {c_res_taken(em, c, "r", left)};\n}}\n"
 
-	d = d + f"static void {c_helper_of("drop", name)}({name} *r) {{\n"
-	d = d + "    if (" + c_res_is_left("(*r)") + ") { zrt_release(r->ok); }\n}\n"
+	mut df := ""
+	mut cf := ""
+	if c_carrier_boxed(em, c) {
+		df = "    if (" + c_res_is_left("(*r)") + ") { zrt_release(r->ok); }\n"
+		cf = "    if (" + c_res_is_left("v") + ") { v.ok = zrt_ref_copy(v.ok); }\n"
+	} else if c_needs_copy(em, left) {
+		df = "    if (" + c_res_is_left("(*r)") + ") { " + c_drop_stmt(em, left, "r->ok") + " }\n"
+		cf = "    if (" + c_res_is_left("v") + ") { v.ok = " + c_copy_of(em, left, "v.ok") + "; }\n"
+	}
+	if not ast.ty_is_opt(c) {
+		right := c_either_right(c)
+		if c_carrier_right_boxed(em, c) {
+			df = df + "    if (" + c_res_is_right("(*r)") + ") { zrt_release(r->err); }\n"
+			cf = cf + "    if (" + c_res_is_right("v") + ") { v.err = zrt_ref_copy(v.err); }\n"
+		} else if c_needs_copy(em, right) {
+			df = df + "    if (" + c_res_is_right("(*r)") + ") { " + c_drop_stmt(em, right, "r->err") + " }\n"
+			cf = cf + "    if (" + c_res_is_right("v") + ") { v.err = " + c_copy_of(em, right, "v.err") + "; }\n"
+		}
+	}
+	d = d + f"static void {c_helper_of("drop", name)}({name} *r) {{\n{df}}}\n"
+	d = d + f"static {name} {c_helper_of("copy", name)}({name} v) {{\n{cf}    return v;\n}}\n"
 
-	d = d + f"static {name} {c_helper_of("copy", name)}({name} v) {{\n"
-	d = d + "    if (" + c_res_is_left("v") + ") { v.ok = zrt_ref_copy(v.ok); }\n    return v;\n}\n"
-
-	# the CELL'S OWN drop, and the allocator that fills one. They are the enum's
-	# `c_refbox_helpers` written for a carrier, and they are here rather than shared with it
-	# because an enum boxes a field of a type it declares and a carrier is a structural type
-	# nobody declares — the two are named from different places.
-	# THE CELL'S PAYLOAD IS AN LVALUE HERE, spelled `*(T*)p` and not `(T*)p`: c_drop_stmt
-	# takes the VALUE to give back and writes the `&` itself, so handing it the pointer asked
-	# cc for the address of a cast.
-	dropbox := c_helper_of("dropbox", name)
-	d = d + f"static void {dropbox}(void *p) {{ {c_drop_stmt(em, left, f"(*({ct}*)p)")} }}\n"
-	d = d + f"static void *{c_helper_of("boxnew", name)}({ct} v) {{\n"
-	d = d + f"    void *r = zrt_ref_alloc(sizeof({ct}), &{dropbox});\n"
-	d = d + f"    *({ct}*)zrt_ref_payload(r) = v;\n    return r;\n}}\n"
-
+	if c_carrier_boxed(em, c) {
+		d = d + c_carrier_cell_helpers(em, left, name, "dropbox", "boxnew")
+	}
+	if not ast.ty_is_opt(c) and c_carrier_right_boxed(em, c) {
+		d = d + c_carrier_cell_helpers(em, c_either_right(c), name, "dropboxr", "boxnewr")
+	}
 	return d + c_elem_vt_helper(em, c)
+}
+
+# c_carrier_cell_helpers are the CELL'S OWN drop, and the allocator that fills one, for one
+# boxed side. They are the enum's `c_refbox_helpers` written for a carrier, and they are here
+# rather than shared with it because an enum boxes a field of a type it declares and a carrier
+# is a structural type nobody declares — the two are named from different places.
+# THE CELL'S PAYLOAD IS AN LVALUE HERE, spelled `*(T*)p` and not `(T*)p`: c_drop_stmt takes the
+# VALUE to give back and writes the `&` itself, so handing it the pointer asked cc for the
+# address of a cast.
+fn c_carrier_cell_helpers(mut &em: Emitter, t: ast.Ty, name: str, drop: str, alloc: str) -> str {
+	ct := c_type(t)
+	dropbox := c_helper_of(drop, name)
+	mut d := f"static void {dropbox}(void *p) {{ {c_drop_stmt(em, t, f"(*({ct}*)p)")} }}\n"
+	d = d + f"static void *{c_helper_of(alloc, name)}({ct} v) {{\n"
+	d = d + f"    void *r = zrt_ref_alloc(sizeof({ct}), &{dropbox});\n"
+	return d + f"    *({ct}*)zrt_ref_payload(r) = v;\n    return r;\n}}\n"
 }
 
 # c_carrier_ty_cname / c_carrier_left read a carrier TYPE — an optional or an either —
@@ -6212,10 +6306,8 @@ fn c_type_decls(mut &em: Emitter, f: ast.File, carriers: list[ast.Ty], tuples: l
 	# written where its typedef was. Nothing has read them before here: the prototypes went
 	# out with the typedefs.
 	for c in carriers {
-		if c_carrier_boxed(em, c) {
-			nm := c_carrier_ty_cname(c)
-			lf := c_carrier_left(c)
-			out = out + c_carrier_boxed_body(em, c, nm, lf, c_type(lf))
+		if c_carrier_cut(em, c) {
+			out = out + c_carrier_boxed_body(em, c, c_carrier_ty_cname(c))
 		}
 	}
 	return out
@@ -6232,17 +6324,30 @@ fn c_type_decls(mut &em: Emitter, f: ast.File, carriers: list[ast.Ty], tuples: l
 # ALREADY-BOXED IS NOT A CANDIDATE, or a cycle no pointer can break would be "broken" forever
 # and the sweep would spin instead of refusing. A carrier is boxed once and then it is a
 # pointer; if the group is still stuck after that, it is stuck for another reason.
+#
+# AN EITHER BOXES EACH SIDE THAT WAITS, and only those: the side the cycle runs through gets
+# the pointer, and a side holding a `str` or a type already out stays inline.
 fn c_box_a_carrier(mut &em: Emitter, cs: list[ast.Ty], mut &done: list[str], mut &all: list[str]) -> bool {
 	for c in cs {
 		cn := c_carrier_ty_cname(c)
-		continue if c_name_in(em.boxed_carriers, cn)
+		continue if c_carrier_cut(em, c)
 
-		for dep in c_carrier_deps(c) {
-			if c_name_in(all, dep) and not c_name_in(done, dep) {
-				em.boxed_carriers.append(cn)
-				return true
-			}
+		if c_side_waits(c_carrier_left(c), done, all) {
+			em.boxed_carriers.append(cn)
 		}
+		if not ast.ty_is_opt(c) and c_side_waits(c_either_right(c), done, all) {
+			em.boxed_rights.append(cn)
+		}
+		return true if c_carrier_cut(em, c)
+	}
+	return false
+}
+
+fn c_side_waits(t: ast.Ty, done: list[str], all: list[str]) -> bool {
+	mut deps: list[str] = []
+	c_ty_struct_deps(t, deps)
+	for dep in deps {
+		return true if c_name_in(all, dep) and not c_name_in(done, dep)
 	}
 	return false
 }
@@ -6253,13 +6358,34 @@ fn c_box_a_carrier(mut &em: Emitter, cs: list[ast.Ty], mut &done: list[str], mut
 # self-recursive enum, and it is made HERE rather than inside c_carrier_deps because whether
 # a carrier is boxed is a fact about the program being emitted, not about the type.
 fn c_carrier_deps_of(mut &em: Emitter, c: ast.Ty) -> list[str] {
-	return [] if c_name_in(em.boxed_carriers, c_carrier_ty_cname(c))
-	return c_carrier_deps(c)
+	return c_carrier_deps(c) if not c_carrier_cut(em, c)
+
+	mut deps: list[str] = []
+	return deps if ast.ty_is_opt(c)
+
+	if not c_carrier_boxed(em, c) {
+		c_ty_struct_deps(c_either_left(c), deps)
+	}
+	if not c_carrier_right_boxed(em, c) {
+		c_ty_struct_deps(c_either_right(c), deps)
+	}
+	return deps
 }
 
-# c_carrier_boxed is the one question every reader of a carrier's payload asks.
+# c_carrier_boxed is the one question every reader of a carrier's LEFT payload asks, and
+# c_carrier_right_boxed the same question about an Either's Right.
 pub fn c_carrier_boxed(mut &em: Emitter, t: ast.Ty) -> bool {
 	return c_name_in(em.boxed_carriers, c_carrier_ty_cname(t))
+}
+
+fn c_carrier_right_boxed(mut &em: Emitter, t: ast.Ty) -> bool {
+	return c_name_in(em.boxed_rights, c_carrier_ty_cname(t))
+}
+
+# c_carrier_cut is whether the sweep broke a cycle at this carrier at all — either side boxed —
+# which is what decides that its typedef and its bodies are written apart.
+fn c_carrier_cut(mut &em: Emitter, t: ast.Ty) -> bool {
+	return c_carrier_boxed(em, t) or c_carrier_right_boxed(em, t)
 }
 
 # c_deps_done reports whether every DECLARED type a declaration names by value is already
@@ -8635,7 +8761,7 @@ fn c_payload_acc(mut &em: Emitter, st: ast.Ty, ctor: str, i: int, s: str) -> str
 	if c_is_either(st) {
 		return c_res_val(em, st, s) if c_result_tag(em, ctor, st) == 0
 
-		return c_res_err(s)
+		return c_res_err_val(em, st, s)
 	}
 
 	en := c_named_of(st)
@@ -23589,7 +23715,7 @@ fn c_render_carrier_body(mut &em: Emitter, t: ast.Ty) -> str {
 	lheld := c_render_holds(em, [lt])
 	mut out := "    if (v.tag != 0) {\n"
 	out = out + c_render_open(em, "        ", "zrt_str_dup(\"Right(\")", rheld)
-	out = out + c_render_join("        ", c_render_of(em, rt, "v.err", true), true)
+	out = out + c_render_join("        ", c_render_of(em, rt, c_res_err_val(em, t, "v"), true), true)
 	out = out + "    " + c_render_close(")", rheld)
 	out = out + "    }\n"
 	out = out + c_render_open(em, "    ", "zrt_str_dup(\"Left(\")", lheld)
@@ -23766,8 +23892,12 @@ fn c_render_step_body(mut &em: Emitter, t: ast.Ty) -> str {
 	}
 
 	if c_is_carrier(t) {
+		mut rv := "x->err"
+		if c_carrier_right_boxed(em, t) {
+			rv = c_res_err_val(em, t, "(*x)")
+		}
 		mut out := head + "    if (x->tag != 0) {\n"
-		out = out + c_render_step_one(em, t, "Right(", c_either_right(t), "x->err", ")", "        ") + "    }\n"
+		out = out + c_render_step_one(em, t, "Right(", c_either_right(t), rv, ")", "        ") + "    }\n"
 		return out + c_render_step_one(em, t, "Left(", c_either_left(t), c_res_val(em, t, "(*x)"), ")", "    ")
 	}
 
@@ -31222,7 +31352,7 @@ fn c_emit_unit_as(prog0: ast.File, own0: ast.File, ft: FileTypes, ms: Mods, whol
 	# is what makes that invariant hold for a multi-unit program, at the place it already lives,
 	# and it is what lets the declaration passes below go back to reading the WHOLE program.
 	seen := diags.len()
-	mut em := Emitter([], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], false, false, false, false, [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], 0, [], 0, [], [], false, "", "", [], [], ast.Ty.TVoid, 0, "", 0, 0, 0, 0, "", diags, 0, 0, [], [], [], [], [], false, 0, false, "", 0, false, false, [], [], [], [], [], [], [], [], [], [], [], "", want_lints, [], [], [], [], [], [], [], [], [], [], [], [], false, 0, [], [], "", c_nosub(), [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], false, ast.no_index(), [], [], [], [], [], [], [], [], [], [], [], [], false, [], [], [], [], [], [], [], [], [], [], [], "", [], [], 0, 0, [], -1, 0, -1, -1, [], false, 0, [], [], [], [], c_pg_none(), [], [], [])
+	mut em := Emitter([], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], false, false, false, false, [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], 0, [], 0, [], [], false, "", "", [], [], ast.Ty.TVoid, 0, "", 0, 0, 0, 0, "", diags, 0, 0, [], [], [], [], [], false, 0, false, "", 0, false, false, [], [], [], [], [], [], [], [], [], [], [], "", want_lints, [], [], [], [], [], [], [], [], [], [], [], [], false, 0, [], [], "", c_nosub(), [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], false, ast.no_index(), [], [], [], [], [], [], [], [], [], [], [], [], false, [], [], [], [], [], [], [], [], [], [], [], "", [], [], 0, 0, [], -1, 0, -1, -1, [], false, 0, [], [], [], [], c_pg_none(), [], [], [])
 
 	# ASSIGNED, NOT PASSED. Every argument above is a zero value, and `layering` asserts that
 	# — it lines the call up with the fields by KIND, which only works while nothing in it

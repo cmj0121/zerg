@@ -1269,7 +1269,12 @@ fn c_into(mut &em: Emitter, want: ast.Ty, e0: ast.Expr, sb: Subst) -> str {
 		if em.want_index {
 			c_nx_gen_variant_written(em, c_app_base(c_named_of(want)), e)
 		}
-		return c_variant_ctor(em, c_named_of(want), gv, c_meth_args(e), sb)
+
+		# c_into is not c_expr, so the payload's ordering temporaries are wrapped HERE: left on
+		# em.seq_pre they reached no statement expression, and cc met the names undeclared
+		keep := em.seq_pre
+		em.seq_pre = ""
+		return c_seq_close(em, keep, c_variant_ctor(em, c_named_of(want), gv, c_meth_args(e), sb))
 	}
 
 	# A SPEC-TYPED POSITION BUILDS A BOX out of the implementer written into it, and it is asked
@@ -9840,9 +9845,16 @@ fn c_expr(mut &em: Emitter, e: ast.Expr, sb: Subst) -> str {
 	keep := em.seq_pre
 	em.seq_pre = ""
 	out := c_expr_node(em, c_ns_unqualify(em, e), c_sub_active(em, sb))
+	c_shallower(em)
+	return c_seq_close(em, keep, out)
+}
+
+# c_seq_close ends a node that began by saving em.seq_pre as `keep` and clearing it: whatever
+# the node left there is wrapped around `out` in the statement expression it belongs to, and
+# the enclosing node's list is put back.
+fn c_seq_close(mut &em: Emitter, keep: str, out: str) -> str {
 	pre := em.seq_pre
 	em.seq_pre = keep
-	c_shallower(em)
 	return out if pre == ""
 
 	return f"({{ {pre}{out}; }})"

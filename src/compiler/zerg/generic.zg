@@ -34,6 +34,7 @@ import (
 	"./emit"
 	"./lexer"
 	"./lint"
+	"./parser"
 )
 fn gen_ty_key(t: ast.Ty) -> str {
 	mut out := ""
@@ -672,39 +673,52 @@ fn gen_left_ident(su: TySubst, n: str, l: int, c: int) -> ast.Expr {
 	return ast.Expr.EIdent(ast.ty_name(subst_ty(su, ast.Ty.TNamed(n))), l, c)
 }
 
+# subst_expr dispatches on the node's shape (ast.expr_shape) and destructures nothing itself:
+# its frame and one shape helper's are what a deep tree pays per level. gen_resolve_lens sends
+# every function through this walk, so a frame holding every variant's arms ran an 8 MB stack
+# out on a chain the parser admits, in any program. A shape helper is handed only the variants
+# its shape names, and its `_` arm is subst_missed: the exhaustive match is expr_shape's, and a
+# variant given a shape there but not named in that shape's helper is this compiler's fault.
 fn subst_expr(su: TySubst, e: ast.Expr) -> ast.Expr {
+	k := ast.expr_shape(e)
+
+	return subst_unary(su, e) if k == ast.EXPR_UNARY
+	return subst_binary(su, e) if k == ast.EXPR_BINARY
+	return subst_link(su, e) if k == ast.EXPR_LINK
+	return subst_control(su, e) if k == ast.EXPR_CONTROL
+	return subst_aggregate(su, e) if k == ast.EXPR_AGGREGATE
+
+	# a literal or a bare name, which holds no type for an argument to reach
+	return e if k == ast.EXPR_LEAF
+
+	return subst_missed("expr", e)
+}
+
+# subst_missed is a node handed to a shape helper that does not name it — a state expr_shape
+# rules out, reported as the compiler's fault rather than copied through unsubstituted.
+fn subst_missed(walk: str, e: ast.Expr) -> ast.Expr {
+	raise parser.p_impossible(f"subst_{walk} was handed {ast.expr_kind(e)}, which its shape (ast.expr_shape) does not route there — the helper for that shape has to name the variant")
+}
+
+fn subst_unary(su: TySubst, e: ast.Expr) -> ast.Expr {
 	return match e {
 		Expr.EUnary(o, x) => ast.Expr.EUnary(o, subst_expr(su, x))
-		Expr.EBinary(o, a, b) => ast.Expr.EBinary(o, subst_expr(su, a), subst_expr(su, b))
-		Expr.ECall(nm, xs, ts, l, c) => ast.Expr.ECall(nm, subst_exprs(su, xs), subst_tys(su, ts), l, c)
-		Expr.ECallVal(c, xs) => ast.Expr.ECallVal(subst_expr(su, c), subst_exprs(su, xs))
-		Expr.ENamedArg(nm, x, l, c) => ast.Expr.ENamedArg(nm, subst_expr(su, x), l, c)
-		Expr.EField(x, f, l, c) => ast.Expr.EField(subst_type_left(su, x), f, l, c)
-		Expr.EOptChain(x, f, l, c) => ast.Expr.EOptChain(subst_expr(su, x), f, l, c)
-		Expr.EOptMethod(x, m, xs, l, c) => ast.Expr.EOptMethod(subst_expr(su, x), m, subst_exprs(su, xs), l, c)
 		Expr.ETry(x) => ast.Expr.ETry(subst_expr(su, x))
-		Expr.EIndex(x, i) => ast.Expr.EIndex(subst_expr(su, x), subst_expr(su, i))
-		Expr.EMethod(x, m, xs, l, c) => ast.Expr.EMethod(subst_type_left(su, x), m, subst_exprs(su, xs), l, c)
-		Expr.EListLit(xs) => ast.Expr.EListLit(subst_exprs(su, xs))
-		Expr.EConv(ty, x, as_) => ast.Expr.EConv(subst_ty(su, ty), subst_expr(su, x), as_)
-		Expr.EFmt(x, cv, sp) => ast.Expr.EFmt(subst_expr(su, x), cv, sp)
-		Expr.EIf(c, a, b) => ast.Expr.EIf(subst_expr(su, c), subst_expr(su, a), subst_expr(su, b))
-		Expr.EIfLet(n, v, a, b, l, c) => ast.Expr.EIfLet(n, subst_expr(su, v), subst_expr(su, a), subst_expr(su, b), l, c)
-		Expr.EMatch(x, arms) => ast.Expr.EMatch(subst_expr(su, x), subst_arms(su, arms))
-		Expr.ERange(a, b, inc) => ast.Expr.ERange(subst_expr(su, a), subst_expr(su, b), inc)
-		Expr.ETuple(xs) => ast.Expr.ETuple(subst_exprs(su, xs))
-		Expr.EMapLit(ks, vs) => ast.Expr.EMapLit(subst_exprs(su, ks), subst_exprs(su, vs))
-		Expr.EFn(ps, hr, r, b) => ast.Expr.EFn(subst_params(su, ps), hr, subst_ty(su, r), subst_block(su, b))
-		Expr.EChanNew(ty, cap) => ast.Expr.EChanNew(subst_chan_elem(su, ty), subst_expr(su, cap))
-		Expr.ERecv(x) => ast.Expr.ERecv(subst_expr(su, x))
 		Expr.EForce(x) => ast.Expr.EForce(subst_expr(su, x))
-		Expr.ECoalesce(a, b, jump) => ast.Expr.ECoalesce(subst_expr(su, a), subst_expr(su, b), subst_block(su, jump))
-		Expr.EGuard(b) => ast.Expr.EGuard(subst_block(su, b))
-		Expr.EBlock(b) => ast.Expr.EBlock(subst_block(su, b))
-		Expr.EUnsafe(b) => ast.Expr.EUnsafe(subst_block(su, b))
-		Expr.EAsm(tpl, ops) => ast.Expr.EAsm(tpl, subst_asm_ops(su, ops))
+		Expr.ERecv(x) => ast.Expr.ERecv(subst_expr(su, x))
+		Expr.EFmt(x, cv, sp) => ast.Expr.EFmt(subst_expr(su, x), cv, sp)
+		Expr.EConv(ty, x, as_) => ast.Expr.EConv(subst_ty(su, ty), subst_expr(su, x), as_)
 		Expr.EIs(x, nm) => ast.Expr.EIs(subst_expr(su, x), gen_is_name(su, nm))
-		Expr.EIn(x, s) => ast.Expr.EIn(subst_expr(su, x), subst_expr(su, s))
+		_ => subst_missed("unary", e)
+	}
+}
+
+fn subst_binary(su: TySubst, e: ast.Expr) -> ast.Expr {
+	return match e {
+		Expr.EBinary(o, a, b)  => ast.Expr.EBinary(o, subst_expr(su, a), subst_expr(su, b))
+		Expr.EIndex(x, i)      => ast.Expr.EIndex(subst_expr(su, x), subst_expr(su, i))
+		Expr.ERange(a, b, inc) => ast.Expr.ERange(subst_expr(su, a), subst_expr(su, b), inc)
+		Expr.EIn(x, s)         => ast.Expr.EIn(subst_expr(su, x), subst_expr(su, s))
 
 		# THE FILL FORM CARRIES TWO EXPRESSIONS and the fallback left both. `[T(0); 3]` in a
 		# template kept its `T` and the specialization was refused with _E4064 no type named
@@ -712,15 +726,45 @@ fn subst_expr(su: TySubst, e: ast.Expr) -> ast.Expr {
 		# node type along, and found the same way: by asking which variants this match does
 		# not name.
 		Expr.EFill(v, n) => ast.Expr.EFill(subst_expr(su, v), subst_expr(su, n))
+		Expr.ECoalesce(a, b, jump) => ast.Expr.ECoalesce(subst_expr(su, a), subst_expr(su, b), subst_block(su, jump))
+		_ => subst_missed("binary", e)
+	}
+}
 
-		# and no catch-all, for subst_stmt's reason. What is left is the literals and a bare
-		# name, which hold no type for an argument to reach.
-		Expr.EInt(_, _, _)   => e
-		Expr.EFloat(_)       => e
-		Expr.EStr(_)         => e
-		Expr.EBool(_)        => e
-		Expr.ENil            => e
-		Expr.EIdent(_, _, _) => e
+fn subst_link(su: TySubst, e: ast.Expr) -> ast.Expr {
+	return match e {
+		Expr.ECall(nm, xs, ts, l, c) => ast.Expr.ECall(nm, subst_exprs(su, xs), subst_tys(su, ts), l, c)
+		Expr.ECallVal(c, xs) => ast.Expr.ECallVal(subst_expr(su, c), subst_exprs(su, xs))
+		Expr.ENamedArg(nm, x, l, c) => ast.Expr.ENamedArg(nm, subst_expr(su, x), l, c)
+		Expr.EField(x, f, l, c) => ast.Expr.EField(subst_type_left(su, x), f, l, c)
+		Expr.EOptChain(x, f, l, c) => ast.Expr.EOptChain(subst_expr(su, x), f, l, c)
+		Expr.EOptMethod(x, m, xs, l, c) => ast.Expr.EOptMethod(subst_expr(su, x), m, subst_exprs(su, xs), l, c)
+		Expr.EMethod(x, m, xs, l, c) => ast.Expr.EMethod(subst_type_left(su, x), m, subst_exprs(su, xs), l, c)
+		_ => subst_missed("link", e)
+	}
+}
+
+fn subst_control(su: TySubst, e: ast.Expr) -> ast.Expr {
+	return match e {
+		Expr.EIf(c, a, b) => ast.Expr.EIf(subst_expr(su, c), subst_expr(su, a), subst_expr(su, b))
+		Expr.EIfLet(n, v, a, b, l, c) => ast.Expr.EIfLet(n, subst_expr(su, v), subst_expr(su, a), subst_expr(su, b), l, c)
+		Expr.EMatch(x, arms) => ast.Expr.EMatch(subst_expr(su, x), subst_arms(su, arms))
+		Expr.EGuard(b) => ast.Expr.EGuard(subst_block(su, b))
+		Expr.EBlock(b) => ast.Expr.EBlock(subst_block(su, b))
+		Expr.EUnsafe(b) => ast.Expr.EUnsafe(subst_block(su, b))
+		Expr.EFn(ps, hr, r, b) => ast.Expr.EFn(subst_params(su, ps), hr, subst_ty(su, r), subst_block(su, b))
+		Expr.EAsm(tpl, ops) => ast.Expr.EAsm(tpl, subst_asm_ops(su, ops))
+		_ => subst_missed("control", e)
+	}
+}
+
+fn subst_aggregate(su: TySubst, e: ast.Expr) -> ast.Expr {
+	return match e {
+		Expr.EListLit(xs) => ast.Expr.EListLit(subst_exprs(su, xs))
+		Expr.ETuple(xs) => ast.Expr.ETuple(subst_exprs(su, xs))
+		Expr.EMapLit(ks, vs) => ast.Expr.EMapLit(subst_exprs(su, ks), subst_exprs(su, vs))
+		Expr.EChanNew(ty, cap) => ast.Expr.EChanNew(subst_chan_elem(su, ty), subst_expr(su, cap))
+		_ => subst_missed("aggregate", e)
 	}
 }
 

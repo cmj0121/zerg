@@ -10209,7 +10209,32 @@ fn c_written_call_name(e: ast.Expr) -> str {
 	}
 }
 
+# c_expr_node dispatches on the node's shape (ast.expr_shape) and destructures nothing itself,
+# because its frame is paid once per level of the walk, ahead of the c_deeper check that is to
+# refuse a too-deep tree by name: holding every variant's arms, it was large enough that the
+# native stack ran out first. A shape helper is handed only the variants its shape names, and its
+# `_` arm is c_shape_missed: the exhaustive match is expr_shape's, and a variant given a shape there
+# but not named in that shape's helper is this compiler's fault, never a `0` in the C.
 fn c_expr_node(mut &em: Emitter, e: ast.Expr, sb: Subst) -> str {
+	k := ast.expr_shape(e)
+
+	return c_unary_node(em, e, sb) if k == ast.EXPR_UNARY
+	return c_binary_node(em, e, sb) if k == ast.EXPR_BINARY
+	return c_link_node(em, e, sb) if k == ast.EXPR_LINK
+	return c_control_node(em, e, sb) if k == ast.EXPR_CONTROL
+	return c_aggregate_node(em, e, sb) if k == ast.EXPR_AGGREGATE
+	return c_leaf_node(em, e, sb) if k == ast.EXPR_LEAF
+
+	return c_shape_missed("expr", e)
+}
+
+# c_shape_missed is a node handed to a shape helper that does not name it — a state expr_shape
+# rules out, reported as the compiler's fault rather than lowered as something it is not.
+fn c_shape_missed(walk: str, e: ast.Expr) -> str {
+	raise parser.p_impossible(f"c_{walk}_node was handed {ast.expr_kind(e)}, which its shape (ast.expr_shape) does not route there — the helper for that shape has to name the variant")
+}
+
+fn c_leaf_node(mut &em: Emitter, e: ast.Expr, sb: Subst) -> str {
 	return match e {
 		Expr.EInt(lex, _, _) => c_int_dec(em, lex)
 		Expr.EFloat(lex) => c_float_dec(lex)
@@ -10217,10 +10242,44 @@ fn c_expr_node(mut &em: Emitter, e: ast.Expr, sb: Subst) -> str {
 		Expr.EBool(b) => c_bool(b)
 		Expr.ENil => "0"
 		Expr.EIdent(n, l, c) => c_ident_val(em, n, l, c, sb)
+		_ => c_shape_missed("leaf", e)
+	}
+}
+
+fn c_unary_node(mut &em: Emitter, e: ast.Expr, sb: Subst) -> str {
+	return match e {
 		Expr.EUnary(oper, x) => c_unexpr(em, oper, x, sb)
+		Expr.ETry(x) => c_try(em, x, sb)
+		Expr.EForce(x) => c_force(em, x, sb)
+		Expr.ERecv(ch) => c_recv(em, ch, sb)
+		Expr.EFmt(x, cv, sp) => c_fmt_hole(em, x, cv, sp, sb)
+		Expr.EConv(ty, x, nm) => c_conv(em, ty, x, nm, sb)
+		Expr.EIs(x, name) => c_is_test(em, x, name, sb)
+		_ => c_shape_missed("unary", e)
+	}
+}
+
+fn c_binary_node(mut &em: Emitter, e: ast.Expr, sb: Subst) -> str {
+	return match e {
 		Expr.EBinary(oper, a, b) => c_binexpr(em, oper, a, b, sb)
+		Expr.EIndex(target, idx) => c_index(em, target, idx, sb)
+
+		# A range reaching HERE is one used as a value — a slice bound or a match arm —
+		# rather than as a `for`'s iterable, which c_forin takes before this point. Those
+		# forms have no lowering yet, and saying so is better than emitting something that
+		# reads as an int.
+		Expr.ERange(lo, hi, inclusive) => c_range_value(em, lo, hi, inclusive, sb)
+		Expr.EIn(x, set) => c_in_test(em, x, set, sb)
+		Expr.EFill(v, n) => c_fill_lit(em, v, n, sb)
+		Expr.ECoalesce(a, b, jump) => c_coalesce(em, a, b, jump, sb)
+		_ => c_shape_missed("binary", e)
+	}
+}
+
+fn c_link_node(mut &em: Emitter, e: ast.Expr, sb: Subst) -> str {
+	return match e {
 		Expr.ECall(name, args, ts, l, c) => c_call_written(em, name, args, ts, l, c, sb)
-		Expr.ECallVal(callee, args) => c_call_val(em, callee, args, sb)
+		Expr.ECallVal(callee, args)      => c_call_val(em, callee, args, sb)
 
 		# A NAMED ARGUMENT REACHING THE LOWERING was written where a name means nothing —
 		# every call site reorders and unwraps its own, so one that survives to here is in a
@@ -10229,35 +10288,32 @@ fn c_expr_node(mut &em: Emitter, e: ast.Expr, sb: Subst) -> str {
 		Expr.EField(target, fld, l, c) => c_fieldref(em, target, fld, l, c, sb)
 		Expr.EOptChain(target, fld, l, c) => c_optchain(em, target, fld, l, c, sb)
 		Expr.EOptMethod(target, meth, args, l, c) => c_optmethod(em, target, meth, args, l, c, sb)
-		Expr.ETry(x) => c_try(em, x, sb)
-		Expr.EIndex(target, idx) => c_index(em, target, idx, sb)
 		Expr.EMethod(target, meth, args, l, c) => c_method(em, target, meth, args, l, c, sb)
-		Expr.EListLit(elems) => c_list_lit(em, elems, sb)
-		Expr.EFill(v, n) => c_fill_lit(em, v, n, sb)
-		Expr.EConv(ty, x, nm) => c_conv(em, ty, x, nm, sb)
-		Expr.EFmt(x, cv, sp) => c_fmt_hole(em, x, cv, sp, sb)
+		_ => c_shape_missed("link", e)
+	}
+}
+
+fn c_control_node(mut &em: Emitter, e: ast.Expr, sb: Subst) -> str {
+	return match e {
 		Expr.EIf(cond, then_e, else_e) => c_ternary(em, cond, then_e, else_e, sb)
 		Expr.EIfLet(nm, v, a, b, l, c) => c_expr(em, c_iflet_match(em, nm, v, a, b, l, c), sb)
 		Expr.EMatch(scrut, arms) => c_match(em, scrut, arms, sb)
-
-		# A range reaching HERE is one used as a value — a slice bound or a match arm —
-		# rather than as a `for`'s iterable, which c_forin takes before this point. Those
-		# forms have no lowering yet, and saying so is better than emitting something that
-		# reads as an int.
-		Expr.ERange(lo, hi, inclusive) => c_range_value(em, lo, hi, inclusive, sb)
-		Expr.ETuple(elems) => c_tuple_lit(em, elems, sb)
-		Expr.EMapLit(ks, vs) => c_map_lit(em, ks, vs, sb)
-		Expr.EFn(ps, has_ret, ret, body) => c_lambda(em, ps, has_ret, ret, body)
-		Expr.EChanNew(t, cap) => c_chan_new(em, t, cap, sb)
-		Expr.ERecv(ch) => c_recv(em, ch, sb)
-		Expr.EForce(x) => c_force(em, x, sb)
-		Expr.ECoalesce(a, b, jump) => c_coalesce(em, a, b, jump, sb)
 		Expr.EGuard(body) => c_guard(em, body, sb)
 		Expr.EBlock(body) => c_block_expr(em, body, sb)
 		Expr.EUnsafe(body) => c_unsafe_expr(em, body, sb)
+		Expr.EFn(ps, has_ret, ret, body) => c_lambda(em, ps, has_ret, ret, body)
 		Expr.EAsm(tpl, ops) => c_asm(em, tpl, ops, sb)
-		Expr.EIs(x, name) => c_is_test(em, x, name, sb)
-		Expr.EIn(x, set) => c_in_test(em, x, set, sb)
+		_ => c_shape_missed("control", e)
+	}
+}
+
+fn c_aggregate_node(mut &em: Emitter, e: ast.Expr, sb: Subst) -> str {
+	return match e {
+		Expr.EListLit(elems) => c_list_lit(em, elems, sb)
+		Expr.ETuple(elems) => c_tuple_lit(em, elems, sb)
+		Expr.EMapLit(ks, vs) => c_map_lit(em, ks, vs, sb)
+		Expr.EChanNew(t, cap) => c_chan_new(em, t, cap, sb)
+		_ => c_shape_missed("aggregate", e)
 	}
 }
 
@@ -10996,60 +11052,74 @@ fn c_is_shortcircuit(oper: str) -> bool {
 
 # c_binexpr lowers a binary expression, special-casing string concatenation and equality
 # (which are not C operators on const char*).
+#
+# Its lowerings are functions of their own because a chain of operators pays this frame once per
+# term, ahead of the c_deeper check that refuses a chain too deep by name: written as one, its
+# frame held every path's temporaries and the native stack ran out first.
 fn c_binexpr(mut &em: Emitter, oper: str, a: ast.Expr, b: ast.Expr, sb: Subst) -> str {
 	ta := c_infer(em, a)
 	check.chk_binary(em, oper, ta, c_infer(em, b), a, b)
-	if c_is_str(ta) {
-		if oper == "+" {
-			em.used_str = true
-			em.used_rt = true
-			return c_str_concat(em, a, b, sb)
-		}
 
-		# EVERY comparison on two strs is strcmp's, not just the two equalities. `<` `>` `<=`
-		# `>=` fell through to the numeric path below and compared the two POINTERS: `"zzz" <
-		# "aaa"` answered TRUE, silently, and the seed answered false. An ordering is what a
-		# sort is built on, so the wrong answer does not stay local.
-		#
-		# `strcmp` is a CALL, so its two arguments are an argument list like any other and
-		# get the same ordering the numeric path below gets.
-		#
-		# AN OPERAND THIS EXPRESSION OWNS IS GIVEN BACK once the answer is in hand, as a concat
-		# gives its operands back: `c_ident_name(e) != ""` compared the name the call handed over
-		# and walked away from it, once per call — and c_is_place asks that on every argument the
-		# emitter lowers, which a language server paid again on every check (#23). The two are
-		# bound in source order inside one statement expression, which is also the ordering.
-		oa := c_owns_value(a)
-		ob := c_owns_value(b)
-		if c_is_cmp_op(oper) and (oa or ob) {
-			la := c_tmp(em, "zgt_t")
-			lb := c_tmp(em, "zgt_t")
-			rn := c_tmp(em, "zgt_t")
-			keep := em.rel_cnames.len()
-			mut frees := ""
-			mut left := f"const char *{la} = {c_expr(em, a, sb)}; "
-			if oa {
-				frees = frees + f"zrt_str_release({la}); "
+	return c_str_binexpr(em, oper, a, b, sb) if c_is_str(ta) and (oper == "+" or c_is_cmp_op(oper))
+	return c_cmp_binexpr(em, oper, a, b, ta, sb) if c_is_cmp_op(oper)
 
-				# held across the right operand, as a concat's left one is
-				if c_runs_code(b) {
-					left = left + c_hold(em, ast.Ty.TStr, la)
-				}
-			}
-			if ob {
-				frees = frees + f"zrt_str_release({lb}); "
-			}
-			right := f"const char *{lb} = {c_expr(em, b, sb)}; "
-			return f"({{ {left}{right}{c_unhold(em, keep)}int {rn} = strcmp({la}, {lb}); {frees}({rn} {oper} 0); }})"
-		}
-		if c_is_cmp_op(oper) {
-			seq := c_needs_order([a, b], 1)
-			la := c_ordered(em, seq, c_expr(em, a, sb))
-			lb := c_ordered(em, seq, c_expr(em, b, sb))
-			return f"(strcmp({la}, {lb}) {oper} 0)"
-		}
+	return c_num_binexpr(em, oper, a, b, ta, sb)
+}
+
+# c_str_binexpr is `+` and the comparisons on two strs.
+fn c_str_binexpr(mut &em: Emitter, oper: str, a: ast.Expr, b: ast.Expr, sb: Subst) -> str {
+	if oper == "+" {
+		em.used_str = true
+		em.used_rt = true
+		return c_str_concat(em, a, b, sb)
 	}
 
+	# EVERY comparison on two strs is strcmp's, not just the two equalities. `<` `>` `<=`
+	# `>=` fell through to the numeric path below and compared the two POINTERS: `"zzz" <
+	# "aaa"` answered TRUE, silently, and the seed answered false. An ordering is what a
+	# sort is built on, so the wrong answer does not stay local.
+	#
+	# `strcmp` is a CALL, so its two arguments are an argument list like any other and
+	# get the same ordering the numeric path below gets.
+	#
+	# AN OPERAND THIS EXPRESSION OWNS IS GIVEN BACK once the answer is in hand, as a concat
+	# gives its operands back: `c_ident_name(e) != ""` compared the name the call handed over
+	# and walked away from it, once per call — and c_is_place asks that on every argument the
+	# emitter lowers, which a language server paid again on every check (#23). The two are
+	# bound in source order inside one statement expression, which is also the ordering.
+	oa := c_owns_value(a)
+	ob := c_owns_value(b)
+	if c_is_cmp_op(oper) and (oa or ob) {
+		la := c_tmp(em, "zgt_t")
+		lb := c_tmp(em, "zgt_t")
+		rn := c_tmp(em, "zgt_t")
+		keep := em.rel_cnames.len()
+		mut frees := ""
+		mut left := f"const char *{la} = {c_expr(em, a, sb)}; "
+		if oa {
+			frees = frees + f"zrt_str_release({la}); "
+
+			# held across the right operand, as a concat's left one is
+			if c_runs_code(b) {
+				left = left + c_hold(em, ast.Ty.TStr, la)
+			}
+		}
+		if ob {
+			frees = frees + f"zrt_str_release({lb}); "
+		}
+		right := f"const char *{lb} = {c_expr(em, b, sb)}; "
+		return f"({{ {left}{right}{c_unhold(em, keep)}int {rn} = strcmp({la}, {lb}); {frees}({rn} {oper} 0); }})"
+	}
+
+	seq := c_needs_order([a, b], 1)
+	la := c_ordered(em, seq, c_expr(em, a, sb))
+	lb := c_ordered(em, seq, c_expr(em, b, sb))
+	return f"(strcmp({la}, {lb}) {oper} 0)"
+}
+
+# c_cmp_binexpr is a comparison on any other pair: an aggregate's from its `Eq` or `Ord`, a
+# scalar's by c_num_binexpr.
+fn c_cmp_binexpr(mut &em: Emitter, oper: str, a: ast.Expr, b: ast.Expr, ta: ast.Ty, sb: Subst) -> str {
 	# AN AGGREGATE HAS NO C OPERATOR, and `Eq` is where its `==` comes from. C has no `==` for
 	# a struct, an enum, a list, a map or a tuple, so the operator used to reach cc as
 	# `invalid operands to binary expression` against code nobody wrote.
@@ -11058,50 +11128,53 @@ fn c_binexpr(mut &em: Emitter, oper: str, a: ast.Expr, b: ast.Expr, sb: Subst) -
 	# fieldless enum and WRONG for a payload one: `Circle(1) == Circle(2)` answered true. It
 	# was also equality with no impl behind it, which docs/core/derive.md rules out — there is
 	# no auto-derived equality — and the seed refuses exactly that.
-	if c_is_cmp_op(oper) {
-		# TWO BOXES ARE NEVER COMPARED BY VALUE, and a box is a pointer in C: left to the numeric
-		# path below, `e == f` compared the two cells' addresses. It is asked ahead of `Eq`, which
-		# a spec that requires it would otherwise answer by dispatching `eq`.
-		if (oper == "==" or oper == "!=") and c_is_spec_name(em, c_named_of(ta)) {
+	# TWO BOXES ARE NEVER COMPARED BY VALUE, and a box is a pointer in C: left to the numeric
+	# path below, `e == f` compared the two cells' addresses. It is asked ahead of `Eq`, which
+	# a spec that requires it would otherwise answer by dispatching `eq`.
+	if (oper == "==" or oper == "!=") and c_is_spec_name(em, c_named_of(ta)) {
+		c_eq_refuse(em, oper, ta)
+		return "0"
+	}
+	return c_eq_call(em, oper, a, b, sb) if (oper == "==" or oper == "!=") and c_has_eq(em, ta)
+
+	# AN UNNAMED FORM HAS IT FROM ITS PARTS (docs/core/types.md): there is no declaration
+	# to derive on and nothing a program could write, so it is written here.
+	return c_eq_parts(em, oper, a, b, ta, sb) if (oper == "==" or oper == "!=") and c_is_unnamed(ta) and c_eq_legal(em, ta) and ast.ty_eq(ta, c_infer(em, b))
+
+	# AND ORDERING COMES FROM `Ord`, the same way. `less` is the one method the spec
+	# requires (docs/core/specs.md) and the other three orderings are written out of it
+	# here rather than required of an implementer.
+	return c_ord_call(em, oper, a, b, ta, sb) if c_is_order_op(oper) and c_has_ord(em, ta)
+
+	# and a TUPLE or an ARRAY has it from its parts as it has `==`, compared in order with the
+	# first part that differs deciding (docs/core/types.md)
+	return c_eq_parts(em, oper, a, b, ta, sb) if c_is_order_op(oper) and c_is_ordered_form(ta) and c_ord_legal(em, ta) and ast.ty_eq(ta, c_infer(em, b))
+
+	# EQUALITY and ORDERING are two questions. `c_eq_legal` answers the first — and is
+	# the same answer the `T: Eq` bound gives, which is the point of it being one
+	# function. An ORDERING additionally has nothing on any aggregate WITHOUT an `Ord`,
+	# which is what would supply it, so a `#[derive(Eq)]` struct answers `==` and still
+	# not `<`.
+	#
+	# ONLY WHEN THE TWO SIDES ARE THE SAME TYPE. `Color == Fruit` and `Color == 1` are
+	# already reported by chk_binary above, and they are the better sentence — what is
+	# wrong there is the pair, not a missing impl. Raising here as well replaced a
+	# diagnostic about the program with one about a spec the program never mentioned.
+	#
+	# `ty_eq` and not `ty_name`, which is the same correction chk_binary's equality rule
+	# took: a SPELLING is the same question only where a type has a name of its own, and
+	# the pair that reaches here is a pair of aggregates, which is exactly where it is not.
+	if not c_eq_legal(em, ta) or c_is_aggregate(em, ta) {
+		if ast.ty_eq(ta, c_infer(em, b)) {
 			c_eq_refuse(em, oper, ta)
-			return "0"
-		}
-		return c_eq_call(em, oper, a, b, sb) if (oper == "==" or oper == "!=") and c_has_eq(em, ta)
-
-		# AN UNNAMED FORM HAS IT FROM ITS PARTS (docs/core/types.md): there is no declaration
-		# to derive on and nothing a program could write, so it is written here.
-		return c_eq_parts(em, oper, a, b, ta, sb) if (oper == "==" or oper == "!=") and c_is_unnamed(ta) and c_eq_legal(em, ta) and ast.ty_eq(ta, c_infer(em, b))
-
-		# AND ORDERING COMES FROM `Ord`, the same way. `less` is the one method the spec
-		# requires (docs/core/specs.md) and the other three orderings are written out of it
-		# here rather than required of an implementer.
-		return c_ord_call(em, oper, a, b, ta, sb) if c_is_order_op(oper) and c_has_ord(em, ta)
-
-		# and a TUPLE or an ARRAY has it from its parts as it has `==`, compared in order with the
-		# first part that differs deciding (docs/core/types.md)
-		return c_eq_parts(em, oper, a, b, ta, sb) if c_is_order_op(oper) and c_is_ordered_form(ta) and c_ord_legal(em, ta) and ast.ty_eq(ta, c_infer(em, b))
-
-		# EQUALITY and ORDERING are two questions. `c_eq_legal` answers the first — and is
-		# the same answer the `T: Eq` bound gives, which is the point of it being one
-		# function. An ORDERING additionally has nothing on any aggregate WITHOUT an `Ord`,
-		# which is what would supply it, so a `#[derive(Eq)]` struct answers `==` and still
-		# not `<`.
-		#
-		# ONLY WHEN THE TWO SIDES ARE THE SAME TYPE. `Color == Fruit` and `Color == 1` are
-		# already reported by chk_binary above, and they are the better sentence — what is
-		# wrong there is the pair, not a missing impl. Raising here as well replaced a
-		# diagnostic about the program with one about a spec the program never mentioned.
-		#
-		# `ty_eq` and not `ty_name`, which is the same correction chk_binary's equality rule
-		# took: a SPELLING is the same question only where a type has a name of its own, and
-		# the pair that reaches here is a pair of aggregates, which is exactly where it is not.
-		if not c_eq_legal(em, ta) or c_is_aggregate(em, ta) {
-			if ast.ty_eq(ta, c_infer(em, b)) {
-				c_eq_refuse(em, oper, ta)
-			}
 		}
 	}
 
+	return c_num_binexpr(em, oper, a, b, ta, sb)
+}
+
+# c_num_binexpr is the operator on two scalars, a checked runtime call or a C operator.
+fn c_num_binexpr(mut &em: Emitter, oper: str, a: ast.Expr, b: ast.Expr, ta: ast.Ty, sb: Subst) -> str {
 	# THE OTHER OPERAND IS A POSITION, so a literal tree standing beside a float is a tree of
 	# floats — and C will not read it that way on its own. `n + 1 / 2` for a float `n` was
 	# `2`: the checker had already typed the `1 / 2` as float (chk_lit_fits, at the operand

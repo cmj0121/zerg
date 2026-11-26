@@ -2786,6 +2786,65 @@ pub fn expr_parts(e: Expr) -> list[Expr] {
 	}
 }
 
+# expr_shape sorts an Expr into a few small groups, for a recursive walk to dispatch on BEFORE
+# it destructures. A walk over the tree pays its frame once per level, and the emitted C is
+# built at -O0, where every arm's temporaries keep a slot of their own: one match over every
+# variant made subst_expr's and c_expr_node's frames so large that a chain the parser admits
+# under ZG_MAX_NESTING ran an 8 MB stack out, and a chain the emitter was to refuse by name
+# (E4028) died as StackOverflowError first. Dispatching on the shape keeps each level's frames
+# to one group's arms.
+#
+# Every variant is named, for expr_parts' reason: a new Expr has to be given a shape.
+pub const EXPR_LEAF := 0
+pub const EXPR_UNARY := 1
+pub const EXPR_BINARY := 2
+pub const EXPR_LINK := 3
+pub const EXPR_CONTROL := 4
+pub const EXPR_AGGREGATE := 5
+
+pub fn expr_shape(e: Expr) -> int {
+	return match e {
+		Expr.EInt(_, _, _) => EXPR_LEAF
+		Expr.EFloat(_) => EXPR_LEAF
+		Expr.EStr(_) => EXPR_LEAF
+		Expr.EBool(_) => EXPR_LEAF
+		Expr.ENil => EXPR_LEAF
+		Expr.EIdent(_, _, _) => EXPR_LEAF
+		Expr.EUnary(_, _) => EXPR_UNARY
+		Expr.ETry(_) => EXPR_UNARY
+		Expr.EForce(_) => EXPR_UNARY
+		Expr.ERecv(_) => EXPR_UNARY
+		Expr.EFmt(_, _, _) => EXPR_UNARY
+		Expr.EConv(_, _, _) => EXPR_UNARY
+		Expr.EIs(_, _) => EXPR_UNARY
+		Expr.EBinary(_, _, _) => EXPR_BINARY
+		Expr.EIndex(_, _) => EXPR_BINARY
+		Expr.ERange(_, _, _) => EXPR_BINARY
+		Expr.EIn(_, _) => EXPR_BINARY
+		Expr.EFill(_, _) => EXPR_BINARY
+		Expr.ECoalesce(_, _, _) => EXPR_BINARY
+		Expr.ECall(_, _, _, _, _) => EXPR_LINK
+		Expr.ECallVal(_, _) => EXPR_LINK
+		Expr.ENamedArg(_, _, _, _) => EXPR_LINK
+		Expr.EField(_, _, _, _) => EXPR_LINK
+		Expr.EOptChain(_, _, _, _) => EXPR_LINK
+		Expr.EOptMethod(_, _, _, _, _) => EXPR_LINK
+		Expr.EMethod(_, _, _, _, _) => EXPR_LINK
+		Expr.EIf(_, _, _) => EXPR_CONTROL
+		Expr.EIfLet(_, _, _, _, _, _) => EXPR_CONTROL
+		Expr.EMatch(_, _) => EXPR_CONTROL
+		Expr.EGuard(_) => EXPR_CONTROL
+		Expr.EBlock(_) => EXPR_CONTROL
+		Expr.EUnsafe(_) => EXPR_CONTROL
+		Expr.EFn(_, _, _, _) => EXPR_CONTROL
+		Expr.EAsm(_, _) => EXPR_CONTROL
+		Expr.EListLit(_) => EXPR_AGGREGATE
+		Expr.ETuple(_) => EXPR_AGGREGATE
+		Expr.EMapLit(_, _) => EXPR_AGGREGATE
+		Expr.EChanNew(_, _) => EXPR_AGGREGATE
+	}
+}
+
 # expr_parts_none is "this node contains no expression". It is a function rather than a
 # bare `[]` because the seed that compiles this compiler cannot infer an empty list
 # literal's element type inside a match arm, and a leaf is where that literal would be.

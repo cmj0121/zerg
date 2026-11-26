@@ -11059,6 +11059,13 @@ fn c_binexpr(mut &em: Emitter, oper: str, a: ast.Expr, b: ast.Expr, sb: Subst) -
 	# was also equality with no impl behind it, which docs/core/derive.md rules out — there is
 	# no auto-derived equality — and the seed refuses exactly that.
 	if c_is_cmp_op(oper) {
+		# TWO BOXES ARE NEVER COMPARED BY VALUE, and a box is a pointer in C: left to the numeric
+		# path below, `e == f` compared the two cells' addresses. It is asked ahead of `Eq`, which
+		# a spec that requires it would otherwise answer by dispatching `eq`.
+		if (oper == "==" or oper == "!=") and c_is_spec_name(em, c_named_of(ta)) {
+			c_eq_refuse(em, oper, ta)
+			return "0"
+		}
 		return c_eq_call(em, oper, a, b, sb) if (oper == "==" or oper == "!=") and c_has_eq(em, ta)
 
 		# AN UNNAMED FORM HAS IT FROM ITS PARTS (docs/core/types.md): there is no declaration
@@ -11150,12 +11157,13 @@ fn c_operand(mut &em: Emitter, pair_is_float: bool, e: ast.Expr, sb: Subst) -> s
 #
 # A scalar and a `str` have it from the language. A declared type has it from an `Eq` impl,
 # derived or written. Nothing else does: a carrier is not a value until it is unwrapped, and a
-# channel is an identity the language never gave an equality to.
+# channel is an identity the language never gave an equality to. A box is neither: its
+# concrete type is what erasure removed (docs/core/specs.md).
 #
 # AN UNNAMED FORM has it exactly when every part has it — the parts-inheritance rule of
 # docs/core/types.md, which is the one way a type with no declaration can have anything.
 fn c_eq_legal(mut &em: Emitter, t: ast.Ty) -> bool {
-	return false if c_is_carrier(t) or c_has_no_equality(t)
+	return false if c_is_carrier(t) or c_has_no_equality(t) or c_is_spec_name(em, c_named_of(t))
 	return c_is_unknown(c_eq_bad_part(em, t)) if c_is_unnamed(t)
 	return c_has_eq(em, t) if c_is_aggregate(em, t)
 
@@ -11889,6 +11897,10 @@ fn c_eq_refuse(mut &em: Emitter, oper: str, t: ast.Ty) {
 # reader wrote — `t` itself, or the unnamed form `t` is a part of.
 fn c_eq_refuse_part(mut &em: Emitter, oper: str, subject: str, t: ast.Ty) {
 	nm := ast.ty_name(t)
+	if c_is_spec_name(em, c_named_of(t)) {
+		check.chk_at(em, rule.Rule.BinaryOnExistential, c_eq_says(oper, subject, f"a {nm} is a boxed value, and erasure removed the concrete type `Eq` needs — two boxes are never comparable by value (docs/core/specs.md)", "keep the concrete type, or a generic parameter bounded by the spec", "keep the concrete values instead"))
+		return
+	}
 	if c_has_no_equality(t) {
 		check.chk_at(em, rule.Rule.IdentityHasNoEquality, c_eq_says(oper, subject, f"a {nm} is an identity rather than a value, which the language gives no equality", "compare something it carries", "look for something it carries instead"))
 		return
@@ -17337,6 +17349,12 @@ fn c_recv_call(mut &em: Emitter, recv: str, meth: str, target: ast.Expr, args: l
 # the same code.
 fn c_spec_call(mut &em: Emitter, recv: str, meth: str, target: ast.Expr, args: list[ast.Expr], sb: Subst) -> str {
 	key := c_sig_key(recv, meth)
+
+	# A NAME THE SPEC DOES NOT DECLARE has no slot, and so no row for the arguments to be read
+	# against — it is the same finding as on any type that declares none. `copy` is one: a box
+	# is copied as every value is, by binding it (`g := e`), never by a method.
+	raise c_no_method_says(em, meth, recv) if c_sig_row(em, key) < 0
+
 	c_spec_call_check(em, recv, meth, key)
 	return f"{c_spec_disp_register(em, recv, meth)}({c_recv_args(em, key, target, args, sb)})"
 }
@@ -17357,8 +17375,6 @@ fn c_spec_call(mut &em: Emitter, recv: str, meth: str, target: ast.Expr, args: l
 # C, which is the one reporter `make refuse` exists to keep off this path.
 fn c_spec_call_check(mut &em: Emitter, sp: str, meth: str, key: str) {
 	row := c_sig_row(em, key)
-	return if row < 0
-
 	if em.sig_assoc[row] {
 		c_refuse_assoc_through_instance(em, sp, meth)
 	}

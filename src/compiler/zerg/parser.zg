@@ -3032,7 +3032,7 @@ fn parse_impl(mut &p: Parser, mut &fns: list[ast.FnDecl], mut &impls: list[ast.I
 	# items are parsed into the file's own lists rather than into it.
 	ip_at := impls.len()
 	if sp != "" {
-		impls.append(ast.ImplDecl(sp, args, target, tp_names, p.path, kw.line, kw.col, 0, 0))
+		impls.append(ast.ImplDecl(sp, args, target, tp_names, tp_bounds, p.path, kw.line, kw.col, 0, 0))
 	}
 
 	# `impl Box[T]` — with no `impl[T]`, what makes it generic is that an argument of its target
@@ -3109,7 +3109,7 @@ fn parse_impl(mut &p: Parser, mut &fns: list[ast.FnDecl], mut &impls: list[ast.I
 	if sp != "" {
 		e := p_ended(p)
 		ip := impls[ip_at]
-		impls[ip_at] = ast.ImplDecl(ip.on, ip.args, ip.target, ip.tparams, ip.path, ip.line, ip.col, e.line, e.col)
+		impls[ip_at] = ast.ImplDecl(ip.on, ip.args, ip.target, ip.tparams, ip.tbounds, ip.path, ip.line, ip.col, e.line, e.col)
 	}
 	p.impl_ty = outer
 	p_tp_scope(p, kw, tp_names.len() + maybe)

@@ -1093,6 +1093,10 @@ pub struct ImplDecl {
 	# materialized per instantiation, the way a generic `fn` is per call.
 	pub tparams: list[str]
 
+	# tbounds are their bounds, one per parameter and joined by `+` as a `fn`'s are — "" for
+	# none. An instantiation whose argument does not meet one has no such impl (c_tpl_unmet_ix).
+	pub tbounds: list[str]
+
 	pub path: str
 	pub line: int
 	pub col: int

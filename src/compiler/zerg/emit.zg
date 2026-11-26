@@ -892,6 +892,19 @@ pub struct Emitter {
 	# `zg_<Type>_<name>`, the rows c_check_cnames calls owned — kept from that walk so
 	# c_fresh_cname can spell a local apart from them without a second one.
 	pub owned_cnames: list[str]
+
+	# A TEMPLATE IMPL'S BOUNDS, decided once per instantiation (c_inst_decide). tpl_plain is the
+	# program's ordinary impls, which the bounds are read against before c_build_impls fills
+	# the registry; inst_decided is, per row of inst_tys, whether that instantiation was decided;
+	# unmet_inst / unmet_row / unmet_why are the pairs that MISS a bound — the row of inst_tys,
+	# the row of impl_tpls, and the E4010 sentence — so a met pair costs no row at all;
+	# tpl_fn_owner is, per row of impl_tpl_fns, the row of impl_tpls the method belongs to, or -1.
+	pub tpl_plain: list[ast.ImplDecl]
+	pub tpl_fn_owner: list[int]
+	pub inst_decided: list[bool]
+	pub unmet_inst: list[int]
+	pub unmet_row: list[int]
+	pub unmet_why: list[str]
 }
 
 # Subst is an active set of identifier substitutions: an EIdent whose name appears in
@@ -4386,6 +4399,9 @@ fn c_with_impl_insts(mut &em: Emitter, f: ast.File, record: bool, alone: bool, m
 			impls.append(ip)
 		}
 	}
+	if record {
+		em.tpl_plain = impls
+	}
 
 	# THE METHODS COME OUT WITH THEM. A body written against `Box[T]` names a receiver that is
 	# not a type — `no type named Box[T]`, at the method rather than at the impl — so the
@@ -4411,17 +4427,31 @@ fn c_with_impl_insts(mut &em: Emitter, f: ast.File, record: bool, alone: bool, m
 		}
 	}
 
-	for ip in tpls {
-		for applied in em.inst_tys {
-			continue if c_app_base(applied) != c_app_base(ip.target)
+	# EVERY ROW HAS ITS OWNER, the ones c_build_generics recorded before any impl was known too.
+	if record {
+		for em.tpl_fn_owner.len() < em.impl_tpl_fns.len() {
+			em.tpl_fn_owner.append(c_tpl_fn_owner(em, f, em.impl_tpl_fns[em.tpl_fn_owner.len()]))
+		}
+	}
 
-			impls.append(ast.ImplDecl(ip.on, ip.args, applied, [], ip.path, ip.line, ip.col, ip.end_line, ip.end_col))
+	# BY INDEX, because deciding a bound hands c_tpl_unmet_ix the Emitter whose list this walks,
+	# and the indexes are what the decision is kept under.
+	for ip in tpls {
+		r := c_tpl_row(em, ip)
+		mut ai := 0
+		for ai < em.inst_tys.len() {
+			applied := em.inst_tys[ai]
+			ai = ai + 1
+			continue if c_app_base(applied) != c_app_base(ip.target) or c_tpl_unmet_ix(em, r, ai - 1, applied) != ""
+
+			impls.append(ast.ImplDecl(ip.on, ip.args, applied, [], [], ip.path, ip.line, ip.col, ip.end_line, ip.end_col))
 		}
 	}
 
 	mut mi := 0
 	for mi < em.impl_tpl_fns.len() {
 		m := em.impl_tpl_fns[mi]
+		owner := em.tpl_fn_owner[mi]
 		mi = mi + 1
 		owned := c_name_in(mine, c_tpl_method_key(m))
 		continue if not owned and not alone
@@ -4429,7 +4459,7 @@ fn c_with_impl_insts(mut &em: Emitter, f: ast.File, record: bool, alone: bool, m
 		mut ti := 0
 		for ti < em.inst_tys.len() {
 			applied := em.inst_tys[ti]
-			if c_app_base(applied) == c_app_base(m.recv) {
+			if c_app_base(applied) == c_app_base(m.recv) and c_tpl_unmet_ix(em, owner, ti, applied) == "" {
 				inst := c_tpl_method_for(em, f, m, applied)
 				if not c_seat_tpl_method(em, inst) {
 					if owned {
@@ -4453,6 +4483,161 @@ fn c_with_impl_insts(mut &em: Emitter, f: ast.File, record: bool, alone: bool, m
 	out.impls = impls
 	out.fns = fns
 	return out
+}
+
+# c_tpl_unmet_ix is why the instantiation `applied` — row `ai` of inst_tys, or -1 for one not
+# in it — HAS NO impl from row `r` of impl_tpls: the E4010 sentence of the first bound its
+# argument misses, or "" when it meets them all (and for `r` -1, a method of no spec impl).
+# `impl[T: Encode] Encode for Box[T]` is one implementation for every `Box[T]` whose `T` is
+# Encode, and for no other: materialized at `Box[int]` its body called `encode` on an `int`
+# and was refused inside a `<derive>` file the reader never wrote. Kept out, the instance is
+# simply not there, and a use that asks for it is refused there (c_no_method_says,
+# check.chk_spec_fits).
+fn c_tpl_unmet_ix(mut &em: Emitter, r: int, ai: int, applied: str) -> str {
+	return "" if r < 0
+	return c_tpl_unmet_calc(em, em.impl_tpls[r], applied) if ai < 0
+
+	c_inst_decide(em, ai)
+	mut k := 0
+	for k < em.unmet_inst.len() {
+		return em.unmet_why[k] if em.unmet_inst[k] == ai and em.unmet_row[k] == r
+		k = k + 1
+	}
+	return ""
+}
+
+# c_tpl_unmet_of is c_tpl_unmet_ix for a caller holding only the applied name.
+fn c_tpl_unmet_of(mut &em: Emitter, r: int, applied: str) -> str {
+	return c_tpl_unmet_ix(em, r, c_inst_row(em, applied), applied)
+}
+
+fn c_inst_row(mut &em: Emitter, applied: str) -> int {
+	mut i := 0
+	for i < em.inst_tys.len() {
+		return i if em.inst_tys[i] == applied
+		i = i + 1
+	}
+	return -1
+}
+
+# c_inst_decide asks every template impl of one instantiation's base at once, the first time
+# any of them is asked. It is the declaration sweep that asks first: the unit passes after it
+# read a program that no longer holds every module's impls, so what they ask is the record.
+fn c_inst_decide(mut &em: Emitter, ai: int) {
+	for em.inst_decided.len() <= ai {
+		em.inst_decided.append(false)
+	}
+	return if em.inst_decided[ai]
+
+	em.inst_decided[ai] = true
+	applied := em.inst_tys[ai]
+	mut r := 0
+	for r < em.impl_tpls.len() {
+		ip := em.impl_tpls[r]
+		if c_app_base(ip.target) == c_app_base(applied) {
+			why := c_tpl_unmet_calc(em, ip, applied)
+			if why != "" {
+				em.unmet_inst.append(ai)
+				em.unmet_row.append(r)
+				em.unmet_why.append(why)
+			}
+		}
+		r = r + 1
+	}
+}
+
+fn c_tpl_unmet_calc(mut &em: Emitter, ip: ast.ImplDecl, applied: str) -> str {
+	mut decls: list[ast.Ty] = [ast.Ty.TNamed(ip.target)]
+	mut actuals: list[ast.Ty] = [ast.Ty.TNamed(applied)]
+	sol := generic.gen_solve(ip.tparams, decls, actuals, em.ty_apps)
+	mut i := 0
+	for i < sol.len() and i < ip.tbounds.len() {
+		for b in c_split_bounds(ip.tbounds[i]) {
+			return c_bound_unmet_says(sol[i], b, ip.target, ip.tparams[i]) if not c_tpl_meets(em, sol[i], b)
+		}
+		i = i + 1
+	}
+	return ""
+}
+
+# c_tpl_row is the row of impl_tpls a unit's template impl is — the same declaration read in
+# the whole program's view, told apart by its place and its spec.
+fn c_tpl_row(mut &em: Emitter, ip: ast.ImplDecl) -> int {
+	key := ast.spec_key(ip.on, ip.args)
+	mut r := 0
+	for r < em.impl_tpls.len() {
+		t := em.impl_tpls[r]
+		return r if t.target == ip.target and t.path == ip.path and t.line == ip.line and t.col == ip.col and ast.spec_key(t.on, t.args) == key
+		r = r + 1
+	}
+	return -1
+}
+
+# c_tpl_spec_row is the template impl of the spec `sp` that an applied name's base has, or -1.
+fn c_tpl_spec_row(mut &em: Emitter, nm: str, sp: str) -> int {
+	mut r := 0
+	for r < em.impl_tpls.len() {
+		ip := em.impl_tpls[r]
+		return r if ast.spec_key(ip.on, ip.args) == sp and c_app_base(ip.target) == c_app_base(nm)
+		r = r + 1
+	}
+	return -1
+}
+
+# c_tpl_spec_unmet is why `nm` does not implement `sp` when a template impl of it is the one it
+# would have had: a SPEC POSITION given a `Box[int]` asks this, so the finding is the missed
+# bound rather than "nothing implements it".
+pub fn c_tpl_spec_unmet(mut &em: Emitter, nm: str, sp: str) -> str {
+	r := c_tpl_spec_row(em, nm, sp)
+	return "" if r < 0
+
+	return c_tpl_unmet_of(em, r, nm)
+}
+
+# c_tpl_meets is whether a type argument meets one bound of a template impl, asked while the
+# registry may still be empty: the ordinary impls are read from tpl_plain, and an application
+# of another template impl meets the bound when that impl's own bounds are met. `Eq` and `Ord`
+# are the operators' (c_satisfies), decided by tables this sweep runs before, so they are not
+# asked here and the instance is built as it always was.
+fn c_tpl_meets(mut &em: Emitter, t: ast.Ty, b: str) -> bool {
+	return true if b == "Eq" or b == "Ord"
+
+	nm := c_named_of(t)
+
+	return c_satisfies(em, t, b) if nm == ""
+	return true if c_impls(em, nm, b)
+
+	for ip in em.tpl_plain {
+		return true if ip.target == nm and ast.spec_key(ip.on, ip.args) == b
+	}
+	r := c_tpl_spec_row(em, nm, b)
+	return r >= 0 and c_tpl_unmet_of(em, r, nm) == ""
+}
+
+# c_tpl_fn_owner is the row of impl_tpls a template method belongs to, or -1 for an inherent
+# one. A method the implementer wrote sits in the impl's block — but every derive of a file is
+# parsed at one `<derive:FILE>` path from its own line 1, so `Eq` and `Encode` on one `Box[T]`
+# overlap, and the spec that requires the method's name is what tells them apart. A seated
+# DEFAULT (c_default_method) keeps the spec member's place instead, which is how it is found.
+fn c_tpl_fn_owner(mut &em: Emitter, f: ast.File, m: ast.FnDecl) -> int {
+	mut i := 0
+	for i < em.impl_tpls.len() {
+		ip := em.impl_tpls[i]
+		at := c_derive_spec_at(f, ip.on)
+		if ip.target == m.recv and at >= 0 {
+			sp := f.specs[at]
+			return i if c_provided_at(sp, m) or (ip.path == m.path and m.line >= ip.line and m.line <= ip.end_line and c_spec_requires(sp, m.name))
+		}
+		i = i + 1
+	}
+	return -1
+}
+
+fn c_spec_requires(sp: ast.SpecDecl, meth: str) -> bool {
+	for req in sp.reqs {
+		return true if req.name == meth
+	}
+	return false
 }
 
 # c_tpl_method_key is one template method's identity across the two views of it — the whole
@@ -4488,11 +4673,13 @@ fn c_seat_tpl_method(mut &em: Emitter, inst: ast.FnDecl) -> bool {
 }
 
 fn c_tpl_methods_late(mut &em: Emitter, applied: str) {
+	ai := c_inst_row(em, applied)
 	mut mi := 0
 	for mi < em.impl_tpl_fns.len() {
 		m := em.impl_tpl_fns[mi]
+		owner := em.tpl_fn_owner[mi]
 		mi = mi + 1
-		continue if c_app_base(applied) != c_app_base(m.recv)
+		continue if c_app_base(applied) != c_app_base(m.recv) or c_tpl_unmet_ix(em, owner, ai, applied) != ""
 
 		inst := c_tpl_method_at(em, m, applied)
 		continue if c_seat_tpl_method(em, inst)
@@ -4510,7 +4697,7 @@ fn c_tpl_methods_late(mut &em: Emitter, applied: str) {
 	for ii < em.impl_tpls.len() {
 		ip := em.impl_tpls[ii]
 		ii = ii + 1
-		continue if c_app_base(applied) != c_app_base(ip.target) or c_impls(em, applied, ast.spec_key(ip.on, ip.args))
+		continue if c_app_base(applied) != c_app_base(ip.target) or c_impls(em, applied, ast.spec_key(ip.on, ip.args)) or c_tpl_unmet_ix(em, ii - 1, ai, applied) != ""
 
 		em.impl_on.append(ast.spec_key(ip.on, ip.args))
 		em.impl_target.append(applied)
@@ -5466,10 +5653,21 @@ fn c_check_bounds(mut &em: Emitter, tpl: ast.FnDecl, sol: list[ast.Ty]) {
 		# the walk carry on into a body whose type does not meet the promise it was written
 		# against — which reports the consequence first and buries the cause.
 		for b in c_split_bounds(tpl.tbounds[i]) {
-			raise c_diag(em, rule.Rule.TypeParamBoundUnmet, f"`{ast.ty_name(sol[i])}` does not implement `{b}`, which `{tpl.name}`'s type parameter `{tpl.tparams[i]}` is bounded by") if not c_satisfies(em, sol[i], b)
+			raise c_bound_unmet(em, c_bound_unmet_says(sol[i], b, tpl.name, tpl.tparams[i])) if not c_satisfies(em, sol[i], b)
 		}
 		i = i + 1
 	}
+}
+
+# c_bound_unmet is E4010, and c_bound_unmet_says its sentence, each written once for the two
+# places a bound is asked: a generic `fn`'s call, and a call on an instantiation a template
+# impl's bound kept out (c_tpl_unmet_ix, which decides before there is a use to report at).
+pub fn c_bound_unmet(mut &em: Emitter, why: str) -> str {
+	return c_diag(em, rule.Rule.TypeParamBoundUnmet, why)
+}
+
+fn c_bound_unmet_says(t: ast.Ty, b: str, owner: str, tp: str) -> str {
+	return f"`{ast.ty_name(t)}` does not implement `{b}`, which `{owner}`'s type parameter `{tp}` is bounded by"
 }
 
 # c_split_bounds takes `Eq+Hash` back apart. An empty bound answers nothing to check, which
@@ -5552,7 +5750,7 @@ fn c_build_sigs(mut &em: Emitter, f: ast.File) {
 		# docs/core/specs.md's "re-boxing a `This`-returning result as the same spec".
 		mut noargs: list[ast.Ty] = []
 		mut notp: list[str] = []
-		self_ip := ast.ImplDecl(sp.name, noargs, sp.name, notp, sp.path, sp.line, sp.col, sp.end_line, sp.end_col)
+		self_ip := ast.ImplDecl(sp.name, noargs, sp.name, notp, notp, sp.path, sp.line, sp.col, sp.end_line, sp.end_col)
 		for req in sp.reqs {
 			c_add_sig(em, c_default_method(sp, self_ip, req))
 
@@ -5587,7 +5785,7 @@ fn c_build_sigs(mut &em: Emitter, f: ast.File) {
 		# the impl is where they were written — so a finding about one of them (`chan[int?]`
 		# reached through `K`) belongs at the impl. Given the spec's coordinates it moved to the
 		# declaration, which says nothing about the argument that caused it.
-		app_ip := ast.ImplDecl(ip.on, ip.args, key, notp, ip.path, ip.line, ip.col, ip.end_line, ip.end_col)
+		app_ip := ast.ImplDecl(ip.on, ip.args, key, notp, notp, ip.path, ip.line, ip.col, ip.end_line, ip.end_col)
 		for req in sp.reqs {
 			m := c_default_method(sp, app_ip, req)
 			continue if c_sig_seen(em, c_sig_key(key, m.name))
@@ -14315,7 +14513,23 @@ fn c_free_method(mut &em: Emitter, target: ast.Expr, meth: str, args: list[ast.E
 # (#87). A second spelling of one rule is what `error-codes-check` refuses, and rightly: the
 # two would drift, and the one a reader met would decide what they believed.
 fn c_no_method_says(mut &em: Emitter, meth: str, tyname: str) -> str {
+	why := c_tpl_meth_unmet(em, meth, tyname)
+	return c_bound_unmet(em, why) if why != ""
+
 	return c_diag(em, rule.Rule.MethodUnknown, f"the method `{meth}` on a {tyname}")
+}
+
+# c_tpl_meth_unmet is why `tyname` lacks `meth` when a template impl declares it and the
+# instantiation misses that impl's bound (c_tpl_unmet) — the finding at the call, not "".
+fn c_tpl_meth_unmet(mut &em: Emitter, meth: str, tyname: str) -> str {
+	mut mi := 0
+	for mi < em.impl_tpl_fns.len() {
+		m := em.impl_tpl_fns[mi]
+		owner := em.tpl_fn_owner[mi]
+		mi = mi + 1
+		return c_tpl_unmet_of(em, owner, tyname) if owner >= 0 and m.name == meth and c_app_base(m.recv) == c_app_base(tyname)
+	}
+	return ""
 }
 
 # c_recv_args renders a method call's arguments: the receiver first, then the written
@@ -29227,15 +29441,53 @@ fn c_codec_field_refused(prog: ast.File, target: str, nm: str, why: str) -> str 
 # c_derive_has_spec is whether a declared type has the spec BEFORE any derive is expanded: a
 # decorator naming it, or a hand-written impl.
 fn c_derive_has_spec(prog: ast.File, n: str, sp: str) -> bool {
+	return true if c_derive_decorated(prog, n, sp)
+
+	for ip in prog.impls {
+		return true if ip.target == n and ip.on == sp
+	}
+	return false
+}
+
+fn c_derive_decorated(prog: ast.File, n: str, sp: str) -> bool {
 	mut i := 0
 	for i < prog.derive_on.len() {
 		return true if prog.derive_on[i] == n and prog.derive_spec[i] == sp
 		i = i + 1
 	}
-	for ip in prog.impls {
-		return true if ip.target == n and ip.on == sp
-	}
 	return false
+}
+
+# c_codec_arg_without is the first type argument of the applied field type `n` that has no
+# `nm`, or "". A DERIVED codec impl on a generic type bounds every parameter by its spec
+# (c_codec_head), so `Box[int]` has no `Encode` and a field of it has nothing to delegate to —
+# refused here, at the field, rather than as E4010 inside the generated body. A parameter of
+# the type being derived is bounded by that impl's own head, so it passes.
+fn c_codec_arg_without(all: ast.File, tps: list[str], nm: str, n: str) -> str {
+	for row in all.ty_apps {
+		if row.name == n {
+			for a in row.args {
+				bad := c_codec_arg_bad(all, tps, nm, a)
+				return bad if bad != ""
+			}
+			return ""
+		}
+	}
+	return ""
+}
+
+fn c_codec_arg_bad(all: ast.File, tps: list[str], nm: str, a: ast.Ty) -> str {
+	an := c_named_of(a)
+
+	return ast.ty_name(a) if an == ""
+	return "" if c_name_in(tps, an)
+
+	b := c_derive_hash_base(an)
+
+	return ast.ty_name(a) if not c_derive_has_spec(all, b, nm)
+	return "" if b == an or not c_derive_decorated(all, b, nm)
+
+	return c_codec_arg_without(all, tps, nm, an)
 }
 
 # c_codec_named is what a declared field type delegates to: its own name, which `encode` is
@@ -29249,6 +29501,11 @@ fn c_codec_named(all: ast.File, prog: ast.File, target: str, tps: list[str], nm:
 
 	return c_codec_field_refused(prog, target, nm, f"{what} is a `{n}`, which is an identity rather than a value and has no wire form") if base == "Ref" or base == "handle"
 	return c_codec_field_refused(prog, target, nm, f"{what} is a `{n}`, an applied generic type, and `{base}.decode` has no argument to solve its parameter from") if base != n and nm == "Decode"
+
+	if base != n and (base == target or c_derive_decorated(all, base, nm)) {
+		bad := c_codec_arg_without(all, tps, nm, n)
+		return c_codec_field_refused(prog, target, nm, f"{what} is a `{n}`, and `{bad}` has no `{nm}` — a derived `{nm}` on `{base}` asks it of every type argument") if bad != ""
+	}
 	return n if base == target or c_derive_has_spec(all, base, nm)
 
 	return c_codec_field_refused(prog, target, nm, f"{what} is a `{n}`, and `{base}` has no `{nm}` to delegate to. Write `#[derive({nm})]` on `{base}`, or `impl {nm} for {base}`")
@@ -31450,7 +31707,7 @@ fn c_emit_unit_as(prog0: ast.File, own0: ast.File, ft: FileTypes, ms: Mods, whol
 	# is what makes that invariant hold for a multi-unit program, at the place it already lives,
 	# and it is what lets the declaration passes below go back to reading the WHOLE program.
 	seen := diags.len()
-	mut em := Emitter([], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], false, false, false, false, [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], 0, [], 0, [], [], false, "", "", [], [], ast.Ty.TVoid, 0, "", 0, 0, 0, 0, "", diags, 0, 0, [], [], [], [], [], false, 0, false, "", 0, false, false, [], [], [], [], [], [], [], [], [], [], [], "", want_lints, [], [], [], [], [], [], [], [], [], [], [], [], false, 0, [], [], "", c_nosub(), [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], false, ast.no_index(), [], [], [], [], [], [], [], [], [], [], [], [], false, [], [], [], [], [], [], [], [], [], [], [], "", [], [], 0, 0, [], -1, 0, -1, -1, [], false, 0, [], [], [], [], c_pg_none(), [], [], [])
+	mut em := Emitter([], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], false, false, false, false, [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], 0, [], 0, [], [], false, "", "", [], [], ast.Ty.TVoid, 0, "", 0, 0, 0, 0, "", diags, 0, 0, [], [], [], [], [], false, 0, false, "", 0, false, false, [], [], [], [], [], [], [], [], [], [], [], "", want_lints, [], [], [], [], [], [], [], [], [], [], [], [], false, 0, [], [], "", c_nosub(), [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], false, ast.no_index(), [], [], [], [], [], [], [], [], [], [], [], [], false, [], [], [], [], [], [], [], [], [], [], [], "", [], [], 0, 0, [], -1, 0, -1, -1, [], false, 0, [], [], [], [], c_pg_none(), [], [], [], [], [], [], [], [], [])
 
 	# ASSIGNED, NOT PASSED. Every argument above is a zero value, and `layering` asserts that
 	# — it lines the call up with the fields by KIND, which only works while nothing in it

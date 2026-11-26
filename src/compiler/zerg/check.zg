@@ -1523,7 +1523,7 @@ fn chk_super_impl(sp: ast.SpecDecl, ip: ast.ImplDecl, args: list[ast.Ty]) -> ast
 	for a in args {
 		out.append(emit.c_spec_subst(a, sp, ip))
 	}
-	return ast.ImplDecl(ip.on, out, ip.target, ip.tparams, ip.path, ip.line, ip.col, ip.end_line, ip.end_col)
+	return ast.ImplDecl(ip.on, out, ip.target, ip.tparams, ip.tbounds, ip.path, ip.line, ip.col, ip.end_line, ip.end_col)
 }
 
 # chk_impl_member finds what the impl supplies for one required member, and compares it.
@@ -1746,6 +1746,7 @@ fn chk_branch_clash(mut &em: emit.Emitter, want: ast.Ty, got: ast.Ty) -> str {
 	return "" if ast.ty_eq(want, ast.Ty.TNil) or ast.ty_eq(got, ast.Ty.TNil)
 	return "" if not chk_carrier_mix(want, got) and (chk_fits(em, want, got) or chk_fits(em, got, want))
 
+	chk_spec_unmet(em, want, got)
 	return f"an `if` expression answers ONE type, and its branches give {ast.ty_name(want)} and {ast.ty_name(got)}"
 }
 
@@ -1792,6 +1793,7 @@ pub fn chk_arm_types(mut &em: emit.Emitter, arms: list[ast.Arm], st: ast.Ty) {
 	for i < arms.len() {
 		got := emit.c_infer_arm_body(em, arms[i], st)
 		if not emit.c_is_unknown(got) and not ast.ty_eq(got, ast.Ty.TVoid) and (chk_carrier_mix(want, got) or chk_nil_unheld(want, got) or not chk_fits(em, want, got)) {
+			chk_spec_unmet(em, want, got)
 			chk_at(em, rule.Rule.MatchArmTypes, f"a `match` answers ONE type, and its arms give {ast.ty_name(want)} and {ast.ty_name(got)}")
 			return
 		}
@@ -2240,6 +2242,7 @@ fn chk_elems_fit(mut &em: emit.Emitter, we: ast.Ty, ival: ast.Expr) -> bool {
 		i = i + 1
 		got := emit.c_infer(em, e)
 		if not chk_fits_expr(em, we, got, e) {
+			chk_spec_unmet(em, we, got)
 			chk_at(em, rule.Rule.ListElementType, f"{chk_elem_says(i)} is {ast.ty_name(we)}, and this gives {ast.ty_name(got)}")
 			reported = true
 		}
@@ -3187,6 +3190,24 @@ fn chk_spec_fits(mut &em: emit.Emitter, want: ast.Ty, got: ast.Ty) -> bool {
 	return emit.c_impls(em, nm, sp)
 }
 
+# chk_spec_unmet is asked where a mismatch is REPORTED, after every order of chk_fits has had
+# its chance: when one side is a spec and the other an instance a template impl's bound kept
+# out of it — `Box[int]` from `impl[T: Encode]` — the finding is that bound (E4010), since the
+# reason `Box[int]` is no `Encode` is the `int`.
+pub fn chk_spec_unmet(mut &em: emit.Emitter, a: ast.Ty, b: ast.Ty) {
+	chk_spec_unmet_one(em, a, b)
+	chk_spec_unmet_one(em, b, a)
+}
+
+fn chk_spec_unmet_one(mut &em: emit.Emitter, want: ast.Ty, got: ast.Ty) {
+	sp := emit.c_named_of(want)
+	nm := emit.c_named_of(got)
+	return if nm == "" or not emit.c_is_spec_name(em, sp)
+
+	why := emit.c_tpl_spec_unmet(em, nm, sp)
+	raise emit.c_bound_unmet(em, why) if why != ""
+}
+
 fn chk_fits(mut &em: emit.Emitter, want: ast.Ty, got: ast.Ty) -> bool {
 	return true if emit.c_is_unknown(want) or emit.c_is_unknown(got)
 
@@ -3330,6 +3351,7 @@ pub fn chk_returned(mut &em: emit.Emitter, e: ast.Expr) -> ast.Ty {
 	declared := em.fn_ret
 	got := emit.c_infer(em, e)
 	if not chk_fits_expr(em, declared, got, e) {
+		chk_spec_unmet(em, declared, got)
 		chk_at(em, rule.Rule.ReturnType, f"{CHK_ANSWER} is {ast.ty_name(declared)}, and this gives {ast.ty_name(got)}")
 	}
 	return got
@@ -3381,6 +3403,7 @@ pub fn chk_binding(mut &em: emit.Emitter, name: str, declared: ast.Ty, ival: ast
 # differently: a local sits inside a statement the emission walk has marked, and a module
 # `const` is a declaration no statement covers, so it carries its own.
 pub fn chk_bind_mismatch(mut &em: emit.Emitter, path: str, line: int, col: int, got: ast.Ty, declared: ast.Ty, name: str) {
+	chk_spec_unmet(em, declared, got)
 	chk_at_place(em, path, line, col, rule.Rule.BindingTypeMismatch, f"cannot bind {ast.ty_name(got)} to a {ast.ty_name(declared)} binding: `{name}`")
 }
 
@@ -3597,6 +3620,7 @@ fn chk_file_declares_ty(f: ast.File, nm: str) -> bool {
 pub fn chk_slot_fits(mut &em: emit.Emitter, where: str, want: ast.Ty, arg: ast.Expr) {
 	got := emit.c_infer(em, arg)
 	if not chk_fits_expr(em, want, got, arg) {
+		chk_spec_unmet(em, want, got)
 		chk_at(em, rule.Rule.FieldOrPayloadType, f"{where} is {ast.ty_name(want)}, and this gives {ast.ty_name(got)}")
 	}
 }
@@ -3674,6 +3698,7 @@ pub fn chk_argument(mut &em: emit.Emitter, key: str, row: int, pos: int, arg: as
 		#
 		# It also puts an argument in the same shape as a struct field and a list element,
 		# so the four positional slots read as one family a reader learns once.
+		chk_spec_unmet(em, want, got)
 		chk_at(em, rule.Rule.ArgumentType, f"{chk_slot_says(key, pos)} is {ast.ty_name(want)}, and this gives {ast.ty_name(got)}")
 	}
 }

@@ -1715,14 +1715,14 @@ fn c_is_fieldref(e: ast.Expr) -> bool {
 # so this is chk_fits and not the adoption question: a literal branch adopts nothing from its
 # sibling, exactly as one match arm adopts nothing from the next.
 pub fn chk_branch_types(mut &em: emit.Emitter, then_e: ast.Expr, else_e: ast.Expr) {
-	chk_branch_tys(em, emit.c_infer(em, then_e), emit.c_infer(em, else_e))
+	chk_branch_say(em, chk_branch_clash(em, emit.c_infer(em, then_e), emit.c_infer(em, else_e), false))
 }
 
-# chk_branch_tys is the rule chk_branch_types holds, on the two branches' TYPES, and it answers
-# whether it reported. It takes types because an if-let expression's then-branch is typed with
+# chk_branch_tys is the rule chk_branch_types holds, on the two branches' TYPES, for branches
+# that meet each other in one conditional, and it answers whether it reported. It takes types because an if-let expression's then-branch is typed with
 # its binding in scope, which only the caller holding it can do.
 pub fn chk_branch_tys(mut &em: emit.Emitter, want: ast.Ty, got: ast.Ty) -> bool {
-	return chk_branch_say(em, chk_branch_clash(em, want, got))
+	return chk_branch_say(em, chk_branch_clash(em, want, got, true))
 }
 
 # chk_branch_say is the one place E3020 is reported from, whichever of its two questions found
@@ -1734,7 +1734,11 @@ fn chk_branch_say(mut &em: emit.Emitter, msg: str) -> bool {
 	return true
 }
 
-fn chk_branch_clash(mut &em: emit.Emitter, want: ast.Ty, got: ast.Ty) -> str {
+# chk_branch_clash is the sentence for two branches that answer no one type, or "" when they do.
+# `sibling` is whether the two branches meet EACH OTHER. Under a carrier slot they do not: the fit
+# is distributed (c_carrier_fit), so each branch is that slot's payload on its own and a spec
+# payload builds its box per branch — `x: Sz? = if c { e } else { Q(3) }` is two typed positions.
+fn chk_branch_clash(mut &em: emit.Emitter, want: ast.Ty, got: ast.Ty, sibling: bool) -> str {
 	return "" if emit.c_is_unknown(want) or emit.c_is_unknown(got)
 	return "" if ast.ty_eq(want, ast.Ty.TVoid) or ast.ty_eq(got, ast.Ty.TVoid)
 
@@ -1744,10 +1748,33 @@ fn chk_branch_clash(mut &em: emit.Emitter, want: ast.Ty, got: ast.Ty) -> str {
 	# bring its type, a literal included: a branch is not a typed position for its sibling, the
 	# same way one match arm is not one for the next.
 	return "" if ast.ty_eq(want, ast.Ty.TNil) or ast.ty_eq(got, ast.Ty.TNil)
-	return "" if not chk_carrier_mix(want, got) and (chk_fits(em, want, got) or chk_fits(em, got, want))
+	return "" if not chk_carrier_mix(want, got) and not (sibling and chk_spec_mix(em, want, got)) and (chk_fits(em, want, got) or chk_fits(em, got, want))
 
 	chk_spec_unmet(em, want, got)
-	return f"an `if` expression answers ONE type, and its branches give {ast.ty_name(want)} and {ast.ty_name(got)}"
+	return f"an `if` expression answers ONE type, and its branches give {ast.ty_name(want)} and {ast.ty_name(got)}{chk_spec_mix_hint(em, want, got)}"
+}
+
+# chk_spec_mix is whether two arms or branches are a spec and some other type, in either order.
+# chk_fits answers yes to an implementer under a spec, because a spec-typed SLOT builds a box,
+# but a sibling is no slot (docs/code/control-flow.md): nothing boxed the implementer, and the
+# two C types met in one conditional, where cc refused them.
+fn chk_spec_mix(mut &em: emit.Emitter, want: ast.Ty, got: ast.Ty) -> bool {
+	return false if ast.ty_eq(want, got)
+
+	return emit.c_is_spec_name(em, emit.c_named_of(want)) or emit.c_is_spec_name(em, emit.c_named_of(got))
+}
+
+# chk_spec_mix_hint is the way out of a spec-and-implementer pair: the place a box IS built.
+fn chk_spec_mix_hint(mut &em: emit.Emitter, want: ast.Ty, got: ast.Ty) -> str {
+	mut sp := want
+	mut ty := got
+	if emit.c_is_spec_name(em, emit.c_named_of(got)) {
+		sp = got
+		ty = want
+	}
+	return "" if not emit.c_is_spec_name(em, emit.c_named_of(sp)) or emit.c_is_spec_name(em, emit.c_named_of(ty)) or not chk_fits(em, sp, ty)
+
+	return f" — a sibling is no typed position, so the {ast.ty_name(ty)} is not boxed: bind it to a name declared `{ast.ty_name(sp)}` first and yield the name"
 }
 
 # chk_carrier_mix is whether two arms or branches are a carrier and a bare value — `int?` and
@@ -1792,9 +1819,9 @@ pub fn chk_arm_types(mut &em: emit.Emitter, arms: list[ast.Arm], st: ast.Ty) {
 	mut i := 1
 	for i < arms.len() {
 		got := emit.c_infer_arm_body(em, arms[i], st)
-		if not emit.c_is_unknown(got) and not ast.ty_eq(got, ast.Ty.TVoid) and (chk_carrier_mix(want, got) or chk_nil_unheld(want, got) or not chk_fits(em, want, got)) {
+		if not emit.c_is_unknown(got) and not ast.ty_eq(got, ast.Ty.TVoid) and (chk_carrier_mix(want, got) or chk_spec_mix(em, want, got) or chk_nil_unheld(want, got) or not chk_fits(em, want, got)) {
 			chk_spec_unmet(em, want, got)
-			chk_at(em, rule.Rule.MatchArmTypes, f"a `match` answers ONE type, and its arms give {ast.ty_name(want)} and {ast.ty_name(got)}")
+			chk_at(em, rule.Rule.MatchArmTypes, f"a `match` answers ONE type, and its arms give {ast.ty_name(want)} and {ast.ty_name(got)}{chk_spec_mix_hint(em, want, got)}")
 			return
 		}
 		i = i + 1

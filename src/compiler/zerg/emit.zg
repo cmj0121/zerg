@@ -4839,29 +4839,23 @@ pub fn c_is_gen_enum_name(mut &em: Emitter, nm: str) -> bool {
 	return c_gen_enum_row(em, nm) >= 0
 }
 
-# c_gen_variant_owner is the generic enum TEMPLATE that declares a bare variant name, or "" —
-# the template half of `c_variant_enum`, which reads rows a template has none of. Two templates
-# declaring one variant name answer "", the way the bare spelling is ambiguous anywhere else.
+# c_gen_variant_owner is the generic enum TEMPLATE of this file that declares a bare variant
+# name, or "" — the template half of `c_variant_enum`, which reads rows a template has none of.
+# Where two of them declare it, the first answers, as c_var_row's first row does for a plain
+# enum: the name is refused as bare either way, and the suggestion is one spelling that works.
 fn c_gen_variant_owner(mut &em: Emitter, name: str) -> str {
 	here := check.c_origin_path(em, em.at_path)
-	mut found := ""
-	mut n := 0
 	for ed in em.gen_enums {
 		for v in ed.variants {
-			if v.name == name and ed.path == here {
-				found = ed.name
-				n = n + 1
-			}
+			return ed.name if v.name == name and ed.path == here
 		}
 	}
-	return "" if n != 1
-
-	return found
+	return ""
 }
 
 # c_gen_enum_on_demand mints one specialization of a generic enum while a body is being
 # lowered. It is `c_gen_type_on_demand` for the other declaration kind, and it exists for the
-# same reason: `Full(42)` names a `Box[int]` that no source wrote, so nothing put it in the
+# same reason: `Box.Full(42)` names a `Box[int]` that no source wrote, so nothing put it in the
 # application table for the declaration sweep to build.
 #
 # THE ROW GOES IN TOO, because both walks that take an applied name apart read that table —
@@ -4893,8 +4887,8 @@ fn c_gen_enum_on_demand(mut &em: Emitter, tpl: ast.EnumDecl, applied: str, sol: 
 }
 
 # c_gen_enum_solved is the specialization a construction decides for itself, or "" when the
-# variant leaves a parameter for the position to answer. `Full(42)` solves `T` and stands
-# alone; `Lft(1)` on a two-parameter sum leaves `Y` and does not.
+# variant leaves a parameter for the position to answer. `Box.Full(42)` solves `T` and stands
+# alone; `Side.Lft(1)` on a two-parameter sum leaves `Y` and does not.
 fn c_gen_enum_solved(mut &em: Emitter, base: str, variant: str, args: list[ast.Expr]) -> str {
 	r := c_gen_enum_row(em, base)
 	return "" if r < 0
@@ -8981,7 +8975,7 @@ fn c_build_enums(mut &em: Emitter, f: ast.File) {
 # c_register_enum is one enum's rows, and it is a function of its own because a SPECIALIZATION
 # minted while a body is lowered has to arrive by the same door as a declared one. Written
 # inline in the sweep above, an on-demand `Box[int]` had no variants, no tags and no payload
-# types — and `Full(42)` came out as `undefined function`.
+# types — and `Box.Full(42)` came out as `undefined function`.
 fn c_register_enum(mut &em: Emitter, ed: ast.EnumDecl) {
 	c_ty_register(em, ed.name, TK_ENUM, ast.Ty.TUnknown, ed.path, ed.is_pub, false, ed.name_line, ed.name_col)
 
@@ -9781,15 +9775,40 @@ pub fn c_undefined_name(mut &em: Emitter, n: str) {
 # that re-exports it (`import pub`), which is how `mid.K.Chan` names `sink`'s `K`. A module no
 # import of this file reaches, or an enum it does not export, has no such spelling, so the note
 # says where the enum is declared instead — never a spelling the reader would be refused for.
+#
+# A GENERIC ENUM'S VARIANT is named through its template, as c_bare_variant_of names it: from a
+# minted specialization's row when there is one, and from the template's when nothing has
+# specialized it yet — `k := A(1)` writes no `M[…]` to mint.
 fn c_variant_elsewhere(mut &em: Emitter, n: str) -> str {
 	r := c_var_row_any(em, n)
-	return "" if r < 0
+	return c_variant_elsewhere_in(em, n, c_variant_owner_name(em, em.var_enum[r]), em.var_path[r], c_ty_pub(em, em.var_enum[r])) if r >= 0
 
-	en := em.var_enum[r]
-	declared := f"; `{n}` is a variant of `{en}`, declared in `{em.var_path[r]}`"
-	return declared if not c_ty_pub(em, en)
+	g := c_gen_variant_row_any(em, n)
+	return "" if g < 0
 
-	dmod := check.c_mod_of(em, em.var_path[r])
+	ed := em.gen_enums[g]
+	return c_variant_elsewhere_in(em, n, ed.name, ed.path, ed.is_pub)
+}
+
+# c_gen_variant_row_any is the first generic enum template anywhere that declares the variant
+# `n`, or -1 — c_var_row_any for the templates, whose variants have no row of their own.
+fn c_gen_variant_row_any(mut &em: Emitter, n: str) -> int {
+	mut i := 0
+	for i < em.gen_enums.len() {
+		for v in em.gen_enums[i].variants {
+			return i if v.name == n
+		}
+		i = i + 1
+	}
+	return -1
+}
+
+# c_variant_elsewhere_in is that note for the variant `n` of the enum `en`, declared at `path`.
+fn c_variant_elsewhere_in(mut &em: Emitter, n: str, en: str, path: str, is_pub: bool) -> str {
+	declared := f"; `{n}` is a variant of `{en}`, declared in `{path}`"
+	return declared if not is_pub
+
+	dmod := check.c_mod_of(em, path)
 	mut i := 0
 	for i < em.ns_names.len() {
 		ns := em.ns_names[i]
@@ -9843,9 +9862,26 @@ fn c_not_callable(mut &em: Emitter, n: str, bt: ast.Ty) {
 # own, taking the one the position wants — so they are not in the variant table at all. Both
 # spellings work; requiring the qualified one is a separate decision about a built-in's
 # documented surface (docs/code/errors.md).
+#
+# A GENERIC ENUM'S VARIANT IS NAMED THROUGH ITS TEMPLATE, because that is the only spelling
+# there is: `Box.Full(42)`, never `Box[int].Full(42)`. A specialization's rows answer the bare
+# name too once something has minted it, so the sentence names the template either way.
 fn c_bare_variant(mut &em: Emitter, name: str) {
-	en := c_variant_enum(em, name)
+	c_bare_variant_of(em, c_variant_enum(em, name), name)
+}
+
+# c_bare_variant_of is c_bare_variant for a variant whose enum, `owner`, the caller has found.
+fn c_bare_variant_of(mut &em: Emitter, owner: str, name: str) {
+	en := c_variant_owner_name(em, owner)
 	check.chk_at(em, rule.Rule.VariantNamedBare, f"`{name}` is a variant of `{en}`, and a variant is named through its enum — write `{en}.{name}`")
+}
+
+# c_variant_owner_name is the enum a variant is written through: the template for a generic
+# enum's specialization, the enum itself otherwise.
+fn c_variant_owner_name(mut &em: Emitter, en: str) -> str {
+	return c_app_base(en) if c_is_applied(en) and c_is_gen_enum_name(em, c_app_base(en))
+
+	return en
 }
 
 # c_var_row is THE variant lookup BY BARE NAME. `var_name` / `var_enum` / `var_tag` are one
@@ -14096,7 +14132,7 @@ fn c_method_enum(mut &em: Emitter, en: str, target: ast.Expr, meth: str, args: l
 # a declaration seven lines up.
 #
 # A CONSTRUCTION THAT SOLVES EVERY PARAMETER DECIDES FOR ITSELF, and mints the
-# specialization here: `Full(42)` names a `Box[int]` no source wrote. Only one that leaves a
+# specialization here: `Box.Full(42)` names a `Box[int]` no source wrote. Only one that leaves a
 # parameter needs a position, and only that one is refused.
 fn c_method_gen_enum(mut &em: Emitter, en: str, target: ast.Expr, meth: str, args: list[ast.Expr], l: int, c: int, sb: Subst) -> str {
 	if em.want_index {
@@ -15357,9 +15393,9 @@ fn c_call_kind(mut &em: Emitter, name: str) -> CallKind {
 		c_not_callable(em, name, bt)
 	}
 
-	# A BARE VARIANT OF A GENERIC ENUM. `Full(42)` names a `Box[int]` no source wrote, and the
-	# template's variants are in no row `c_is_variant` reads — so this fell to "undefined
-	# function `Full`", about a variant declared at the top of the same file.
+	# A BARE VARIANT OF A GENERIC ENUM. The template's variants are in no row `c_is_variant`
+	# reads, so `Full(42)` fell to "undefined function `Full`", about a variant declared at the
+	# top of the same file; it is E3079, the bare spelling a plain enum's variant is refused for.
 	return CallKind.CGenVariant if c_gen_variant_owner(em, name) != ""
 	return CallKind.CType if c_names_a_type(em, name) or c_is_variant(em, name)
 
@@ -15479,16 +15515,20 @@ fn c_call_bound(mut &em: Emitter, name: str, row: int, bt: ast.Ty, args: list[as
 	return f"({c_fnptr_cast(bt)}({c_ident_val(em, name, 0, 0, sb)}).fn)({c_ident_val(em, name, 0, 0, sb)}.env{c_args_after(em, bt, args, sb)})"
 }
 
-# c_call_gen_variant is a bare variant `name` of the generic enum `gb`.
+# c_call_gen_variant is a bare variant `name` of the generic enum `gb`, and it is refused the
+# way a plain enum's is (c_bare_variant): the bare spelling is the finding, so a variant that
+# leaves a parameter open is not ALSO told it needs a position — the qualified spelling the
+# sentence asks for is where that question is asked. A construction that solves every
+# parameter is still built, as c_call_type builds a plain one, and its C is thrown away.
 fn c_call_gen_variant(mut &em: Emitter, gb: str, name: str, args: list[ast.Expr], l: int, c: int, sb: Subst) -> str {
 	if em.want_index {
 		c_nx_gen_variant(em, gb, name, l, c)
 	}
+	c_bare_variant_of(em, gb, name)
 	ap := c_gen_enum_solved(em, gb, name, args)
 	return c_variant_ctor(em, ap, name, args, sb) if ap != ""
 
-	c_gen_enum_no_position(em, gb, name, args)
-	raise c_gen_variant_unrefused("c_call_gen_variant", gb, name)
+	return "0"
 }
 
 # c_call_type is a call whose name is a declared type or a variant.
@@ -17387,6 +17427,17 @@ fn c_ident_val(mut &em: Emitter, n: str, l: int, c: int, sb: Subst) -> str {
 		}
 		c_bare_variant(em, n)
 		return "(" + c_ty_cname(em.var_enum[vr]) + "){.tag = " + strconv.to_string(em.var_tag[vr], 10) + "}"
+	}
+
+	# a generic enum's payload-free variant nothing has minted a specialization of yet has no
+	# row above, and it is the same bare spelling: `b := Nope`, not an undefined name
+	gvo := c_gen_variant_owner(em, n)
+	if gvo != "" {
+		if em.want_index {
+			c_nx_gen_variant(em, gvo, n, l, c)
+		}
+		c_bare_variant_of(em, gvo, n)
+		return "0"
 	}
 
 	# EVERY READ OF A BINDING FUNNELS THROUGH HERE, which is what makes this the one place a
@@ -19742,9 +19793,10 @@ fn c_infer_call(mut &em: Emitter, name: str, args: list[ast.Expr]) -> ast.Ty {
 
 	return c_intrinsic_ret(name) if c_is_intrinsic(em, name)
 
-	# A BARE VARIANT OF A GENERIC ENUM ANSWERS ITS SPECIALIZATION, which the construction has
-	# already solved and minted. Left to the line below it answered nothing, and `a := Full(42)`
-	# took the ARGUMENT's type: `int64_t zg_a = (zgg_Box_int_){…}`.
+	# A BARE VARIANT OF A GENERIC ENUM ANSWERS ITS SPECIALIZATION, as the line below answers a
+	# plain one's enum: the spelling is refused (E3079, c_call_gen_variant) and typing it anyway
+	# keeps that the one finding — the binding it lands in is declared, and reading it later is
+	# not reported as a second mistake.
 	gvo := c_gen_variant_owner(em, name)
 	if gvo != "" {
 		gap := c_gen_enum_solved(em, gvo, name, args)

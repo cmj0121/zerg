@@ -28731,10 +28731,15 @@ fn c_derive_method(ed: ast.EnumDecl, target: str, nm: str, req: ast.FnDecl) -> s
 # names it without arguments … --> <derive>:2:2`, a message about a file they did not write.
 #
 # Written with its parameters, the derived impl is a TEMPLATE IMPL — `impl[T] Eq for Box[T]` —
-# and the pass that materializes one per instantiation is the pass that already exists.
+# and the pass that materializes one per instantiation is the pass that already exists. An
+# ENUM is a template the same way: read only off the structs, `enum M[T]` wrote `impl Eq for M`
+# and was told `no type named M (the receiver of eq)`, at `<derive>` again.
 fn c_derive_params(prog: ast.File, target: str) -> list[str] {
 	for sd in prog.structs {
 		return sd.tparams if sd.name == target
+	}
+	for ed in prog.enums {
+		return ed.tparams if ed.name == target
 	}
 	return []
 }
@@ -29038,7 +29043,7 @@ fn c_derive_hash_variants(all: ast.File, prog: ast.File, ed: ast.EnumDecl, targe
 				binds = binds + ", "
 			}
 			binds = binds + n
-			acc = c_derive_hash_mix(acc, c_derive_hash_of(all, prog, target, [], f"the payload of `{v.name}`", v.fields[i], n))
+			acc = c_derive_hash_mix(acc, c_derive_hash_of(all, prog, target, ed.tparams, f"the payload of `{v.name}`", v.fields[i], n))
 			i = i + 1
 		}
 		mut pat := f"{target}.{v.name}"

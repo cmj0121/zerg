@@ -1,9 +1,10 @@
 /*
  * walk.c - the Zerg runtime's walkers over deep values (#481).
  *
- * A derived `==` or `Hash` on a type that reaches itself was a recursion through the type's
- * own `eq` or `hash`, one C frame per level, so a value built deep enough to be worth
- * building overflowed the stack comparing or hashing it. Here the recursion is a loop over
+ * A derived `==` or `Hash`, or the rendering `print` writes, on a type that reaches itself
+ * was a recursion through the type's own `eq`, `hash` or renderer, one C frame per level, so
+ * a value built deep enough to be worth building overflowed the stack comparing, hashing or
+ * printing it. Here the recursion is a loop over
  * an explicit stack of frames, each naming a STEP the compiler emitted for one type, the
  * operands it reads, and the part to resume at. The stack starts in the walker's own activation and moves to the
  * heap when it outgrows that, so a shallow compare allocates nothing.
@@ -164,4 +165,102 @@ uint64_t zrt_hash_walk(zrt_hash_step step, const void *x, bool held) {
 	}
 	hw_free(&w);
 	return r;
+}
+
+void zrt_sb_put(zrt_sb *b, const char *s) {
+	size_t n = strlen(s);
+	if (b->len + n + 1 > b->cap) {
+		size_t nc = b->cap ? b->cap * 2 : 64;
+		while (b->len + n + 1 > nc) {
+			nc *= 2;
+		}
+		char *np = (char *)zrt_alloc(nc);
+		if (b->len > 0) {
+			memcpy(np, b->p, b->len);
+		}
+		zrt_free(b->p);
+		b->p = np;
+		b->cap = nc;
+	}
+	memcpy(b->p + b->len, s, n);
+	b->len += n;
+}
+
+void zrt_sb_put_cell(zrt_sb *b, const char *cell) {
+	zrt_sb_put(b, cell);
+	zrt_str_release(cell);
+}
+
+/* The answer is laid out as every managed str is (a refcounted cell, its bytes the payload),
+ * so the caller gives it back with zrt_str_release like any other rendering. */
+const char *zrt_sb_take(zrt_sb *b) {
+	char *p = (char *)zrt_ref_payload(zrt_ref_alloc(b->len + 1, NULL));
+	if (b->len > 0) {
+		memcpy(p, b->p, b->len);
+	}
+	p[b->len] = '\0';
+	zrt_sb_drop(b);
+	return p;
+}
+
+void zrt_sb_drop(void *p) {
+	zrt_sb *b = (zrt_sb *)p;
+	zrt_free(b->p);
+	b->p = NULL;
+	b->len = 0;
+	b->cap = 0;
+}
+
+void zrt_rw_push(zrt_rw *w, zrt_render_step step, const void *x) {
+	if (w->len == w->cap) {
+		size_t  nc = w->cap * 2;
+		zrt_rf *nf = (zrt_rf *)zrt_alloc(nc * sizeof(zrt_rf));
+		memcpy(nf, w->f, w->len * sizeof(zrt_rf));
+		if (w->f != w->inl) {
+			zrt_free(w->f);
+		}
+		w->f = nf;
+		w->cap = nc;
+	}
+	zrt_rf *e = &w->f[w->len++];
+	e->step = step;
+	e->x = x;
+	e->at = 0;
+}
+
+static void rw_free(void *p) {
+	zrt_rw *w = (zrt_rw *)p;
+	if (w->f != w->inl) {
+		zrt_free(w->f);
+		w->f = w->inl;
+	}
+}
+
+const char *zrt_render_walk(zrt_render_step step, const void *x, bool held) {
+	zrt_sb b = {NULL, 0, 0};
+	zrt_rw w;
+	w.f = w.inl;
+	w.len = 0;
+	w.cap = sizeof w.inl / sizeof w.inl[0];
+	w.held = held;
+	if (held) {
+		zrt_defer(zrt_sb_drop, &b);
+		zrt_defer(rw_free, &w);
+	}
+	zrt_rw_push(&w, step, x);
+	while (w.len > 0) {
+		size_t k = w.len - 1;
+		size_t at = w.f[k].at;
+		int    s = w.f[k].step(&w, &b, w.f[k].x, &at);
+		/* BY INDEX: the step's push may have moved the array */
+		w.f[k].at = at;
+		if (s == ZRT_R_DONE) {
+			w.len--;
+		}
+	}
+	if (held) {
+		zrt_forget(2);
+	}
+	rw_free(&w);
+	return zrt_sb_take(&b);
 }

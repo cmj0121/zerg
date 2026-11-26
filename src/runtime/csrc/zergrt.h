@@ -415,6 +415,51 @@ uint64_t zrt_hash_walk(zrt_hash_step step, const void *x, bool held);
 /* zrt_hw_push puts one part on the walk, to be hashed from its first part. */
 void zrt_hw_push(zrt_hw *w, zrt_hash_step step, const void *x);
 
+/* Printing a value is the third walk, and it writes ONE text: every piece goes into a
+ * builder (zrt_sb), where the recursion it replaces concatenated each level onto its
+ * child's whole rendering — quadratic bytes as well as linear stack. zrt_sb_put appends a C
+ * string, zrt_sb_put_cell appends a managed str cell and gives it back, zrt_sb_take answers
+ * the text as a fresh managed str cell and frees the builder, and zrt_sb_drop frees an
+ * unfinished one (the cleanup a held walk registers). */
+typedef struct {
+	char  *p;
+	size_t len;
+	size_t cap;
+} zrt_sb;
+void        zrt_sb_put(zrt_sb *b, const char *s);
+void        zrt_sb_put_cell(zrt_sb *b, const char *cell);
+const char *zrt_sb_take(zrt_sb *b);
+void        zrt_sb_drop(void *b);
+
+/* A render step writes x's pieces from part *at on into b and answers ZRT_R_DONE (x is
+ * written through its last piece) or ZRT_R_PUSHED (it pushed one possibly-deep part with
+ * zrt_rw_push and set *at to the piece to resume at). The walk is pre-order: a pushed part is
+ * written whole before its parent resumes. */
+enum { ZRT_R_DONE = 0, ZRT_R_PUSHED = 1 };
+typedef struct zrt_rw zrt_rw;
+typedef int (*zrt_render_step)(zrt_rw *w, zrt_sb *b, const void *x, size_t *at);
+typedef struct {
+	zrt_render_step step;
+	const void     *x;
+	size_t          at;
+} zrt_rf;
+struct zrt_rw {
+	zrt_rf *f;
+	size_t  len;
+	size_t  cap;
+	bool    held;
+	zrt_rf  inl[16];
+};
+
+/* zrt_render_walk answers x's rendering, a fresh managed str cell, by driving `step` and
+ * every step it pushes. `held` says a step can run the program's own code (a part's
+ * `display` or `debug`), which can abort: the frames and the builder are then on the cleanup
+ * stack for the walk's length, so an abort gives both back. */
+const char *zrt_render_walk(zrt_render_step step, const void *x, bool held);
+
+/* zrt_rw_push puts one part on the walk, to be written from its first piece. */
+void zrt_rw_push(zrt_rw *w, zrt_render_step step, const void *x);
+
 /* --- abort / unwind + cleanup(defer) stack (unwind.c) -------------------- */
 
 /* zrt_cleanup is one pending deferred action on the cleanup stack: a thunk and

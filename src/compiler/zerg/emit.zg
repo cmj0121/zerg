@@ -4978,6 +4978,208 @@ fn c_gen_enum_no_position(mut &em: Emitter, base: str, variant: str, args: list[
 	raise c_diag(em, rule.Rule.GenericVariantNoPosition, f"`{base}.{variant}` builds a {base}[…] and nothing here says which{says} — a variant solves the parameters it MENTIONS and the position supplies the rest, so write the type where the value lands (`x: {base}[…] = {base}.{variant}(…)`); a bare binding is not a position (GRAMMAR#enum-decl)")
 }
 
+# c_gen_variant_unpositioned refuses `e` by c_gen_enum_no_position when it is a generic enum's
+# variant that leaves a parameter open, or a list or map literal whose elements do not say
+# together which specialization they hold (c_gen_variant_join), and does nothing otherwise.
+# Such a form infers as unknown, so a walk that SOLVES from what it is handed — a generic call, a generic struct's
+# construction, a `match` subject — has nothing to read from it, and its own sentence would
+# blame a declaration that is fine. This is asked first, so the reason given is the one the
+# reader can act on: the variant needs a position.
+fn c_gen_variant_unpositioned(mut &em: Emitter, e: ast.Expr) {
+	return if not c_is_open_variant_form(em, e)
+
+	match e {
+		Expr.EMethod(t, m, args, _, _) => c_gen_enum_no_position(em, c_variant_qual(em, t), m, args)
+		Expr.EField(t, f, _, _) => c_gen_enum_no_position(em, c_variant_qual(em, t), f, c_exprs_none())
+		Expr.EListLit(elems) => c_gen_variant_unpositioned(em, elems[0])
+		Expr.EMapLit(_, vs) => c_gen_variant_unpositioned(em, vs[0])
+		_ => c_skip()
+	}
+}
+
+# c_is_open_variant_form is whether `e` is what c_gen_variant_unpositioned refuses: a generic
+# enum's variant that leaves a parameter open, or a list or map literal that starts with one and
+# whose elements (a map's values) together do not solve the rest.
+fn c_is_open_variant_form(mut &em: Emitter, e: ast.Expr) -> bool {
+	return match e {
+		Expr.EMethod(_, _, _, _, _) => c_open_variant_base(em, e) != ""
+		Expr.EField(_, _, _, _) => c_open_variant_base(em, e) != ""
+		Expr.EListLit(elems) => elems.len() > 0 and c_open_variant_base(em, elems[0]) != "" and c_is_unknown(c_gen_variant_join(em, elems))
+		Expr.EMapLit(_, vs) => vs.len() > 0 and c_open_variant_base(em, vs[0]) != "" and c_is_unknown(c_gen_variant_join(em, vs))
+		_ => false
+	}
+}
+
+# c_open_variant_base is the generic enum template `e` builds a variant of, when the variant
+# leaves a parameter for a position to supply, or "".
+fn c_open_variant_base(mut &em: Emitter, e: ast.Expr) -> str {
+	return match e {
+		Expr.EMethod(t, m, args, _, _) => c_open_variant_base_at(em, c_variant_qual(em, t), m, args)
+		Expr.EField(t, f, _, _) => c_open_variant_base_at(em, c_variant_qual(em, t), f, c_exprs_none())
+		_ => ""
+	}
+}
+
+fn c_open_variant_base_at(mut &em: Emitter, base: str, variant: str, args: list[ast.Expr]) -> str {
+	return "" if base == "" or not c_is_gen_enum_name(em, base) or c_gen_variant_named(em, base, base, variant) == ""
+	return "" if c_gen_enum_solved(em, base, variant, args) != ""
+
+	return base
+}
+
+# c_gen_variants_unpositioned is c_gen_variant_unpositioned over the arguments of a solve that
+# left a parameter open, asked of each argument whose declared type MENTIONS one of the open
+# parameters — an argument at a closed type such as `Two[P, int]` is a position, and its variant
+# is built there. A parameter some OTHER argument mentions as well is left to the ordinary path:
+# `gt(nosuch, Two.L(P(1)))` is an undefined name first, and that argument is the one to report.
+fn c_gen_variants_unpositioned(mut &em: Emitter, tparams: list[str], sol: list[ast.Ty], decls: list[ast.Ty], args: list[ast.Expr]) {
+	mut i := 0
+	for i < sol.len() and i < tparams.len() {
+		if c_is_unknown(sol[i]) {
+			mut open := -1
+			mut other := false
+			mut j := 0
+			for j < args.len() and j < decls.len() {
+				if generic.ment_ty(tparams[i], em.ty_apps, decls[j]) {
+					if c_is_open_variant_form(em, args[j]) {
+						if open < 0 {
+							open = j
+						}
+					} else {
+						other = true
+					}
+				}
+				j = j + 1
+			}
+			if open >= 0 and not other {
+				c_gen_variant_unpositioned(em, args[open])
+			}
+		}
+		i = i + 1
+	}
+}
+
+# c_solve_open_variants fills what `sol` left open from the arguments that are generic enum
+# variants leaving a parameter of THEIR enum open. Such an argument infers as unknown, so
+# gen_solve read nothing from it — but its declared type can still say enough: `gt[T](a: T, t:
+# Two[T, int])` given `Two.L(P(1))` has `L` saying `A = P`, and the declaration's `A` is `T`. That
+# is the argument's own information, so the call still solves its parameters from its arguments.
+fn c_solve_open_variants(mut &em: Emitter, tparams: list[str], sol: list[ast.Ty], decls: list[ast.Ty], args: list[ast.Expr]) -> list[ast.Ty] {
+	mut open := false
+	for t in sol {
+		open = open or c_is_unknown(t)
+	}
+	return sol if not open
+
+	mut out := sol
+	mut j := 0
+	for j < args.len() and j < decls.len() {
+		base := c_open_variant_base(em, args[j])
+		dn := c_named_of(decls[j])
+		if base != "" and c_is_applied(dn) and c_app_base(dn) == base {
+			tpl := em.gen_enums[c_gen_enum_row(em, base)]
+			mut part: list[ast.Ty] = []
+			for _ in tpl.tparams {
+				part.append(ast.Ty.TUnknown)
+			}
+			c_join_element(em, tpl, base, args[j], part)
+			mut dargs: list[ast.Ty] = []
+			for a in em.ty_apps {
+				if a.name == dn and dargs.len() == 0 {
+					dargs = a.args
+				}
+			}
+			got := generic.gen_solve(tparams, dargs, part, em.ty_apps)
+			mut i := 0
+			for i < out.len() and i < got.len() {
+				if c_is_unknown(out[i]) {
+					out[i] = got[i]
+				}
+				i = i + 1
+			}
+		}
+		j = j + 1
+	}
+	return out
+}
+
+# c_gen_variant_join is the specialization a list literal's elements (or a map literal's values)
+# say together, when the first is a generic enum's variant that leaves a parameter open — or
+# unknown when they do not say it all. `[Two.L(P(1)), Two.R(2)]` is a `list[Two[P, int]]`:
+# `L` solves `A`, `R` solves `B`, and an element already of a `Two[…]` type gives every parameter. The elements are one slot
+# written several times, which is why they may be read together where a tuple's may not.
+#
+# THE FIRST ANSWER FOR A PARAMETER WINS, as it does in gen_solve, and an element that disagrees
+# is then refused where it is lowered into the joined type (E3036) — so the join never depends
+# on which specialization some signature happened to mint first.
+fn c_gen_variant_join(mut &em: Emitter, elems: list[ast.Expr]) -> ast.Ty {
+	base := c_open_variant_base(em, elems[0])
+	return ast.Ty.TUnknown if base == ""
+
+	tpl := em.gen_enums[c_gen_enum_row(em, base)]
+	mut sol: list[ast.Ty] = []
+	for _ in tpl.tparams {
+		sol.append(ast.Ty.TUnknown)
+	}
+	for e in elems {
+		c_join_element(em, tpl, base, e, sol)
+	}
+	for t in sol {
+		return ast.Ty.TUnknown if c_is_unknown(t)
+	}
+
+	applied := ast.spec_key(base, sol)
+	c_gen_enum_on_demand(em, tpl, applied, sol)
+	return ast.Ty.TNamed(applied)
+}
+
+# c_join_element adds what one element says about `base`'s parameters to `sol`, filling only
+# the parameters still open.
+fn c_join_element(mut &em: Emitter, tpl: ast.EnumDecl, base: str, e: ast.Expr, mut &sol: list[ast.Ty]) {
+	mut part: list[ast.Ty] = []
+	vn := c_written_variant(em, base, e)
+	if vn != "" {
+		mut decls: list[ast.Ty] = []
+		for v in tpl.variants {
+			if v.name == vn {
+				decls = v.fields
+			}
+		}
+		mut actuals: list[ast.Ty] = []
+		for a in c_meth_args(e) {
+			actuals.append(c_infer(em, a))
+		}
+		part = generic.gen_solve(tpl.tparams, decls, actuals, em.ty_apps)
+	} else {
+		nm := c_named_of(c_infer(em, e))
+		if c_is_applied(nm) and c_app_base(nm) == base {
+			for a in em.ty_apps {
+				if a.name == nm and part.len() == 0 {
+					part = a.args
+				}
+			}
+		}
+	}
+
+	mut i := 0
+	for i < sol.len() and i < part.len() {
+		if c_is_unknown(sol[i]) {
+			sol[i] = part[i]
+		}
+		i = i + 1
+	}
+}
+
+# c_written_variant is the variant name `e` builds through the template `base` — `L` in
+# `Two.L(…)` and `N` in `Two.N` — or "".
+fn c_written_variant(mut &em: Emitter, base: str, e: ast.Expr) -> str {
+	return match e {
+		Expr.EMethod(t, m, _, _, _) => c_gen_variant_named(em, base, c_variant_qual(em, t), m)
+		Expr.EField(t, f, _, _) => c_gen_variant_named(em, base, c_variant_qual(em, t), f)
+		_ => ""
+	}
+}
+
 # c_gen_variant_of is the variant a construction names, when the construction is a generic
 # enum template's and the position says which specialization. `Maybe.Some(3)` written into a
 # `Maybe[int]` is a `Maybe[int]` — the parameters a variant does not mention come from the
@@ -5571,7 +5773,8 @@ fn c_instantiate(mut &em: Emitter, name: str, args: list[ast.Expr]) -> str {
 	for pm in tpl.params {
 		decls.append(pm.ty)
 	}
-	sol := generic.gen_solve(tpl.tparams, decls, actuals, em.ty_apps)
+	sol := c_solve_open_variants(em, tpl.tparams, generic.gen_solve(tpl.tparams, decls, actuals, em.ty_apps), decls, args)
+	c_gen_variants_unpositioned(em, tpl.tparams, sol, decls, args)
 	return c_instantiate_at(em, name, sol)
 }
 
@@ -15539,7 +15742,8 @@ fn c_gen_applied(mut &em: Emitter, base: str, args: list[ast.Expr]) -> str {
 		actuals.append(c_infer(em, a))
 	}
 
-	sol := generic.gen_solve(tpl.tparams, decls, actuals, em.ty_apps)
+	sol := c_solve_open_variants(em, tpl.tparams, generic.gen_solve(tpl.tparams, decls, actuals, em.ty_apps), decls, args)
+	c_gen_variants_unpositioned(em, tpl.tparams, sol, decls, args)
 	mut i := 0
 	for i < sol.len() {
 		raise c_diag(em, rule.Rule.TypeArgUndecided, f"the type parameter `{tpl.tparams[i]}` of `{base}` is not decided by this construction — no field's type mentions it, so there is nothing to solve it from") if c_is_unknown(sol[i])
@@ -17851,6 +18055,9 @@ fn c_args(mut &em: Emitter, args: list[ast.Expr], sb: Subst) -> str {
 # type to be declared with, and guessing one would turn a typing gap into wrong C.
 fn c_match(mut &em: Emitter, scrut: ast.Expr, arms: list[ast.Arm], sb: Subst) -> str {
 	st := c_infer(em, scrut)
+	if c_is_unknown(st) {
+		c_gen_variant_unpositioned(em, scrut)
+	}
 	c_check_arm_pats(em, arms, st)
 	c_check_exhaustive(em, arms, st)
 	s := c_expr(em, scrut, sb)
@@ -19380,6 +19587,16 @@ fn c_infer_methcall(mut &em: Emitter, target: ast.Expr, meth: str, args: list[as
 	if en != "" and c_is_gen_enum_name(em, en) and c_gen_variant_named(em, en, en, meth) != "" {
 		ap := c_gen_enum_solved(em, en, meth, args)
 		return ast.Ty.TNamed(ap) if ap != ""
+
+		# A VARIANT THAT LEAVES A PARAMETER HAS NO TYPE OF ITS OWN — the position supplies the
+		# rest (c_gen_variant_of). Left to the paths below it answered the FIRST specialization
+		# registered with a variant of that name, so `tp(Two.L(P(1)))` into a `Two[P, int]` was
+		# refused against a `Two[int, str]` some other signature had minted. Unknown fits every
+		# slot; the slot's lowering checks the payload, and a slot with no specialization to
+		# give refuses the variant by name (c_gen_enum_no_position) — and so does a walk that
+		# would solve FROM it, a generic call, a generic struct or a `match` subject, before its
+		# own sentence blames a declaration that is fine (c_gen_variant_unpositioned).
+		return ast.Ty.TUnknown
 	}
 
 	# `P.make(…)` — an ASSOCIATED FN (GRAMMAR#impl-decl). Its target is a TYPE, so the walk
@@ -19649,6 +19866,10 @@ fn c_intrinsic_ret(name: str) -> ast.Ty {
 # element type at all, so it stays unknown and takes the type of whatever it initializes.
 fn c_infer_listlit(mut &em: Emitter, elems: list[ast.Expr]) -> ast.Ty {
 	return ast.Ty.TUnknown if elems.len() == 0
+
+	# a first element that leaves a generic enum's parameter open is read with the rest
+	return ast.Ty.TList(c_gen_variant_join(em, elems)) if c_open_variant_base(em, elems[0]) != ""
+
 	return ast.Ty.TList(c_infer(em, elems[0]))
 }
 
@@ -23412,6 +23633,8 @@ fn c_map_vt(mut &em: Emitter, kt: ast.Ty, vt: ast.Ty) -> str {
 
 fn c_map_lit_ty(mut &em: Emitter, ks: list[ast.Expr], vs: list[ast.Expr]) -> ast.Ty {
 	return ast.Ty.TMap(ast.Ty.TUnknown, ast.Ty.TUnknown) if ks.len() == 0
+	return ast.Ty.TMap(c_infer(em, ks[0]), c_gen_variant_join(em, vs)) if c_open_variant_base(em, vs[0]) != ""
+
 	return ast.Ty.TMap(c_infer(em, ks[0]), c_infer(em, vs[0]))
 }
 

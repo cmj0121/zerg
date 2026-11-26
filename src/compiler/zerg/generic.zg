@@ -906,7 +906,7 @@ pub fn gen_mentions(nm: str, apps: list[ast.TyApp], fd: ast.FnDecl) -> bool {
 
 # a type mentions a parameter at any depth, and `gen_parts` is how a type is taken apart — the
 # solver's own reader, so an applied name's arguments are found through its row
-fn ment_ty(nm: str, apps: list[ast.TyApp], t: ast.Ty) -> bool {
+pub fn ment_ty(nm: str, apps: list[ast.TyApp], t: ast.Ty) -> bool {
 	return true if emit.c_named_of(t) == nm or ment_arr_len(nm, t)
 
 	for p in gen_parts(apps, t) {

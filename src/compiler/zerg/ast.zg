@@ -2995,6 +2995,42 @@ fn tgt_places_each(ts: list[Target]) -> list[Expr] {
 	return out
 }
 
+# stmt_nests sorts a Stmt by whether it holds a block of its own (a loop, a branch, a scope,
+# an assert's desugaring, a select's arms), for a recursive walk to dispatch on BEFORE it
+# destructures — expr_shape's reason, one node type along: a walk pays its frame once per level
+# of nested blocks, and at -O0 one match over every variant holds every arm's temporaries.
+#
+# Every variant is named, so a new Stmt has to be sorted here.
+pub fn stmt_nests(s: Stmt) -> bool {
+	return match s {
+		Stmt.SLet(_, _, _, _, _, _, _, _) => false
+		Stmt.SDestructure(_, _, _, _, _) => false
+		Stmt.SAssign(_, _) => false
+		Stmt.SPrint(_) => false
+		Stmt.SReturn(_, _) => false
+		Stmt.SReturnIf(_, _) => false
+		Stmt.SExpr(_) => false
+		Stmt.SIf(_, _, _, _) => true
+		Stmt.SFor(_, _, _) => true
+		Stmt.SForIn(_, _, _, _, _, _) => true
+		Stmt.SForSelect(_) => true
+		Stmt.SRaise(_, _, _) => false
+		Stmt.SDefer(_) => false
+		Stmt.SSpawn(_) => false
+		Stmt.SSend(_, _) => false
+		Stmt.SSelect(_) => true
+		Stmt.SClose(_, _) => false
+		Stmt.SIfLet(_, _, _, _, _, _, _) => true
+		Stmt.SAssert(_) => true
+		Stmt.SScope(_, _) => true
+		Stmt.SBreak => false
+		Stmt.SContinue => false
+		Stmt.SNop => false
+		Stmt.SDel(_, _, _) => false
+		Stmt.SAt(_, _, _, _) => false
+	}
+}
+
 pub fn stmt_exprs(s: Stmt) -> list[Expr] {
 	return match s {
 		Stmt.SLet(_, _, _, _, _, v, _, _) => [v]

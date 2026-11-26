@@ -602,25 +602,30 @@ fn subst_block(su: TySubst, b: list[ast.Stmt]) -> list[ast.Stmt] {
 	return out
 }
 
+# subst_stmt asks whether the statement holds a block of its own and hands it to one of two
+# helpers, each holding only its group's arms: a nested block pays this frame once per level,
+# and at -O0 every arm's temporaries keep a slot of their own — one match over every variant
+# was a 27 KB frame. The exhaustive match is ast.stmt_nests', for the reason the catch-all
+# came out (in subst_flat_stmt): a new Stmt has to be sorted there before anything compiles.
 fn subst_stmt(su: TySubst, s: ast.Stmt) -> ast.Stmt {
+	return subst_nested_stmt(su, s) if ast.stmt_nests(s)
+
+	return subst_flat_stmt(su, s)
+}
+
+# subst_stmt_missed is a statement handed to the helper that does not name it — a state
+# ast.stmt_nests rules out, reported as the compiler's fault rather than copied through.
+fn subst_stmt_missed(walk: str, s: ast.Stmt) -> ast.Stmt {
+	raise parser.p_impossible(f"subst_{walk}_stmt was handed a statement ast.stmt_nests does not route there — the two have to sort the same variants")
+}
+
+fn subst_nested_stmt(su: TySubst, s: ast.Stmt) -> ast.Stmt {
 	return match s {
-		Stmt.SLet(nm, ty, ht, im, ic, v, l, c) => ast.Stmt.SLet(nm, subst_ty(su, ty), ht, im, ic, subst_expr(su, v), l, c)
-		Stmt.SDestructure(t, v, ib, im, ic) => ast.Stmt.SDestructure(subst_target(su, t), subst_expr(su, v), ib, im, ic)
-		Stmt.SAssign(l, r) => ast.Stmt.SAssign(subst_expr(su, l), subst_expr(su, r))
-		Stmt.SPrint(v) => ast.Stmt.SPrint(subst_expr(su, v))
-		Stmt.SReturn(hv, v) => ast.Stmt.SReturn(hv, subst_expr(su, v))
-		Stmt.SReturnIf(v, c) => ast.Stmt.SReturnIf(subst_expr(su, v), subst_expr(su, c))
-		Stmt.SExpr(v) => ast.Stmt.SExpr(subst_expr(su, v))
 		Stmt.SIf(c, tb, he, eb) => ast.Stmt.SIf(subst_expr(su, c), subst_block(su, tb), he, subst_block(su, eb))
 		Stmt.SFor(hc, c, b) => ast.Stmt.SFor(hc, subst_expr(su, c), subst_block(su, b))
 		Stmt.SForIn(nm, im, it, b, l, c) => ast.Stmt.SForIn(nm, im, subst_expr(su, it), subst_block(su, b), l, c)
 		Stmt.SForSelect(arms) => ast.Stmt.SForSelect(subst_sel_arms(su, arms))
-		Stmt.SRaise(e, hf, cause) => ast.Stmt.SRaise(subst_expr(su, e), hf, subst_expr(su, cause))
-		Stmt.SDefer(v) => ast.Stmt.SDefer(subst_expr(su, v))
-		Stmt.SSpawn(v) => ast.Stmt.SSpawn(subst_expr(su, v))
-		Stmt.SSend(ch, v) => ast.Stmt.SSend(subst_expr(su, ch), subst_expr(su, v))
 		Stmt.SSelect(arms) => ast.Stmt.SSelect(subst_sel_arms(su, arms))
-		Stmt.SClose(ch, tw) => ast.Stmt.SClose(subst_expr(su, ch), tw)
 		Stmt.SIfLet(nm, v, tb, he, eb, l, c) => ast.Stmt.SIfLet(nm, subst_expr(su, v), subst_block(su, tb), he, subst_block(su, eb), l, c)
 
 		# an `assert` holds the author's own condition, desugared, so a `T` written in it — in a
@@ -634,19 +639,40 @@ fn subst_stmt(su: TySubst, s: ast.Stmt) -> ast.Stmt {
 		# _E4056 no type named `T`_ — a legal program, turned away with a reason that is not
 		# true, which sends the reader looking for a declaration they wrote in the signature.
 		Stmt.SScope(b, u) => ast.Stmt.SScope(subst_block(su, b), u)
+		_ => subst_stmt_missed("nested", s)
+	}
+}
+
+fn subst_flat_stmt(su: TySubst, s: ast.Stmt) -> ast.Stmt {
+	return match s {
+		Stmt.SLet(nm, ty, ht, im, ic, v, l, c) => ast.Stmt.SLet(nm, subst_ty(su, ty), ht, im, ic, subst_expr(su, v), l, c)
+		Stmt.SDestructure(t, v, ib, im, ic) => ast.Stmt.SDestructure(subst_target(su, t), subst_expr(su, v), ib, im, ic)
+		Stmt.SAssign(l, r) => ast.Stmt.SAssign(subst_expr(su, l), subst_expr(su, r))
+		Stmt.SPrint(v) => ast.Stmt.SPrint(subst_expr(su, v))
+		Stmt.SReturn(hv, v) => ast.Stmt.SReturn(hv, subst_expr(su, v))
+		Stmt.SReturnIf(v, c) => ast.Stmt.SReturnIf(subst_expr(su, v), subst_expr(su, c))
+		Stmt.SExpr(v) => ast.Stmt.SExpr(subst_expr(su, v))
+		Stmt.SRaise(e, hf, cause) => ast.Stmt.SRaise(subst_expr(su, e), hf, subst_expr(su, cause))
+		Stmt.SDefer(v) => ast.Stmt.SDefer(subst_expr(su, v))
+		Stmt.SSpawn(v) => ast.Stmt.SSpawn(subst_expr(su, v))
+		Stmt.SSend(ch, v) => ast.Stmt.SSend(subst_expr(su, ch), subst_expr(su, v))
+		Stmt.SClose(ch, tw) => ast.Stmt.SClose(subst_expr(su, ch), tw)
 
 		# AND THE CATCH-ALL IS GONE. Twice now a form that carries something has been left
-		# unsubstituted by `_ => s` — the `assert` above and the block above that — and each
-		# time the arm was added and the fallback kept, so the next one was already waiting.
-		# Naming every variant is what makes the next Stmt a type error here instead.
+		# unsubstituted by `_ => s` — the `assert` and the bare block in subst_nested_stmt —
+		# and each time the arm was added and the fallback kept, so the next one was already
+		# waiting. Naming every variant in ast.stmt_nests is what makes the next Stmt a type
+		# error instead, and the `_` below is an internal error, never a statement copied
+		# through.
 		#
 		# These five carry nothing a type argument could reach: two jumps, a nop, a `del` of
 		# a name, and a position marker.
-		Stmt.SBreak          => s
-		Stmt.SContinue       => s
-		Stmt.SNop            => s
-		Stmt.SDel(_, _, _)   => s
+		Stmt.SBreak => s
+		Stmt.SContinue => s
+		Stmt.SNop => s
+		Stmt.SDel(_, _, _) => s
 		Stmt.SAt(_, _, _, _) => s
+		_ => subst_stmt_missed("flat", s)
 	}
 }
 

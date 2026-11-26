@@ -4306,6 +4306,14 @@ fn parse_expr(mut &p: Parser) -> ast.Expr {
 fn parse_coalesce(mut &p: Parser) -> ast.Expr {
 	left := parse_or(p)
 	return left if not p_at(p, token.Kind.Coalesce)
+
+	return p_coalesce_rest(p, left)
+}
+
+# p_coalesce_rest, p_cmp_rest and p_range_rest are their operators' right-hand halves, each a
+# function of its own: a nested expression pays the precedence chain's frames once per level,
+# and at -O0 an operator's temporaries would be paid at every level whether it is there or not.
+fn p_coalesce_rest(mut &p: Parser, left: ast.Expr) -> ast.Expr {
 	p_advance(p)
 	mut jump: list[ast.Stmt] = []
 	if is_divergent(cur_kind(p)) {
@@ -4386,6 +4394,13 @@ fn parse_and(mut &p: Parser) -> ast.Expr {
 # (GRAMMAR#cmp-expr puts the two at the same level and allows only one of them).
 fn parse_cmp(mut &p: Parser) -> ast.Expr {
 	left := parse_range(p)
+	k := cur_kind(p)
+	return left if not token.is_cmp_op(k) and k != token.Kind.Is and k != token.Kind.In
+
+	return p_cmp_rest(p, left)
+}
+
+fn p_cmp_rest(mut &p: Parser, left: ast.Expr) -> ast.Expr {
 	if token.is_cmp_op(cur_kind(p)) {
 		op := token.kind_name(cur_kind(p))
 		p_advance(p)
@@ -4412,7 +4427,7 @@ fn parse_cmp(mut &p: Parser) -> ast.Expr {
 		p_advance(p)
 		return ast.Expr.EIn(left, parse_range(p))
 	}
-	return left
+	raise p_impossible("p_cmp_rest was handed an operator parse_cmp does not route there")
 }
 
 # parse_range reads `a..b` and `a..=b`. GRAMMAR puts this level between comparison and
@@ -4422,6 +4437,11 @@ fn parse_range(mut &p: Parser) -> ast.Expr {
 	lo := parse_add(p)
 	k := cur_kind(p)
 	return lo if k != token.Kind.DotDot and k != token.Kind.DotDotEq
+
+	return p_range_rest(p, lo, k)
+}
+
+fn p_range_rest(mut &p: Parser, lo: ast.Expr, k: token.Kind) -> ast.Expr {
 	op := cur(p)
 	p_advance(p)
 
@@ -4652,89 +4672,100 @@ fn p_field_name(mut &p: Parser, dot: str, tuple_ok: bool) -> str {
 # parse_postfix parses a primary then a chain of calls. In the subset the callee is
 # always a bare identifier, so a call collapses to ECall(name, args).
 fn parse_postfix(mut &p: Parser) -> ast.Expr {
+	# EACH POSTFIX IS A HELPER that takes the chain so far and answers it extended: a nested
+	# expression pays this frame once per level, and at -O0 every branch's temporaries keep a
+	# slot of their own.
 	mut e := parse_primary(p)
 	for p_at(p, token.Kind.LParen) or p_at(p, token.Kind.Dot) or p_at(p, token.Kind.LBrack) or p_at(p, token.Kind.OptDot) {
 		if p_at(p, token.Kind.OptDot) {
 			e = p_opt_dot(p, e)
 		} else if p_at(p, token.Kind.LBrack) {
-			p_advance(p) # '['
-			idx := parse_expr(p)
-
-			# A COMMA MAKES IT TYPE ARGUMENTS, and nothing else it could be. GRAMMAR says so
-			# outright — "'[X, Y]' is unambiguously type arguments (an index takes one value)"
-			# — and this branch read one expression and demanded `]`, so `pairup[str, int](…)`
-			# got "expected `]`, found `,`": the message a typo gets, for the one bracket form
-			# the grammar calls unambiguous.
-			#
-			# The SINGLE-argument case is not decided here. `f[T](x)` and `xs[i]` are the same
-			# tokens and telling them apart needs to know what the base is, so it stays where
-			# it was — recovered from the EIndex below, where a call has been seen.
-			# ASSIGNED, not returned: a call is a postfix like any other, and the chain goes on
-			# after it. Returning here ended the loop, so `pair[int, str](7, "a").len()` died
-			# on "`.` is not an expression this compiler reads" — the same shape of message
-			# this branch exists to remove, one postfix further along.
-			if p_at(p, token.Kind.Comma) {
-				e = p_type_arg_call(p, e, idx)
-			} else {
-				expect(p, token.Kind.RBrack)
-				e = ast.Expr.EIndex(e, idx)
-			}
+			e = p_index_postfix(p, e)
 		} else if p_at(p, token.Kind.Dot) {
-			p_advance(p)
-			ft := cur(p)
-			fld := p_field_name(p, ".", true)
-			if p_at(p, token.Kind.LParen) {
-				# method call: target.method(args)
-				e = ast.Expr.EMethod(e, fld, parse_call_args(p), ft.line, ft.col)
-			} else {
-				e = ast.Expr.EField(e, fld, ft.line, ft.col)
-			}
+			e = p_dot_postfix(p, e)
 		} else {
-			# free call: name(args), or a scalar type conversion like int(x)
-			mut name := ident_name(e)
-
-			# A CALLEE THAT IS NOT A NAME. Three forms reached here and all three used to be
-			# built as `ECall("", args)`, which the emitter reported as ``undefined function
-			# ` ``` — an empty name, naming nothing, for a program with no typo in it:
-			#
-			#   f[T](x)    explicit type arguments (GRAMMAR#postfix, group 7)
-			#   fs[0](x)   a call through a function VALUE held in a container
-			#   p?.get()   an optional method call, which p_opt_dot now reads as its own node
-			#
-			# EXPLICIT TYPE ARGUMENTS ARE NOT A FORM, and this is not where that is said.
-			# `id[int](7)` reaches here as an INDEX of `id`, and so does `fs[i](1)`: the same
-			# tokens, and the only way to tell a subscript from a type argument is to know what
-			# the base is — which is a symbol table. This used to refuse both, so a list of
-			# functions could be called at `0` and at `i + 0` and not at `i` (#308). Both are now
-			# the call through a value below, and the emitter, which has the table, names the one
-			# whose base was never a binding (emit.c_no_type_args).
-			#
-			# GRAMMAR settled the form itself: a postfix `[ … ]` is ALWAYS an index, and a
-			# generic call takes its type from its arguments.
-			mut tyargs: list[ast.Ty] = []
-
 			# A CALLEE THAT IS NOT A NAME IS AN EXPRESSION, and GRAMMAR#postfix already says
 			# so: `(` is a postfix operator on whatever precedes it. `fs[0](1)` calls the
 			# element, and a lambda called where it is written calls the lambda.
-			return ast.Expr.ECallVal(e, parse_call_args(p)) if name == ""
+			return ast.Expr.ECallVal(e, parse_call_args(p)) if ident_name(e) == ""
 
-			args := parse_call_args(p)
-			if is_conv(name) {
-				# A CONVERSION TAKES A VALUE. `int()` and `list[int]()` read as a call and
-				# then indexed an empty argument list, so the COMPILER aborted with its own
-				# `IndexError: index out of range` — no place, no form named, and a stack
-				# trace of the compiler rather than a diagnostic about the program.
-				raise p_diag(p, rule.Rule.ScalarConvNoValue, f"`{name}(…)` converts a VALUE and was given none — a conversion reads one thing as another, so there has to be a thing") if args.len() == 0
-				raise p_diag(p, rule.Rule.ScalarConvManyValues, f"`{name}(…)` converts one value, and this gives {strconv.to_string(args.len(), 10)}") if args.len() > 1
-
-				e = ast.Expr.EConv(conv_ty(name), args[0], name)
-			} else {
-				at := ast.ident_at(e)
-				e = ast.Expr.ECall(name, args, tyargs, at.0, at.1)
-			}
+			e = p_call_postfix(p, e)
 		}
 	}
 	return e
+}
+
+fn p_index_postfix(mut &p: Parser, e: ast.Expr) -> ast.Expr {
+	p_advance(p) # '['
+	idx := parse_expr(p)
+
+	# A COMMA MAKES IT TYPE ARGUMENTS, and nothing else it could be. GRAMMAR says so
+	# outright — "'[X, Y]' is unambiguously type arguments (an index takes one value)"
+	# — and this branch read one expression and demanded `]`, so `pairup[str, int](…)`
+	# got "expected `]`, found `,`": the message a typo gets, for the one bracket form
+	# the grammar calls unambiguous.
+	#
+	# The SINGLE-argument case is not decided here. `f[T](x)` and `xs[i]` are the same
+	# tokens and telling them apart needs to know what the base is, so it stays where
+	# it was — recovered from the EIndex below, where a call has been seen.
+	# ASSIGNED by parse_postfix, not returned from it: a call is a postfix like any other,
+	# and the chain goes on after it. Returning ended the loop, so `pair[int, str](7,
+	# "a").len()` died on "`.` is not an expression this compiler reads" — the same shape
+	# of message this branch exists to remove, one postfix further along.
+	return p_type_arg_call(p, e, idx) if p_at(p, token.Kind.Comma)
+
+	expect(p, token.Kind.RBrack)
+	return ast.Expr.EIndex(e, idx)
+}
+
+fn p_dot_postfix(mut &p: Parser, e: ast.Expr) -> ast.Expr {
+	p_advance(p)
+	ft := cur(p)
+	fld := p_field_name(p, ".", true)
+
+	# method call: target.method(args)
+	return ast.Expr.EMethod(e, fld, parse_call_args(p), ft.line, ft.col) if p_at(p, token.Kind.LParen)
+
+	return ast.Expr.EField(e, fld, ft.line, ft.col)
+}
+
+fn p_call_postfix(mut &p: Parser, e: ast.Expr) -> ast.Expr {
+	# free call: name(args), or a scalar type conversion like int(x)
+	name := ident_name(e)
+
+	# A CALLEE THAT IS NOT A NAME. Three forms reached here and all three used to be
+	# built as `ECall("", args)`, which the emitter reported as ``undefined function
+	# ` ``` — an empty name, naming nothing, for a program with no typo in it:
+	#
+	#   f[T](x)    explicit type arguments (GRAMMAR#postfix, group 7)
+	#   fs[0](x)   a call through a function VALUE held in a container
+	#   p?.get()   an optional method call, which p_opt_dot now reads as its own node
+	#
+	# EXPLICIT TYPE ARGUMENTS ARE NOT A FORM, and this is not where that is said.
+	# `id[int](7)` reaches here as an INDEX of `id`, and so does `fs[i](1)`: the same
+	# tokens, and the only way to tell a subscript from a type argument is to know what
+	# the base is — which is a symbol table. This used to refuse both, so a list of
+	# functions could be called at `0` and at `i + 0` and not at `i` (#308). Both are now
+	# the call through a value below, and the emitter, which has the table, names the one
+	# whose base was never a binding (emit.c_no_type_args).
+	#
+	# GRAMMAR settled the form itself: a postfix `[ … ]` is ALWAYS an index, and a
+	# generic call takes its type from its arguments.
+	mut tyargs: list[ast.Ty] = []
+
+	args := parse_call_args(p)
+	if is_conv(name) {
+		# A CONVERSION TAKES A VALUE. `int()` and `list[int]()` read as a call and
+		# then indexed an empty argument list, so the COMPILER aborted with its own
+		# `IndexError: index out of range` — no place, no form named, and a stack
+		# trace of the compiler rather than a diagnostic about the program.
+		raise p_diag(p, rule.Rule.ScalarConvNoValue, f"`{name}(…)` converts a VALUE and was given none — a conversion reads one thing as another, so there has to be a thing") if args.len() == 0
+		raise p_diag(p, rule.Rule.ScalarConvManyValues, f"`{name}(…)` converts one value, and this gives {strconv.to_string(args.len(), 10)}") if args.len() > 1
+
+		return ast.Expr.EConv(conv_ty(name), args[0], name)
+	}
+	at := ast.ident_at(e)
+	return ast.Expr.ECall(name, args, tyargs, at.0, at.1)
 }
 
 # p_type_arg_call is the MULTI-argument shape of a form the language does not have —
@@ -4829,7 +4860,44 @@ fn p_call_comma(mut &p: Parser, mut &commas: list[int]) {
 }
 
 fn parse_primary(mut &p: Parser) -> ast.Expr {
+	# A NESTED EXPRESSION PAYS THIS FRAME ONCE PER LEVEL, with the rest of the precedence
+	# chain, and at -O0 every branch's temporaries keep a slot of their own: so each form that
+	# builds anything is a helper, and this asks only which one the token opens.
 	t := cur(p)
+	k := t.kind
+
+	return parse_literal(p, t) if p_is_literal(k)
+	return parse_ident_primary(p, t) if k == token.Kind.Ident
+	return parse_paren_expr(p) if k == token.Kind.LParen
+	return parse_list_expr(p) if k == token.Kind.LBrack
+
+	if k == token.Kind.LBrace {
+		# A `{` IN EXPRESSION POSITION IS A MAP LITERAL OR A BLOCK, and GRAMMAR gives both
+		# to `primary`. p_brace_is_map decides on the `:` — the discriminator the grammar
+		# names — and a brace without one is the block EXPRESSION whose value is its last
+		# statement's (GRAMMAR, group 2).
+		#
+		# The same braces at a STATEMENT's start are a block statement (parse_stmt reads
+		# that one, as Stmt.SScope) and their value is discarded; a head that opens with `{`
+		# is E2047. Position decides, and this function is only ever the expression position.
+		return parse_map_lit(p) if p_brace_is_map(p)
+		return ast.Expr.EBlock(parse_block(p))
+	}
+
+	return parse_if_expr(p) if k == token.Kind.If
+	return parse_match(p) if k == token.Kind.Match
+	return parse_fn_expr(p) if k == token.Kind.Fn
+	return parse_chan_new(p, t) if k == token.Kind.Chan
+
+	return parse_primary_rest(p, t)
+}
+
+# p_is_literal is whether the token is one parse_literal reads.
+fn p_is_literal(k: token.Kind) -> bool {
+	return k == token.Kind.Int or k == token.Kind.Byte or k == token.Kind.Rune or k == token.Kind.Float or k == token.Kind.Str or k == token.Kind.RawStr or k == token.Kind.FStr or k == token.Kind.True or k == token.Kind.False or k == token.Kind.Nil or k == token.Kind.KwThis
+}
+
+fn parse_literal(mut &p: Parser, t: token.Token) -> ast.Expr {
 	k := t.kind
 	if k == token.Kind.Int {
 		p_advance(p)
@@ -4890,6 +4958,11 @@ fn parse_primary(mut &p: Parser) -> ast.Expr {
 		p.saw_this = true
 		return ast.Expr.EIdent("this", t.line, t.col)
 	}
+	raise p_impossible("parse_literal was handed a token p_is_literal does not name")
+}
+
+fn parse_ident_primary(mut &p: Parser, t: token.Token) -> ast.Expr {
+	k := t.kind
 
 	# The INTERPOLATING form, `` f`…` ``, lexes as a bare `f` and then the command literal,
 	# so the parser saw a call with a stray token after it and said `expected `)`, found
@@ -4944,20 +5017,79 @@ fn parse_primary(mut &p: Parser) -> ast.Expr {
 		p_advance(p)
 		return ast.Expr.EIdent(t.lexeme, t.line, t.col)
 	}
-	return parse_fn_expr(p) if k == token.Kind.Fn
-	if k == token.Kind.Chan {
-		# `chan[T](cap)` — the capacity is optional and defaults to an unbuffered
-		# rendezvous, which is what a bare `chan[T]()` means
-		p_advance(p)
-		elem := parse_chan_elem(p, t.line, t.col)
-		expect(p, token.Kind.LParen)
-		mut cap: ast.Expr = ast.Expr.EInt("0", 0, 0)
-		if not p_at(p, token.Kind.RParen) {
-			cap = parse_expr(p)
-		}
+	raise p_impossible("parse_ident_primary was handed a token that is not an identifier")
+}
+
+fn parse_paren_expr(mut &p: Parser) -> ast.Expr {
+	# `(e)` is grouping and `(a, b)` is a tuple — the comma is what tells them apart,
+	# so the first element is read before deciding which this is
+	p_advance(p)
+	inner := parse_expr(p)
+	if not p_at(p, token.Kind.Comma) {
 		expect(p, token.Kind.RParen)
-		return ast.Expr.EChanNew(elem, cap)
+		return inner
 	}
+	mut elems: list[ast.Expr] = []
+	elems.append(inner)
+	for p_at(p, token.Kind.Comma) {
+		ct := cur(p)
+		p_advance(p)
+
+		# A COMMA WITH NOTHING AFTER IT is two different ill-formed programs, and which
+		# one it is depends on how many elements are already in hand: after one it is
+		# the 1-tuple `(1, )`, after two or more it is a trailing comma. The loop used
+		# to `break` here, which built a tuple out of either and said nothing.
+		if p_at(p, token.Kind.RParen) {
+			if elems.len() == 1 {
+				p_one_tuple(p, ct.line, ct.col)
+			}
+			p_trailing_comma(p, "a tuple literal", ")", ct.line, ct.col)
+		}
+		elems.append(parse_expr(p))
+	}
+	expect(p, token.Kind.RParen)
+	return ast.Expr.ETuple(elems)
+}
+
+fn parse_list_expr(mut &p: Parser) -> ast.Expr {
+	# list literal: [] or [a, b, ...], or the FILL form [v; N]
+	p_advance(p)
+	mut elems: list[ast.Expr] = []
+	for not p_at(p, token.Kind.RBrack) and not p_at(p, token.Kind.Eof) {
+		elems.append(parse_expr(p))
+
+		# `[v; N]` is N copies of v. The `;` is the lexer's statement separator
+		# elsewhere, which is exactly why it needs handling here: without it the
+		# count was read as a second ELEMENT and the list came out the wrong length.
+		if p_at(p, token.Kind.Semi) and elems.len() == 1 {
+			p_advance(p)
+			return parse_fill(p, elems[0])
+		}
+
+		p_list_sep(p, token.Kind.RBrack, "]", "a list literal")
+	}
+	expect(p, token.Kind.RBrack)
+	return ast.Expr.EListLit(elems)
+}
+
+fn parse_chan_new(mut &p: Parser, t: token.Token) -> ast.Expr {
+	# `chan[T](cap)` — the capacity is optional and defaults to an unbuffered
+	# rendezvous, which is what a bare `chan[T]()` means
+	p_advance(p)
+	elem := parse_chan_elem(p, t.line, t.col)
+	expect(p, token.Kind.LParen)
+	mut cap: ast.Expr = ast.Expr.EInt("0", 0, 0)
+	if not p_at(p, token.Kind.RParen) {
+		cap = parse_expr(p)
+	}
+	expect(p, token.Kind.RParen)
+	return ast.Expr.EChanNew(elem, cap)
+}
+
+# parse_primary_rest is every other token an expression may begin with, and the refusals of
+# the ones it may not.
+fn parse_primary_rest(mut &p: Parser, t: token.Token) -> ast.Expr {
+	k := t.kind
 	if k == token.Kind.Guard {
 		# `guard { … }` is an EXPRESSION (GRAMMAR#guard-expr) yielding Result[T], not a statement.
 		# It was read as one before, which is why `n := guard { f() } ?? 0` — the form the
@@ -4998,71 +5130,6 @@ fn parse_primary(mut &p: Parser) -> ast.Expr {
 		p_advance(p)
 		return cmd_call(p, t, cmd_argv(p, t, t.value))
 	}
-	if k == token.Kind.LParen {
-		# `(e)` is grouping and `(a, b)` is a tuple — the comma is what tells them apart,
-		# so the first element is read before deciding which this is
-		p_advance(p)
-		inner := parse_expr(p)
-		if not p_at(p, token.Kind.Comma) {
-			expect(p, token.Kind.RParen)
-			return inner
-		}
-		mut elems: list[ast.Expr] = []
-		elems.append(inner)
-		for p_at(p, token.Kind.Comma) {
-			ct := cur(p)
-			p_advance(p)
-
-			# A COMMA WITH NOTHING AFTER IT is two different ill-formed programs, and which
-			# one it is depends on how many elements are already in hand: after one it is
-			# the 1-tuple `(1, )`, after two or more it is a trailing comma. The loop used
-			# to `break` here, which built a tuple out of either and said nothing.
-			if p_at(p, token.Kind.RParen) {
-				if elems.len() == 1 {
-					p_one_tuple(p, ct.line, ct.col)
-				}
-				p_trailing_comma(p, "a tuple literal", ")", ct.line, ct.col)
-			}
-			elems.append(parse_expr(p))
-		}
-		expect(p, token.Kind.RParen)
-		return ast.Expr.ETuple(elems)
-	}
-	if k == token.Kind.LBrace {
-		# A `{` IN EXPRESSION POSITION IS A MAP LITERAL OR A BLOCK, and GRAMMAR gives both
-		# to `primary`. p_brace_is_map decides on the `:` — the discriminator the grammar
-		# names — and a brace without one is the block EXPRESSION whose value is its last
-		# statement's (GRAMMAR, group 2).
-		#
-		# The same braces at a STATEMENT's start are a block statement (parse_stmt reads
-		# that one, as Stmt.SScope) and their value is discarded; a head that opens with `{`
-		# is E2047. Position decides, and this function is only ever the expression position.
-		return parse_map_lit(p) if p_brace_is_map(p)
-		return ast.Expr.EBlock(parse_block(p))
-	}
-	if k == token.Kind.LBrack {
-		# list literal: [] or [a, b, ...], or the FILL form [v; N]
-		p_advance(p)
-		mut elems: list[ast.Expr] = []
-		for not p_at(p, token.Kind.RBrack) and not p_at(p, token.Kind.Eof) {
-			elems.append(parse_expr(p))
-
-			# `[v; N]` is N copies of v. The `;` is the lexer's statement separator
-			# elsewhere, which is exactly why it needs handling here: without it the
-			# count was read as a second ELEMENT and the list came out the wrong length.
-			if p_at(p, token.Kind.Semi) and elems.len() == 1 {
-				p_advance(p)
-				return parse_fill(p, elems[0])
-			}
-
-			p_list_sep(p, token.Kind.RBrack, "]", "a list literal")
-		}
-		expect(p, token.Kind.RBrack)
-		return ast.Expr.EListLit(elems)
-	}
-
-	return parse_if_expr(p) if k == token.Kind.If
-	return parse_match(p) if k == token.Kind.Match
 
 	# A STATEMENT standing where an expression is wanted. The common way in is a match
 	# arm — GRAMMAR makes an arm's body an expression, and `Left(v) => print v` is the

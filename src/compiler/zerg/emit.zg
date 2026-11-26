@@ -1197,6 +1197,18 @@ fn c_carrier_fit(mut &em: Emitter, where: str, want: ast.Ty, e: ast.Expr, sb: Su
 fn c_fit_copied(mut &em: Emitter, where: str, want: ast.Ty, e: ast.Expr, sb: Subst) -> str {
 	check.chk_slot_fits(em, where, want, e)
 
+	# a nested argument pays this frame once per level, so the shaped slots are a helper's
+	return c_into(em, want, e, sb) if not c_fit_is_shaped(want, e)
+
+	return c_fit_shaped(em, where, want, e, sb)
+}
+
+# c_fit_is_shaped is whether c_fit_shaped has a lowering of its own for `e` at `want`.
+fn c_fit_is_shaped(want: ast.Ty, e: ast.Expr) -> bool {
+	return c_is_carrier(want) or (c_is_list(want) and c_is_listlit(e))
+}
+
+fn c_fit_shaped(mut &em: Emitter, where: str, want: ast.Ty, e: ast.Expr, sb: Subst) -> str {
 	return c_carrier_fit(em, where, want, e, sb) if c_is_carrier(want)
 
 	# a bare `[]` carries NO element type of its own, so it takes the destination's. Without
@@ -1216,7 +1228,7 @@ fn c_fit_copied(mut &em: Emitter, where: str, want: ast.Ty, e: ast.Expr, sb: Sub
 	# fires on it.
 	return c_list_build(em, c_list_elem(want), c_listlit_elems(em, e), true, sb) if c_is_list(want) and c_is_listlit(e)
 
-	return c_into(em, want, e, sb)
+	raise parser.p_impossible("c_fit_shaped was handed a slot c_fit_is_shaped does not name — the two have to list the same shapes")
 }
 
 # A POSITION EMITS NO CONVERSION. This is where the compiler used to write the `.into()` the
@@ -1232,13 +1244,6 @@ fn c_fit_copied(mut &em: Emitter, where: str, want: ast.Ty, e: ast.Expr, sb: Sub
 # chk_fits_expr with the written form as the fix, and `L501` — the lint that reported each
 # such application while it was still legal — retires with them.
 fn c_into(mut &em: Emitter, want: ast.Ty, e0: ast.Expr, sb: Subst) -> str {
-	# A LIST LITERAL IN AN ARRAY POSITION IS AN ARRAY (docs/code/collections.md): the literal
-	# is context-typed, a `list[T]` by default and a `[T; N]` when the target is one. It is
-	# read HERE rather than in c_fit_copied because a DECLARED BINDING is the one typed
-	# position that does not lower through that one, and `xs: [int; 3] = [1, 2, 3]` is the
-	# first thing anybody writes.
-	return c_arr_lit(em, c_into_says(want), want, e0, sb) if c_is_arr(want) and c_is_listlit(e0)
-
 	# CARVE-OUT (c): a closure's omitted parameter types — and its omitted return type —
 	# come from the function type it is CHECKED AGAINST, which is a fact about THIS POSITION
 	# and not about the closure. It is filled here because c_fit_copied's eighteen slots come
@@ -1258,6 +1263,34 @@ fn c_into(mut &em: Emitter, want: ast.Ty, e0: ast.Expr, sb: Subst) -> str {
 	# what keeps inference bottom-up: by the time anything asks this closure's type, it has
 	# one of its own.
 	e := c_fn_typed(want, e0)
+
+	# A NESTED ARGUMENT PAYS THIS FRAME ONCE PER LEVEL, and at -O0 every branch's temporaries
+	# keep a slot of their own: so which slot this is is asked by c_into_is_copy, and every
+	# lowering but the plain copy is c_into_shaped's.
+	return c_copied(em, want, e, sb) if c_into_is_copy(em, want, e0, e)
+
+	return c_into_shaped(em, want, e0, e, sb)
+}
+
+# c_into_is_copy is whether none of c_into_shaped's slots is this one, asked in its order.
+fn c_into_is_copy(mut &em: Emitter, want: ast.Ty, e0: ast.Expr, e: ast.Expr) -> bool {
+	return false if c_is_arr(want) and c_is_listlit(e0)
+	return false if c_is_float(want) and c_is_lit_tree(e)
+	return false if c_is_uint(want) and c_is_wide_uint_lit(e)
+	return false if c_gen_variant_of(em, want, e) != ""
+
+	return not (c_is_spec_name(em, c_named_of(want)) and not c_is_spec_name(em, c_named_of(c_infer(em, e))))
+}
+
+# c_into_shaped is c_into at a slot c_into_is_copy said is not a plain copy: `e0` as written
+# and `e` as c_fn_typed filled it.
+fn c_into_shaped(mut &em: Emitter, want: ast.Ty, e0: ast.Expr, e: ast.Expr, sb: Subst) -> str {
+	# A LIST LITERAL IN AN ARRAY POSITION IS AN ARRAY (docs/code/collections.md): the literal
+	# is context-typed, a `list[T]` by default and a `[T; N]` when the target is one. It is
+	# read HERE rather than in c_fit_copied because a DECLARED BINDING is the one typed
+	# position that does not lower through that one, and `xs: [int; 3] = [1, 2, 3]` is the
+	# first thing anybody writes.
+	return c_arr_lit(em, c_into_says(want), want, e0, sb) if c_is_arr(want) and c_is_listlit(e0)
 
 	# A LITERAL THAT ADOPTED `float` COMPUTES IN `float`, which C will not do on its own: the
 	# leaves are integer tokens, so `x: float = 1 / 2` renders as an integer division and lands
@@ -1307,9 +1340,9 @@ fn c_into(mut &em: Emitter, want: ast.Ty, e0: ast.Expr, sb: Subst) -> str {
 	#
 	# A box already boxed is itself — `pass(g)` on a `Greet` hands the cell along, and `c_copied`
 	# below duplicates it when the position owns one.
-	return c_spec_box(em, want, e, sb) if c_is_spec_name(em, c_named_of(want)) and not c_is_spec_name(em, c_named_of(c_infer(em, e)))
+	return c_spec_box(em, want, e, sb) if c_is_spec_name(em, c_named_of(want))
 
-	return c_copied(em, want, e, sb)
+	raise parser.p_impossible("c_into_shaped was handed a slot c_into_is_copy does not name — the two have to list the same slots")
 }
 
 # c_is_lit_tree is chk_lit_float_tree — the checker's answer about which literal trees adopt a
@@ -8209,11 +8242,27 @@ fn c_needs_copy_in(mut &em: Emitter, t: ast.Ty, mut &seen: list[str]) -> bool {
 # integer's bits by the same road. The rule was written in c_let alone, which is why a typed
 # binding was the one position that was right. The empty set has the same nothing to read.
 fn c_copied(mut &em: Emitter, t: ast.Ty, e: ast.Expr, sb: Subst) -> str {
+	# a nested argument pays this frame once per level, so the two literals typed by the slot
+	# and the copy after the render are helpers', and their temporaries are not paid here
+	return c_copied_lit(em, t, e, sb) if c_copied_is_lit(t, e)
+
+	return c_copied_of(em, t, e, c_expr(em, e, sb))
+}
+
+fn c_copied_is_lit(t: ast.Ty, e: ast.Expr) -> bool {
+	return (c_is_map(t) and c_is_maplit(e)) or (c_is_set(t) and c_is_empty_set_ctor(e) and not c_is_unknown(c_set_elem(t)))
+}
+
+fn c_copied_lit(mut &em: Emitter, t: ast.Ty, e: ast.Expr, sb: Subst) -> str {
 	return c_map_lit_as(em, t, e, sb) if c_is_map(t) and c_is_maplit(e)
-	return c_set_empty(em, c_set_elem(t)) if c_is_set(t) and c_is_empty_set_ctor(e) and not c_is_unknown(c_set_elem(t))
 
-	rendered := c_expr(em, e, sb)
+	return c_set_empty(em, c_set_elem(t)) if c_is_set(t) and c_is_empty_set_ctor(e)
 
+	raise parser.p_impossible("c_copied_lit was handed a literal c_copied_is_lit does not name")
+}
+
+# c_copied_of is c_copied's answer for `e`, already rendered.
+fn c_copied_of(mut &em: Emitter, t: ast.Ty, e: ast.Expr, rendered: str) -> str {
 	# A channel `if` whose branches all name handles is not a borrow and hands over no
 	# count (c_ternary). The line below would store that pointer raw, and the holder —
 	# a struct field, a list element — gives it back, which releases the name's own count.
@@ -10215,13 +10264,22 @@ fn c_written_call_name(e: ast.Expr) -> str {
 # native stack ran out first. A shape helper is handed only the variants its shape names, and its
 # `_` arm is c_shape_missed: the exhaustive match is expr_shape's, and a variant given a shape there
 # but not named in that shape's helper is this compiler's fault, never a `0` in the C.
+#
+# Every call here copies the node into a slot of this frame, so it names the two shapes most
+# nesting is made of — a call or method link, and a control form — and c_operand_node takes the
+# rest.
 fn c_expr_node(mut &em: Emitter, e: ast.Expr, sb: Subst) -> str {
 	k := ast.expr_shape(e)
 
-	return c_unary_node(em, e, sb) if k == ast.EXPR_UNARY
-	return c_binary_node(em, e, sb) if k == ast.EXPR_BINARY
 	return c_link_node(em, e, sb) if k == ast.EXPR_LINK
 	return c_control_node(em, e, sb) if k == ast.EXPR_CONTROL
+
+	return c_operand_node(em, k, e, sb)
+}
+
+fn c_operand_node(mut &em: Emitter, k: int, e: ast.Expr, sb: Subst) -> str {
+	return c_unary_node(em, e, sb) if k == ast.EXPR_UNARY
+	return c_binary_node(em, e, sb) if k == ast.EXPR_BINARY
 	return c_aggregate_node(em, e, sb) if k == ast.EXPR_AGGREGATE
 	return c_leaf_node(em, e, sb) if k == ast.EXPR_LEAF
 
@@ -10276,10 +10334,20 @@ fn c_binary_node(mut &em: Emitter, e: ast.Expr, sb: Subst) -> str {
 	}
 }
 
+# c_link_node names the two links a nested chain is made of, a call and a method, and hands the
+# rest to c_member_node: this frame is paid once per level of `f(f(…))` and `x.m().m()…`, and at
+# -O0 every arm's bindings keep a slot of their own.
 fn c_link_node(mut &em: Emitter, e: ast.Expr, sb: Subst) -> str {
 	return match e {
 		Expr.ECall(name, args, ts, l, c) => c_call_written(em, name, args, ts, l, c, sb)
-		Expr.ECallVal(callee, args)      => c_call_val(em, callee, args, sb)
+		Expr.EMethod(target, meth, args, l, c) => c_method(em, target, meth, args, l, c, sb)
+		_ => c_member_node(em, e, sb)
+	}
+}
+
+fn c_member_node(mut &em: Emitter, e: ast.Expr, sb: Subst) -> str {
+	return match e {
+		Expr.ECallVal(callee, args) => c_call_val(em, callee, args, sb)
 
 		# A NAMED ARGUMENT REACHING THE LOWERING was written where a name means nothing —
 		# every call site reorders and unwraps its own, so one that survives to here is in a
@@ -10288,20 +10356,28 @@ fn c_link_node(mut &em: Emitter, e: ast.Expr, sb: Subst) -> str {
 		Expr.EField(target, fld, l, c) => c_fieldref(em, target, fld, l, c, sb)
 		Expr.EOptChain(target, fld, l, c) => c_optchain(em, target, fld, l, c, sb)
 		Expr.EOptMethod(target, meth, args, l, c) => c_optmethod(em, target, meth, args, l, c, sb)
-		Expr.EMethod(target, meth, args, l, c) => c_method(em, target, meth, args, l, c, sb)
 		_ => c_shape_missed("link", e)
 	}
 }
 
+# c_control_node names the four control forms that nest — an `if`, a `match`, a block and a
+# closure — and hands the rest to c_control_rest: a nested one pays this frame once per level,
+# and at -O0 every arm's bindings keep a slot of their own.
 fn c_control_node(mut &em: Emitter, e: ast.Expr, sb: Subst) -> str {
 	return match e {
 		Expr.EIf(cond, then_e, else_e) => c_ternary(em, cond, then_e, else_e, sb)
-		Expr.EIfLet(nm, v, a, b, l, c) => c_expr(em, c_iflet_match(em, nm, v, a, b, l, c), sb)
 		Expr.EMatch(scrut, arms) => c_match(em, scrut, arms, sb)
-		Expr.EGuard(body) => c_guard(em, body, sb)
 		Expr.EBlock(body) => c_block_expr(em, body, sb)
-		Expr.EUnsafe(body) => c_unsafe_expr(em, body, sb)
 		Expr.EFn(ps, has_ret, ret, body) => c_lambda(em, ps, has_ret, ret, body)
+		_ => c_control_rest(em, e, sb)
+	}
+}
+
+fn c_control_rest(mut &em: Emitter, e: ast.Expr, sb: Subst) -> str {
+	return match e {
+		Expr.EIfLet(nm, v, a, b, l, c) => c_expr(em, c_iflet_match(em, nm, v, a, b, l, c), sb)
+		Expr.EGuard(body) => c_guard(em, body, sb)
+		Expr.EUnsafe(body) => c_unsafe_expr(em, body, sb)
 		Expr.EAsm(tpl, ops) => c_asm(em, tpl, ops, sb)
 		_ => c_shape_missed("control", e)
 	}
@@ -13777,41 +13853,17 @@ fn c_meth_kind(mut &em: Emitter, tty: ast.Ty, meth: str) -> MethKind {
 }
 
 fn c_method(mut &em: Emitter, target: ast.Expr, meth: str, args: list[ast.Expr], l: int, c: int, sb: Subst) -> str {
+	# A METHOD CHAIN PAYS THIS FRAME ONCE PER LINK, so it asks what the target is and hands
+	# each kind to a helper of its own: at -O0 every branch's temporaries keep a slot of their
+	# own, and holding all of them here was most of a link's frame.
+	#
 	# `E.of(n)` is not a method on a value: the target NAMES A TYPE. It is answered before
 	# inference is asked anything, because an enum name is not a binding and infers to
 	# nothing — which is why this used to come out as "the method `of` on a ?".
 	en := c_ident_name(target)
-	if en != "" and c_is_enum_name(em, en) and not c_enum_declares_fn(em, en, meth) {
-		if em.want_index {
-			c_nx_type_name(em, target, en)
-			c_nx_use(em, l, c, meth, c_nx_var_in(em, en, meth))
-		}
 
-		# `Shape.Line(5)` and `Shape.of(n)` name the type, c_fieldref's question for `Color.Red`
-		check.chk_ty_visible(em, en)
-		return c_enum_of(em, en, meth, args, sb)
-	}
-
-	# A GENERIC ENUM'S TEMPLATE NAMES NO ENUM — it was removed in favour of its specializations
-	# — so this used to fall through to inference and come out as `undefined name `Side``, about
-	# a declaration seven lines up.
-	#
-	# A CONSTRUCTION THAT SOLVES EVERY PARAMETER DECIDES FOR ITSELF, and mints the
-	# specialization here: `Full(42)` names a `Box[int]` no source wrote. Only one that leaves a
-	# parameter needs a position, and only that one is refused.
-	if en != "" and c_is_gen_enum_name(em, en) {
-		if em.want_index {
-			c_nx_type_name(em, target, en)
-			c_nx_gen_variant(em, en, meth, l, c)
-		}
-		check.chk_ty_visible(em, en)
-		ap := c_gen_enum_solved(em, en, meth, args)
-
-		return c_variant_ctor(em, ap, meth, args, sb) if ap != ""
-		return "0" if check.chk_ty_hidden(em, en)
-
-		c_gen_enum_no_position(em, en, meth, args)
-	}
+	return c_method_enum(em, en, target, meth, args, l, c, sb) if en != "" and c_is_enum_name(em, en) and not c_enum_declares_fn(em, en, meth)
+	return c_method_gen_enum(em, en, target, meth, args, l, c, sb) if en != "" and c_is_gen_enum_name(em, en)
 
 	# `Either.Left(v)` written where nothing says WHICH Either. The target names a built-in
 	# type rather than a value, so inference answers nothing about it and this used to come
@@ -13822,6 +13874,52 @@ fn c_method(mut &em: Emitter, target: ast.Expr, meth: str, args: list[ast.Expr],
 		c_either_no_context(em, f"{en}.{meth}")
 	}
 
+	return c_method_on(em, target, meth, args, l, c, sb)
+}
+
+fn c_method_enum(mut &em: Emitter, en: str, target: ast.Expr, meth: str, args: list[ast.Expr], l: int, c: int, sb: Subst) -> str {
+	if em.want_index {
+		c_nx_type_name(em, target, en)
+		c_nx_use(em, l, c, meth, c_nx_var_in(em, en, meth))
+	}
+
+	# `Shape.Line(5)` and `Shape.of(n)` name the type, c_fieldref's question for `Color.Red`
+	check.chk_ty_visible(em, en)
+	return c_enum_of(em, en, meth, args, sb)
+}
+
+# A GENERIC ENUM'S TEMPLATE NAMES NO ENUM — it was removed in favour of its specializations
+# — so this used to fall through to inference and come out as `undefined name `Side``, about
+# a declaration seven lines up.
+#
+# A CONSTRUCTION THAT SOLVES EVERY PARAMETER DECIDES FOR ITSELF, and mints the
+# specialization here: `Full(42)` names a `Box[int]` no source wrote. Only one that leaves a
+# parameter needs a position, and only that one is refused.
+fn c_method_gen_enum(mut &em: Emitter, en: str, target: ast.Expr, meth: str, args: list[ast.Expr], l: int, c: int, sb: Subst) -> str {
+	if em.want_index {
+		c_nx_type_name(em, target, en)
+		c_nx_gen_variant(em, en, meth, l, c)
+	}
+	check.chk_ty_visible(em, en)
+	ap := c_gen_enum_solved(em, en, meth, args)
+
+	return c_variant_ctor(em, ap, meth, args, sb) if ap != ""
+	return "0" if check.chk_ty_hidden(em, en)
+
+	c_gen_enum_no_position(em, en, meth, args)
+	raise c_gen_variant_unrefused("c_method_gen_enum", en, meth)
+}
+
+# c_gen_variant_unrefused is a generic enum's variant that solved nothing and was not refused
+# by c_gen_enum_no_position: `en` names a template, so it has a row, and the solve that came
+# out empty here comes out empty there — a state that is this compiler's fault.
+fn c_gen_variant_unrefused(walk: str, en: str, variant: str) -> str {
+	return parser.p_impossible(f"{walk}: `{en}.{variant}` solved no specialization and c_gen_enum_no_position did not refuse it")
+}
+
+# c_method_on is a method called on a VALUE: its type is inferred, the name resolved, and the
+# family it belongs to picked.
+fn c_method_on(mut &em: Emitter, target: ast.Expr, meth: str, args: list[ast.Expr], l: int, c: int, sb: Subst) -> str {
 	tty := c_infer(em, target)
 	recv := c_recv_name(em, tty)
 
@@ -13838,6 +13936,29 @@ fn c_method(mut &em: Emitter, target: ast.Expr, meth: str, args: list[ast.Expr],
 	if em.want_index {
 		c_nx_method(em, target, tty, recv, written, meth, kind, l, c)
 	}
+	return c_builtin_method(em, kind, target, meth, args, tty, sb) if c_meth_kind_builtin(kind)
+
+	return c_declared_method(em, kind, recv, target, meth, args, l, c, sb)
+}
+
+# c_meth_kind_builtin is whether a family's methods are this compiler's own rather than declared.
+fn c_meth_kind_builtin(kind: MethKind) -> bool {
+	return match kind {
+		MethKind.MSpec    => false
+		MethKind.MRecv    => false
+		MethKind.MFnField => false
+		MethKind.MFree    => false
+		MethKind.MRender  => true
+		MethKind.MPtr     => true
+		MethKind.MList    => true
+		MethKind.MArr     => true
+		MethKind.MMap     => true
+		MethKind.MErr     => true
+		MethKind.MCarrier => true
+	}
+}
+
+fn c_builtin_method(mut &em: Emitter, kind: MethKind, target: ast.Expr, meth: str, args: list[ast.Expr], tty: ast.Ty, sb: Subst) -> str {
 	return match kind {
 		MethKind.MRender => c_render_meth(em, target, meth, tty, sb)
 		MethKind.MList => c_list_method(em, target, meth, args, tty, sb)
@@ -13846,6 +13967,16 @@ fn c_method(mut &em: Emitter, target: ast.Expr, meth: str, args: list[ast.Expr],
 		MethKind.MMap => c_map_method(em, target, meth, args, tty, sb)
 		MethKind.MErr => c_err_method(em, target, meth, args, sb)
 		MethKind.MCarrier => c_carrier_method(em, target, meth, args, tty, sb)
+		_ => c_builtin_method_missed()
+	}
+}
+
+fn c_builtin_method_missed() -> str {
+	raise parser.p_impossible("c_builtin_method was handed a family c_meth_kind_builtin does not name")
+}
+
+fn c_declared_method(mut &em: Emitter, kind: MethKind, recv: str, target: ast.Expr, meth: str, args: list[ast.Expr], l: int, c: int, sb: Subst) -> str {
+	return match kind {
 		MethKind.MSpec => c_spec_call(em, recv, meth, target, args, sb)
 		MethKind.MRecv => c_recv_call(em, recv, meth, target, args, sb)
 		MethKind.MFnField => c_fnfield_call(em, recv, meth, target, args, sb)
@@ -14647,8 +14778,7 @@ fn c_recv_args(mut &em: Emitter, key: str, target: ast.Expr, args: list[ast.Expr
 	#
 	# A default that reads an earlier parameter puts every argument in a temporary
 	# (c_args_from), and those run before the receiver unless it is held in one as well.
-	seq := c_needs_order_args(args, c_ref_args(em, key, 1, args), 0) or c_last_code(c_defaults_from(em, key, 1 + args.len())) >= 0 or c_defaults_read_earlier(em, key, 1, args.len(), c_args_filled(em, key, 1, args))
-	bound := seq and not c_is_ref_param(em, key, 0)
+	bound := c_recv_seq(em, key, args) and not c_is_ref_param(em, key, 0)
 	recv := c_ordered(em, bound, c_arg(em, key, 0, 0, target, sb))
 
 	# A RECEIVER THE CALL OWNS IS HELD ACROSS THE ARGUMENTS (c_hold, #326), as every earlier
@@ -14667,13 +14797,24 @@ fn c_recv_args(mut &em: Emitter, key: str, target: ast.Expr, args: list[ast.Expr
 	# writes landed on it. The parameter rows of a method count the receiver as row 0, so the
 	# rule is asked of the receiver in front of the arguments in their declared order.
 	if c_is_ref_param(em, key, 0) {
-		mut all: list[ast.Expr] = [target]
-		for a in c_args_named(em, key, 1, args) {
-			all.append(a)
-		}
-		em.seq_pre = em.seq_pre + c_alias_guard(em, check.chk_ref_alias(em, key, all), sb)
+		em.seq_pre = em.seq_pre + c_recv_alias(em, key, target, args, sb)
 	}
 	return recv + c_args_held(em, key, 1, args, true, sb, keep)
+}
+
+# c_recv_seq and c_recv_alias are c_recv_args' questions about the whole call, each a function
+# of its own: a method chain pays c_recv_args' frame once per link, and at -O0 every temporary
+# in it is paid at every link.
+fn c_recv_seq(mut &em: Emitter, key: str, args: list[ast.Expr]) -> bool {
+	return c_needs_order_args(args, c_ref_args(em, key, 1, args), 0) or c_last_code(c_defaults_from(em, key, 1 + args.len())) >= 0 or c_defaults_read_earlier(em, key, 1, args.len(), c_args_filled(em, key, 1, args))
+}
+
+fn c_recv_alias(mut &em: Emitter, key: str, target: ast.Expr, args: list[ast.Expr], sb: Subst) -> str {
+	mut all: list[ast.Expr] = [target]
+	for a in c_args_named(em, key, 1, args) {
+		all.append(a)
+	}
+	return c_alias_guard(em, check.chk_ref_alias(em, key, all), sb)
 }
 
 # c_call emits an enum-variant construction as a tagged-union literal, a struct
@@ -14840,6 +14981,12 @@ fn c_list_build(mut &em: Emitter, ety: ast.Ty, elems: list[ast.Expr], typed: boo
 fn c_call_written(mut &em: Emitter, name: str, args: list[ast.Expr], ts: list[ast.Ty], l: int, c: int, sb: Subst) -> str {
 	return c_call(em, name, args, l, c, sb, true) if ts.len() == 0
 
+	return c_call_type_args(em, name, args, ts, l, c, sb)
+}
+
+# c_call_type_args is a call that writes its type arguments, `f[int](…)` — a helper of its own
+# so a nested call without them does not pay this branch's temporaries at every level.
+fn c_call_type_args(mut &em: Emitter, name: str, args: list[ast.Expr], ts: list[ast.Ty], l: int, c: int, sb: Subst) -> str {
 	c_no_type_arg_list(em, name, ts)
 
 	if em.want_index and c_is_generic(em, name) {
@@ -14958,6 +15105,115 @@ fn c_call_through(mut &em: Emitter, v: str, fty: ast.Ty, args: list[ast.Expr], s
 # here too — the specialization is an ordinary free function — and that call has already named
 # its file, so the bare-name rule (c_chk_bare_fn) stays quiet for it (#391).
 fn c_call(mut &em: Emitter, name: str, args: list[ast.Expr], l: int, c: int, sb: Subst, bare: bool) -> str {
+	# A NESTED CALL PAYS THIS FRAME ONCE PER LEVEL, so it asks which kind of callee the name
+	# is (c_call_kind) and hands each kind to a helper of its own. The emitted C is built at
+	# -O0, where every branch's temporaries keep a slot of their own: holding every kind's
+	# lowering, this frame was most of why `f(f(…))` ran an 8 MB stack out before c_deeper
+	# could refuse the chain by name. A generic call comes back through here once more, as
+	# its specialization, so the two kinds a chain is made of are asked first.
+	k := c_call_kind(em, name)
+
+	return match k {
+		CallKind.CFree => c_call_free(em, name, args, l, c, sb, bare)
+		CallKind.CGeneric => c_call_generic(em, name, args, l, c, sb, bare)
+		_ => c_call_other(em, k, name, args, l, c, sb)
+	}
+}
+
+# The kinds of callee c_call_kind sorts a name into.
+enum CallKind {
+	CBuiltin
+	CBound
+	CGenVariant
+	CType
+	CGeneric
+	CGenStruct
+	CFree
+}
+
+# c_call_kind is which kind of callee `name` is, asked in the order the rules apply. It is
+# also where a binding that shadows a function is reported, because that is where the order
+# puts the rule: after a binding holding a function has been ruled out, before any kind below.
+fn c_call_kind(mut &em: Emitter, name: str) -> CallKind {
+	return CallKind.CBuiltin if c_call_is_builtin(em, name)
+
+	# calling a BINDING that holds a function: cast the stored generic pointer back to the
+	# signature its type carries, then call through it
+	bt := c_call_binding_ty(em, name)
+	return CallKind.CBound if c_is_fn(bt)
+
+	# A BINDING THAT IS NOT A FUNCTION SHADOWS ONE ALL THE SAME. The name is looked up as a
+	# binding first, because a binding holding a function is a call — and when it holds
+	# something else the walk fell through to the FUNCTION of that name, emitting a call to
+	# `zg_f` while `f` was an int64_t in scope. cc reported "called object type 'int64_t' is
+	# not a function or function pointer" against generated code; the reader wrote `f := 2`
+	# above their `f()` and was told nothing about it. The rule is c_not_callable's, which a
+	# `spawn` and a `defer` callee ask as well. Emission carries on into the function of that
+	# name and the C is thrown away.
+	if not c_is_unknown(bt) {
+		c_not_callable(em, name, bt)
+	}
+
+	# A BARE VARIANT OF A GENERIC ENUM. `Full(42)` names a `Box[int]` no source wrote, and the
+	# template's variants are in no row `c_is_variant` reads — so this fell to "undefined
+	# function `Full`", about a variant declared at the top of the same file.
+	return CallKind.CGenVariant if c_gen_variant_owner(em, name) != ""
+	return CallKind.CType if c_names_a_type(em, name) or c_is_variant(em, name)
+
+	# A GENERIC CALL. The template is not a function and has no C symbol; the SPECIALIZATION
+	# is, so the call is rewritten to name it and handed back to this same function — which
+	# then finds an ordinary free function and applies the argument rules to a signature with
+	# real types in it. Nothing below this line knows a generic was involved.
+	return CallKind.CGeneric if c_is_generic(em, name)
+
+	# A GENERIC TYPE'S CONSTRUCTOR SOLVES ITS OWN PARAMETERS, from the ARGUMENTS and never from
+	# where the answer lands — docs/core/type-system.md states it for a call, and a construction
+	# is one: "`T` comes from the arguments, never from where the answer lands". `Box(7)` is a
+	# `Box[int]` wherever it is written, and `b: Box[str] = Box(1)` solves `Box[int]` and is
+	# then refused at the BINDING, exactly as `x: float = id(5)` is.
+	#
+	# BESIDE THE GENERIC FN, because it is the same rule about the same thing: a template named
+	# at a call, solved from what the call gives it. It sits here rather than with the struct
+	# constructions below because a template is not a type — it was removed from the program
+	# with the other templates — so the branch that asks "is this name a type" never sees it,
+	# and what it reached instead was `undefined function`.
+	return CallKind.CGenStruct if c_gen_struct_row(em, name) >= 0
+
+	return CallKind.CFree
+}
+
+# c_call_binding_ty is the type of the live binding `name`, or TUnknown when none is live.
+fn c_call_binding_ty(mut &em: Emitter, name: str) -> ast.Ty {
+	row := c_live_idx(em, name)
+	return ast.Ty.TUnknown if row < 0
+
+	return em.env_tys[row]
+}
+
+# c_call_other lowers the kinds c_call does not name itself.
+fn c_call_other(mut &em: Emitter, k: CallKind, name: str, args: list[ast.Expr], l: int, c: int, sb: Subst) -> str {
+	return match k {
+		CallKind.CBuiltin    => c_call_builtin(em, name, args, sb)
+		CallKind.CBound      => c_call_bound(em, name, c_live_idx(em, name), c_call_binding_ty(em, name), args, l, c, sb)
+		CallKind.CGenVariant => c_call_gen_variant(em, c_gen_variant_owner(em, name), name, args, l, c, sb)
+		CallKind.CType       => c_call_type(em, name, args, l, c, sb)
+		CallKind.CGenStruct  => c_call_gen_struct(em, name, args, l, c, sb)
+		CallKind.CGeneric    => c_call_kind_missed()
+		CallKind.CFree       => c_call_kind_missed()
+	}
+}
+
+fn c_call_kind_missed() -> str {
+	raise parser.p_impossible("c_call_other was handed a kind of callee c_call names itself")
+}
+
+# c_call_is_builtin is whether c_call_builtin answers the name: the intrinsics this compiler
+# reads by name, and the built-in error constructors.
+fn c_call_is_builtin(mut &em: Emitter, name: str) -> bool {
+	return name == "set" or name == "addr" or name == "Ref" or name == "deref" or c_is_intrinsic(em, name) or c_err_kind(name) > 0
+}
+
+fn c_call_builtin(mut &em: Emitter, name: str, args: list[ast.Expr], sb: Subst) -> str {
 	# `set(xs)` IS A CONSTRUCTOR, and it is read here rather than anywhere a type is read,
 	# because `set` is not a declared name: GRAMMAR#map-lit's note is that a set has no literal
 	# — `{1}` cannot be told from a one-statement block — so the call IS the spelling.
@@ -15001,131 +15257,105 @@ fn c_call(mut &em: Emitter, name: str, args: list[ast.Expr], l: int, c: int, sb:
 		return f"zrt_err_own({c_err_kind(name)}, {c_err_msg(em, args[0], sb)})" if args.len() == 1
 		return f"zrt_err_own({c_err_kind(name)}, {c_args(em, args, sb)})"
 	}
+	raise parser.p_impossible("c_call_builtin was handed a name c_call_is_builtin does not name")
+}
 
-	# calling a BINDING that holds a function: cast the stored generic pointer back to the
-	# signature its type carries, then call through it
-	row := c_live_idx(em, name)
-	mut bt := ast.Ty.TUnknown
-	if row >= 0 {
-		bt = em.env_tys[row]
-	}
-	if c_is_fn(bt) {
-		if em.want_index {
-			c_nx_use(em, l, c, name, em.env_nx[row])
-		}
-
-		# a name bound straight to a closure literal that declares a default (c_cl_call)
-		cl := em.env_cl[row]
-		if cl >= 0 {
-			mut cd := em.cl_decls[cl]
-			return c_cl_call(em, name, bt, row, cd, args, sb) if c_cl_fills(cd.params.len(), args)
-		}
-		em.fn_indirect = true
-		return f"({c_fnptr_cast(bt)}({c_ident_val(em, name, 0, 0, sb)}).fn)({c_ident_val(em, name, 0, 0, sb)}.env{c_args_after(em, bt, args, sb)})"
+# c_call_bound is a call through the binding at `row`, whose type `bt` is a function's.
+fn c_call_bound(mut &em: Emitter, name: str, row: int, bt: ast.Ty, args: list[ast.Expr], l: int, c: int, sb: Subst) -> str {
+	if em.want_index {
+		c_nx_use(em, l, c, name, em.env_nx[row])
 	}
 
-	# A BINDING THAT IS NOT A FUNCTION SHADOWS ONE ALL THE SAME. The name is looked up as a
-	# binding first, because a binding holding a function is a call — and when it holds
-	# something else the walk fell through to the FUNCTION of that name, emitting a call to
-	# `zg_f` while `f` was an int64_t in scope. cc reported "called object type 'int64_t' is
-	# not a function or function pointer" against generated code; the reader wrote `f := 2`
-	# above their `f()` and was told nothing about it. The rule is c_not_callable's, which a
-	# `spawn` and a `defer` callee ask as well. Emission carries on into the function of that
-	# name and the C is thrown away.
-	if not c_is_unknown(bt) {
-		c_not_callable(em, name, bt)
+	# a name bound straight to a closure literal that declares a default (c_cl_call)
+	cl := em.env_cl[row]
+	if cl >= 0 {
+		mut cd := em.cl_decls[cl]
+		return c_cl_call(em, name, bt, row, cd, args, sb) if c_cl_fills(cd.params.len(), args)
+	}
+	em.fn_indirect = true
+	return f"({c_fnptr_cast(bt)}({c_ident_val(em, name, 0, 0, sb)}).fn)({c_ident_val(em, name, 0, 0, sb)}.env{c_args_after(em, bt, args, sb)})"
+}
+
+# c_call_gen_variant is a bare variant `name` of the generic enum `gb`.
+fn c_call_gen_variant(mut &em: Emitter, gb: str, name: str, args: list[ast.Expr], l: int, c: int, sb: Subst) -> str {
+	if em.want_index {
+		c_nx_gen_variant(em, gb, name, l, c)
+	}
+	ap := c_gen_enum_solved(em, gb, name, args)
+	return c_variant_ctor(em, ap, name, args, sb) if ap != ""
+
+	c_gen_enum_no_position(em, gb, name, args)
+	raise c_gen_variant_unrefused("c_call_gen_variant", gb, name)
+}
+
+# c_call_type is a call whose name is a declared type or a variant.
+fn c_call_type(mut &em: Emitter, name: str, args: list[ast.Expr], l: int, c: int, sb: Subst) -> str {
+	if em.want_index {
+		c_nx_type_call(em, name, l, c)
+	}
+	if c_call_is_variant(em, name) {
+		c_bare_variant(em, name)
+
+		# the bare spelling is already the finding; the enum it is built as is the one a
+		# bare name resolves to, which is what c_bare_variant just told the reader to write
+		return c_variant_ctor(em, c_variant_enum(em, name), name, args, sb)
 	}
 
-	# A BARE VARIANT OF A GENERIC ENUM. `Full(42)` names a `Box[int]` no source wrote, and the
-	# template's variants are in no row `c_is_variant` reads — so this fell to "undefined
-	# function `Full`", about a variant declared at the top of the same file.
-	gb := c_gen_variant_owner(em, name)
-	if gb != "" {
-		if em.want_index {
-			c_nx_gen_variant(em, gb, name, l, c)
-		}
-		ap := c_gen_enum_solved(em, gb, name, args)
-		return c_variant_ctor(em, ap, name, args, sb) if ap != ""
-
-		c_gen_enum_no_position(em, gb, name, args)
+	# `Left(v)` and `Right(e)` are CONTEXT-TYPED: they name a side of an Either and have
+	# no type of their own, so they are read where the wanted type is known (c_either_wrap)
+	# and reaching here means there was no such place. Saying that is the difference
+	# between a form used wrongly and a form that does not exist.
+	if c_ctor_side_of(name, args.len()) >= 0 {
+		c_either_no_context(em, name)
 	}
 
-	if c_names_a_type(em, name) or c_is_variant(em, name) {
-		if em.want_index {
-			c_nx_type_call(em, name, l, c)
-		}
-		if c_call_is_variant(em, name) {
-			c_bare_variant(em, name)
+	# A TYPEDEF NAME IS A CONVERSION, not a construction. `Celsius(20)` builds a Celsius
+	# out of an int the way every conversion in this language builds its target — by
+	# re-construction, never by reinterpreting — and `int(c)` is the way back. It goes
+	# through the same c_conv the built-in scalars use, with the typedef's underlying
+	# type standing in for the shape, so the range checks a narrowing owes are the ones
+	# it already knows how to emit.
+	if c_is_typedef(em, name) {
+		chk_call_arity_exact(em, name, args.len())
 
-			# the bare spelling is already the finding; the enum it is built as is the one a
-			# bare name resolves to, which is what c_bare_variant just told the reader to write
-			return c_variant_ctor(em, c_variant_enum(em, name), name, args, sb)
-		}
-
-		# `Left(v)` and `Right(e)` are CONTEXT-TYPED: they name a side of an Either and have
-		# no type of their own, so they are read where the wanted type is known (c_either_wrap)
-		# and reaching here means there was no such place. Saying that is the difference
-		# between a form used wrongly and a form that does not exist.
-		if c_ctor_side_of(name, args.len()) >= 0 {
-			c_either_no_context(em, name)
-		}
-
-		# A TYPEDEF NAME IS A CONVERSION, not a construction. `Celsius(20)` builds a Celsius
-		# out of an int the way every conversion in this language builds its target — by
-		# re-construction, never by reinterpreting — and `int(c)` is the way back. It goes
-		# through the same c_conv the built-in scalars use, with the typedef's underlying
-		# type standing in for the shape, so the range checks a narrowing owes are the ones
-		# it already knows how to emit.
-		if c_is_typedef(em, name) {
-			chk_call_arity_exact(em, name, args.len())
-
-			return c_typedef_conv(em, name, args[0], sb)
-		}
-
-		# A DECLARED TYPE THAT IS NOT A STRUCT IS NOT CONSTRUCTED BY A CALL. Reaching here means
-		# the name IS a type — that is what the branch above asked — so a spec, or an enum with
-		# no such constructor, arrives with a shape only a struct answers.
-		#
-		# THE SENTENCE USED TO SAY THE TYPE DID NOT EXIST, which was true of the population it
-		# had when a name was a type BY ITS CAPITAL: any PascalCase call naming nothing landed
-		# here. Now an undeclared name is not a type at all and never reaches this branch — it
-		# is an undefined name at the call — so the old wording had become false about every
-		# case that is left: `S(1)` on a declared `spec S` reported that no type named `S`
-		# existed, eight lines under the declaration.
-		if not c_is_struct_name(em, name) {
-			c_builtin_check(em, name)
-
-			raise c_diag(em, rule.Rule.NoSuchTypeToConstruct, f"`{name}` is {c_ty_kind_word(em, name)} and a call does not construct one — a construction names a `struct`")
-		}
-
-		return c_construct(em, name, args, sb)
+		return c_typedef_conv(em, name, args[0], sb)
 	}
 
-	# A GENERIC CALL. The template is not a function and has no C symbol; the SPECIALIZATION
-	# is, so the call is rewritten to name it and handed back to this same function — which
-	# then finds an ordinary free function and applies the argument rules to a signature with
-	# real types in it. Nothing below this line knows a generic was involved.
-	if em.want_index and c_is_generic(em, name) {
+	# A DECLARED TYPE THAT IS NOT A STRUCT IS NOT CONSTRUCTED BY A CALL. Reaching here means
+	# the name IS a type — that is what the branch above asked — so a spec, or an enum with
+	# no such constructor, arrives with a shape only a struct answers.
+	#
+	# THE SENTENCE USED TO SAY THE TYPE DID NOT EXIST, which was true of the population it
+	# had when a name was a type BY ITS CAPITAL: any PascalCase call naming nothing landed
+	# here. Now an undeclared name is not a type at all and never reaches this branch — it
+	# is an undefined name at the call — so the old wording had become false about every
+	# case that is left: `S(1)` on a declared `spec S` reported that no type named `S`
+	# existed, eight lines under the declaration.
+	if not c_is_struct_name(em, name) {
+		c_builtin_check(em, name)
+
+		raise c_diag(em, rule.Rule.NoSuchTypeToConstruct, f"`{name}` is {c_ty_kind_word(em, name)} and a call does not construct one — a construction names a `struct`")
+	}
+
+	return c_construct(em, name, args, sb)
+}
+
+fn c_call_generic(mut &em: Emitter, name: str, args: list[ast.Expr], l: int, c: int, sb: Subst, bare: bool) -> str {
+	if em.want_index {
 		c_nx_use(em, l, c, c_tpl_written(name), c_nx_template(em, name))
 	}
-	return c_call(em, c_instantiate(em, name, args), args, 0, 0, sb, bare) if c_is_generic(em, name)
+	return c_call(em, c_instantiate(em, name, args), args, 0, 0, sb, bare)
+}
 
-	# A GENERIC TYPE'S CONSTRUCTOR SOLVES ITS OWN PARAMETERS, from the ARGUMENTS and never from
-	# where the answer lands — docs/core/type-system.md states it for a call, and a construction
-	# is one: "`T` comes from the arguments, never from where the answer lands". `Box(7)` is a
-	# `Box[int]` wherever it is written, and `b: Box[str] = Box(1)` solves `Box[int]` and is
-	# then refused at the BINDING, exactly as `x: float = id(5)` is.
-	#
-	# BESIDE THE GENERIC FN, because it is the same rule about the same thing: a template named
-	# at a call, solved from what the call gives it. It sits here rather than with the struct
-	# constructions below because a template is not a type — it was removed from the program
-	# with the other templates — so the branch that asks "is this name a type" never sees it,
-	# and what it reached instead was `undefined function`.
-	if em.want_index and c_gen_struct_row(em, name) >= 0 {
+fn c_call_gen_struct(mut &em: Emitter, name: str, args: list[ast.Expr], l: int, c: int, sb: Subst) -> str {
+	if em.want_index {
 		c_nx_use(em, l, c, name, c_nx_tk(em, name))
 	}
-	return c_gen_construct(em, name, args, sb) if c_gen_struct_row(em, name) >= 0
+	return c_gen_construct(em, name, args, sb)
+}
 
+# c_call_free is a call of a declared free function, the last kind c_call asks about.
+fn c_call_free(mut &em: Emitter, name: str, args: list[ast.Expr], l: int, c: int, sb: Subst, bare: bool) -> str {
 	# NOTHING DECLARES THIS FUNCTION. It used to be spelled `zg_<name>(…)` and handed to
 	# cc, which reported a call to an undeclared function against a file under .zerg-cache
 	# — for a typo, or for one of the specified-but-unbuilt builtins (`addr`, `ptr`), which
@@ -15786,7 +16016,7 @@ fn c_args_held(mut &em: Emitter, key: str, base: int, written: list[ast.Expr], l
 	# the aliasing rule is about a CALL rather than an argument, so it is asked once here
 	# and not inside the per-argument walk below
 	if base == 0 {
-		em.seq_pre = em.seq_pre + c_alias_guard(em, check.chk_ref_alias(em, key, args), sb)
+		em.seq_pre = em.seq_pre + c_args_alias(em, key, args, sb)
 	}
 
 	# `lead` is also the answer to "does an operand already stand in front of these": it is
@@ -15799,6 +16029,58 @@ fn c_args_held(mut &em: Emitter, key: str, base: int, written: list[ast.Expr], l
 		at = 0
 	}
 
+	pl := c_args_plan(em, key, base, args, written, at)
+	mut prior: list[str] = []
+
+	mut out := ""
+	mut i := 0
+	for i < args.len() {
+		if lead or i > 0 {
+			out = out + ", "
+		}
+
+		# a filled slot takes none of the caller's match substitution either — c_default_enter
+		# clears the standing one and this passes none: a match arm's binders are the caller's
+		# names, and a default that spells one means its own file's declaration
+		mut s := sb
+		mut saved := c_default_stay(em)
+		if c_is_filled(pl.filled, i) {
+			s = c_nosub()
+			saved = c_default_enter(em, key, base + i, base, prior)
+		}
+		bound := (pl.seq or pl.need) and not pl.refs[i]
+		v := c_ordered(em, bound, c_arg(em, key, base + i, i + 1, args[i], s))
+		c_default_leave(em, saved)
+		if bound and i < pl.last {
+			em.seq_pre = em.seq_pre + c_arg_hold(em, key, base + i, args[i], v)
+		}
+		if pl.need {
+			prior.append(v)
+		}
+		out = out + v
+		i = i + 1
+	}
+
+	out = out + c_args_defaulted(em, key, base, base + args.len(), pl.defs, lead, pl.need, keep, pl.last, prior)
+	em.seq_pre = em.seq_pre + c_unhold(em, keep)
+	return out
+}
+
+# ArgPlan is what c_args_held knows about a call before it renders an argument: which
+# arguments are `mut &`, the defaults appended after them, which slots a name skipped, whether
+# the operands need an order, whether a default reads an earlier parameter, and the last
+# operand that runs code. It is worked out by c_args_plan, whose frame is gone by the time an
+# argument is rendered — c_args_held's is paid once per level of a nested call.
+pub struct ArgPlan {
+	pub refs: list[bool]
+	pub defs: list[ast.Expr]
+	pub filled: list[bool]
+	pub seq: bool
+	pub need: bool
+	pub last: int
+}
+
+fn c_args_plan(mut &em: Emitter, key: str, base: int, args: list[ast.Expr], written: list[ast.Expr], at: int) -> ArgPlan {
 	refs := c_ref_args(em, key, base, args)
 
 	# A DEFAULT THAT RUNS CODE sequences the call as a written argument that does: it is
@@ -15815,10 +16097,24 @@ fn c_args_held(mut &em: Emitter, key: str, base: int, written: list[ast.Expr], l
 	# is held in a temporary the default can name — in call order, which is the order the
 	# arguments run in anyway. `prior` stays empty for every other call, and so does its C.
 	need := c_defaults_read_earlier(em, key, base, args.len(), filled)
-	mut prior: list[str] = []
 
-	# the last operand that runs code, counting the defaults appended after the written ones:
-	# an argument in front of it is held, and the one at it — bound last — never is
+	last := c_args_last(args, refs, defs)
+	return ArgPlan(refs, defs, filled, seq, need, last)
+}
+
+# c_args_held's pieces that run before or after its per-argument walk, each a function of its
+# own: the walk is on the stack once per level of a nested call, and at -O0 every temporary in
+# its frame is paid at every level.
+
+# c_args_alias is the aliasing rule's guard. It is about a CALL rather than an argument, so it
+# is asked once and not inside the per-argument walk.
+fn c_args_alias(mut &em: Emitter, key: str, args: list[ast.Expr], sb: Subst) -> str {
+	return c_alias_guard(em, check.chk_ref_alias(em, key, args), sb)
+}
+
+# c_args_last is the last operand that runs code, counting the defaults appended after the
+# written ones: an argument in front of it is held, and the one at it — bound last — never is.
+fn c_args_last(args: list[ast.Expr], refs: list[bool], defs: list[ast.Expr]) -> int {
 	mut last := 0 - 1
 	mut k := 0
 	for k < args.len() {
@@ -15834,55 +16130,31 @@ fn c_args_held(mut &em: Emitter, key: str, base: int, written: list[ast.Expr], l
 		}
 		k = k + 1
 	}
+	return last
+}
 
+# c_args_defaulted renders the appended defaults, the first at parameter `first`, each with its
+# leading comma. One is bound as well while anything is held: left in the parentheses it would
+# run after the holds came off, and one that raises would lose what they held.
+fn c_args_defaulted(mut &em: Emitter, key: str, base: int, first: int, defs: list[ast.Expr], lead: bool, need: bool, keep: int, last: int, prior: list[str]) -> str {
+	mut seen := prior
 	mut out := ""
-	mut i := 0
-	for i < args.len() {
-		if lead or i > 0 {
-			out = out + ", "
-		}
-
-		# a filled slot takes none of the caller's match substitution either — c_default_enter
-		# clears the standing one and this passes none: a match arm's binders are the caller's
-		# names, and a default that spells one means its own file's declaration
-		mut s := sb
-		mut saved := c_default_stay(em)
-		if c_is_filled(filled, i) {
-			s = c_nosub()
-			saved = c_default_enter(em, key, base + i, base, prior)
-		}
-		bound := (seq or need) and not refs[i]
-		v := c_ordered(em, bound, c_arg(em, key, base + i, i + 1, args[i], s))
-		c_default_leave(em, saved)
-		if bound and i < last {
-			em.seq_pre = em.seq_pre + c_arg_hold(em, key, base + i, args[i], v)
-		}
-		if need {
-			prior.append(v)
-		}
-		out = out + v
-		i = i + 1
-	}
-
-	# an appended default is bound as well while anything is held: left in the parentheses it
-	# would run after the holds came off, and one that raises would lose what they held
-	mut j := base + args.len()
+	mut j := first
 	for d in defs {
 		if lead or j > base {
 			out = out + ", "
 		}
 		bound := need or (em.rel_cnames.len() > keep and c_runs_code(d))
-		v := c_ordered(em, bound, c_default_arg(em, key, j, base, prior, d))
+		v := c_ordered(em, bound, c_default_arg(em, key, j, base, seen, d))
 		if bound and j - base < last {
 			em.seq_pre = em.seq_pre + c_arg_hold(em, key, j, d, v)
 		}
 		if need {
-			prior.append(v)
+			seen.append(v)
 		}
 		out = out + v
 		j = j + 1
 	}
-	em.seq_pre = em.seq_pre + c_unhold(em, keep)
 	return out
 }
 
@@ -16374,6 +16646,15 @@ fn c_arg(mut &em: Emitter, fname: str, idx: int, pos: int, a: ast.Expr, sb: Subs
 	# row up from — the scan above is the one this function exists not to repeat
 	check.chk_argument(em, fname, row, pos, a)
 
+	# EVERY OTHER SLOT IS c_arg_other's: a nested call pays this frame once per level, and at
+	# -O0 the branches' temporaries would be paid with it whether or not they run
+	return c_arg_other(em, fname, row, pos, a, sb) if row < 0 or em.pr_ref[row] or ast.ty_is_chan(em.pr_ty[row])
+
+	return c_fit_copied(em, check.chk_slot_says(fname, pos), em.pr_ty[row], a, sb)
+}
+
+# c_arg_other is an argument whose parameter is a `mut &`, a channel, or no row at all.
+fn c_arg_other(mut &em: Emitter, fname: str, row: int, pos: int, a: ast.Expr, sb: Subst) -> str {
 	# a `mut &` argument is the caller's own storage, handed over to be WRITTEN — so it is
 	# lowered like an assignment target and not like a read. `f(mut &xs[0])` took the
 	# address of a slot in a buffer that may be shared, and the callee's write was read
@@ -16402,7 +16683,7 @@ fn c_arg(mut &em: Emitter, fname: str, idx: int, pos: int, a: ast.Expr, sb: Subs
 		check.chk_slot_fits(em, check.chk_slot_says(fname, pos), em.pr_ty[row], a)
 		return c_expr(em, a, sb)
 	}
-	return c_fit_copied(em, check.chk_slot_says(fname, pos), em.pr_ty[row], a, sb)
+	raise parser.p_impossible("c_arg_other was handed a parameter that is not a `mut &`, a channel or a missing row — c_arg routes only those here")
 }
 
 # c_callee_enter is c_default_enter for the idx-th argument of a `spawn` or `defer` callee: an
@@ -17575,6 +17856,13 @@ fn c_match(mut &em: Emitter, scrut: ast.Expr, arms: list[ast.Arm], sb: Subst) ->
 	s := c_expr(em, scrut, sb)
 	return c_arms(em, arms, 0, s, st, sb) if c_is_borrow(scrut) or c_is_unknown(st)
 
+	return c_match_owned(em, arms, s, st, sb)
+}
+
+# c_match_owned is a match whose scrutinee is this expression's own value, held in a temporary
+# the arms read — a helper of its own so a nested match on a borrowed scrutinee does not pay
+# its temporaries at every level.
+fn c_match_owned(mut &em: Emitter, arms: list[ast.Arm], s: str, st: ast.Ty, sb: Subst) -> str {
 	tag := strconv.to_string(em.op_n, 10)
 	em.op_n = em.op_n + 1
 	tmp := "zgt_ms" + tag
@@ -18011,11 +18299,13 @@ fn c_is_bool_lit(e: ast.Expr, v: bool) -> bool {
 	}
 }
 
+# THE ARM CHAIN PASSES `arms` AND AN INDEX, never an arm: a nested match pays c_arms,
+# c_arm_value and c_arm_body once per level, an Arm is several hundred bytes, and at -O0 every
+# copy of one keeps a slot of its own in the frame that made it.
 fn c_arms(mut &em: Emitter, arms: list[ast.Arm], i: int, s: str, st: ast.Ty, sb: Subst) -> str {
-	a := arms[i]
 	return c_arm_value(em, arms, i, s, st, sb) if i == arms.len() - 1
 
-	cond := c_arm_cond(em, a, s, st, sb)
+	cond := c_arm_cond_at(em, arms, i, s, st, sb)
 	body := c_arm_value(em, arms, i, s, st, sb)
 	rest := c_arms(em, arms, i + 1, s, st, sb)
 	return f"({cond} ? {body} : {rest})"
@@ -18025,12 +18315,24 @@ fn c_arms(mut &em: Emitter, arms: list[ast.Arm], i: int, s: str, st: ast.Ty, sb:
 # beside a `T?` first arm it is that optional's ABSENT side (c_opt_wrap): rendered bare it
 # lowered to a `0` in a conditional whose other side is a carrier struct, and cc refused the pair.
 fn c_arm_value(mut &em: Emitter, arms: list[ast.Arm], i: int, s: str, st: ast.Ty, sb: Subst) -> str {
-	a := arms[i]
-	if i > 0 and ast.is_nil_lit(a.body) {
-		t := c_infer_arm_body(em, arms[0], st)
-		return c_opt_wrap(em, "", c_opt_elem(t), a.body, sb) if ast.ty_is_opt(t)
-	}
-	return c_arm_body(em, a, s, st, sb)
+	return c_arm_nil_value(em, arms, i, s, st, sb) if i > 0 and c_arm_is_nil(arms, i)
+
+	return c_arm_body(em, arms, i, s, st, sb)
+}
+
+fn c_arm_is_nil(arms: list[ast.Arm], i: int) -> bool {
+	return ast.is_nil_lit(arms[i].body)
+}
+
+fn c_arm_nil_value(mut &em: Emitter, arms: list[ast.Arm], i: int, s: str, st: ast.Ty, sb: Subst) -> str {
+	t := c_infer_arm_body(em, arms[0], st)
+	return c_opt_wrap(em, "", c_opt_elem(t), arms[i].body, sb) if ast.ty_is_opt(t)
+
+	return c_arm_body(em, arms, i, s, st, sb)
+}
+
+fn c_arm_cond_at(mut &em: Emitter, arms: list[ast.Arm], i: int, s: str, st: ast.Ty, sb: Subst) -> str {
+	return c_arm_cond(em, arms[i], s, st, sb)
 }
 
 # c_either_side is the side of an Either that a constructor pattern names, or "" for a name
@@ -18873,22 +19175,40 @@ fn c_arm_bound(mut &em: Emitter, b: ast.Expr, sb: Subst) -> str {
 # SUBSTITUTION into `v.u.A.f0` and never a C variable, so the outer one came back as
 # `use of undeclared identifier 'zg_x__2'` from cc. The seed gets this right, which is how
 # it was found.
-fn c_arm_body(mut &em: Emitter, a: ast.Arm, s: str, st: ast.Ty, sb: Subst) -> str {
+fn c_arm_body(mut &em: Emitter, arms: list[ast.Arm], i: int, s: str, st: ast.Ty, sb: Subst) -> str {
 	outer := c_scope_open(em)
-	c_bind_env(em, a, st)
+	c_bind_env_at(em, arms, i, st)
 
 	# COPIED, because a match used as a value hands its answer to whoever asked. An arm's
 	# payload binding is a SUBSTITUTION into the scrutinee's own field, so `mut ys := match
 	# b { One(q) => q … }` handed back the enum's own list header and a write through `ys`
 	# was read back through `b`. It is the carrier extraction's rule, one shape along.
-	t := c_infer(em, a.body)
+	t := c_infer_arm_value(em, arms, i)
 	mark := em.rs_tmps.len()
-	sub := c_arm_subst(em, a, s, st, sb)
+	sub := c_arm_subst_at(em, arms, i, s, st, sb)
 	keep := em.rel_cnames.len()
 	decl := c_rest_open(em, mark)
-	out := c_rest_close(em, mark, keep, decl, c_copied(em, t, a.body, sub), c_is_nil_ty(t))
+	out := c_rest_close(em, mark, keep, decl, c_copied(em, t, c_arm_value_expr(arms, i), sub), c_is_nil_ty(t))
 	c_scope_close(em, outer)
 	return out
+}
+
+# c_bind_env_at, c_infer_arm_value, c_arm_subst_at and c_arm_value_expr read arm `i` for
+# c_arm_body, so the arm is copied in their frames and not in the one a nested match pays.
+fn c_bind_env_at(mut &em: Emitter, arms: list[ast.Arm], i: int, st: ast.Ty) {
+	c_bind_env(em, arms[i], st)
+}
+
+fn c_infer_arm_value(mut &em: Emitter, arms: list[ast.Arm], i: int) -> ast.Ty {
+	return c_infer(em, arms[i].body)
+}
+
+fn c_arm_subst_at(mut &em: Emitter, arms: list[ast.Arm], i: int, s: str, st: ast.Ty, sb: Subst) -> Subst {
+	return c_arm_subst(em, arms[i], s, st, sb)
+}
+
+fn c_arm_value_expr(arms: list[ast.Arm], i: int) -> ast.Expr {
+	return arms[i].body
 }
 
 # --- type inference ------------------------------------------------------------
@@ -18925,7 +19245,29 @@ pub fn c_infer(mut &em: Emitter, e: ast.Expr) -> ast.Ty {
 	return t
 }
 
+# c_infer_node dispatches on the node's shape (ast.expr_shape), for c_expr_node's reason: its
+# frame is paid once per level of the walk, and emission infers a subtree at every level of a
+# nested call, so a frame holding every variant's arms was paid on top of the emitter's own
+# down the whole depth. Each shape helper's `_` arm is c_infer_missed, never a type.
 fn c_infer_node(mut &em: Emitter, e: ast.Expr) -> ast.Ty {
+	k := ast.expr_shape(e)
+
+	return c_infer_link(em, e) if k == ast.EXPR_LINK
+	return c_infer_leaf(em, e) if k == ast.EXPR_LEAF
+	return c_infer_unary_node(em, e) if k == ast.EXPR_UNARY
+	return c_infer_binary_node(em, e) if k == ast.EXPR_BINARY
+	return c_infer_control(em, e) if k == ast.EXPR_CONTROL
+	return c_infer_aggregate(em, e) if k == ast.EXPR_AGGREGATE
+
+	return c_infer_missed("node", e)
+}
+
+# c_infer_missed is c_shape_missed for the inference walk.
+fn c_infer_missed(walk: str, e: ast.Expr) -> ast.Ty {
+	raise parser.p_impossible(f"c_infer_{walk} was handed {ast.expr_kind(e)}, which its shape (ast.expr_shape) does not route there — the helper for that shape has to name the variant")
+}
+
+fn c_infer_leaf(mut &em: Emitter, e: ast.Expr) -> ast.Ty {
 	return match e {
 		Expr.EInt(_, _, _) => ast.Ty.TInt
 		Expr.EFloat(_) => ast.Ty.TFloat
@@ -18933,10 +19275,43 @@ fn c_infer_node(mut &em: Emitter, e: ast.Expr) -> ast.Ty {
 		Expr.EBool(_) => ast.Ty.TBool
 		Expr.ENil => ast.Ty.TNil
 		Expr.EIdent(n, _, _) => c_infer_ident(em, n)
+		_ => c_infer_missed("leaf", e)
+	}
+}
+
+fn c_infer_unary_node(mut &em: Emitter, e: ast.Expr) -> ast.Ty {
+	return match e {
 		Expr.EUnary(oper, x) => c_infer_unary(em, oper, x)
+		Expr.ETry(x) => c_carrier_elem(c_infer(em, x))
+		Expr.EConv(ty, x, _) => ty
+		Expr.EFmt(_, _, _) => ast.Ty.TStr
+		Expr.ERecv(ch) => ast.Ty.TOpt(ast.ty_chan_elem(c_infer(em, ch)))
+		Expr.EForce(x) => c_carrier_elem(c_infer(em, x))
+		Expr.EIs(_, _) => ast.Ty.TBool
+		_ => c_infer_missed("unary", e)
+	}
+}
+
+fn c_infer_binary_node(mut &em: Emitter, e: ast.Expr) -> ast.Ty {
+	return match e {
 		Expr.EBinary(oper, a, b) => c_infer_binary(em, oper, a, b)
+		Expr.EIndex(target, idx) => c_elem_ty(em, target, idx)
+		Expr.EFill(v, _)         => c_infer_fill(em, v)
+
+		# A RANGE'S TYPE IS ITS BOUNDS'. It answered TUnknown while the form was refused, and
+		# an unknown type is what every rule in check.zg returns early on — so a range in a
+		# value position met no rule at all on its way to the one that turned it away.
+		Expr.ERange(lo, _, _) => ast.Ty.TRange(c_infer(em, lo))
+		Expr.ECoalesce(a, b, _) => c_infer_coalesce(em, a, b)
+		Expr.EIn(_, _) => ast.Ty.TBool
+		_ => c_infer_missed("binary", e)
+	}
+}
+
+fn c_infer_link(mut &em: Emitter, e: ast.Expr) -> ast.Ty {
+	return match e {
 		Expr.ECall(name, args, ts, _, _) => c_infer_call_written(em, name, args, ts)
-		Expr.ECallVal(callee, _) => c_infer_call_val(em, callee)
+		Expr.ECallVal(callee, _)         => c_infer_call_val(em, callee)
 
 		# the name decides WHICH parameter, never WHAT TYPE — so the type is the value's, and
 		# a named argument answers whatever it would have answered written positionally
@@ -18945,36 +19320,33 @@ fn c_infer_node(mut &em: Emitter, e: ast.Expr) -> ast.Ty {
 		Expr.EField(target, fld, _, _) => c_field_ty_of(em, target, fld)
 		Expr.EOptChain(target, fld, _, _) => c_optchain_ty(em, target, fld)
 		Expr.EOptMethod(target, meth, args, l, c) => c_optmethod_ty(em, target, meth, args, l, c)
-		Expr.ETry(x) => c_carrier_elem(c_infer(em, x))
-		Expr.EIndex(target, idx) => c_elem_ty(em, target, idx)
-		Expr.EListLit(elems) => c_infer_listlit(em, elems)
+		_ => c_infer_missed("link", e)
+	}
+}
 
-		Expr.EFill(v, _) => c_infer_fill(em, v)
-		Expr.EConv(ty, x, _) => ty
-		Expr.EFmt(_, _, _) => ast.Ty.TStr
+fn c_infer_control(mut &em: Emitter, e: ast.Expr) -> ast.Ty {
+	return match e {
 		Expr.EIf(_, then_e, _) => c_infer(em, then_e)
 		Expr.EMatch(scrut, arms) => c_infer_match(em, scrut, arms)
 		Expr.EIfLet(nm, v, a, b, l, c) => c_infer(em, c_iflet_match(em, nm, v, a, b, l, c))
-
-		# A RANGE'S TYPE IS ITS BOUNDS'. It answered TUnknown while the form was refused, and
-		# an unknown type is what every rule in check.zg returns early on — so a range in a
-		# value position met no rule at all on its way to the one that turned it away.
-		Expr.ERange(lo, _, _) => ast.Ty.TRange(c_infer(em, lo))
-		Expr.ETuple(elems) => c_tuple_ty(em, elems)
-		Expr.EMapLit(ks, vs) => c_map_lit_ty(em, ks, vs)
 		Expr.EFn(ps, has_ret, ret, body) => c_lambda_ty(ps, has_ret, ret)
-		Expr.EChanNew(t, _) => ast.ty_chan(t, 0, "")
-		Expr.ERecv(ch) => ast.Ty.TOpt(ast.ty_chan_elem(c_infer(em, ch)))
-		Expr.EForce(x) => c_carrier_elem(c_infer(em, x))
-		Expr.ECoalesce(a, b, _) => c_infer_coalesce(em, a, b)
 		Expr.EGuard(body) => ast.Ty.TEither(c_guard_elem(c_guard_val_ty(em, body)), ast.Ty.TErr)
 		Expr.EBlock(body) => c_block_val_ty(em, body)
 		Expr.EUnsafe(body) => c_block_val_ty(em, body)
 
 		# an `asm(…)` yields nothing: its effects are its operands and its clobbers
-		Expr.EAsm(_, _)   => ast.Ty.TVoid
-		Expr.EIs(x, name) => ast.Ty.TBool
-		Expr.EIn(x, _)    => ast.Ty.TBool
+		Expr.EAsm(_, _) => ast.Ty.TVoid
+		_ => c_infer_missed("control", e)
+	}
+}
+
+fn c_infer_aggregate(mut &em: Emitter, e: ast.Expr) -> ast.Ty {
+	return match e {
+		Expr.EListLit(elems) => c_infer_listlit(em, elems)
+		Expr.ETuple(elems) => c_tuple_ty(em, elems)
+		Expr.EMapLit(ks, vs) => c_map_lit_ty(em, ks, vs)
+		Expr.EChanNew(t, _) => ast.ty_chan(t, 0, "")
+		_ => c_infer_missed("aggregate", e)
 	}
 }
 
@@ -19407,27 +19779,55 @@ fn c_infer_binary(mut &em: Emitter, oper: str, a: ast.Expr, b: ast.Expr) -> ast.
 
 # --- statement emission --------------------------------------------------------
 
+# c_stmt dispatches on ast.stmt_nests and destructures nothing itself: a nested block pays
+# this frame once per level, and at -O0 one match over every variant held every arm's
+# temporaries. Each helper's `_` arm is c_stmt_missed, never a statement dropped.
 fn c_stmt(mut &em: Emitter, s: ast.Stmt, ind: str) -> str {
+	return c_nested_stmt(em, s, ind) if ast.stmt_nests(s)
+
+	return c_flat_stmt(em, s, ind)
+}
+
+# c_stmt_missed is a statement handed to the helper that does not name it — a state
+# ast.stmt_nests rules out, reported as the compiler's fault rather than emitted as nothing.
+fn c_stmt_missed(walk: str, s: ast.Stmt) -> str {
+	raise parser.p_impossible(f"c_{walk}_stmt was handed a statement ast.stmt_nests does not route there — the two have to sort the same variants")
+}
+
+fn c_nested_stmt(mut &em: Emitter, s: ast.Stmt, ind: str) -> str {
 	return match s {
-		Stmt.SLet(name, ty, has_type, is_mut, is_const, ival, l, c) => c_let_at(em, name, ty, has_type, is_mut, is_const, ival, l, c, ind)
-		Stmt.SAssign(lhs, rhs) => c_assign(em, lhs, rhs, ind)
-		Stmt.SDestructure(t, v, is_bind, is_mut, is_const) => c_destructure(em, t, v, is_bind, is_mut, is_const, ind)
-		Stmt.SPrint(e) => c_print(em, e, ind)
-		Stmt.SReturn(has_val, e) => c_return(em, has_val, e, ind)
-		Stmt.SReturnIf(val, cond) => c_return_if(em, val, cond, ind)
-		Stmt.SExpr(e) => c_expr_stmt(em, e, ind)
 		Stmt.SIf(cond, then_body, has_else, else_body) => c_if(em, cond, then_body, has_else, else_body, ind)
 		Stmt.SIfLet(name, value, then_body, has_else, else_body, l, c) => c_iflet_at(em, name, value, then_body, has_else, else_body, l, c, ind)
 		Stmt.SFor(has_cond, cond, body) => c_for(em, has_cond, cond, body, ind)
 		Stmt.SForIn(var, im, iter, body, l, c) => c_forin_at(em, var, im, iter, body, l, c, ind)
-		Stmt.SRaise(x, hc, c) => c_raise(em, x, hc, c, ind)
 		Stmt.SAssert(body) => c_assert(em, body, ind)
 		Stmt.SScope(body, is_unsafe) => c_scope(em, body, is_unsafe, ind)
+		Stmt.SSelect(arms) => c_select(em, arms, ind, false)
+		Stmt.SForSelect(arms) => c_for_select(em, arms, ind)
+		_ => c_stmt_missed("nested", s)
+	}
+}
+
+fn c_flat_stmt(mut &em: Emitter, s: ast.Stmt, ind: str) -> str {
+	return match s {
+		Stmt.SLet(name, ty, has_type, is_mut, is_const, ival, l, c) => c_let_at(em, name, ty, has_type, is_mut, is_const, ival, l, c, ind)
+		Stmt.SAssign(lhs, rhs) => c_assign(em, lhs, rhs, ind)
+		Stmt.SPrint(e) => c_print(em, e, ind)
+		Stmt.SReturn(has_val, e) => c_return(em, has_val, e, ind)
+		Stmt.SReturnIf(val, cond) => c_return_if(em, val, cond, ind)
+		Stmt.SExpr(e) => c_expr_stmt(em, e, ind)
+		_ => c_other_stmt(em, s, ind)
+	}
+}
+
+# c_other_stmt is a flat statement that is not one of the six an expression is nested inside.
+fn c_other_stmt(mut &em: Emitter, s: ast.Stmt, ind: str) -> str {
+	return match s {
+		Stmt.SDestructure(t, v, is_bind, is_mut, is_const) => c_destructure(em, t, v, is_bind, is_mut, is_const, ind)
+		Stmt.SRaise(x, hc, c) => c_raise(em, x, hc, c, ind)
 		Stmt.SDefer(x) => c_defer(em, x, ind)
 		Stmt.SSpawn(x) => c_spawn(em, x, ind)
 		Stmt.SSend(ch, v) => c_send(em, ch, v, ind)
-		Stmt.SSelect(arms) => c_select(em, arms, ind, false)
-		Stmt.SForSelect(arms) => c_for_select(em, arms, ind)
 		Stmt.SDel(n, l, c) => c_del_at(em, n, l, c, ind)
 		Stmt.SClose(ch, at_exit) => c_close(em, ch, at_exit, ind)
 		Stmt.SBreak => c_jump(em, "break", ind)
@@ -19436,6 +19836,7 @@ fn c_stmt(mut &em: Emitter, s: ast.Stmt, ind: str) -> str {
 
 		# a marker, not a statement: it records where the next one starts and emits nothing
 		Stmt.SAt(l, c, el, ec) => c_at(em, l, c, el, ec)
+		_ => c_stmt_missed("flat", s)
 	}
 }
 
@@ -21817,60 +22218,15 @@ fn c_lambda(mut &em: Emitter, ps: list[ast.Param], has_ret: bool, ret: ast.Ty, b
 	# expressions. The captures become ordinary LEADING PARAMETERS of the lifted function, so
 	# every rule about a by-value parameter already applies to them: the copy in, the drop
 	# out, the shadowing. Nothing in the body has to know it is reading a capture.
-	# A PARAMETER NOTHING COULD TYPE. Every typed position fills these in (c_fn_typed), so
-	# reaching here with one still unknown means the closure met no position that could —
-	# `f := fn (x) { … }`, or an argument slot with fewer parameters than the closure wrote.
-	# That is the second half of carve-out (c) and the specification states it as an error,
-	# so it is one here rather than a `TUnknown` carried into a C declaration.
-	for pm in ps {
-		if c_is_unknown(pm.ty) {
-			check.chk_at(em, rule.Rule.ClosureParamNoType, f"the closure parameter `{pm.name}` has no type, and this position gives it none — a closure takes its parameter types from the function type it is checked against, so write `{pm.name}: T` or put the closure where one is declared")
-		}
-	}
-
-	# its defaults are judged where it is written, in the scopes open here (check.chk_defaults)
-	mut judged := false
-	for pm in ps {
-		judged = judged or pm.has_def
-	}
-	if judged {
-		check.chk_defaults(em, em.at_path, 0, 0, ps, "this closure", false)
-	}
+	#
+	# EVERY STEP BEFORE AND AFTER THE BODY IS A HELPER'S: a closure written in a closure pays
+	# this frame once per level, and at -O0 every temporary in it is paid at every level.
+	c_lambda_judge(em, ps)
 
 	caps := c_lambda_free_all(em, ps, body)
-	mut cps: list[ast.Param] = []
-	for cn in caps {
-		ct := c_lookup_var(em, cn)
-
-		# A capture whose type is unknown cannot be given a field, so it is refused here and
-		# the refusal NAMES it. Every capture is a binding of the enclosing function, so what
-		# arrives untyped is a binding that function never typed — `xs := []`, which the
-		# checker has already reported and which would otherwise go on into a C declaration.
-		# A name that function has NOT bound is no capture and never reaches this line: the
-		# lifted body resolves it, or refuses it as it would be refused outside a closure.
-		raise c_diag(em, rule.Rule.ClosureCaptureUnknown, f"a closure captures `{cn}`, and this compiler cannot work out what it holds") if c_is_unknown(ct)
-
-		cps.append(ast.Param(cn, ct, false, false, ast.Expr.ENil, 0, 0))
-	}
-
-	# THE VALUES ARE READ HERE, while the ENCLOSING environment is still the current one. A
-	# few lines down it is swapped for the lambda's own, and by then these names mean nothing
-	# — which is the whole reason a capture is a copy taken at the point the lambda is
-	# written rather than a reference to a binding that may already be gone.
-	mut cvals: list[str] = []
-	for cp in cps {
-		cvals.append(c_copied(em, cp.ty, ast.Expr.EIdent(cp.name, 0, 0), c_nosub()))
-	}
-
-	# AND WHAT EACH CAPTURE IS IN THE NAME INDEX: the binding it copies, so a use inside the body
-	# is a reference of that binding. The lifted function binds its parameters before anything
-	# else — the captures first — so their rows are the next ones c_nx_row hands out.
-	mut cap_nx: list[int] = []
-	if em.want_index {
-		for cn in caps {
-			cap_nx.append(em.env_nx[c_live_idx(em, cn)])
-		}
-	}
+	cps := c_lambda_caps(em, caps)
+	cvals := c_lambda_cvals(em, cps)
+	cap_nx := c_lambda_cap_nx(em, caps)
 	nx_from := em.nx_rows.len()
 
 	mut allps := cps
@@ -21908,7 +22264,7 @@ fn c_lambda(mut &em: Emitter, ps: list[ast.Param], has_ret: bool, ret: ast.Ty, b
 	# the substitution still in force.
 	saved_sub := em.sub
 	em.sub = c_nosub()
-	em.lam_defs.append(c_fn(em, ast.FnDecl(name, "", allps, has_ret, ret, body, false, em.at_path, em.at_line, em.at_col, [], [], em.in_unsafe_fn, false, false, true, false, "", 0, 0, 0, 0, "")))
+	em.lam_defs.append(c_fn(em, c_lambda_decl(em, name, allps, has_ret, ret, body)))
 	mut ci := 0
 	for ci < cap_nx.len() {
 		em.nx_rows[nx_from + ci] = cap_nx[ci]
@@ -21927,6 +22283,81 @@ fn c_lambda(mut &em: Emitter, ps: list[ast.Param], has_ret: bool, ret: ast.Ty, b
 	em.walk_idxs = saved_walk
 	em.used_fnptr = true
 
+	return c_lambda_value(em, name, caps, cps, ps, has_ret, ret, cvals)
+}
+
+# A PARAMETER NOTHING COULD TYPE. Every typed position fills these in (c_fn_typed), so
+# reaching here with one still unknown means the closure met no position that could —
+# `f := fn (x) { … }`, or an argument slot with fewer parameters than the closure wrote.
+# That is the second half of carve-out (c) and the specification states it as an error,
+# so it is one here rather than a `TUnknown` carried into a C declaration.
+fn c_lambda_judge(mut &em: Emitter, ps: list[ast.Param]) {
+	for pm in ps {
+		if c_is_unknown(pm.ty) {
+			check.chk_at(em, rule.Rule.ClosureParamNoType, f"the closure parameter `{pm.name}` has no type, and this position gives it none — a closure takes its parameter types from the function type it is checked against, so write `{pm.name}: T` or put the closure where one is declared")
+		}
+	}
+
+	# its defaults are judged where it is written, in the scopes open here (check.chk_defaults)
+	mut judged := false
+	for pm in ps {
+		judged = judged or pm.has_def
+	}
+	if judged {
+		check.chk_defaults(em, em.at_path, 0, 0, ps, "this closure", false)
+	}
+}
+
+fn c_lambda_caps(mut &em: Emitter, caps: list[str]) -> list[ast.Param] {
+	mut cps: list[ast.Param] = []
+	for cn in caps {
+		ct := c_lookup_var(em, cn)
+
+		# A capture whose type is unknown cannot be given a field, so it is refused here and
+		# the refusal NAMES it. Every capture is a binding of the enclosing function, so what
+		# arrives untyped is a binding that function never typed — `xs := []`, which the
+		# checker has already reported and which would otherwise go on into a C declaration.
+		# A name that function has NOT bound is no capture and never reaches this line: the
+		# lifted body resolves it, or refuses it as it would be refused outside a closure.
+		raise c_diag(em, rule.Rule.ClosureCaptureUnknown, f"a closure captures `{cn}`, and this compiler cannot work out what it holds") if c_is_unknown(ct)
+
+		cps.append(ast.Param(cn, ct, false, false, ast.Expr.ENil, 0, 0))
+	}
+	return cps
+}
+
+# THE VALUES ARE READ HERE, while the ENCLOSING environment is still the current one. A
+# few lines down it is swapped for the lambda's own, and by then these names mean nothing
+# — which is the whole reason a capture is a copy taken at the point the lambda is
+# written rather than a reference to a binding that may already be gone.
+fn c_lambda_cvals(mut &em: Emitter, cps: list[ast.Param]) -> list[str] {
+	mut cvals: list[str] = []
+	for cp in cps {
+		cvals.append(c_copied(em, cp.ty, ast.Expr.EIdent(cp.name, 0, 0), c_nosub()))
+	}
+	return cvals
+}
+
+# AND WHAT EACH CAPTURE IS IN THE NAME INDEX: the binding it copies, so a use inside the body
+# is a reference of that binding. The lifted function binds its parameters before anything
+# else — the captures first — so their rows are the next ones c_nx_row hands out.
+fn c_lambda_cap_nx(mut &em: Emitter, caps: list[str]) -> list[int] {
+	mut cap_nx: list[int] = []
+	if em.want_index {
+		for cn in caps {
+			cap_nx.append(em.env_nx[c_live_idx(em, cn)])
+		}
+	}
+	return cap_nx
+}
+
+# c_lambda_decl is the declaration the closure is lifted into.
+fn c_lambda_decl(mut &em: Emitter, name: str, allps: list[ast.Param], has_ret: bool, ret: ast.Ty, body: list[ast.Stmt]) -> ast.FnDecl {
+	return ast.FnDecl(name, "", allps, has_ret, ret, body, false, em.at_path, em.at_line, em.at_col, [], [], em.in_unsafe_fn, false, false, true, false, "", 0, 0, 0, 0, "")
+}
+
+# c_lambda_value is the closure's value, once its body is lifted.
+fn c_lambda_value(mut &em: Emitter, name: str, caps: list[str], cps: list[ast.Param], ps: list[ast.Param], has_ret: bool, ret: ast.Ty, cvals: list[str]) -> str {
 	# NOTHING CAPTURED is the case that already worked: the lifted function is an ordinary
 	# one, and it reaches the fn-value shape the same way a named function does — through a
 	# thunk that takes the environment and ignores it.
@@ -25274,17 +25705,10 @@ fn c_range_incl(e: ast.Expr) -> bool {
 # a raise. Its step is the checked `+`, so a loop that walks past the largest int raises
 # `OverflowError` as `i + 1` would (docs/core/types.md) instead of wrapping to the smallest.
 fn c_forrange(mut &em: Emitter, var: str, iter: ast.Expr, body: list[ast.Stmt], ind: str) -> str {
-	open := ast.is_nil_lit(c_range_hi(iter))
-	c_for_bound(em, c_range_lo(iter))
-	c_for_bound(em, c_range_hi(iter))
-
-	# both bounds are lowered before the loop variable exists, so neither can name it
+	# EVERYTHING AROUND THE BODY IS A HELPER'S: nested loops pay this frame once per level, and
+	# at -O0 every temporary in it is paid at every level.
 	in2 := ind + "    "
-	lo := c_expr(em, c_range_lo(iter), c_nosub())
-	mut hi_decl := ""
-	if not open {
-		hi_decl = f"{in2}int64_t zgt_hi = {c_expr(em, c_range_hi(iter), c_nosub())};\n"
-	}
+	head := c_forrange_bounds(em, iter, ind)
 	outer_scope := c_scope_open(em)
 	c_add_var(em, var, ast.Ty.TInt, false, false)
 
@@ -25296,7 +25720,33 @@ fn c_forrange(mut &em: Emitter, var: str, iter: ast.Expr, body: list[ast.Stmt], 
 	# `for` initialiser, which C runs after the declaration above it — so `for i in a()..b()`
 	# called `b` and then `a`, while the same two calls written `a() + b()` in the same
 	# program ran left to right, as every other operand pair in the language does.
-	mut out := ind + "{\n" + in2 + "int64_t zgt_lo = " + lo + ";\n" + hi_decl
+	mut out := head + c_forrange_loop(em, iter, cv, in2)
+	out = out + c_loop_block(em, body, in2 + "    ")
+	out = out + in2 + "}\n"
+	c_scope_close(em, outer_scope)
+	return out + ind + "}\n"
+}
+
+# c_forrange_bounds checks and evaluates the range's bounds, once, ahead of the loop.
+fn c_forrange_bounds(mut &em: Emitter, iter: ast.Expr, ind: str) -> str {
+	open := ast.is_nil_lit(c_range_hi(iter))
+	c_for_bound(em, c_range_lo(iter))
+	c_for_bound(em, c_range_hi(iter))
+
+	# both bounds are lowered before the loop variable exists, so neither can name it
+	in2 := ind + "    "
+	lo := c_expr(em, c_range_lo(iter), c_nosub())
+	mut hi_decl := ""
+	if not open {
+		hi_decl = f"{in2}int64_t zgt_hi = {c_expr(em, c_range_hi(iter), c_nosub())};\n"
+	}
+	return ind + "{\n" + in2 + "int64_t zgt_lo = " + lo + ";\n" + hi_decl
+}
+
+# c_forrange_loop is the `for` header over the bounds c_forrange_bounds bound.
+fn c_forrange_loop(mut &em: Emitter, iter: ast.Expr, cv: str, in2: str) -> str {
+	open := ast.is_nil_lit(c_range_hi(iter))
+	mut out := ""
 
 	# An INCLUSIVE range whose high end is the type's maximum has no value to step to after
 	# it: `v++` there overflows, which is undefined in C and in practice loops forever. The
@@ -25314,10 +25764,7 @@ fn c_forrange(mut &em: Emitter, var: str, iter: ast.Expr, body: list[ast.Stmt], 
 	} else {
 		out = out + in2 + "for (int64_t " + cv + " = zgt_lo; " + cv + " < zgt_hi; " + cv + "++) {\n"
 	}
-	out = out + c_loop_block(em, body, in2 + "    ")
-	out = out + in2 + "}\n"
-	c_scope_close(em, outer_scope)
-	return out + ind + "}\n"
+	return out
 }
 
 # c_for_bound holds one bound of a `for … in` range to an int. The missing upper bound of an
@@ -25601,9 +26048,61 @@ fn c_forin(mut &em: Emitter, var: str, iter: ast.Expr, body: list[ast.Stmt], ind
 	return c_forrange(em, var, iter, body, ind) if c_is_range(iter)
 	em.used_rt = true
 
+	ct := c_infer(em, iter)
+
+	# EACH KIND OF ITERABLE IS A HELPER'S: this frame is paid once per level of nested loops,
+	# and at -O0 every kind's temporaries would be paid at every level.
+	return c_forin_shaped(em, var, iter, ct, body, ind) if c_forin_is_shaped(ct)
+
+	return c_forlist(em, var, iter, ct, body, ind)
+}
+
+# c_forlist is a `for … in` over a list — or over a type no rule could walk, refused first.
+fn c_forlist(mut &em: Emitter, var: str, iter: ast.Expr, ct: ast.Ty, body: list[ast.Stmt], ind: str) -> str {
+	if not c_is_list(ct) and not c_is_unknown(ct) {
+		check.chk_at(em, rule.Rule.NotIterable, f"`for … in` walks a list, an array, a map, a str, a range or a channel, and {ast.ty_name(ct)} is not iterable")
+	}
+
+	elem := c_list_elem(ct)
+	et := c_type(elem)
+	outer_scope := c_scope_open(em)
+	c_add_var(em, var, elem, false, false)
+	cv := c_var_cname(em, var)
+
+	# wrap in a block and COPY the iterable into a local. It used to be a header bit-copy —
+	# addressable, and enough for a call-result rvalue — which meant the loop held a
+	# pointer into a buffer it had taken no reference to: `for v in xs { xs.append(v) }`
+	# grew `xs` past its capacity, `zrt_list_grow` freed the buffer, and the loop read on
+	# from the free'd one. ASan called it a heap-use-after-free; without it the loop simply
+	# read rubbish. A copy is what the language says a loop iterates anyway — the sequence
+	# as it was when the loop started — and under copy-on-write it costs an increment.
+	# The iterable is COPIED into a local when it names storage, and TAKEN OVER when it does
+	# not — `for v in xs` must iterate the sequence as it was when the loop started, and
+	# `for c in s` builds its list of code points here and owns the only reference to it.
+	# Copying that one as well left the fresh list at two references and dropped neither, so
+	# every execution of the loop leaked its whole buffer.
+	in2 := ind + "    "
+	keep := em.rel_cnames.len()
+	mark := c_new_mark(em)
+	mut out := c_forlist_head(em, iter, elem, et, cv, ind, mark)
+
+	frz := c_frz_push(em, iter)
+	out = out + c_loop_block(em, body, in2 + "    ")
+	c_frz_pop(em, frz, iter)
+	out = out + in2 + "}\n"
+	c_scope_close(em, outer_scope)
+	c_scope_forget(em, keep)
+	return out + in2 + f"zrt_unwind_to({mark});\n" + ind + "}\n"
+}
+
+# c_forin_is_shaped is whether the iterable is one c_forin_shaped lowers: every kind but a list.
+fn c_forin_is_shaped(ct: ast.Ty) -> bool {
+	return ast.ty_is_chan(ct) or c_is_range_ty(ct) or c_is_map(ct) or c_is_set(ct) or c_is_str(ct) or c_is_arr(ct)
+}
+
+fn c_forin_shaped(mut &em: Emitter, var: str, iter: ast.Expr, ct: ast.Ty, body: list[ast.Stmt], ind: str) -> str {
 	# A CHANNEL is the other thing that is iterated without being a container: the loop
 	# is the receive, and the close is what ends it.
-	ct := c_infer(em, iter)
 	return c_forchan(em, var, iter, ct, body, ind) if ast.ty_is_chan(ct)
 
 	# A RANGE VALUE walks the same counted loop the literal above does, reading its bounds out
@@ -25632,31 +26131,12 @@ fn c_forin(mut &em: Emitter, var: str, iter: ast.Expr, body: list[ast.Stmt], ind
 	# of the line that is fine.
 	return c_forarr(em, var, iter, ct, body, ind) if c_is_arr(ct)
 
-	if not c_is_list(ct) and not c_is_unknown(ct) {
-		check.chk_at(em, rule.Rule.NotIterable, f"`for … in` walks a list, an array, a map, a str, a range or a channel, and {ast.ty_name(ct)} is not iterable")
-	}
+	raise parser.p_impossible("c_forin_shaped was handed an iterable c_forin_is_shaped does not name")
+}
 
-	elem := c_list_elem(ct)
-	et := c_type(elem)
-	outer_scope := c_scope_open(em)
-	c_add_var(em, var, elem, false, false)
-	cv := c_var_cname(em, var)
-
-	# wrap in a block and COPY the iterable into a local. It used to be a header bit-copy —
-	# addressable, and enough for a call-result rvalue — which meant the loop held a
-	# pointer into a buffer it had taken no reference to: `for v in xs { xs.append(v) }`
-	# grew `xs` past its capacity, `zrt_list_grow` freed the buffer, and the loop read on
-	# from the free'd one. ASan called it a heap-use-after-free; without it the loop simply
-	# read rubbish. A copy is what the language says a loop iterates anyway — the sequence
-	# as it was when the loop started — and under copy-on-write it costs an increment.
-	# The iterable is COPIED into a local when it names storage, and TAKEN OVER when it does
-	# not — `for v in xs` must iterate the sequence as it was when the loop started, and
-	# `for c in s` builds its list of code points here and owns the only reference to it.
-	# Copying that one as well left the fresh list at two references and dropped neither, so
-	# every execution of the loop leaked its whole buffer.
+# c_forlist_head is a list loop's opening: its mark, the copy it walks, and the element binding.
+fn c_forlist_head(mut &em: Emitter, iter: ast.Expr, elem: ast.Ty, et: str, cv: str, ind: str, mark: str) -> str {
 	in2 := ind + "    "
-	keep := em.rel_cnames.len()
-	mark := c_new_mark(em)
 	mut out := ind + "{\n" + in2 + f"size_t {mark} = zrt_scope_mark();\n"
 	out = out + in2 + "zrt_list zgt_it = " + c_copied(em, c_infer(em, iter), iter, c_nosub()) + ";\n"
 	out = out + c_pend_drop(em, ast.Ty.TList(elem), "zgt_it", in2)
@@ -25667,13 +26147,7 @@ fn c_forin(mut &em: Emitter, var: str, iter: ast.Expr, body: list[ast.Stmt], ind
 	# BINDING is pushed here and popped after, so every rule that consults the stack sees
 	# exactly the loops the statement is inside — and sees the loop's own binding rather
 	# than everything the body spells with the same name
-	frz := c_frz_push(em, iter)
-	out = out + c_loop_block(em, body, in2 + "    ")
-	c_frz_pop(em, frz, iter)
-	out = out + in2 + "}\n"
-	c_scope_close(em, outer_scope)
-	c_scope_forget(em, keep)
-	return out + in2 + f"zrt_unwind_to({mark});\n" + ind + "}\n"
+	return out
 }
 
 # c_formap is the list loop over a map's KEYS, on the runtime's insertion-ordered accessor.
@@ -25781,9 +26255,16 @@ fn c_let(mut &em: Emitter, name: str, ty: ast.Ty, has_type: bool, is_mut: bool, 
 	return c_let_chan(em, name, eff, is_mut, is_const, ival, ind) if ast.ty_is_chan(eff)
 	return c_let_str(em, name, eff, is_mut, is_const, ival, ind) if c_is_str(eff)
 
-	# an optional does not fit a declaration that promised a value: there is no implicit
-	# unwrap in the language, and letting one through emitted a carrier where a scalar went
-	raise c_diag(em, rule.Rule.OptionalNotUnwrapped, f"`{name}` is declared {ast.ty_name(eff)} and the value is {ast.ty_name(c_infer(em, ival))}: unwrap it with `?? …`, `!` or `if {name} := …`") if has_type and not ast.ty_is_opt(eff) and ast.ty_is_opt(c_infer(em, ival))
+	return c_let_value(em, name, eff, has_type, is_mut, is_const, ival, ind)
+}
+
+# c_let_value is c_let once the binding's type is settled and is none of the three with a
+# lowering of its own. It is a helper, and its pieces are, because a closure bound in a closure
+# pays c_let's frame once per level, and at -O0 every branch's temporaries are paid with it.
+fn c_let_value(mut &em: Emitter, name: str, eff: ast.Ty, has_type: bool, is_mut: bool, is_const: bool, ival: ast.Expr, ind: str) -> str {
+	if has_type {
+		c_let_not_opt(em, name, eff, ival)
+	}
 
 	# a declared `T?` takes the value the declaration promises, wrapping a bare one; the
 	# value is rendered BEFORE the binding enters scope, so an initializer naming `name`
@@ -25793,11 +26274,7 @@ fn c_let(mut &em: Emitter, name: str, ty: ast.Ty, has_type: bool, is_mut: bool, 
 	# would not: it ends at c_into, which converts and copies but never puts a value into a
 	# carrier. So this arm stays, and what it gains is the registration it never had, which
 	# is the same c_pend_drop the bottom of this function reaches.
-	if has_type and c_is_carrier(eff) {
-		cval := c_carrier_fit(em, check.chk_binding_says(name), eff, ival, c_nosub())
-		c_add_var(em, name, eff, is_mut, is_const)
-		return c_let_decl(em, c_var_cname(em, name), eff, cval, ind)
-	}
+	return c_let_carrier(em, name, eff, is_mut, is_const, ival, ind) if has_type and c_is_carrier(eff)
 
 	# The initializer is rendered BEFORE the binding enters scope: in `mut n := n` the
 	# right-hand side names the OUTER n, and resolving it after would make the new
@@ -25812,13 +26289,7 @@ fn c_let(mut &em: Emitter, name: str, ty: ast.Ty, has_type: bool, is_mut: bool, 
 	# and what a closure's default will resolve its names in (c_cl_record): the view as it stands
 	# before the literal is lowered and before this binding exists, so the default sees neither
 	# the name it is bound to nor anything bound after it
-	mut cl := 0 - 1
-	if not is_mut and not has_type {
-		ps := c_cl_defaulted(ival)
-		if ps.len() != 0 {
-			cl = c_cl_record(em, ps, ClView(em.at_path, em.sub, em.open_scopes, em.ref_rows), true)
-		}
-	}
+	cl := c_let_cl(em, is_mut, has_type, ival)
 	val := c_into(em, eff, ival, c_nosub())
 
 	# WHAT THIS BINDING IS WORTH AT COMPILE TIME, folded before the row exists so that
@@ -25844,6 +26315,31 @@ fn c_let(mut &em: Emitter, name: str, ty: ast.Ty, has_type: bool, is_mut: bool, 
 	# payload back at scope exit rather than leaking it. The typed arm above registers the
 	# one it wraps for the same reason.
 	return c_let_decl(em, cn, eff, val, ind)
+}
+
+# c_let_not_opt is the rule that an optional does not fit a declaration that promised a value:
+# there is no implicit unwrap in the language, and letting one through emitted a carrier where
+# a scalar went.
+fn c_let_not_opt(mut &em: Emitter, name: str, eff: ast.Ty, ival: ast.Expr) {
+	raise c_diag(em, rule.Rule.OptionalNotUnwrapped, f"`{name}` is declared {ast.ty_name(eff)} and the value is {ast.ty_name(c_infer(em, ival))}: unwrap it with `?? …`, `!` or `if {name} := …`") if not ast.ty_is_opt(eff) and ast.ty_is_opt(c_infer(em, ival))
+}
+
+# c_let_carrier is a declared `T?` or Result binding (c_let_value says why it is its own arm).
+fn c_let_carrier(mut &em: Emitter, name: str, eff: ast.Ty, is_mut: bool, is_const: bool, ival: ast.Expr, ind: str) -> str {
+	cval := c_carrier_fit(em, check.chk_binding_says(name), eff, ival, c_nosub())
+	c_add_var(em, name, eff, is_mut, is_const)
+	return c_let_decl(em, c_var_cname(em, name), eff, cval, ind)
+}
+
+# c_let_cl is the closure-default row an immutable, undeclared binding of a closure literal
+# records (c_cl_record), or -1.
+fn c_let_cl(mut &em: Emitter, is_mut: bool, has_type: bool, ival: ast.Expr) -> int {
+	return 0 - 1 if is_mut or has_type
+
+	ps := c_cl_defaulted(ival)
+	return 0 - 1 if ps.len() == 0
+
+	return c_cl_record(em, ps, ClView(em.at_path, em.sub, em.open_scopes, em.ref_rows), true)
 }
 
 # c_let_chan declares a CHANNEL binding, which owns what it holds. Two halves:
@@ -27066,9 +27562,58 @@ fn c_fn(mut &em: Emitter, fn_d: ast.FnDecl) -> str {
 	em.fn_mark = fmark
 	em.fn_mark_used = false
 
-	mut pdefer := ""
-
 	cname := c_fn_cname_in(em, fn_d.path, fn_d.recv, fn_d.name)
+	sp := c_fn_sig(em, fn_d, cname)
+	sig := sp.sig
+	pdefer := sp.pdefer
+
+	# A BLOCK'S VALUE IS ITS LAST STATEMENT'S (GRAMMAR#block), and a function
+	# body is a block. Written without a `return`, the value used to be computed and thrown
+	# away: `fn(a: int) -> int { a + 5 }` emitted `(zgt_a + 5);` and then fell off the end of
+	# a non-void C function, so the call answered whatever was in the return register.
+	#
+	# Only a trailing EXPRESSION statement is a value. A body ending in anything else while
+	# declaring a result is a missing return, and is refused below rather than given one.
+	body := c_fn_body(em, fn_d)
+
+	# THE DERIVED BODY IS STILL LOWERED when the walk replaces it: lowering it is what refuses a
+	# part `==` or `hash` means nothing on (an optional, a carrier), and the walk reads only what
+	# the body was allowed to.
+	rendered := c_fn_walked(em, fn_d, fmark, c_block(em, body, "    "))
+
+	head := c_fn_head(em, pdefer, fmark)
+	c_scope_forget(em, 0)
+	em.fn_mark = outer_fn_mark
+	em.fn_mark_used = outer_used
+	em.loop_mark = outer_loop_mark
+	em.loop_keep = outer_loop_keep
+	em.loop_mark_used = outer_loop_used
+	em.loop_defer = outer_loop_defer
+	em.loop_env_lo = outer_loop_env_lo
+	em.del_exits = outer_del_exits
+	em.loop_env_outer = outer_loop_env_outer
+	em.loop_lo_next = outer_loop_lo_next
+
+	out := c_fn_text(em, fn_d, cname, sig, pdefer, head, rendered, body, fmark)
+	em.fn_indirect = outer_indirect
+	em.fn_frame = outer_frame
+	em.fn_ret = saved_ret
+	em.in_unsafe_fn = saved_unsafe
+	em.cur_fn = outer_fn
+	em.at_for = outer_for
+	return out
+}
+
+# c_fn_sig is the signature c_fn writes and the parameter drops it registers, with each
+# parameter bound — c_fn's pieces before and after the body are helpers, because a closure
+# lifted inside a closure pays c_fn's frame once per level.
+pub struct FnSig {
+	pub sig: str
+	pub pdefer: str
+}
+
+fn c_fn_sig(mut &em: Emitter, fn_d: ast.FnDecl, cname: str) -> FnSig {
+	mut pdefer := ""
 	mut sig := f"{c_ret_type(fn_d)} {cname}("
 
 	# A LIFTED CLOSURE IS ITS UNIT'S OWN. Its tag counts the unit's closures, so two modules that
@@ -27123,14 +27668,10 @@ fn c_fn(mut &em: Emitter, fn_d: ast.FnDecl) -> str {
 		}
 	}
 	sig = sig + ") {\n"
+	return FnSig(sig, pdefer)
+}
 
-	# A BLOCK'S VALUE IS ITS LAST STATEMENT'S (GRAMMAR#block), and a function
-	# body is a block. Written without a `return`, the value used to be computed and thrown
-	# away: `fn(a: int) -> int { a + 5 }` emitted `(zgt_a + 5);` and then fell off the end of
-	# a non-void C function, so the call answered whatever was in the return register.
-	#
-	# Only a trailing EXPRESSION statement is a value. A body ending in anything else while
-	# declaring a result is a missing return, and is refused below rather than given one.
+fn c_fn_body(mut &em: Emitter, fn_d: ast.FnDecl) -> list[ast.Stmt] {
 	mut body := fn_d.body
 	if fn_d.has_ret {
 		last := body.len() - 1
@@ -27140,17 +27681,26 @@ fn c_fn(mut &em: Emitter, fn_d: ast.FnDecl) -> str {
 			body[last] = ast.Stmt.SReturn(true, c_expr_stmt_of(body[last]))
 		}
 	}
+	return body
+}
 
-	# THE DERIVED BODY IS STILL LOWERED when the walk replaces it: lowering it is what refuses a
-	# part `==` or `hash` means nothing on (an optional, a carrier), and the walk reads only what
-	# the body was allowed to.
-	mut rendered := c_block(em, body, "    ")
-	if c_eq_walked(em, fn_d) {
-		rendered = c_eq_walk_body(em, fn_d, fmark)
-	} else if c_hash_walked(em, fn_d) {
-		rendered = c_hash_walk_body(em, fn_d, fmark)
-	}
+# c_fn_walked is a derived `==` or `hash` body's walk in place of its `rendered` body.
+fn c_fn_walked(mut &em: Emitter, fn_d: ast.FnDecl, fmark: str, rendered: str) -> str {
+	return c_eq_walk_body(em, fn_d, fmark) if c_eq_walked(em, fn_d)
+	return c_hash_walk_body(em, fn_d, fmark) if c_hash_walked(em, fn_d)
 
+	return rendered
+}
+
+fn c_fn_head(mut &em: Emitter, pdefer: str, fmark: str) -> str {
+	return "" if pdefer == "" and not em.fn_mark_used
+
+	em.used_rt = true
+	return f"    size_t {fmark} = zrt_scope_mark();\n"
+}
+
+# c_fn_text puts the function together around its rendered body.
+fn c_fn_text(mut &em: Emitter, fn_d: ast.FnDecl, cname: str, sig: str, pdefer: str, head: str, rendered: str, body: list[ast.Stmt], fmark: str) -> str {
 	# Falling off the end is the one exit that renders nothing of its own, so it is the one
 	# that needs the unwind written out — but only when a parameter put something on the
 	# stack, since the body block has already unwound its own.
@@ -27158,22 +27708,6 @@ fn c_fn(mut &em: Emitter, fn_d: ast.FnDecl) -> str {
 	if pdefer != "" and not c_body_diverges(body) {
 		tail = f"    zrt_unwind_to({fmark});\n"
 	}
-	mut head := ""
-	if pdefer != "" or em.fn_mark_used {
-		em.used_rt = true
-		head = f"    size_t {fmark} = zrt_scope_mark();\n"
-	}
-	c_scope_forget(em, 0)
-	em.fn_mark = outer_fn_mark
-	em.fn_mark_used = outer_used
-	em.loop_mark = outer_loop_mark
-	em.loop_keep = outer_loop_keep
-	em.loop_mark_used = outer_loop_used
-	em.loop_defer = outer_loop_defer
-	em.loop_env_lo = outer_loop_env_lo
-	em.del_exits = outer_del_exits
-	em.loop_env_outer = outer_loop_env_outer
-	em.loop_lo_next = outer_loop_lo_next
 
 	# The body never falls through when it has a value to return, and nothing tells cc that once
 	# the end of it is reachable.
@@ -27191,14 +27725,7 @@ fn c_fn(mut &em: Emitter, fn_d: ast.FnDecl) -> str {
 	# a hit there unwinds what the call was handed, as every other abort does
 	pre := at_fn + head + pdefer
 	c_probe_books(em, fn_d, cname, bytearray(pre).len())
-	em.fn_indirect = outer_indirect
-	em.fn_frame = outer_frame
-	out := sig + pre + rendered + tail + at_end + "}\n\n"
-	em.fn_ret = saved_ret
-	em.in_unsafe_fn = saved_unsafe
-	em.cur_fn = outer_fn
-	em.at_for = outer_for
-	return out
+	return sig + pre + rendered + tail + at_end + "}\n\n"
 }
 
 # c_fn_told is c_fn for one function of the unit, and what it adds is the declaration an ABORT

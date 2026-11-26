@@ -7057,6 +7057,10 @@ EOF
 # inherits Go's growable stack and accepts all eight — a gap its own contract records
 # (src/bootstrap/README.md).
 
+# The source reaches `reject` by process substitution and never down a pipe: every stage of
+# a pipeline runs in a subshell, so a `reject` on the right of a `|` counts its verdict in a
+# copy of $pass and $fail that is thrown away, and a case that fails leaves the gate green.
+
 # deep_expr <nested|flat> writes ONE too-deep expression, with no statement around it, so
 # the four placements below differ only in where they put it.
 deep_expr() {
@@ -7073,17 +7077,17 @@ deep_expr() {
 for shape in nested flat; do
 	e=$(deep_expr "$shape")
 
-	printf 'fn main() {\n\tprint %s\n}\n' "$e" |
-		reject "deep-$shape-in-a-body" E2012 seed-gap
+	reject "deep-$shape-in-a-body" E2012 seed-gap \
+		< <(printf 'fn main() {\n\tprint %s\n}\n' "$e")
 
-	printf 'fn deep[T](v: T) -> int {\n\treturn %s\n}\n\nfn main() {\n\tprint deep(1)\n}\n' "$e" |
-		reject "deep-$shape-in-an-instantiated-generic" E2012 seed-gap
+	reject "deep-$shape-in-an-instantiated-generic" E2012 seed-gap \
+		< <(printf 'fn deep[T](v: T) -> int {\n\treturn %s\n}\n\nfn main() {\n\tprint deep(1)\n}\n' "$e")
 
-	printf 'K := %s\n\nfn main() {\n\tprint K\n}\n' "$e" |
-		reject "deep-$shape-in-a-module-constant" E2012 seed-gap
+	reject "deep-$shape-in-a-module-constant" E2012 seed-gap \
+		< <(printf 'K := %s\n\nfn main() {\n\tprint K\n}\n' "$e")
 
-	printf 'fn f(a: int = %s) -> int {\n\treturn a\n}\n\nfn main() {\n\tprint f()\n}\n' "$e" |
-		reject "deep-$shape-in-a-default-parameter" E2012 seed-gap
+	reject "deep-$shape-in-a-default-parameter" E2012 seed-gap \
+		< <(printf 'fn f(a: int = %s) -> int {\n\treturn a\n}\n\nfn main() {\n\tprint f()\n}\n' "$e")
 done
 
 # The ninth case, and the only one the PARSER cannot answer: a tree the compiler COMPOSES.
@@ -7097,8 +7101,8 @@ done
 # 190 is chosen to sit UNDER the 200 bound on each half and over it once composed; the two
 # halves are the same chain so the arithmetic is visible rather than tuned.
 half=$(awk 'BEGIN { s = "1"; for (i = 0; i < 190; i++) s = s " + 1"; printf "%s", s }')
-printf 'fn f(a: int = %s) -> int {\n\treturn a\n}\n\nfn main() {\n\tprint f() + %s\n}\n' "$half" "$half" |
-	reject deep-composed-by-a-default-splice E4028 seed-gap
+reject deep-composed-by-a-default-splice E4028 seed-gap \
+	< <(printf 'fn f(a: int = %s) -> int {\n\treturn a\n}\n\nfn main() {\n\tprint f() + %s\n}\n' "$half" "$half")
 
 # --- report ------------------------------------------------------------------------
 

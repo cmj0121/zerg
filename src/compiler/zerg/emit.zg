@@ -2153,17 +2153,18 @@ fn c_carrier_decl(mut &em: Emitter, c: ast.Ty) -> str {
 # carrier's typedef needs nothing complete — it is a tag and a pointer — which is the whole
 # point of boxing it, but its FORCE returns the payload by value and its drop calls the
 # payload's, so the bodies need the struct the cycle is about. The typedef goes out in the
-# sweep where it breaks the cycle, the bodies go out after every struct has, and the
-# bodies go out after every struct has.
+# sweep where it breaks the cycle, and the bodies go out after every struct has.
 #
-# THERE ARE NO PROTOTYPES IN BETWEEN, and there is nothing for them to serve: the struct arm
-# of the same sweep writes ITS copy/drop prototypes there, so what a boxed carrier's body
-# calls is already declared — while nothing emitted between the two points calls a carrier
-# helper, because the only things emitted there are typedefs and prototypes. A prototype for
-# these could not have been written anyway: `zgh_force_` returns the payload BY VALUE, and at
-# the typedef the payload is not yet a name cc knows.
+# THE COPY AND THE DROP ARE PROTOTYPED WITH THE TYPEDEF, because a tuple or an array that
+# holds the carrier writes its own helpers beside its own typedef, in the same sweep — and
+# those call the carrier's. `Node((int, T?, str))` called `zgh_copy_…_zgh_opt_…` from the
+# tuple's copy long before the body existed, and cc reported it against generated C. Both
+# signatures spell only the carrier's own name, so the typedef is all they need. `zgh_force_`
+# gets none: it returns the payload BY VALUE, and at the typedef the payload is not yet a
+# name cc knows — nothing in the sweep forces one.
 fn c_carrier_boxed_head(name: str) -> str {
-	return f"typedef struct {{ int32_t tag; void *ok; }} {name};\n"
+	d := f"typedef struct {{ int32_t tag; void *ok; }} {name};\n"
+	return d + f"static void {c_helper_of("drop", name)}({name} *r);\nstatic {name} {c_helper_of("copy", name)}({name} v);\n"
 }
 
 fn c_carrier_boxed_body(mut &em: Emitter, c: ast.Ty, name: str, left: ast.Ty, ct: str) -> str {

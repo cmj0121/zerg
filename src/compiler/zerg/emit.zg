@@ -1952,6 +1952,16 @@ fn c_res_is_right(r: str) -> str {
 	return c_res_tag(r) + " != 0"
 }
 
+# c_force_right_fault / c_force_nil_fault are the abort a force raises on a Right that is
+# not an Err, and on an absent optional: a message of its own, as a str cell (#405).
+fn c_force_right_fault(mut &em: Emitter) -> str {
+	return f"zrt_raise_fault(zrt_err_own(0, {c_str_cell(em, "force-unwrap of a Right")}));"
+}
+
+fn c_force_nil_fault(mut &em: Emitter) -> str {
+	return f"zrt_raise_fault(zrt_err_own(0, {c_str_cell(em, "force-unwrap of nil")}));"
+}
+
 # c_res_mark_left / c_res_mark_right are the discriminant WRITES — a whole C statement,
 # because that is how a carrier is filled in the statement contexts (`guard`, `select`)
 # where a compound literal cannot go.
@@ -2118,9 +2128,9 @@ fn c_carrier_decl(mut &em: Emitter, c: ast.Ty) -> str {
 	#
 	# The message is a str CELL (c_str_cell), never a bare literal through zrt_err_new: the
 	# Err reaches a guard, and binding its `.msg` retains what it holds (#405).
-	mut fail := f"zrt_raise_fault(zrt_err_own(0, {c_str_cell(em, "force-unwrap of a Right")}));"
+	mut fail := c_force_right_fault(em)
 	if ast.ty_is_opt(c) {
-		fail = f"zrt_raise_fault(zrt_err_own(0, {c_str_cell(em, "force-unwrap of nil")}));"
+		fail = c_force_nil_fault(em)
 	} else if c_is_err_ty(c_either_right(c)) {
 		# a COPY: `r` is the caller's carrier, which its holder gives back as the unwind
 		# passes it, so the Err in flight holds counts of its own (#377). A carrier the
@@ -2241,11 +2251,11 @@ fn c_carrier_boxed_body(mut &em: Emitter, c: ast.Ty, name: str) -> str {
 	# the payload comes out as a value of its own, exactly as the inline form's does — the
 	# cell is shared, so what is handed back is a copy of what is in it. The Right fails the
 	# way it does inline: an Err re-raised, any other Right a message of its own.
-	mut fail := f"zrt_raise_fault(zrt_err_own(0, {c_str_cell(em, "force-unwrap of nil")}));"
+	mut fail := c_force_nil_fault(em)
 	if c_is_result(c) {
 		fail = "zrt_raise_err(zrt_err_copy(" + c_res_err("r") + "));"
 	} else if not ast.ty_is_opt(c) {
-		fail = f"zrt_raise_fault(zrt_err_own(0, {c_str_cell(em, "force-unwrap of a Right")}));"
+		fail = c_force_right_fault(em)
 	}
 	d = d + f"static {ct} {c_helper_of("force", name)}({name} r) {{\n"
 	d = d + "    if (" + c_res_is_right("r") + ") { " + fail + " }\n"
@@ -10010,7 +10020,8 @@ fn c_force(mut &em: Emitter, x: ast.Expr, sb: Subst) -> str {
 	# A carrier that NAMES storage is somebody else's and is only read here. One that does
 	# not — a receive, a call's result — is this expression's own, and the force copies its
 	# payload out and leaves the carrier holding a second reference nothing will ever give
-	# back. The drop is after the force, because the force is what raises on a Right.
+	# back. The drop is after the force, which reads the payload out; a Right that raises
+	# is dropped first where it is not moved into the raise (below).
 	force := c_helper_of("force", name)
 	return f"{force}({rendered})" if df == ""
 
@@ -10020,9 +10031,14 @@ fn c_force(mut &em: Emitter, x: ast.Expr, sb: Subst) -> str {
 
 	# an Err this expression owns is MOVED into the raise, which the helper's copy would
 	# leave counted twice with only one holder to give it back (#377)
+	#
+	# Any other Right is released before its fault is raised: the helper would raise with
+	# the payload still in the temp, and the abort never reaches the drop after it.
 	mut mv := ""
 	if c_is_result(t) {
 		mv = f"if ({c_res_is_right(cn)}) {{ zrt_raise_err({c_res_err(cn)}); }} "
+	} else if not ast.ty_is_opt(t) {
+		mv = f"if ({c_res_is_right(cn)}) {{ {df}(&{cn}); {c_force_right_fault(em)} }} "
 	}
 	return f"({{ {name} {cn} = {rendered}; {mv}{et} {vn} = {force}({cn}); {df}(&{cn}); {vn}; }})"
 }

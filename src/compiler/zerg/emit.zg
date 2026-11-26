@@ -7696,6 +7696,17 @@ fn c_field_init(mut &em: Emitter, where: str, fty: ast.Ty, arg: ast.Expr, sb: Su
 
 # c_needs_copy reports whether copying a value of this type has to do more than a C `=`.
 fn c_needs_copy(mut &em: Emitter, t: ast.Ty) -> bool {
+	mut seen: list[str] = []
+	return c_needs_copy_in(em, t, seen)
+}
+
+# c_needs_copy_in is c_needs_copy with the declared types already being asked about, which
+# is what makes it terminate on a cycle of by-value declarations. Such a cycle has no size and
+# c_type_decls refuses it at E4026 — but a `#[derive]` on one of its types asks this question
+# before that sweep runs, and the walk that recursed back into the type it came from never
+# returned (the compiler's own stack overflowed). A type met again answers `false`: anything
+# it holds that does need a copy is found on the path that is still walking it.
+fn c_needs_copy_in(mut &em: Emitter, t: ast.Ty, mut &seen: list[str]) -> bool {
 	# A Ref IS THE COPY RULE ITSELF: copying one retains the cell, which is what makes the
 	# holders' releases balance (docs/runtime/builtins.md).
 	return true if c_is_ref_box(t)
@@ -7744,24 +7755,25 @@ fn c_needs_copy(mut &em: Emitter, t: ast.Ty) -> bool {
 	# AN ARRAY owes a copy exactly when its ELEMENT does, which is the tuple's rule with one
 	# element type instead of a list of them: a `[str; 4]` copied by the C struct assignment
 	# alone would give two names one set of cells.
-	return c_needs_copy(em, c_arr_elem(t)) if c_is_arr(t)
+	return c_needs_copy_in(em, c_arr_elem(t), seen) if c_is_arr(t)
 
 	# A TUPLE is the third composite, and it was missing: `mut t := (a, 0)` bit-copied the
 	# list `a`, so `t.0[0] = 99` was read back through `a`. Its elements are a list of
 	# types, so the same question is asked of each.
 	for e in ast.ty_tuple_elems(t) {
-		return true if c_needs_copy(em, e)
+		return true if c_needs_copy_in(em, e, seen)
 	}
 
 	nm := c_named_of(t)
-	return false if nm == ""
+	return false if nm == "" or c_name_in(seen, nm)
+	seen.append(nm)
 
-	# A struct cannot contain itself BY VALUE — that would have no finite size — so this
-	# recursion always terminates. A self-referential type reaches itself through a list,
-	# which answers true above without recursing.
+	# A struct cannot contain itself BY VALUE — that would have no finite size, and `seen`
+	# stops the walk on a program that tries. A self-referential type reaches itself through
+	# a list, which answers true above without recursing.
 	mut i := 0
 	for i < em.fld_struct.len() {
-		return true if em.fld_struct[i] == nm and c_needs_copy(em, em.fld_ty[i])
+		return true if em.fld_struct[i] == nm and c_needs_copy_in(em, em.fld_ty[i], seen)
 		i = i + 1
 	}
 
@@ -7780,7 +7792,7 @@ fn c_needs_copy(mut &em: Emitter, t: ast.Ty) -> bool {
 	for j < em.vf_variant.len() {
 		if em.vf_enum[j] == nm {
 			return true if em.vf_boxed[j]
-			return true if c_needs_copy(em, em.vf_ty[j])
+			return true if c_needs_copy_in(em, em.vf_ty[j], seen)
 		}
 		j = j + 1
 	}

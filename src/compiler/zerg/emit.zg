@@ -1270,6 +1270,11 @@ fn c_into(mut &em: Emitter, want: ast.Ty, e0: ast.Expr, sb: Subst) -> str {
 			c_nx_gen_variant_written(em, c_app_base(c_named_of(want)), e)
 		}
 
+		# `Opt.Some(1)` NAMES THE TYPE, here as on c_method's path: a private template another
+		# module declares is not this file's to spell, and an unannotated binding now reaches
+		# this path typed by the variant rather than by the position
+		check.chk_ty_visible(em, c_app_base(c_named_of(want)))
+
 		# c_into is not c_expr, so the payload's ordering temporaries are wrapped HERE: left on
 		# em.seq_pre they reached no statement expression, and cc met the names undeclared
 		keep := em.seq_pre
@@ -4761,9 +4766,20 @@ fn c_gen_variant_of(mut &em: Emitter, want: ast.Ty, e: ast.Expr) -> str {
 	# field reference, because a payload-less variant takes no arguments — one value, two forms,
 	# and reading only the first left `e: Tree[int] = Tree.Leaf` saying `undefined name Tree`.
 	return match e {
-		Expr.EMethod(t, m, _, _, _) => c_gen_variant_named(em, c_app_base(nm), c_ident_name(t), m)
-		Expr.EField(t, f, _, _) => c_gen_variant_named(em, c_app_base(nm), c_ident_name(t), f)
+		Expr.EMethod(t, m, _, _, _) => c_gen_variant_named(em, c_app_base(nm), c_variant_qual(em, t), m)
+		Expr.EField(t, f, _, _) => c_gen_variant_named(em, c_app_base(nm), c_variant_qual(em, t), f)
 		_ => ""
+	}
+}
+
+# c_variant_qual is the enum a variant is named through: `Tree` in `Tree.Leaf`, and in
+# `lib.Tree.Leaf` too — read as the rewrite c_ns_unqualify_field makes, which runs only when
+# the expression is lowered. Asked of the written shape, the module-qualified spelling had no
+# enum name, so `f(lib.Tree.Leaf)` was told nothing said which `Tree[…]` it builds.
+fn c_variant_qual(mut &em: Emitter, t: ast.Expr) -> str {
+	return match t {
+		Expr.EField(ns, f, _, _) => c_ns_type_named(em, ns, f)
+		_ => c_ident_name(t)
 	}
 }
 
@@ -9280,8 +9296,12 @@ fn c_ns_type_named(mut &em: Emitter, t: ast.Expr, member: str) -> str {
 # the one the prefix names — the same rule the call and the constant paths ask, since
 # `b.Box(1)` once resolved a `Box` module `a` declared and constructed it. Answering false
 # hands the pair back to the ordinary field path, which reports the member `b` has not got.
+#
+# A GENERIC ENUM IS ONE OF THEM: a template has no type row, so `lib.Opt.Some(1)` on a
+# `pub enum Opt[T]` was told the module has no `Opt` while `lib.Opt[int]` in a type position
+# resolved. Named bare after the rewrite, it reaches the template's own variant path.
 fn c_ns_names_ty(mut &em: Emitter, t: ast.Expr, nm: str) -> bool {
-	return false if not c_is_struct_name(em, nm) and not c_is_enum_name(em, nm) and not c_is_typedef(em, nm)
+	return false if not c_is_struct_name(em, nm) and not c_is_enum_name(em, nm) and not c_is_typedef(em, nm) and not c_is_gen_enum_name(em, nm)
 
 	return c_ns_names_mod(em, c_ns_root(t), c_ty_mod(em, nm))
 }
@@ -13495,7 +13515,9 @@ fn c_method(mut &em: Emitter, target: ast.Expr, meth: str, args: list[ast.Expr],
 		}
 		check.chk_ty_visible(em, en)
 		ap := c_gen_enum_solved(em, en, meth, args)
+
 		return c_variant_ctor(em, ap, meth, args, sb) if ap != ""
+		return "0" if check.chk_ty_hidden(em, en)
 
 		c_gen_enum_no_position(em, en, meth, args)
 	}
@@ -18659,6 +18681,14 @@ fn c_infer_methcall(mut &em: Emitter, target: ast.Expr, meth: str, args: list[as
 		# `Shape.Line(5)` is a value of `Shape`. It is total where `of` is partial: the
 		# variant is named rather than looked up, so there is nothing to fail.
 		return ast.Ty.TNamed(en) if c_is_variant_in(em, en, meth)
+	}
+
+	# `Opt.Some(1)` — a GENERIC enum's variant, by the decision c_method lowers it by
+	# (c_gen_enum_solved). Left to the bare-name path below it was answered only where the
+	# template's own file asks, so `lib.Opt.Some(1)` was typed `int` and lowered `Opt[int]`.
+	if en != "" and c_is_gen_enum_name(em, en) and c_gen_variant_named(em, en, en, meth) != "" {
+		ap := c_gen_enum_solved(em, en, meth, args)
+		return ast.Ty.TNamed(ap) if ap != ""
 	}
 
 	# `P.make(…)` — an ASSOCIATED FN (GRAMMAR#impl-decl). Its target is a TYPE, so the walk
@@ -24573,6 +24603,10 @@ fn c_fieldref(mut &em: Emitter, target: ast.Expr, fld: str, l: int, c: int, sb: 
 		check.chk_ty_visible(em, gb)
 		ap := c_gen_enum_solved(em, gb, fld, noargs)
 		return "(" + c_ty_cname(ap) + "){.tag = " + strconv.to_string(c_variant_tag_in(em, ap, fld), 10) + "}" if ap != ""
+
+		# the privacy finding first: an unsolved parameter is a reason about a type this file
+		# may not name at all
+		return "0" if check.chk_ty_hidden(em, gb)
 
 		c_gen_enum_no_position(em, gb, fld, noargs)
 	}

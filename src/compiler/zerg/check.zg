@@ -454,12 +454,18 @@ fn chk_ty_mod_ns(mut &em: emit.Emitter, decl_mod: str) -> str {
 # all, so a BARE `Secret` there is an unknown type rather than a private one. This compiler
 # does flatten, so the bare spelling is exactly the hole and is what this covers.
 pub fn chk_ty_visible(mut &em: emit.Emitter, nm: str) {
-	return if emit.c_ty_pub(em, nm)
+	return if not chk_ty_hidden(em, nm)
 
-	decl_path := emit.c_ty_path(em, nm)
-	return if not chk_across_modules(em, em.at_path, decl_path)
+	chk_at(em, rule.Rule.NotPublicType, f"`{nm}` is not a public type of `{emit.c_ty_path(em, nm)}` — the file is the unit of privacy (docs/runtime/package.md)")
+}
 
-	chk_at(em, rule.Rule.NotPublicType, f"`{nm}` is not a public type of `{decl_path}` — the file is the unit of privacy (docs/runtime/package.md)")
+# chk_ty_hidden is chk_ty_visible's question without its finding, for a caller whose next
+# step would refuse the same expression for a reason the privacy rule comes before: told that
+# `lib.Hid.HN` leaves `T` unsolved, the reader would fix a position on a type they may not name.
+pub fn chk_ty_hidden(mut &em: emit.Emitter, nm: str) -> bool {
+	return false if emit.c_ty_pub(em, nm)
+
+	return chk_across_modules(em, em.at_path, emit.c_ty_path(em, nm))
 }
 
 # chk_ctor_sealed is `#[sealed]` (GRAMMAR group 7): the field-wise `T(…)` constructor is

@@ -10012,6 +10012,15 @@ fn main() {
 }
 EOF
 
+reject a-generic-variant-map-join-disagrees E3036 'payload 1 of `L` is P, and this gives int' <<EOF
+$two_prelude
+
+fn main() {
+	m := {"a": Two.L(P(1)), "b": Two.R(2), "c": Two.L(3)}
+	print m.len()
+}
+EOF
+
 # AND WHERE NOTHING ASKS FOR A `Two`, NOTHING DECIDES: a position that states no
 # specialization of it leaves the unmentioned parameter unsolved, and a generic call's `T`
 # never comes from where its answer lands (docs/core/type-system.md). These hold the boundary
@@ -10075,6 +10084,38 @@ $two_prelude
 
 fn main() {
 	print tp(gk([Two.L(P(7))]))
+}
+EOF
+
+# A MAP'S VALUES ARE JOINED AS A LIST'S ELEMENTS ARE, so values that leave a parameter open
+# are the variant's refusal there too. The map is not empty, and "the empty map" would blame a
+# form the reader did not write — for one value, and for several that leave `B` open. The
+# program is `Two` and `P` alone: a map that nothing else in the file explains.
+two_bare='enum Two[A, B] {
+	L(A)
+	R(B)
+	N
+}
+
+struct P {
+	pub x: int
+}'
+
+reject a-generic-variant-map-leaves-a-parameter E3156 'leaves `B` unsolved' <<EOF
+$two_bare
+
+fn main() {
+	m := {"a": Two.L(P(5))}
+	print m.len()
+}
+EOF
+
+reject a-generic-variant-map-join-leaves-a-parameter E3156 'leaves `B` unsolved' <<EOF
+$two_bare
+
+fn main() {
+	m := {"a": Two.L(P(5)), "b": Two.L(6)}
+	print m.len()
 }
 EOF
 

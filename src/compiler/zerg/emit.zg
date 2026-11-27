@@ -23737,7 +23737,16 @@ fn c_map_lit(mut &em: Emitter, ks: list[ast.Expr], vs: list[ast.Expr], sb: Subst
 fn c_map_lit_at(mut &em: Emitter, kt: ast.Ty, vt: ast.Ty, ks: list[ast.Expr], vs: list[ast.Expr], sb: Subst) -> str {
 	# A TYPE THAT IS NOT ONE HAS NO TABLE. `?` is spelled `int64_t` by c_type's fallback, so a
 	# position that only LOOKS typed — a type parameter solved from the `{:}` itself — would
-	# build the table #332 is about and say nothing.
+	# build the table #332 is about and say nothing. A value type left unknown by generic
+	# variants that do not solve every parameter between them is that variant's refusal, as
+	# it is for a list's elements: the map is not empty, and E3034 would blame the wrong form.
+	if c_is_unknown(vt) {
+		lit := ast.Expr.EMapLit(ks, vs)
+		if c_is_open_variant_form(em, lit) {
+			c_gen_variant_unpositioned(em, lit)
+			return "(zrt_map){0}"
+		}
+	}
 	return c_no_slot(em, "the empty map `{:}`", "(zrt_map){0}") if c_is_unknown(kt) or c_is_unknown(vt)
 
 	em.used_rt = true

@@ -4308,6 +4308,47 @@ fn main() {
 }
 EOF
 
+# A LIST LITERAL WITH NO DECLARED TYPE FOLLOWS THE BINDING RULE wherever it stands (#481): its
+# first element names the element type, and a later one of another number type is refused as
+# it is in `xs := [1, 2.5]`. In a tuple, a `print` or a `for` the literal used to be built
+# from its elements as they stood, and cc narrowed the 2.5 to 2 with a warning.
+reject a-float-after-an-int-in-a-tuples-list E3036 'element 2 of this list literal is int, and this gives float' <<'EOF'
+fn main() {
+	t := (1, [1, 2.5])
+	print t
+}
+EOF
+
+reject a-float-after-an-int-in-a-printed-list E3036 'element 2 of this list literal is int, and this gives float' <<'EOF'
+fn main() {
+	print [1, 2.5]
+}
+EOF
+
+reject a-float-name-after-an-int-in-a-tuples-list E3036 'element 2 of this list literal is int, and this gives float' <<'EOF'
+fn main() {
+	f := 2.5
+	print (1, [3, f])
+}
+EOF
+
+reject a-byte-after-an-int-in-a-tuples-list E3036 'element 2 of this list literal is int, and this gives byte' <<'EOF'
+fn main() {
+	b: byte = 7
+	print (1, [3, b])
+}
+EOF
+
+reject a-float-after-an-int-in-a-for-list E3036 'element 2 of this list literal is int, and this gives float' <<'EOF'
+fn main() {
+	mut s := 0.0
+	for e in [1, 2.5] {
+		s = s + float(e)
+	}
+	print s
+}
+EOF
+
 reject an-optional-as-a-later-map-value E3036 'a value of this map literal is int, and this gives int?' <<'EOF'
 fn pick(n: int) -> int? {
 	return n if n > 0

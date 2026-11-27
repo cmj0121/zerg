@@ -8846,18 +8846,81 @@ fn c_elem_vt_helper(mut &em: Emitter, t: ast.Ty) -> str {
 #
 # It takes the value BY POINTER — a drop is a statement about storage, not about a value —
 # and it does not clear what it drops. Every caller is at the end of that storage's life.
+#
+# A FIELD WHOSE DROP CAN RUN A DROP ACTION CAN ABORT, and the fields after it would be lost
+# with the frame: a chain of `Ref`s overflows the stack inside such a drop, and the unwind
+# longjmps over every glue frame still owing the rest of its struct — `next` dropped, `tally`
+# never released, its channel leaked. So before that field is dropped the rest of the walk is
+# registered as one cleanup (c_drop_tail), which the normal path runs by unwinding to its
+# mark and an abort runs on its way to the handler.
 fn c_drop_helper(mut &em: Emitter, sd: ast.StructDecl) -> str {
 	nm := c_ty_cname(sd.name)
-	mut out := "static void " + c_ty_helper("drop", sd.name) + "(" + nm + " *v) {\n"
-	mut i := sd.fields.len() - 1
+	mut out := ""
+	mut i := 0
+	for i < sd.fields.len() {
+		if c_drop_tail_owed(em, sd, i) {
+			out = out + "static void " + c_drop_tail(sd, i) + "(void *p) {\n    " + nm + " *v = (" + nm + " *)p;\n" + c_drop_fields(em, sd, i - 1) + "}\n"
+		}
+		i = i + 1
+	}
+	return out + "static void " + c_ty_helper("drop", sd.name) + "(" + nm + " *v) {\n" + c_drop_fields(em, sd, sd.fields.len() - 1) + "}\n\n"
+}
+
+# c_drop_fields is the walk itself, from field `top` down to the first: reverse declaration
+# order. At a field that owes a tail it hands the remaining fields to that tail and stops.
+fn c_drop_fields(mut &em: Emitter, sd: ast.StructDecl, top: int) -> str {
+	mut out := ""
+	mut i := top
 	for i >= 0 {
 		fd := sd.fields[i]
+		if c_drop_tail_owed(em, sd, i) {
+			em.used_rt = true
+			return out + "    { size_t zgt_mk = zrt_scope_mark();\n    zrt_defer(" + c_drop_tail(sd, i) + ", v);\n    " + c_drop_stmt(em, fd.ty, "v->zg_" + fd.name) + "\n    zrt_unwind_to(zgt_mk); }\n"
+		}
 		if c_needs_copy(em, fd.ty) {
 			out = out + "    " + c_drop_stmt(em, fd.ty, "v->zg_" + fd.name) + "\n"
 		}
 		i = i - 1
 	}
-	return out + "}\n\n"
+	return out
+}
+
+# c_drop_tail names the cleanup that drops the fields below `i`.
+fn c_drop_tail(sd: ast.StructDecl, i: int) -> str {
+	return c_helper_ofs("droptail", [c_ty_cname(sd.name), strconv.to_string(i, 10)])
+}
+
+# c_drop_tail_owed is whether field `i` can run a drop action while a field below it still
+# owes a drop — the one case in which an abort inside it would lose something.
+fn c_drop_tail_owed(mut &em: Emitter, sd: ast.StructDecl, i: int) -> bool {
+	mut seen: list[str] = []
+	return false if not c_drop_runs_action(em, sd.fields[i].ty, seen)
+
+	mut j := i - 1
+	for j >= 0 {
+		return true if c_needs_copy(em, sd.fields[j].ty)
+		j = j - 1
+	}
+	return false
+}
+
+# c_drop_runs_action is whether giving a `t` back can reach a `Ref`'s drop action, which is
+# the program's own code and so can abort. A box and a held function answer yes, because what
+# they hold is not in their type; a channel answers for what it buffers.
+fn c_drop_runs_action(mut &em: Emitter, t: ast.Ty, mut &seen: list[str]) -> bool {
+	return true if c_is_ref_box(t) or c_is_spec_name(em, c_named_of(t)) or c_is_fn(t)
+
+	return c_drop_runs_action(em, ast.ty_chan_elem(t), seen) if ast.ty_is_chan(t)
+	return false if not c_has_parts(em, t)
+
+	key := c_render_key(em, t)
+	return false if c_name_in(seen, key)
+	seen.append(key)
+
+	for p in c_render_parts(em, t) {
+		return true if c_drop_runs_action(em, p, seen)
+	}
+	return false
 }
 
 # c_drop_stmt spells one give-back as a C statement, given the PLACE holding the value. It

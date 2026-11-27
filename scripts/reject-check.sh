@@ -9883,6 +9883,160 @@ pub fn one() -> int {
 }
 EOF
 
+# A GENERIC VARIANT READ AGAINST THE TYPE ITS POSITION ASKS FOR. The position decides the
+# specialization (docs/core/type-system.md), so a payload that disagrees with it is a wrong
+# payload, named at the payload — never the variant of a plain enum that happens to declare
+# the same name. The program declares such a `K` beside `Two`, so a reading that picks the
+# wrong enum shows in the sentence. Wherever a position states the type, the rule is this one.
+#
+# The program each case below is a `main` appended to: `Two` beside a plain `K` declaring
+# the same variant names, and a parameter of each kind of position.
+two_prelude='enum Two[A, B] {
+	L(A)
+	R(B)
+	N
+}
+
+struct P {
+	pub x: int
+}
+
+enum K {
+	L(int)
+	R(str)
+}
+
+struct Box[T] {
+	pub v: T
+}
+
+fn tp(t: Two[P, int]) -> int {
+	return 2
+}
+
+fn gk[T](xs: list[T]) -> T {
+	return xs[0]
+}
+
+fn idf[T](x: T) -> T {
+	return x
+}
+
+fn fk(k: K) -> int {
+	return 3
+}'
+
+reject a-generic-variant-payload-against-its-parameter E3036 'payload 1 of `L` is P, and this gives int' <<EOF
+$two_prelude
+
+fn main() {
+	print tp(Two.L(3))
+}
+EOF
+
+reject a-generic-variant-payload-against-its-list-element E3036 'payload 1 of `L` is P, and this gives int' <<EOF
+$two_prelude
+
+fn main() {
+	xs: list[Two[P, int]] = [Two.L(3)]
+	print xs.len()
+}
+EOF
+
+reject a-generic-variant-payload-against-its-assignment E3036 'payload 1 of `L` is P, and this gives int' <<EOF
+$two_prelude
+
+fn main() {
+	mut t: Two[P, int] = Two.N
+	t = Two.L(3)
+	print tp(t)
+}
+EOF
+
+reject a-generic-variant-payload-against-its-option-slot E3036 'payload 1 of `L` is P, and this gives int' <<EOF
+$two_prelude
+
+fn main() {
+	o: Two[P, int]? = Two.L(3)
+	print 1
+}
+EOF
+
+reject a-generic-variant-list-join-disagrees E3036 'payload 1 of `L` is P, and this gives int' <<EOF
+$two_prelude
+
+fn main() {
+	xs := [Two.L(P(1)), Two.R(2), Two.L(3)]
+	print xs.len()
+}
+EOF
+
+# AND WHERE NOTHING ASKS FOR A `Two`, NOTHING DECIDES: a position that states no
+# specialization of it leaves the unmentioned parameter unsolved, and a generic call's `T`
+# never comes from where its answer lands (docs/core/type-system.md). These hold the boundary
+# the position rule must not cross.
+reject a-generic-variant-as-a-match-subject E3156 'leaves `B` unsolved' seed-gap <<EOF
+$two_prelude
+
+fn main() {
+	match Two.L(3) {
+		Two.L(v) => { print v }
+		_ => { print 0 }
+	}
+}
+EOF
+
+reject a-generic-variant-bound-by-walrus E3156 'leaves `B` unsolved' seed-gap <<EOF
+$two_prelude
+
+fn main() {
+	a := Two.L(3)
+	print 1
+}
+EOF
+
+reject a-generic-variant-in-an-int-slot E3156 'leaves `A` unsolved' <<EOF
+$two_prelude
+
+fn main() {
+	x: int = Two.R(3)
+	print x
+}
+EOF
+
+reject a-generic-variant-for-a-plain-enum-parameter E3156 'leaves `B` unsolved' <<EOF
+$two_prelude
+
+fn main() {
+	print fk(Two.L(3))
+}
+EOF
+
+reject a-generic-variant-as-a-generic-fn-argument E3156 'leaves `B` unsolved' seed-gap <<EOF
+$two_prelude
+
+fn main() {
+	print tp(idf(Two.L(P(1))))
+}
+EOF
+
+reject a-generic-variant-as-a-generic-struct-field E3156 'leaves `B` unsolved' seed-gap <<EOF
+$two_prelude
+
+fn main() {
+	b := Box(Two.L(3))
+	print 1
+}
+EOF
+
+reject a-generic-variant-under-a-generic-call-answer E3156 'leaves `B` unsolved' seed-gap <<EOF
+$two_prelude
+
+fn main() {
+	print tp(gk([Two.L(P(7))]))
+}
+EOF
+
 # A PATTERN IS TYPED BY ITS SUBJECT, not by the file, so a bare `Chan(n)` against a `Local`
 # that has no `Chan` is the wrong enum's variant when another file declares one — never "no
 # variant named `Chan`". The file-scoped lookup above must not reach this question.

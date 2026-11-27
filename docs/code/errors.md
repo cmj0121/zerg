@@ -196,6 +196,14 @@ two errors combine by the **same nesting as `raise e from cause`** — the later
 already in flight recorded as its `unwrap()` cause — so neither is lost and the consumer reads the whole
 chain. No error silently wins, and there is no separate _suppressed_ slot to consult.
 
+The chain follows the unwind. A later abort that already has a cause keeps it, with the in-flight error
+below it, and a third abort during the same unwind chains onto the second. The `Err` a program already
+holds is not changed by this. A `guard` inside the `defer` that catches its own raise sees no cause, and
+the outer abort stays in flight. Reporting is separate from the chain: an abort nothing guards writes its
+line when it is raised, before its unwind, and the report does not walk the chain. So when nothing guards
+either one, a `defer` that aborts during another abort's unwind prints a second line after the first
+error's, and the program exits with status **1**.
+
 A **`StackOverflowError`** is an ordinary abort. Zerg does not optimize tail calls — `for` is the loop,
 so a bounded stack is enough — which makes an unbounded recursion a definite overflow rather than a silent
 hang. A function that can be entered again before it returns checks, as it starts, that its frame still

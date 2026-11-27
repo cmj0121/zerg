@@ -167,6 +167,12 @@ fire-and-forget——見 [Concurrency](coroutine.zh-TW.md)）。
 合併——較晚的 abort 往外傳、把還在飛的那個記成它的 `unwrap()` cause——所以兩者皆不遺失、consumer 讀得到整條鏈。
 沒有哪個錯誤會無聲勝出,也沒有另一個 _suppressed_ 槽要去查。
 
+這條鏈跟著 unwind 走。本來就有 cause 的較晚 abort 會保留它,還在飛的錯誤排在它下面;同一次 unwind 裡的第三個
+abort 則接在第二個上面。程式已經握著的 `Err` 不會因此被改動。`defer` 裡接住自己 raise 的 `guard` 看不到 cause,
+外層的 abort 仍在飛。回報與這條鏈無關:沒有被 guard 的 abort 在 raise 的當下、在它的 unwind 之前寫出它那一行,而回報
+不會走訪這條鏈。所以兩者都沒被 guard 時,在另一個 abort 的 unwind 中 abort 的 `defer`,會在第一個錯誤那一行之後
+再印出第二行,而程式以狀態 **1** 結束。
+
 一個 **`StackOverflowError`** 是一次一般的 abort。Zerg **不做 tail-call 優化**——`for` 才是迴圈、有界 stack 就夠——
 因此無界遞迴是一個確定的溢位、而不是無聲的卡死。一個在回傳之前可能再被進入的函式,會在開始時檢查自己的 frame 是否
 還放得進它的 stack;放不進的呼叫就在那裡 raise `StackOverflowError: stack overflow`,從那一刻起它就跟其他 abort

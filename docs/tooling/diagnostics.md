@@ -361,7 +361,7 @@ shipping compiler rather than a part of it (the line
 | `E3152` | `…` is an ASSOCIATED FN of `…`, reached through the type                                              |
 | `E3153` | an array length names `…`, and no compile-time constant this build can fold answers to it             |
 | `E3154` | `into` on a type with several impls says which by nothing                                             |
-| `E3155` | a binary same-type member called on a boxed value                                                     |
+| `E3155` | a binary same-type member, or `==`, `!=` or `in`, called on a boxed value                             |
 | `E3156` | a generic enum's variant written where nothing says which specialization                              |
 | `E3157` | a generic method called on a boxed value                                                              |
 | `E3158` | a type position qualifies a type this file also declares as its own private one                       |

@@ -53,9 +53,10 @@ where the closure already is. Two things stay out whatever else changes: a **per
 would make every value pay for a use site most programs do not have and would still not solve heterogeneous
 size; and an **object-safety gate**, since the matrix `#[obj]` already refuses by is the same one.
 
-On a boxed value, **unary** operations dispatch to the real type and work: its spec methods, plus `copy`
-(producing an independent box — a contained `Ref` refcount-bumps) and `debug`, and the structural memory
-ops (`del`, pass, store, send). The **binary same-type** operations — `Eq`'s `==` / `!=`, `Ord`
+On a boxed value, **unary** operations dispatch to the real type and work: its spec methods, plus `debug`,
+and the structural memory ops (`del`, pass, store, send). A box is copied by binding it, never by a method:
+`g := e` builds an independent box (a contained `Ref` refcount-bumps), and `e.copy()` is _E3131_, the
+finding any type gives for a method it lacks. The **binary same-type** operations — `Eq`'s `==` / `!=`, `Ord`
 comparison, and so `Hash` keying — **do not**: their `other: This` operand is exactly the concrete type erasure
 removes, and `is` tests only identity, never supplying it. Two boxed values are therefore **never
 comparable by value**. Box a value to dynamically dispatch its spec's methods; to compare, sort, or key
@@ -91,8 +92,10 @@ box, `list[Conv[int]]` holds two implementers, and one type may implement a spec
 members are seated under the same key.
 
 Each of the three member kinds a box cannot serve is refused at the call: a **binary same-type** member is
-_E3155_, a **generic method** is _E3157_ — a table holds one slot per required member and a generic one would
-need one per type argument — and an **associated fn** is _E3160_, through a box or through the spec's own name.
+_E3155_, and so are `==` and `!=` on two boxes, any `==` that compares a box as a part (`[e] == [f]`), and
+`in` over a collection of them (a box at a `T: Eq` bound is _E4010_); a **generic method** is _E3157_ — a
+table holds one slot per required member and a generic one would need one per type argument — and an
+**associated fn** is _E3160_, through a box or through the spec's own name.
 
 Concrete-bound generics are **monomorphized** in the emitted C — the compiler emits a separate
 specialized version for each concrete type — while a spec used as a type is the one place codegen uses

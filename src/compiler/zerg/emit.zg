@@ -4878,12 +4878,28 @@ fn c_gen_enum_on_demand(mut &em: Emitter, tpl: ast.EnumDecl, applied: str, sol: 
 	# `M[P]` in a body, and `impl[T: Sz] Sz for M[T]` was refused as a method it does not have.
 	c_tpl_methods_late(em, applied)
 	em.res_decls.append(c_enum_typedef(ed))
-	em.res_decls.append(c_refbox_helpers(ed))
-	if c_needs_copy(em, ast.Ty.TNamed(applied)) {
+
+	# THE PROTOTYPES BEFORE THE REF-BOX HELPERS, as the declaration sweep places them
+	# (c_type_decls): a self-recursive `M[int]` minted here hands its cell a drop that runs
+	# `zgh_drop_<key>`, whose body comes after, and cc refused the call as undeclared.
+	needs := c_needs_copy(em, ast.Ty.TNamed(applied))
+	box := c_refbox_helpers(ed)
+	if needs and box != "" {
+		em.res_decls.append(c_copy_drop_protos(applied))
+	}
+	em.res_decls.append(box)
+	if needs {
 		em.res_decls.append(c_enum_copy_helper(em, ed))
 		em.res_decls.append(c_enum_drop_helper(em, ed))
 		em.res_decls.append(c_elem_vt_helper(em, ast.Ty.TNamed(applied)))
 	}
+}
+
+# c_copy_drop_protos is the copy and drop PROTOTYPES of a declared type, which need only its
+# typedef: whatever calls the two ahead of their bodies — a ref-box cell's drop — compiles.
+fn c_copy_drop_protos(nm: str) -> str {
+	ct := c_ty_cname(nm)
+	return "static " + ct + " " + c_ty_helper("copy", nm) + "(" + ct + " v);\n" + "static void " + c_ty_helper("drop", nm) + "(" + ct + " *v);\n"
 }
 
 # c_gen_enum_solved is the specialization a construction decides for itself, or "" when the
@@ -6711,8 +6727,7 @@ fn c_type_decls(mut &em: Emitter, f: ast.File, carriers: list[ast.Ty], tuples: l
 				# just written, which keeps that order from deciding whether the C compiles —
 				# and an enum whose payload is another enum is the same problem one level in.
 				if c_needs_copy(em, ast.Ty.TNamed(ed.name)) {
-					out = out + "static " + c_ty_cname(ed.name) + " " + c_ty_helper("copy", ed.name) + "(" + c_ty_cname(ed.name) + " v);\n"
-					out = out + "static void " + c_ty_helper("drop", ed.name) + "(" + c_ty_cname(ed.name) + " *v);\n"
+					out = out + c_copy_drop_protos(ed.name)
 				}
 				done.append(ed.name)
 			} else {
@@ -6732,8 +6747,7 @@ fn c_type_decls(mut &em: Emitter, f: ast.File, carriers: list[ast.Ty], tuples: l
 				# struct's helper is. A prototype needs only the typedef just written, and
 				# it is what keeps that order from deciding whether the C compiles.
 				if c_needs_copy(em, ast.Ty.TNamed(sd.name)) {
-					out = out + "static " + c_ty_cname(sd.name) + " " + c_ty_helper("copy", sd.name) + "(" + c_ty_cname(sd.name) + " v);\n"
-					out = out + "static void " + c_ty_helper("drop", sd.name) + "(" + c_ty_cname(sd.name) + " *v);\n"
+					out = out + c_copy_drop_protos(sd.name)
 				}
 				done.append(sd.name)
 			} else {

@@ -15171,26 +15171,23 @@ fn c_exprs_none() -> list[ast.Expr] {
 fn c_list_lit(mut &em: Emitter, elems: list[ast.Expr], sb: Subst) -> str {
 	return c_no_slot(em, "the empty list `[]`", "(zrt_list){0}") if elems.len() == 0
 
-	# COPIED, and this is the untyped twin of the rule c_elem_exprs states for a literal that
-	# HAS a declared element type to render at. A push owns what it is handed — the buffer's
-	# vtable drops every element the last holder still has — so an element rendered as a bare
-	# lvalue makes the list a second owner of storage it never took a reference to, and the
-	# first of the two drops takes it out from under the name it was read from.
-	#
-	# This is the ONE position that renders a literal with nothing to render it at: a match
-	# arm body, where `Expr.EBinary(_, a, b) => [a, b]` builds a list out of two names. Every
-	# other list literal in the language reaches c_fit_copied and is built element by element
-	# at the declared type.
-	return c_list_build(em, c_infer(em, elems[0]), elems, false, sb)
+	# This is where a literal with no declared type to render at is lowered: a match arm body,
+	# where `Expr.EBinary(_, a, b) => [a, b]` builds a list out of two names, a tuple's element,
+	# an element of another such list, a `print` or `for` operand. ITS OWN ELEMENT TYPE IS THE
+	# DECLARED ONE, so it follows the binding rule and every element is a typed position: an
+	# element is copied, fitted and checked as c_fit_copied does for `xs: list[T] = [...]`.
+	# Rendered as it stood, the `nil` in `(1, [co, nil])` was a bare `0` pushed into a buffer
+	# of `P?`, which cc refused, and the `2.5` in `(1, [1, 2.5])` was stored as `2`.
+	ety := c_list_elem(c_infer_listlit(em, elems))
+	return c_list_build(em, ety, elems, not c_is_unknown(ety), sb)
 }
 
-# c_list_build assembles the literal, element by element, for the two callers that disagree
-# about how an element is rendered while agreeing about everything else. They do disagree, and
-# it matters: one has a declared element type to render AT (`typed`, c_fit_copied) and the
-# other only has the elements (c_copied). `xs: list[float] = [i, 2, 3]` for an `int` binding
-# `i` built a buffer of int64_t bit patterns and read them back as doubles — it printed
-# 5.92879e-323 — because the sizeof, the element vtable and every push came from the first
-# element's type instead of the one the declaration named.
+# c_list_build assembles the literal, element by element, AT `ety`: the sizeof, the element
+# vtable and every push come from it. `typed` fits each element there (c_fit_copied); it is
+# false only when no element type is known, and each element is then a plain copy (c_copied).
+# `xs: list[float] = [i, 2, 3]` for an `int` binding `i` built a buffer of int64_t bit
+# patterns and read them back as doubles — it printed 5.92879e-323 — because the stride came
+# from the first element's type instead of the one the declaration named.
 #
 # THE LIST UNDER CONSTRUCTION IS HELD ACROSS THE ELEMENTS AFTER THE FIRST (c_hold, #312). A
 # push hands the element to the list, and the list is a C temporary nobody owns until the

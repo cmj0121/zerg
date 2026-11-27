@@ -138,13 +138,13 @@ func TestEmbedShipsTree(t *testing.T) {
 	for _, c := range cfiles {
 		got[filepath.Base(c)] = true
 	}
-	for _, want := range []string{"alloc.c", "ref.c", "list.c", "map.c", "unwind.c", "entry.c", "sys.c", "fmt.c", "conv.c", "str.c"} {
+	for _, want := range []string{"alloc.c", "ref.c", "list.c", "map.c", "unwind.c", "entry.c", "sys.c", "fmt.c", "conv.c", "str.c", "walk.c"} {
 		if !got[want] {
 			t.Errorf("materialized C files missing %s (got %v)", want, cfiles)
 		}
 	}
-	if len(cfiles) != len(got) || len(got) != 10 {
-		t.Errorf("expected 10 C units, got %v", cfiles)
+	if len(cfiles) != len(got) || len(got) != 11 {
+		t.Errorf("expected 11 C units, got %v", cfiles)
 	}
 }
 
@@ -244,6 +244,10 @@ func TestMapCompilesAndRuns(t *testing.T) {
 		"copy-indep=1/1000\n" +
 		"ref-sum=60\n" +
 		"nested=2:3\n" +
+		"cow-map=1/1:2:3\n" +
+		"cow-orig=0:3\n" +
+		"cow-list=6/16\n" +
+		"cow-struct=1,10/2,50\n" +
 		"key-miss-abort=1\n" +
 		"live=0\n"
 	if string(out) != want {
@@ -276,6 +280,26 @@ static const zrt_map_vt vt_int_ref = { zrt_hash_int, zrt_eq_int, NULL, NULL, ref
 static void map_val_copy(void *dst, const void *src) { zrt_map_copy((zrt_map *)dst, (const zrt_map *)src); }
 static void map_val_drop(void *v) { zrt_map_drop((zrt_map *)v); }
 static const zrt_map_vt vt_int_map = { zrt_hash_int, zrt_eq_int, NULL, NULL, map_val_copy, map_val_drop };
+
+static void list_val_copy(void *dst, const void *src) { zrt_list_copy((zrt_list *)dst, (const zrt_list *)src); }
+static void list_val_drop(void *v) { zrt_list_drop((zrt_list *)v); }
+static const zrt_map_vt vt_int_list = { zrt_hash_int, zrt_eq_int, NULL, NULL, list_val_copy, list_val_drop };
+
+/* a struct value { int64 n; list[int] xs }, copied and dropped field by field as the
+ * emitter's struct thunks do */
+typedef struct { int64_t n; zrt_list xs; } row;
+static void row_copy(void *dst, const void *src) {
+    ((row *)dst)->n = ((const row *)src)->n;
+    zrt_list_copy(&((row *)dst)->xs, &((const row *)src)->xs);
+}
+static void row_drop(void *v) { zrt_list_drop(&((row *)v)->xs); }
+static const zrt_map_vt vt_int_row = { zrt_hash_int, zrt_eq_int, NULL, NULL, row_copy, row_drop };
+
+static int64_t list_sum(const zrt_list *l) {
+    int64_t s = 0;
+    for (size_t i = 0; i < zrt_list_len(l); i++) { s += *(int64_t *)zrt_list_at_ref((zrt_list *)l, i); }
+    return s;
+}
 
 int main(void) {
     /* --- map[str,int]: insert 10 keys (grows past load factor 0.75 from nbuckets 8),
@@ -351,7 +375,69 @@ int main(void) {
     zrt_map *in0 = (zrt_map *)zrt_map_index(&outer, &o0);
     zrt_map *in1 = (zrt_map *)zrt_map_index(&outer, &o1);
     printf("nested=%zu:%zu\n", zrt_map_len(in0), zrt_map_len(in1)); /* 2:3 */
+
+    /* --- copy-on-write: a copy shares the table until written; a write to the copy (the
+     * emitted read-modify-store: copy the value out, change it, set it back) never shows
+     * through the original, nor one to the original through the copy. --- */
+    zrt_map oc;
+    zrt_map_copy(&oc, &outer);
+    int shared = oc.entries == outer.entries;
+    zrt_map v0;
+    zrt_map_copy(&v0, (zrt_map *)zrt_map_index(&oc, &o0));
+    int64_t nk = 50, nvv = 50;
+    zrt_map_set(&v0, &nk, &nvv);
+    zrt_map_set(&oc, &o0, &v0);
+    printf("cow-map=%d/%d:%zu:%zu\n", shared, oc.entries != outer.entries,
+        zrt_map_len((zrt_map *)zrt_map_index(&outer, &o0)), zrt_map_len((zrt_map *)zrt_map_index(&oc, &o0)));
+    zrt_map oc2;
+    zrt_map_copy(&oc2, &outer);
+    zrt_map fresh;
+    zrt_map_init(&fresh, sizeof(int64_t), sizeof(int64_t), &vt_int_int);
+    zrt_map_set(&outer, &o1, &fresh); /* the write lands on the original this time */
+    printf("cow-orig=%zu:%zu\n", zrt_map_len((zrt_map *)zrt_map_index(&outer, &o1)),
+        zrt_map_len((zrt_map *)zrt_map_index(&oc2, &o1))); /* 0:3 */
+    zrt_map_drop(&oc2);
+    zrt_map_drop(&oc);
     zrt_map_drop(&outer);
+
+    zrt_map lm;
+    zrt_map_init(&lm, sizeof(int64_t), sizeof(zrt_list), &vt_int_list);
+    zrt_list xs;
+    zrt_list_init(&xs, sizeof(int64_t), NULL);
+    for (int64_t j = 1; j <= 3; j++) { zrt_list_push(&xs, &j); }
+    zrt_map_set(&lm, &o0, &xs);
+    zrt_map lc;
+    zrt_map_copy(&lc, &lm);
+    zrt_list ys;
+    zrt_list_copy(&ys, (zrt_list *)zrt_map_index(&lc, &o0));
+    int64_t ten = 10;
+    zrt_list_push(&ys, &ten);
+    zrt_map_set(&lc, &o0, &ys);
+    printf("cow-list=%lld/%lld\n", (long long)list_sum((zrt_list *)zrt_map_index(&lm, &o0)),
+        (long long)list_sum((zrt_list *)zrt_map_index(&lc, &o0))); /* 6/16 */
+    zrt_map_drop(&lc);
+    zrt_map_drop(&lm);
+
+    zrt_map sm;
+    zrt_map_init(&sm, sizeof(int64_t), sizeof(row), &vt_int_row);
+    row r0;
+    r0.n = 1;
+    zrt_list_init(&r0.xs, sizeof(int64_t), NULL);
+    zrt_list_push(&r0.xs, &ten);
+    zrt_map_set(&sm, &o0, &r0);
+    zrt_map sc;
+    zrt_map_copy(&sc, &sm);
+    row r1;
+    row_copy(&r1, zrt_map_index(&sc, &o0));
+    r1.n = 2;
+    zrt_list_set(&r1.xs, 0, &nvv);
+    zrt_map_set(&sc, &o0, &r1);
+    row *ro = (row *)zrt_map_index(&sm, &o0);
+    row *rc2 = (row *)zrt_map_index(&sc, &o0);
+    printf("cow-struct=%lld,%lld/%lld,%lld\n", (long long)ro->n, (long long)list_sum(&ro->xs),
+        (long long)rc2->n, (long long)list_sum(&rc2->xs)); /* 1,10/2,50 */
+    zrt_map_drop(&sc);
+    zrt_map_drop(&sm);
 
     /* --- key-miss abort: m[k] on a miss raises KeyError; a guard handler catches it. --- */
     zrt_map km;
@@ -1043,6 +1129,116 @@ func TestRaisedErrRendersItsKind(t *testing.T) {
 		})
 	}
 }
+
+// TestAbortDuringUnwindChainsTheInFlightErr pins #483: an abort raised while another one
+// unwinds to the same handler does not lose the first. The later Err reaches the handler with
+// the in-flight one as its cause — below any cause it already had, without touching the
+// cell that cause lives in — and a `guard` inside the unwind catches its own raise and leaves
+// the outer Err where it was.
+func TestAbortDuringUnwindChainsTheInFlightErr(t *testing.T) {
+	bin := buildCore(t, "unwind_chain", unwindChainC)
+	out, errOut, code := runBoundedStreams(t, bin, "", 20*time.Second)
+	want := "defer: second > first\n" +
+		"drop: dropped > first\n" +
+		"third: second > third > first\n" +
+		"inner: caught: inner\n" +
+		"inner: first\n" +
+		"from: second > user > first\n" +
+		"from: user cell kept=1\n"
+	if code != 0 || out != want {
+		t.Errorf("exit=%d stdout=%q, want 0 and %q (stderr %q)", code, out, want, errOut)
+	}
+}
+
+// TestUnguardedDoubleAbortReportsBoth pins the report timing #483 leaves alone: each abort
+// is reported before its unwind, so a defer that aborts during an unhandled one adds a line.
+func TestUnguardedDoubleAbortReportsBoth(t *testing.T) {
+	bin := buildCore(t, "unwind_double", unwindDoubleC)
+	_, errOut, code := runBoundedStreams(t, bin, "", 20*time.Second)
+	if want := "ValueError: first\nIOError: second\n"; code != 1 || errOut != want {
+		t.Errorf("exit=%d stderr=%q, want 1 and %q", code, errOut, want)
+	}
+}
+
+// unwindChainC raises "first" under a guard, with cleanups that abort while it unwinds.
+const unwindChainC = `
+#include "zergrt.h"
+#include <stdio.h>
+
+static zrt_err g_user;
+static void *g_cell;
+
+static void raise_second(void *env) { (void)env; zrt_raise_err(zrt_err_new_kind(ZRT_ERR_IO, "second")); }
+static void raise_third(void *env) { (void)env; zrt_raise_err(zrt_err_new_kind(ZRT_ERR_KEY, "third")); }
+static void raise_from(void *env) { (void)env; zrt_raise_err(zrt_err_copy(g_user)); }
+static void cell_drop(void *p) { (void)p; zrt_raise_err(zrt_err_new_kind(ZRT_ERR_IO, "dropped")); }
+
+static void print_chain(const char *name, zrt_err e) {
+    printf("%s: %s", name, e.msg);
+    for (zrt_err *c = e.cause; c != NULL; c = c->cause) {
+        printf(" > %s", c->msg);
+    }
+    printf("\n");
+}
+
+static void guarded(void *env) {
+    (void)env;
+    zrt_frame fr;
+    zrt_handler_push_catch(&fr);
+    if (setjmp(fr.buf) == 0) {
+        zrt_raise_err(zrt_err_new_kind(ZRT_ERR_KEY, "inner"));
+    } else {
+        zrt_err e = zrt_taken_err();
+        print_chain("inner: caught", e);
+        zrt_err_drop(e);
+    }
+    zrt_handler_pop(&fr);
+}
+
+static void run(const char *name, void (*a)(void *), void (*b)(void *), void *env) {
+    zrt_frame fr;
+    zrt_handler_push_catch(&fr);
+    if (setjmp(fr.buf) == 0) {
+        if (b != NULL) {
+            zrt_defer(b, env);
+        }
+        zrt_defer(a, env);
+        zrt_raise_err(zrt_err_new_kind(ZRT_ERR_VALUE, "first"));
+    } else {
+        zrt_err e = zrt_taken_err();
+        print_chain(name, e);
+        zrt_err_drop(e);
+    }
+    zrt_handler_pop(&fr);
+}
+
+int main(void) {
+    run("defer", raise_second, NULL, NULL);
+    g_cell = zrt_ref_alloc(sizeof(int64_t), cell_drop);
+    run("drop", zrt_defer_release, NULL, &g_cell);
+    run("third", raise_third, raise_second, NULL);
+    run("inner", guarded, NULL, NULL);
+    g_user = zrt_err_chain(zrt_err_new_kind(ZRT_ERR_IO, "second"), zrt_err_new_kind(ZRT_ERR_VALUE, "user"));
+    run("from", raise_from, NULL, NULL);
+    printf("from: user cell kept=%d\n", g_user.cause->cause == NULL);
+    zrt_err_drop(g_user);
+    return 0;
+}
+`
+
+// unwindDoubleC is the same "first" with no guard: the root handler reports both aborts.
+const unwindDoubleC = `
+#include "zergrt.h"
+
+static void raise_second(void *env) { (void)env; zrt_raise_err(zrt_err_new_kind(ZRT_ERR_IO, "second")); }
+
+static void prog(void) {
+    zrt_defer(raise_second, NULL);
+    zrt_raise_err(zrt_err_new_kind(ZRT_ERR_VALUE, "first"));
+}
+
+int main(void) { return zrt_main_run_nil(prog); }
+`
 
 // abortLineC aborts once, with no handler anywhere: the last-resort arm of the abort core,
 // which is the shape a program that raises out of main has.
@@ -2671,6 +2867,385 @@ int main(void) {
     }
     zrt_handler_pop(&fr);
     printf("caught=%d order=%s live=%ld\n", caught, g_log, g_live);
+    return 0;
+}
+`
+
+// TestEqWalkIsIterative drives walk.c's `==` walker over chains far deeper than a C stack
+// holds, through both container steps: each cell keeps its one child in a list at an odd
+// depth and in a map at an even one, the shape of a derived `==` on an enum whose payload
+// is a container of itself. It holds the walker to its four answers — equal, a leaf that
+// differs, a list and a map whose lengths differ, a key the other map lacks — and to its
+// `held` contract: a step that aborts 100000 frames down (the program's own `eq`) leaves the
+// heap where it was once the chains are freed.
+func TestEqWalkIsIterative(t *testing.T) {
+	bin := buildCounted(t, "eqwalk", eqWalkC, false)
+	out, code := runBounded(t, bin, "", 60*time.Second)
+	want := "same=1 leaf=0 listlen=0 maplen=0 key=0 caught=1 live=0\n"
+	if code != 0 || out != want {
+		t.Fatalf("eqwalk exit=%d output %q, want exit 0 and %q", code, out, want)
+	}
+}
+
+const eqWalkC = `
+#include "zergrt.h"
+#include <setjmp.h>
+#include <stdio.h>
+#include <stdlib.h>
+
+#define DEEP 200000
+
+static long g_live;
+void *zrt_alloc(size_t n) { void *p = malloc(n); if (p != NULL) { g_live++; } return p; }
+void zrt_free(void *p) { if (p != NULL) { g_live--; free(p); } }
+
+static const zrt_map_vt vt_int = { zrt_hash_int, zrt_eq_int, NULL, NULL, NULL, NULL };
+
+typedef struct cell { int64_t v; zrt_list l; zrt_map m; } cell;
+static int64_t g_abort_v = -1;
+
+static int step_cell(zrt_eqw *w, const void *pa, const void *pb, size_t *at);
+static int step_ptr(zrt_eqw *w, const void *pa, const void *pb, size_t *at) {
+    if (*at > 0) { return ZRT_EQ_YES; }
+    *at = 1;
+    zrt_eqw_push(w, step_cell, *(cell *const *)pa, *(cell *const *)pb);
+    return ZRT_EQ_PUSHED;
+}
+static int step_list(zrt_eqw *w, const void *pa, const void *pb, size_t *at) {
+    return zrt_eqstep_list(w, step_ptr, (const zrt_list *)pa, (const zrt_list *)pb, at);
+}
+static int step_map(zrt_eqw *w, const void *pa, const void *pb, size_t *at) {
+    return zrt_eqstep_map(w, step_ptr, (const zrt_map *)pa, (const zrt_map *)pb, at);
+}
+static int step_cell(zrt_eqw *w, const void *pa, const void *pb, size_t *at) {
+    const cell *a = (const cell *)pa;
+    const cell *b = (const cell *)pb;
+    switch (*at) {
+    case 0:
+        if (a->v == g_abort_v) { zrt_abort("eq aborts"); }
+        if (a->v != b->v) { return ZRT_EQ_NO; }
+        *at = 1;
+        zrt_eqw_push(w, step_list, &a->l, &b->l);
+        return ZRT_EQ_PUSHED;
+    case 1:
+        *at = 2;
+        zrt_eqw_push(w, step_map, &a->m, &b->m);
+        return ZRT_EQ_PUSHED;
+    default:
+        return ZRT_EQ_YES;
+    }
+}
+
+static cell *mk(int64_t v) {
+    cell *c = (cell *)zrt_alloc(sizeof(cell));
+    c->v = v;
+    zrt_list_init(&c->l, sizeof(cell *), NULL);
+    zrt_map_init(&c->m, sizeof(int64_t), sizeof(cell *), &vt_int);
+    return c;
+}
+
+/* build: DEEP cells, the child of depth d in the list when d is odd, else the map under key */
+static cell *build(int64_t last, int64_t key) {
+    cell *root = mk(0), *c = root;
+    for (int64_t d = 1; d <= DEEP; d++) {
+        cell *n = mk(d == DEEP ? last : d);
+        if (d % 2) { zrt_list_push(&c->l, &n); } else { zrt_map_set(&c->m, &key, &n); }
+        c = n;
+    }
+    return root;
+}
+
+static cell *at_depth(cell *c, int64_t d) {
+    for (int64_t i = 0; i < d; i++) {
+        c = zrt_list_len(&c->l) ? *(cell **)zrt_list_at_ref(&c->l, 0) : *(cell **)zrt_map_val_at(&c->m, 0);
+    }
+    return c;
+}
+
+static void drop(cell *c) {
+    while (c != NULL) {
+        cell *n = NULL;
+        if (zrt_list_len(&c->l)) { n = *(cell **)zrt_list_at_ref(&c->l, 0); }
+        else if (zrt_map_len(&c->m)) { n = *(cell **)zrt_map_val_at(&c->m, 0); }
+        zrt_list_drop(&c->l);
+        zrt_map_drop(&c->m);
+        zrt_free(c);
+        c = n;
+    }
+}
+
+static int eq(cell *a, cell *b, bool held) { return zrt_eq_walk(step_cell, a, b, held) ? 1 : 0; }
+
+int main(void) {
+    long base = g_live;
+    cell *a = build(7, 0), *b = build(7, 0);
+    int same = eq(a, b, false);
+    cell *c = build(8, 0);
+    int leaf = eq(a, c, false);
+    drop(c);
+    c = build(7, 0);
+    cell *extra = mk(DEEP + 1);
+    zrt_list_push(&at_depth(c, DEEP - 2)->l, &extra);
+    int listlen = eq(a, c, false);
+    drop(extra);
+    drop(c);
+    c = build(7, 0);
+    int64_t k2 = 2;
+    extra = mk(DEEP + 1);
+    zrt_map_set(&at_depth(c, DEEP - 1)->m, &k2, &extra);
+    int maplen = eq(a, c, false);
+    drop(extra);
+    drop(c);
+    c = build(7, 1);
+    int key = eq(a, c, false);
+    drop(c);
+
+    g_abort_v = DEEP / 2;
+    int caught = 0;
+    long before = g_live;
+    zrt_frame fr;
+    zrt_handler_push_catch(&fr);
+    if (setjmp(fr.buf) == 0) {
+        (void)eq(a, b, true);
+    } else {
+        caught = 1;
+        zrt_err_drop(zrt_taken_err());
+    }
+    zrt_handler_pop(&fr);
+    caught = caught && g_live == before;
+    drop(a);
+    drop(b);
+    printf("same=%d leaf=%d listlen=%d maplen=%d key=%d caught=%d live=%ld\n", same, leaf, listlen, maplen, key, caught, g_live - base);
+    return 0;
+}
+`
+
+// TestHashWalkIsIterative drives walk.c's `Hash` walker over a chain far deeper than a C stack
+// holds. Each cell hashes like a derived enum payload — a start, its own value mixed in, then
+// a left and a right child, then a second value — and the walk must fold each child's hash
+// into its parent exactly as the recursion it replaces did: against a recursive reference on a
+// small tree, and against the chain's hashes computed bottom-up. A step that aborts 100000
+// frames down under a held walk leaves the heap where it was.
+func TestHashWalkIsIterative(t *testing.T) {
+	bin := buildCounted(t, "hashwalk", hashWalkC, false)
+	out, code := runBounded(t, bin, "", 60*time.Second)
+	want := "tree=1 chain=1 caught=1 live=0\n"
+	if code != 0 || out != want {
+		t.Fatalf("hashwalk exit=%d output %q, want exit 0 and %q", code, out, want)
+	}
+}
+
+const hashWalkC = `
+#include "zergrt.h"
+#include <setjmp.h>
+#include <stdio.h>
+#include <stdlib.h>
+
+#define DEEP 200000
+#define FNV 1099511628211ull
+
+static long g_live;
+void *zrt_alloc(size_t n) { void *p = malloc(n); if (p != NULL) { g_live++; } return p; }
+void zrt_free(void *p) { if (p != NULL) { g_live--; free(p); } }
+
+typedef struct cell { int64_t v; struct cell *l; struct cell *r; } cell;
+static int64_t g_abort_v = -1;
+
+static uint64_t mix(uint64_t acc, uint64_t h) { return (acc ^ h) * FNV; }
+
+static int step_cell(zrt_hw *w, const void *px, uint64_t *acc, size_t *at) {
+    const cell *c = (const cell *)px;
+    switch (*at) {
+    case 0:
+        if (c->v == g_abort_v) { zrt_abort("hash aborts"); }
+        *acc = 1;
+        *acc = mix(*acc, zrt_hash_word(c->v));
+        if (c->l != NULL) { *at = 1; zrt_hw_push(w, step_cell, c->l); return ZRT_H_PUSHED; }
+    case 1:
+        if (c->r != NULL) { *at = 2; zrt_hw_push(w, step_cell, c->r); return ZRT_H_PUSHED; }
+    case 2:;
+    }
+    *acc = mix(*acc, zrt_hash_word(c->v + 1));
+    return ZRT_H_DONE;
+}
+
+static uint64_t ref(const cell *c) {
+    uint64_t acc = mix(1, zrt_hash_word(c->v));
+    if (c->l != NULL) { acc = mix(acc, ref(c->l)); }
+    if (c->r != NULL) { acc = mix(acc, ref(c->r)); }
+    return mix(acc, zrt_hash_word(c->v + 1));
+}
+
+static cell *mk(int64_t v, cell *l, cell *r) {
+    cell *c = (cell *)zrt_alloc(sizeof(cell));
+    c->v = v;
+    c->l = l;
+    c->r = r;
+    return c;
+}
+
+static void drop_tree(cell *c) {
+    if (c == NULL) { return; }
+    drop_tree(c->l);
+    drop_tree(c->r);
+    zrt_free(c);
+}
+
+int main(void) {
+    long base = g_live;
+    cell *t = mk(1, mk(2, mk(3, NULL, NULL), NULL), mk(4, mk(5, NULL, mk(6, NULL, NULL)), mk(7, NULL, NULL)));
+    int tree = zrt_hash_walk(step_cell, t, false) == ref(t);
+    drop_tree(t);
+
+    cell **cs = (cell **)malloc((DEEP + 1) * sizeof(cell *));
+    cs[DEEP] = mk(DEEP, NULL, NULL);
+    for (int64_t d = DEEP - 1; d >= 0; d--) {
+        cs[d] = d % 2 ? mk(d, cs[d + 1], NULL) : mk(d, NULL, cs[d + 1]);
+    }
+    uint64_t want = 0;
+    for (int64_t d = DEEP; d >= 0; d--) {
+        uint64_t acc = mix(1, zrt_hash_word(d));
+        if (d < DEEP) { acc = mix(acc, want); }
+        want = mix(acc, zrt_hash_word(d + 1));
+    }
+    int chain = zrt_hash_walk(step_cell, cs[0], false) == want;
+
+    g_abort_v = DEEP / 2;
+    int caught = 0;
+    long before = g_live;
+    zrt_frame fr;
+    zrt_handler_push_catch(&fr);
+    if (setjmp(fr.buf) == 0) {
+        (void)zrt_hash_walk(step_cell, cs[0], true);
+    } else {
+        caught = 1;
+        zrt_err_drop(zrt_taken_err());
+    }
+    zrt_handler_pop(&fr);
+    caught = caught && g_live == before;
+    for (int64_t d = 0; d <= DEEP; d++) { zrt_free(cs[d]); }
+    free(cs);
+    printf("tree=%d chain=%d caught=%d live=%ld\n", tree, chain, caught, g_live - base);
+    return 0;
+}
+`
+
+// TestRenderWalkIsIterative drives walk.c's render walker over a chain far deeper than a C
+// stack holds. Each cell renders like a derived payload — its name, its value as a cell the
+// step hands over, then a left and a right child between separators — and the walk must write
+// exactly the text the recursion it replaces built: against a recursive reference on a small
+// tree, and against the chain's text written out in a loop. The answer is a managed str cell
+// the caller gives back. A step that aborts 100000 frames down under a held walk leaves the
+// heap where it was: the frames and the half-built text are both given back.
+func TestRenderWalkIsIterative(t *testing.T) {
+	bin := buildCounted(t, "renderwalk", renderWalkC, false)
+	out, code := runBounded(t, bin, "", 60*time.Second)
+	want := "tree=1 chain=1 caught=1 live=0\n"
+	if code != 0 || out != want {
+		t.Fatalf("renderwalk exit=%d output %q, want exit 0 and %q", code, out, want)
+	}
+}
+
+const renderWalkC = `
+#include "zergrt.h"
+#include <setjmp.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+
+#define DEEP 200000
+
+static long g_live;
+void *zrt_alloc(size_t n) { void *p = malloc(n); if (p != NULL) { g_live++; } return p; }
+void zrt_free(void *p) { if (p != NULL) { g_live--; free(p); } }
+
+typedef struct cell { int64_t v; struct cell *l; struct cell *r; } cell;
+static int64_t g_abort_v = -1;
+
+static int step_cell(zrt_rw *w, zrt_sb *b, const void *px, size_t *at) {
+    const cell *c = (const cell *)px;
+    char num[32];
+    switch (*at) {
+    case 0:
+        if (c->v == g_abort_v) { zrt_abort("render aborts"); }
+        zrt_sb_put(b, "C(");
+        snprintf(num, sizeof num, "%lld", (long long)c->v);
+        zrt_sb_put_cell(b, zrt_str_dup(num));
+        if (c->l != NULL) { zrt_sb_put(b, ", "); *at = 1; zrt_rw_push(w, step_cell, c->l); return ZRT_R_PUSHED; }
+    case 1:
+        if (c->r != NULL) { zrt_sb_put(b, ", "); *at = 2; zrt_rw_push(w, step_cell, c->r); return ZRT_R_PUSHED; }
+    case 2:;
+    }
+    zrt_sb_put(b, ")");
+    return ZRT_R_DONE;
+}
+
+static size_t ref(const cell *c, char *o) {
+    size_t n = (size_t)sprintf(o, "C(%lld", (long long)c->v);
+    if (c->l != NULL) { n += (size_t)sprintf(o + n, ", "); n += ref(c->l, o + n); }
+    if (c->r != NULL) { n += (size_t)sprintf(o + n, ", "); n += ref(c->r, o + n); }
+    n += (size_t)sprintf(o + n, ")");
+    return n;
+}
+
+static cell *mk(int64_t v, cell *l, cell *r) {
+    cell *c = (cell *)zrt_alloc(sizeof(cell));
+    c->v = v;
+    c->l = l;
+    c->r = r;
+    return c;
+}
+
+static void drop_tree(cell *c) {
+    if (c == NULL) { return; }
+    drop_tree(c->l);
+    drop_tree(c->r);
+    zrt_free(c);
+}
+
+int main(void) {
+    long base = g_live;
+    char small[256];
+    cell *t = mk(1, mk(2, mk(3, NULL, NULL), NULL), mk(4, mk(5, NULL, mk(6, NULL, NULL)), mk(7, NULL, NULL)));
+    ref(t, small);
+    const char *got = zrt_render_walk(step_cell, t, false);
+    int tree = strcmp(got, small) == 0;
+    zrt_str_release(got);
+    drop_tree(t);
+
+    cell **cs = (cell **)malloc((DEEP + 1) * sizeof(cell *));
+    cs[DEEP] = mk(DEEP, NULL, NULL);
+    for (int64_t d = DEEP - 1; d >= 0; d--) {
+        cs[d] = d % 2 ? mk(d, cs[d + 1], NULL) : mk(d, NULL, cs[d + 1]);
+    }
+    char *want = (char *)malloc((size_t)DEEP * 16 + 64);
+    size_t n = 0;
+    for (int64_t d = 0; d <= DEEP; d++) {
+        n += (size_t)sprintf(want + n, d < DEEP ? "C(%lld, " : "C(%lld", (long long)d);
+    }
+    for (int64_t d = 0; d <= DEEP; d++) { want[n++] = ')'; }
+    want[n] = 0;
+    got = zrt_render_walk(step_cell, cs[0], false);
+    int chain = strcmp(got, want) == 0;
+    zrt_str_release(got);
+    free(want);
+
+    g_abort_v = DEEP / 2;
+    int caught = 0;
+    long before = g_live;
+    zrt_frame fr;
+    zrt_handler_push_catch(&fr);
+    if (setjmp(fr.buf) == 0) {
+        (void)zrt_render_walk(step_cell, cs[0], true);
+    } else {
+        caught = 1;
+        zrt_err_drop(zrt_taken_err());
+    }
+    zrt_handler_pop(&fr);
+    caught = caught && g_live == before;
+    for (int64_t d = 0; d <= DEEP; d++) { zrt_free(cs[d]); }
+    free(cs);
+    printf("tree=%d chain=%d caught=%d live=%ld\n", tree, chain, caught, g_live - base);
     return 0;
 }
 `

@@ -4308,6 +4308,47 @@ fn main() {
 }
 EOF
 
+# A LIST LITERAL WITH NO DECLARED TYPE FOLLOWS THE BINDING RULE wherever it stands (#481): its
+# first element names the element type, and a later one of another number type is refused as
+# it is in `xs := [1, 2.5]`. In a tuple, a `print` or a `for` the literal used to be built
+# from its elements as they stood, and cc narrowed the 2.5 to 2 with a warning.
+reject a-float-after-an-int-in-a-tuples-list E3036 'element 2 of this list literal is int, and this gives float' <<'EOF'
+fn main() {
+	t := (1, [1, 2.5])
+	print t
+}
+EOF
+
+reject a-float-after-an-int-in-a-printed-list E3036 'element 2 of this list literal is int, and this gives float' <<'EOF'
+fn main() {
+	print [1, 2.5]
+}
+EOF
+
+reject a-float-name-after-an-int-in-a-tuples-list E3036 'element 2 of this list literal is int, and this gives float' <<'EOF'
+fn main() {
+	f := 2.5
+	print (1, [3, f])
+}
+EOF
+
+reject a-byte-after-an-int-in-a-tuples-list E3036 'element 2 of this list literal is int, and this gives byte' <<'EOF'
+fn main() {
+	b: byte = 7
+	print (1, [3, b])
+}
+EOF
+
+reject a-float-after-an-int-in-a-for-list E3036 'element 2 of this list literal is int, and this gives float' <<'EOF'
+fn main() {
+	mut s := 0.0
+	for e in [1, 2.5] {
+		s = s + float(e)
+	}
+	print s
+}
+EOF
+
 reject an-optional-as-a-later-map-value E3036 'a value of this map literal is int, and this gives int?' <<'EOF'
 fn pick(n: int) -> int? {
 	return n if n > 0
@@ -4450,6 +4491,59 @@ fn f(x: int) -> int? {
 
 fn main() {
 	print f(1) ?? 0
+}
+EOF
+
+# --- a spec value and its implementer are two types ------------------------------------
+#
+# chk_fits lets an implementer into a spec SLOT, which builds a box, and the arm and branch rules
+# asked it, so a spec-first pair passed — and the unboxed implementer met the box in one C
+# conditional that cc refused. A sibling is not a slot: the pair is refused in either order.
+
+reject an-if-answering-a-spec-then-its-implementer E3020 'its branches give Sz and Q' <<'EOF'
+spec Sz {
+	fn sz() -> int
+}
+
+struct Q {
+	pub y: int
+}
+
+impl Sz for Q {
+	fn sz() -> int {
+		return this.y
+	}
+}
+
+fn main() {
+	e: Sz = Q(1)
+	f := if e.sz() == 1 { e } else { Q(3) }
+	print f.sz()
+}
+EOF
+
+reject a-match-answering-a-spec-then-its-implementer E3021 'its arms give Sz and Q' <<'EOF'
+spec Sz {
+	fn sz() -> int
+}
+
+struct Q {
+	pub y: int
+}
+
+impl Sz for Q {
+	fn sz() -> int {
+		return this.y
+	}
+}
+
+fn main() {
+	e: Sz = Q(1)
+	f := match e.sz() {
+		1 => e
+		_ => Q(3)
+	}
+	print f.sz()
 }
 EOF
 
@@ -6963,6 +7057,10 @@ EOF
 # inherits Go's growable stack and accepts all eight — a gap its own contract records
 # (src/bootstrap/README.md).
 
+# The source reaches `reject` by process substitution and never down a pipe: every stage of
+# a pipeline runs in a subshell, so a `reject` on the right of a `|` counts its verdict in a
+# copy of $pass and $fail that is thrown away, and a case that fails leaves the gate green.
+
 # deep_expr <nested|flat> writes ONE too-deep expression, with no statement around it, so
 # the four placements below differ only in where they put it.
 deep_expr() {
@@ -6979,17 +7077,17 @@ deep_expr() {
 for shape in nested flat; do
 	e=$(deep_expr "$shape")
 
-	printf 'fn main() {\n\tprint %s\n}\n' "$e" |
-		reject "deep-$shape-in-a-body" E2012 seed-gap
+	reject "deep-$shape-in-a-body" E2012 seed-gap \
+		< <(printf 'fn main() {\n\tprint %s\n}\n' "$e")
 
-	printf 'fn deep[T](v: T) -> int {\n\treturn %s\n}\n\nfn main() {\n\tprint deep(1)\n}\n' "$e" |
-		reject "deep-$shape-in-an-instantiated-generic" E2012 seed-gap
+	reject "deep-$shape-in-an-instantiated-generic" E2012 seed-gap \
+		< <(printf 'fn deep[T](v: T) -> int {\n\treturn %s\n}\n\nfn main() {\n\tprint deep(1)\n}\n' "$e")
 
-	printf 'K := %s\n\nfn main() {\n\tprint K\n}\n' "$e" |
-		reject "deep-$shape-in-a-module-constant" E2012 seed-gap
+	reject "deep-$shape-in-a-module-constant" E2012 seed-gap \
+		< <(printf 'K := %s\n\nfn main() {\n\tprint K\n}\n' "$e")
 
-	printf 'fn f(a: int = %s) -> int {\n\treturn a\n}\n\nfn main() {\n\tprint f()\n}\n' "$e" |
-		reject "deep-$shape-in-a-default-parameter" E2012 seed-gap
+	reject "deep-$shape-in-a-default-parameter" E2012 seed-gap \
+		< <(printf 'fn f(a: int = %s) -> int {\n\treturn a\n}\n\nfn main() {\n\tprint f()\n}\n' "$e")
 done
 
 # The ninth case, and the only one the PARSER cannot answer: a tree the compiler COMPOSES.
@@ -7003,8 +7101,8 @@ done
 # 190 is chosen to sit UNDER the 200 bound on each half and over it once composed; the two
 # halves are the same chain so the arithmetic is visible rather than tuned.
 half=$(awk 'BEGIN { s = "1"; for (i = 0; i < 190; i++) s = s " + 1"; printf "%s", s }')
-printf 'fn f(a: int = %s) -> int {\n\treturn a\n}\n\nfn main() {\n\tprint f() + %s\n}\n' "$half" "$half" |
-	reject deep-composed-by-a-default-splice E4028 seed-gap
+reject deep-composed-by-a-default-splice E4028 seed-gap \
+	< <(printf 'fn f(a: int = %s) -> int {\n\treturn a\n}\n\nfn main() {\n\tprint f() + %s\n}\n' "$half" "$half")
 
 # --- report ------------------------------------------------------------------------
 
@@ -9681,6 +9779,350 @@ pub fn one() -> int {
 }
 EOF
 
+# A GENERIC ENUM'S VARIANT IS NO DIFFERENT. It used to be read bare as a construction whose
+# arguments solved the enum (`A(1)` built an `M[int]`), and where they did not the reader was
+# told about an unsolved parameter (E3156) or an undefined name (E3069) rather than that the
+# name needs its enum. The sentence names the enum as it is declared — `M.B`, never
+# `M[int].B`, which is not a spelling a reader can write — whether the type came from the
+# arguments, from the position, or from neither, and wherever the bare name stands.
+reject a-bare-generic-variant-solved-by-its-argument E3079 'write `M.A`' seed-gap <<'EOF'
+enum M[T] {
+	A(T)
+	B
+}
+
+fn main() {
+	k := A(1)
+	print 1
+}
+EOF
+
+reject a-bare-generic-variant-at-a-typed-position E3079 'write `Two.L`' seed-gap <<'EOF'
+enum Two[X, Y] {
+	L(X)
+	R(Y)
+}
+
+fn main() {
+	t: Two[int, str] = L(3)
+	print 1
+}
+EOF
+
+reject a-bare-payload-free-generic-variant E3079 'write `M.B`' seed-gap <<'EOF'
+enum M[T] {
+	A(T)
+	B
+}
+
+fn main() {
+	k := B
+	print 1
+}
+EOF
+
+reject a-bare-generic-variant-names-the-enum-not-its-instance E3079 '`B` is a variant of `M`, and a variant is named through its enum — write `M.B`' <<'EOF'
+enum M[T] {
+	A(T)
+	B
+}
+
+fn main() {
+	k: M[int] = B
+	print 1
+}
+EOF
+
+reject a-bare-generic-variant-as-an-argument E3079 'write `M.A`' seed-gap <<'EOF'
+enum M[T] {
+	A(T)
+	B
+}
+
+fn take(m: M[int]) -> int {
+	return 1
+}
+
+fn main() {
+	print take(A(2))
+}
+EOF
+
+reject a-bare-generic-variant-as-a-list-element E3079 'write `M.A`' seed-gap <<'EOF'
+enum M[T] {
+	A(T)
+	B
+}
+
+fn main() {
+	ks: list[M[int]] = [M.A(1), A(2)]
+	print ks.len()
+}
+EOF
+
+# Two generic enums declaring the same variant: the one named is the one the position asks
+# for, the way `a-bare-payload-variant-names-this-files-enum` holds it for two plain ones.
+reject a-bare-generic-variant-two-enums-declare E3079 'write `L1.A`' seed-gap <<'EOF'
+enum L1[T] {
+	A(T)
+	B
+}
+
+enum L2[T] {
+	A(T)
+	C
+}
+
+fn main() {
+	k: L1[int] = A(1)
+	print 1
+}
+EOF
+
+# ANOTHER MODULE'S GENERIC VARIANT is not in this file's scope at all, so the name is undefined
+# — and the sentence says which enum has it and how to reach it, through the module and the
+# enum as declared. A private enum is not reachable, and the sentence says where it lives.
+reject a-bare-generic-variant-of-another-module E3069 '`B` is a variant of `gm.M` — name it through its module (`gm.M.B`)' <<'EOF'
+import "./gm"
+
+fn main() {
+	k: gm.M[int] = B
+	print 1
+}
+--- gm/mod.zg
+pub enum M[T] {
+	A(T)
+	B
+}
+EOF
+
+reject a-bare-generic-variant-call-of-another-module E4016 '`A` is a variant of `gm.M` — name it through its module (`gm.M.A`)' <<'EOF'
+import "./gm"
+
+fn main() {
+	k := A(1)
+	print 1
+}
+--- gm/mod.zg
+pub enum M[T] {
+	A(T)
+	B
+}
+EOF
+
+reject a-bare-generic-variant-of-a-private-enum E4016 '`A` is a variant of `P`, declared in' <<'EOF'
+import "./pm"
+
+fn main() {
+	k := A(1)
+	print pm.one()
+}
+--- pm/mod.zg
+enum P[T] {
+	A(T)
+	B
+}
+
+pub fn one() -> int {
+	return 1
+}
+EOF
+
+# A GENERIC VARIANT READ AGAINST THE TYPE ITS POSITION ASKS FOR. The position decides the
+# specialization (docs/core/type-system.md), so a payload that disagrees with it is a wrong
+# payload, named at the payload — never the variant of a plain enum that happens to declare
+# the same name. The program declares such a `K` beside `Two`, so a reading that picks the
+# wrong enum shows in the sentence. Wherever a position states the type, the rule is this one.
+#
+# The program each case below is a `main` appended to: `Two` beside a plain `K` declaring
+# the same variant names, and a parameter of each kind of position.
+two_prelude='enum Two[A, B] {
+	L(A)
+	R(B)
+	N
+}
+
+struct P {
+	pub x: int
+}
+
+enum K {
+	L(int)
+	R(str)
+}
+
+struct Box[T] {
+	pub v: T
+}
+
+fn tp(t: Two[P, int]) -> int {
+	return 2
+}
+
+fn gk[T](xs: list[T]) -> T {
+	return xs[0]
+}
+
+fn idf[T](x: T) -> T {
+	return x
+}
+
+fn fk(k: K) -> int {
+	return 3
+}'
+
+reject a-generic-variant-payload-against-its-parameter E3036 'payload 1 of `L` is P, and this gives int' <<EOF
+$two_prelude
+
+fn main() {
+	print tp(Two.L(3))
+}
+EOF
+
+reject a-generic-variant-payload-against-its-list-element E3036 'payload 1 of `L` is P, and this gives int' <<EOF
+$two_prelude
+
+fn main() {
+	xs: list[Two[P, int]] = [Two.L(3)]
+	print xs.len()
+}
+EOF
+
+reject a-generic-variant-payload-against-its-assignment E3036 'payload 1 of `L` is P, and this gives int' <<EOF
+$two_prelude
+
+fn main() {
+	mut t: Two[P, int] = Two.N
+	t = Two.L(3)
+	print tp(t)
+}
+EOF
+
+reject a-generic-variant-payload-against-its-option-slot E3036 'payload 1 of `L` is P, and this gives int' <<EOF
+$two_prelude
+
+fn main() {
+	o: Two[P, int]? = Two.L(3)
+	print 1
+}
+EOF
+
+reject a-generic-variant-list-join-disagrees E3036 'payload 1 of `L` is P, and this gives int' <<EOF
+$two_prelude
+
+fn main() {
+	xs := [Two.L(P(1)), Two.R(2), Two.L(3)]
+	print xs.len()
+}
+EOF
+
+reject a-generic-variant-map-join-disagrees E3036 'payload 1 of `L` is P, and this gives int' <<EOF
+$two_prelude
+
+fn main() {
+	m := {"a": Two.L(P(1)), "b": Two.R(2), "c": Two.L(3)}
+	print m.len()
+}
+EOF
+
+# AND WHERE NOTHING ASKS FOR A `Two`, NOTHING DECIDES: a position that states no
+# specialization of it leaves the unmentioned parameter unsolved, and a generic call's `T`
+# never comes from where its answer lands (docs/core/type-system.md). These hold the boundary
+# the position rule must not cross.
+reject a-generic-variant-as-a-match-subject E3156 'leaves `B` unsolved' seed-gap <<EOF
+$two_prelude
+
+fn main() {
+	match Two.L(3) {
+		Two.L(v) => { print v }
+		_ => { print 0 }
+	}
+}
+EOF
+
+reject a-generic-variant-bound-by-walrus E3156 'leaves `B` unsolved' seed-gap <<EOF
+$two_prelude
+
+fn main() {
+	a := Two.L(3)
+	print 1
+}
+EOF
+
+reject a-generic-variant-in-an-int-slot E3156 'leaves `A` unsolved' <<EOF
+$two_prelude
+
+fn main() {
+	x: int = Two.R(3)
+	print x
+}
+EOF
+
+reject a-generic-variant-for-a-plain-enum-parameter E3156 'leaves `B` unsolved' <<EOF
+$two_prelude
+
+fn main() {
+	print fk(Two.L(3))
+}
+EOF
+
+reject a-generic-variant-as-a-generic-fn-argument E3156 'leaves `B` unsolved' seed-gap <<EOF
+$two_prelude
+
+fn main() {
+	print tp(idf(Two.L(P(1))))
+}
+EOF
+
+reject a-generic-variant-as-a-generic-struct-field E3156 'leaves `B` unsolved' seed-gap <<EOF
+$two_prelude
+
+fn main() {
+	b := Box(Two.L(3))
+	print 1
+}
+EOF
+
+reject a-generic-variant-under-a-generic-call-answer E3156 'leaves `B` unsolved' seed-gap <<EOF
+$two_prelude
+
+fn main() {
+	print tp(gk([Two.L(P(7))]))
+}
+EOF
+
+# A MAP'S VALUES ARE JOINED AS A LIST'S ELEMENTS ARE, so values that leave a parameter open
+# are the variant's refusal there too. The map is not empty, and "the empty map" would blame a
+# form the reader did not write — for one value, and for several that leave `B` open. The
+# program is `Two` and `P` alone: a map that nothing else in the file explains.
+two_bare='enum Two[A, B] {
+	L(A)
+	R(B)
+	N
+}
+
+struct P {
+	pub x: int
+}'
+
+reject a-generic-variant-map-leaves-a-parameter E3156 'leaves `B` unsolved' <<EOF
+$two_bare
+
+fn main() {
+	m := {"a": Two.L(P(5))}
+	print m.len()
+}
+EOF
+
+reject a-generic-variant-map-join-leaves-a-parameter E3156 'leaves `B` unsolved' <<EOF
+$two_bare
+
+fn main() {
+	m := {"a": Two.L(P(5)), "b": Two.L(6)}
+	print m.len()
+}
+EOF
+
 # A PATTERN IS TYPED BY ITS SUBJECT, not by the file, so a bare `Chan(n)` against a `Local`
 # that has no `Chan` is the wrong enum's variant when another file declares one — never "no
 # variant named `Chan`". The file-scoped lookup above must not reach this question.
@@ -10082,6 +10524,239 @@ struct W {
 
 fn main() {
 	print W([N(1)]) == W([N(1)])
+}
+EOF
+
+# A METHOD A SPEC DOES NOT DECLARE HAS NO SLOT, so a call on a box is the finding every type
+# gives for a method it lacks. `copy` is such a name: a box is copied by binding it, as every
+# value is (docs/core/specs.md). Until this stood the compiler stopped with "index out of
+# range" and no diagnostic, reading the arguments against a signature row that is not there.
+reject a-method-a-spec-lacks-on-a-box E3131 'the method `copy` on a Sz' <<'EOF'
+spec Sz {
+	fn sz() -> int
+}
+
+struct P {
+	pub x: int
+}
+
+impl Sz for P {
+	fn sz() -> int {
+		return this.x
+	}
+}
+
+fn main() {
+	e: Sz = P(1)
+	g := e.copy()
+	print g.sz()
+}
+EOF
+
+# TWO BOXES ARE NEVER COMPARED BY VALUE (docs/core/specs.md): erasure removed the concrete type
+# `Eq` needs. A box is a pointer in C, so before this `e == f` compared the two cells'
+# ADDRESSES — two boxes holding an equal `P(1)` answered false and `!=` true, a wrong answer
+# with nothing said. The two boxes here hold equal values, so the old answer was wrong rather
+# than merely unasked.
+reject eq-on-two-boxes E3155 '`==` on a Sz' <<'EOF'
+spec Sz {
+	fn sz() -> int
+}
+
+#[derive(Eq)]
+struct P {
+	pub x: int
+}
+
+impl Sz for P {
+	fn sz() -> int {
+		return this.x
+	}
+}
+
+fn main() {
+	e: Sz = P(1)
+	f: Sz = P(1)
+	print e == f
+}
+EOF
+
+reject ne-on-two-boxes E3155 '`!=` on a Sz' <<'EOF'
+spec Sz {
+	fn sz() -> int
+}
+
+#[derive(Eq)]
+struct P {
+	pub x: int
+}
+
+impl Sz for P {
+	fn sz() -> int {
+		return this.x
+	}
+}
+
+fn main() {
+	e: Sz = P(1)
+	f: Sz = P(1)
+	print e != f
+}
+EOF
+
+# and every spelling that compares a box as a part asks the same question: `in` compares with
+# `==`, and a list's `==` compares its parts — each of which answered by address before.
+reject in-over-a-list-of-boxes E3155 '`in` over a collection of Sz' <<'EOF'
+spec Sz {
+	fn sz() -> int
+}
+
+#[derive(Eq)]
+struct P {
+	pub x: int
+}
+
+impl Sz for P {
+	fn sz() -> int {
+		return this.x
+	}
+}
+
+fn main() {
+	e: Sz = P(1)
+	f: Sz = P(1)
+	print e in [f]
+}
+EOF
+
+reject eq-on-two-lists-of-boxes E3155 'on a list[Sz], which compares its Sz' <<'EOF'
+spec Sz {
+	fn sz() -> int
+}
+
+#[derive(Eq)]
+struct P {
+	pub x: int
+}
+
+impl Sz for P {
+	fn sz() -> int {
+		return this.x
+	}
+}
+
+fn main() {
+	e: Sz = P(1)
+	f: Sz = P(1)
+	print [e] == [f]
+}
+EOF
+
+# THE BOUND IS THE SAME QUESTION, asked at the call: a box does not meet `T: Eq`, or the
+# generic body's `==` would be the address comparison above.
+reject a-box-does-not-meet-the-eq-bound E4010 '`Sz` does not implement `Eq`' seed-gap <<'EOF'
+spec Sz {
+	fn sz() -> int
+}
+
+#[derive(Eq)]
+struct P {
+	pub x: int
+}
+
+impl Sz for P {
+	fn sz() -> int {
+		return this.x
+	}
+}
+
+fn same[T: Eq](a: T, b: T) -> bool {
+	return a == b
+}
+
+fn main() {
+	e: Sz = P(1)
+	print same(e, e)
+}
+EOF
+
+# A DERIVED `Encode` ON A GENERIC TYPE is `impl[T: Encode]`, and a built-in type has no impl of
+# the spec, so `Bx[int]` has no `encode` and the call asking for one is the finding — at the
+# call, not inside the `<derive>` file the reader never wrote (docs/core/derive.md).
+reject a-derived-encode-at-a-built-in-argument E4010 '`int` does not implement `Encode`, which `Bx[T]`' at=12:2 <<'EOF'
+import "codec"
+
+#[derive(Encode)]
+struct Bx[T] {
+	pub v: T
+}
+
+fn main() {
+	mut o := codec.Encoder()
+	b: Bx[int] = Bx(3)
+	print b.v
+	b.encode(o)
+}
+EOF
+
+reject a-derived-encode-on-an-enum-at-a-built-in-argument E4010 '`str` does not implement `Encode`, which `M[T]`' at=12:2 <<'EOF'
+import "codec"
+
+#[derive(Encode)]
+enum M[T] {
+	A(T)
+	B(M[T])
+}
+
+fn main() {
+	mut o := codec.Encoder()
+	m: M[str] = M.B(M.A("a"))
+	m.encode(o)
+}
+EOF
+
+# and a DERIVED PARENT asks it of its field: `Bx[int]` has no `Encode` to delegate to, so the
+# field is refused at the parent's declaration (E4124, as a field of a type with no `Encode`
+# is), not as E4010 inside the body the derive generated.
+reject a-derived-encode-over-a-field-at-a-built-in-argument E4124 'the field `b` is a `Bx[int]`, and `int` has no `Encode`' at=9:1 <<'EOF'
+import "codec"
+
+#[derive(Encode)]
+struct Bx[T] {
+	pub v: T
+}
+
+#[derive(Encode)]
+struct W {
+	pub b: Bx[int]
+}
+
+fn main() {
+	mut o := codec.Encoder()
+	W(Bx(3)).encode(o)
+}
+EOF
+
+reject a-derived-encode-from-a-module-at-a-built-in-argument E4010 '`int` does not implement `Encode`, which `Bx[T]`' at=7:2 <<'EOF'
+import "./lib/ge"
+import "codec"
+
+fn main() {
+	mut o := codec.Encoder()
+	b := ge.Bx(3)
+	b.encode(o)
+}
+--- lib/ge.zg
+import "codec"
+
+#[derive(Encode)]
+pub struct Bx[T] {
+	pub v: T
+}
+
+pub fn unused() -> int {
+	o := codec.Encoder()
+	return o.bytes.len()
 }
 EOF
 

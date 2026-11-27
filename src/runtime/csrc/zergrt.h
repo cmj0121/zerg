@@ -286,6 +286,12 @@ void zrt_map_init(zrt_map *m, size_t keysz, size_t valsz, const zrt_map_vt *vt);
  * checked `.get(k)` path. */
 void *zrt_map_get(zrt_map *m, const void *key);
 
+/* zrt_map_unshare gives m a table of its own when its entries buffer is shared: a fresh
+ * buffer and bucket index, each non-POD key/value copied one level (vt->key_copy /
+ * vt->val_copy), the shared table released. A no-op on an empty or sole-owner map. Every
+ * write calls it first; the readers below do not (map.c states why that is sound). */
+void zrt_map_unshare(zrt_map *m);
+
 /* zrt_map_index returns the value pointer for key, aborting ("key not found", a
  * KeyError) on a miss — the force path `m[k]`. */
 void *zrt_map_index(zrt_map *m, const void *key);
@@ -307,13 +313,15 @@ size_t zrt_map_len(const zrt_map *m);
 void *zrt_map_key_at(zrt_map *m, size_t i);
 void *zrt_map_val_at(zrt_map *m, size_t i);
 
-/* zrt_map_copy deep-copies src into dst: fresh storage, the entry bits bit-copied, then
- * per-entry vt->key_copy / vt->val_copy for any non-POD side. It is the value-semantics
- * copy the compiler inserts wherever a map is bound/passed/returned by value. */
+/* zrt_map_copy makes dst a copy of src that SHARES src's entries buffer and bucket index
+ * (a refcount bump, O(1)); the first write to either one unshares it (zrt_map_unshare).
+ * It is the value-semantics copy the compiler inserts wherever a map is bound/passed/
+ * returned by value. */
 void zrt_map_copy(zrt_map *dst, const zrt_map *src);
 
-/* zrt_map_drop drops every live key/value (vt->key_drop / vt->val_drop) and frees both
- * buffers, leaving an empty header. It is the scope-exit teardown for a map. */
+/* zrt_map_drop releases m's table, leaving an empty header; the last holder drops every
+ * live key/value (vt->key_drop / vt->val_drop) and frees both buffers. It is the
+ * scope-exit teardown for a map. */
 void zrt_map_drop(zrt_map *m);
 
 /* zrt_hash_int / zrt_eq_int are the built-in Hash for an int key (a splitmix64 mix of
@@ -332,6 +340,125 @@ bool   zrt_eq_str(const void *a, const void *b);
  * key therefore hash alike, and so do a str field and a str key. */
 uint64_t zrt_hash_word(int64_t v);
 uint64_t zrt_hash_text(const char *s);
+
+/* --- deep-value walkers (walk.c) ----------------------------------------- */
+
+/* A derived `==` on a type that reaches itself (a self-recursive enum, a struct holding a
+ * list of itself) is a WALK over an explicit stack rather than a recursion on the C one, so a
+ * value built 200000 deep compares like a shallow one. The compiler emits one STEP per type
+ * on the walk; zrt_eq_walk drives them.
+ *
+ * A step compares the parts of a and b from part *at on, in declaration order. It answers
+ * ZRT_EQ_NO (a part differs), ZRT_EQ_YES (every part from *at on is equal and nothing was
+ * pushed) or ZRT_EQ_PUSHED (it pushed one possibly-deep pair with zrt_eqw_push and set *at to
+ * the part to resume at). A shallow part it compares inline. Frames point INTO the operands,
+ * which is sound because a walk only reads and the caller holds both for its whole length. */
+enum { ZRT_EQ_NO = 0, ZRT_EQ_YES = 1, ZRT_EQ_PUSHED = 2 };
+typedef struct zrt_eqw zrt_eqw;
+typedef int (*zrt_eq_step)(zrt_eqw *w, const void *a, const void *b, size_t *at);
+typedef struct {
+	zrt_eq_step step;
+	const void *a;
+	const void *b;
+	size_t      at;
+} zrt_eqf;
+/* the walker's stack: sixteen frames inline, then a heap array doubled as it fills */
+struct zrt_eqw {
+	zrt_eqf *f;
+	size_t   len;
+	size_t   cap;
+	bool     held;
+	zrt_eqf  inl[16];
+};
+
+/* zrt_eq_walk answers whether a == b by driving `step` and every step it pushes. `held` says
+ * a step can run the program's own code (a part's hand-written `eq`), which can abort: the
+ * frame array is then on the cleanup stack for the walk's length, so an abort frees it. */
+bool zrt_eq_walk(zrt_eq_step step, const void *a, const void *b, bool held);
+
+/* zrt_eqw_push puts one pair on the walk, to be compared from its first part. */
+void zrt_eqw_push(zrt_eqw *w, zrt_eq_step step, const void *a, const void *b);
+
+/* zrt_eqstep_list / zrt_eqstep_map are the container steps an emitted step delegates to,
+ * naming the element's (the value's) step: a list compares in order and a map pair by pair,
+ * each value found in b under a's key. A length that differs answers NO before any element
+ * is read. *at is the element index. */
+int zrt_eqstep_list(zrt_eqw *w, zrt_eq_step elem, const zrt_list *a, const zrt_list *b, size_t *at);
+int zrt_eqstep_map(zrt_eqw *w, zrt_eq_step val, const zrt_map *a, const zrt_map *b, size_t *at);
+
+/* A derived `Hash` on a type that reaches itself is the same kind of walk. A step hashes x's
+ * parts from part *at on, folding each into *acc, and answers ZRT_H_DONE (*acc is x's whole
+ * hash) or ZRT_H_PUSHED (it pushed one possibly-deep part with zrt_hw_push and set *at to the
+ * part to resume at). A DONE frame is popped and its hash folded into its parent's acc as the
+ * derive's fold does, `(acc ^ h) * 1099511628211`, so the value is the recursion's exactly. */
+enum { ZRT_H_DONE = 0, ZRT_H_PUSHED = 1 };
+typedef struct zrt_hw zrt_hw;
+typedef int (*zrt_hash_step)(zrt_hw *w, const void *x, uint64_t *acc, size_t *at);
+typedef struct {
+	zrt_hash_step step;
+	const void   *x;
+	uint64_t      acc;
+	size_t        at;
+} zrt_hf;
+struct zrt_hw {
+	zrt_hf *f;
+	size_t  len;
+	size_t  cap;
+	bool    held;
+	zrt_hf  inl[16];
+};
+
+/* zrt_hash_walk answers x's hash by driving `step` and every step it pushes; `held` is
+ * zrt_eq_walk's (a part's hand-written `hash` can abort). */
+uint64_t zrt_hash_walk(zrt_hash_step step, const void *x, bool held);
+
+/* zrt_hw_push puts one part on the walk, to be hashed from its first part. */
+void zrt_hw_push(zrt_hw *w, zrt_hash_step step, const void *x);
+
+/* Printing a value is the third walk, and it writes ONE text: every piece goes into a
+ * builder (zrt_sb), where the recursion it replaces concatenated each level onto its
+ * child's whole rendering — quadratic bytes as well as linear stack. zrt_sb_put appends a C
+ * string, zrt_sb_put_cell appends a managed str cell and gives it back, zrt_sb_take answers
+ * the text as a fresh managed str cell and frees the builder, and zrt_sb_drop frees an
+ * unfinished one (the cleanup a held walk registers). */
+typedef struct {
+	char  *p;
+	size_t len;
+	size_t cap;
+} zrt_sb;
+void        zrt_sb_put(zrt_sb *b, const char *s);
+void        zrt_sb_put_cell(zrt_sb *b, const char *cell);
+const char *zrt_sb_take(zrt_sb *b);
+void        zrt_sb_drop(void *b);
+
+/* A render step writes x's pieces from part *at on into b and answers ZRT_R_DONE (x is
+ * written through its last piece) or ZRT_R_PUSHED (it pushed one possibly-deep part with
+ * zrt_rw_push and set *at to the piece to resume at). The walk is pre-order: a pushed part is
+ * written whole before its parent resumes. */
+enum { ZRT_R_DONE = 0, ZRT_R_PUSHED = 1 };
+typedef struct zrt_rw zrt_rw;
+typedef int (*zrt_render_step)(zrt_rw *w, zrt_sb *b, const void *x, size_t *at);
+typedef struct {
+	zrt_render_step step;
+	const void     *x;
+	size_t          at;
+} zrt_rf;
+struct zrt_rw {
+	zrt_rf *f;
+	size_t  len;
+	size_t  cap;
+	bool    held;
+	zrt_rf  inl[16];
+};
+
+/* zrt_render_walk answers x's rendering, a fresh managed str cell, by driving `step` and
+ * every step it pushes. `held` says a step can run the program's own code (a part's
+ * `display` or `debug`), which can abort: the frames and the builder are then on the cleanup
+ * stack for the walk's length, so an abort gives both back. */
+const char *zrt_render_walk(zrt_render_step step, const void *x, bool held);
+
+/* zrt_rw_push puts one part on the walk, to be written from its first piece. */
+void zrt_rw_push(zrt_rw *w, zrt_render_step step, const void *x);
 
 /* --- abort / unwind + cleanup(defer) stack (unwind.c) -------------------- */
 
@@ -457,6 +584,26 @@ zrt_fn_end_:;                                                                   
 			&&zrt_fn_end_, NULL, 0, 0, __COUNTER__};                              \
 	}
 
+/* zrt_err is the Zerg runtime's minimal error value (Decision D): a message and an
+ * optional chained cause. It is INTERNAL — never FFI-frozen — so a later phase may
+ * add fields without breaking any ABI (a Result is never FFI-safe). `raise e`,
+ * `x!`, and an abort carry one; a surrounding `guard`/`?` reads it back. */
+/* AN ERR OWNS WHAT IT HOLDS, when it says so. `owned` is set on an Err built with
+ * zrt_err_own: its msg is a counted or immortal str cell, and the Err holds one count on it.
+ * That is every Err the shipping compiler or the runtime's own aborts build (#405), so a
+ * reader that binds `e.msg` retains a cell. zrt_err_new borrows a plain C string and leaves
+ * the flag clear; only the seed builds with it. zrt_err_copy and zrt_err_drop read the
+ * flag; nothing else may retain or release an Err's msg.
+ *
+ * `cause` is the payload of a counted cell (zrt_err_chain) and is counted whatever the
+ * flag says: a copy shares the chain and the last holder frees it. */
+typedef struct zrt_err {
+	const char     *msg;
+	struct zrt_err *cause;
+	int             kind; /* a zrt_err_kind (ZRT_ERR_*); ZRT_ERR_NONE for a generic Err */
+	int             owned; /* nonzero: msg is a counted cell this Err holds a count on */
+} zrt_err;
+
 /* zrt_frame is an abort handler: a setjmp landing pad plus the cleanup-stack
  * height to unwind to on abort. Frames form a stack via `prev`. The setjmp
  * itself must be evaluated in the frame owner's own activation (see zrt_run),
@@ -480,6 +627,11 @@ typedef struct zrt_frame {
 	 * lowered limit and its flag end where its unwind does */
 	char             *stack_lim;       /* g_tls.stack_lim at push */
 	bool              overflow_unwind; /* g_tls.overflow_unwind at push */
+	/* the Err an abort is unwinding to this frame with (#483), held here and not in
+	 * g_tls.taken while its cleanups run: one of them may abort too, and that later Err
+	 * lands here with this one as its cause. The landing moves it back into taken. */
+	bool              unwinding;
+	zrt_err          inflight;
 } zrt_frame;
 
 /* one release the drain still owes (#479). Kept by value in zrt_tls.pend; refer by INDEX
@@ -491,8 +643,8 @@ typedef struct zrt_frame {
 typedef struct {
 	uint8_t     kind;     /* ZRT_PEND_* */
 	bool        dropped;  /* CELL: h->drop already ran (set BEFORE the call; #487 clears it) */
-	void       *block;    /* CELL: the zrt_ref_hdr*; LIST: the buffer's zrt_buf_hdr*; MAP: entries */
-	uint8_t    *data;     /* LIST: element 0; MAP: entry 0 (== block) */
+	void       *block;    /* CELL: the zrt_ref_hdr*; LIST: the buffer's zrt_buf_hdr*; MAP: the rc prefix (zrt_mbuf_hdr*) */
+	uint8_t    *data;     /* LIST: element 0; MAP: entry 0 (just past block's rc prefix) */
 	size_t      len;      /* LIST/MAP: element / entry count */
 	size_t      next;     /* LIST/MAP cursor: next index to drop (advanced BEFORE the call) */
 	size_t      stride;   /* LIST: elemsz; MAP: entrysz */
@@ -511,10 +663,6 @@ typedef struct {
  * stack. Moving this state does NOT change any emitted C: the cleanup-stack API
  * (zrt_scope_mark / zrt_defer / zrt_unwind_to / zrt_handler_push / …) is unchanged;
  * only where it reads its state from moved. */
-/* zrt_err is the Zerg runtime's minimal error value (Decision D): a message and an
- * optional chained cause. It is INTERNAL — never FFI-frozen — so a later phase may
- * add fields without breaking any ABI (a Result is never FFI-safe). `raise e`,
- * `x!`, and an abort carry one; a surrounding `guard`/`?` reads it back. */
 /* zrt_err_kind is the FIXED, built-in error taxonomy (docs/code/errors.md, GRAMMAR group
  * 8). Users choose from these named kinds but cannot define their own this phase. The
  * kind lets a `guard`/`?`-recovered Err be distinguished at the language surface (the
@@ -539,29 +687,14 @@ enum {
 	ZRT_ERR_STACK_OVERFLOW = 13, /* StackOverflowError: a call that could not fit (#480) */
 };
 
-/* AN ERR OWNS WHAT IT HOLDS, when it says so. `owned` is set on an Err built with
- * zrt_err_own: its msg is a counted or immortal str cell, and the Err holds one count on it.
- * That is every Err the shipping compiler or the runtime's own aborts build (#405), so a
- * reader that binds `e.msg` retains a cell. zrt_err_new borrows a plain C string and leaves
- * the flag clear; only the seed builds with it. zrt_err_copy and zrt_err_drop read the
- * flag; nothing else may retain or release an Err's msg.
- *
- * `cause` is the payload of a counted cell (zrt_err_chain) and is counted whatever the
- * flag says: a copy shares the chain and the last holder frees it. */
-typedef struct zrt_err {
-	const char     *msg;
-	struct zrt_err *cause;
-	int             kind; /* a zrt_err_kind (ZRT_ERR_*); ZRT_ERR_NONE for a generic Err */
-	int             owned; /* nonzero: msg is a counted cell this Err holds a count on */
-} zrt_err;
-
 typedef struct {
 	zrt_cleanup *stack; /* the cleanup(defer) stack (was the file-static g_stack) */
 	size_t       len;   /* its live height (was g_len) */
 	size_t       cap;   /* its allocated capacity (was g_cap) */
 	zrt_frame   *handler; /* the innermost abort handler (was g_handler) */
-	zrt_err      taken;   /* the in-flight Err an abort/raise carries; a `guard` reads
-	                       * it with zrt_taken_err on the abort landing (Decision D). */
+	zrt_err      taken;   /* the Err an abort/raise carries; a `guard` reads it with
+	                       * zrt_taken_err on the abort landing (Decision D). While the
+	                       * abort unwinds it is the target frame's `inflight` (#483). */
 
 	/* crashing is true only while THIS coroutine unwinds an unhandled crash, which is
 	 * what makes a channel auto-closed by its last sender carry a crash Err rather than
@@ -624,8 +757,8 @@ void            zrt_drain_close(zrt_drain_scope s);
 void zrt_pend_cell(zrt_ref_hdr *h);
 void zrt_pend_list(void *hdr, uint8_t *data, size_t len, size_t elemsz,
                    const zrt_elem_vt *vt);     /* hdr: the buffer's zrt_buf_hdr*, list.c-private type */
-void zrt_pend_map(uint8_t *entries, int64_t *buckets, size_t len, size_t entrysz, size_t koff,
-                  size_t voff, const zrt_map_vt *vt);
+void zrt_pend_map(void *block, uint8_t *entries, int64_t *buckets, size_t len, size_t entrysz,
+                  size_t koff, size_t voff, const zrt_map_vt *vt); /* block: the buffer's rc prefix */
 void zrt_drain(void);
 void zrt_drain_run(void);
 /* zrt_tls_detach zeroes the mounted bundle's pending fields WITHOUT freeing: the array now
@@ -773,9 +906,9 @@ _Noreturn void zrt_raise_fault(zrt_err e);
 
 /* zrt_taken_err MOVES OUT the Err the current abort/raise carried, read on a `guard`
  * setjmp!=0 landing: the caller owns what it is handed and the stash is left empty. It is
- * an empty Err (msg NULL) when nothing was stashed. zrt_taken_err_copy is a second holder
- * of the in-flight Err that leaves it in flight — what a channel a crashing sender closes
- * keeps. */
+ * an empty Err (msg NULL) when nothing was stashed. zrt_taken_err_copy, read only during a
+ * crash, is a second holder of the crash's Err — the in-flight one of the coroutine's
+ * outermost frame — that leaves it in flight: what a channel a crashing sender closes keeps. */
 zrt_err zrt_taken_err(void);
 zrt_err zrt_taken_err_copy(void);
 
@@ -1929,7 +2062,7 @@ void zrt_chan_close(zrt_chan *ch);
 
 /* zrt_crash_active reports whether the abort currently unwinding is an unhandled
  * coroutine crash (unwind.c sets it while running the crashing coroutine's cleanup
- * stack). zrt_chan_sender_release reads it, alongside zrt_taken_err for the Err itself,
+ * stack). zrt_chan_sender_release reads it, alongside zrt_taken_err_copy for the Err itself,
  * so a channel auto-closed by a crashing last sender carries that crash rather than the
  * ordinary StopIteration. Always false on a normal path. */
 bool zrt_crash_active(void);

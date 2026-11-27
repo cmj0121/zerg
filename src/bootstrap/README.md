@@ -368,6 +368,14 @@ byte)` compiles to a truncation and cc warns about the generated C. `zerg` refus
   same reason its gaps are its own contract: it is the oracle on programs that follow the
   rule, not the enforcer of it. (In PATTERN position there is no gap and no rule to enforce:
   a bare name binds in both compilers, which is what GRAMMAR#pattern says it is.)
+- **A generic enum's variant named THROUGH its enum is handed to cc.** `Box.Full(42)` on
+  `enum Box[T] { Full(T); Empty }` is the only spelling `zerg` takes (the bare `Full(42)` is
+  the `E3079` above), and the seed lowers it against the template rather than a
+  specialization: cc reports `struct { void f0; } Full;` as an incomplete type, with or
+  without an annotated binding, and `b: Box[int] = Box.Empty` is _cannot bind Box to a
+  Box[int] binding_. No spelling of such a construction builds in both compilers, so a corpus
+  program that writes one is an oracle skip. The compiler's own sources declare no generic
+  enum.
 - **`This` as a DECLARATION's name is accepted.** `This` is the self type, written by every
   `impl` and declared by none, so it is reserved the way `this` is — but it is the one
   reserved word the lexer reads as an ordinary identifier, and the seed has no rule about a
@@ -453,6 +461,11 @@ byte(N)` and `byte(N * 3)` are compile errors. The seed folds the literal alone:
   position a type is written (`E9048`). The seed asks the question of a parameter and a result
   and not of a field, so `pub v: Tag` declares a field whose type nothing gives a
   representation and the program builds. One case in `reject-check.sh` carries the marker.
+- **A box at a `T: Eq` bound is accepted, and cc answers.** Two boxes are never comparable by
+  value ([specs](../../docs/core/specs.md)), so `zerg` refuses `same(e, e)` for an `e: Sz`
+  (`E4010`). The seed checks no bound against a spec-typed argument and emits a generic
+  instance whose parameters are `void`, which clang refuses. One case in `reject-check.sh`
+  carries the marker.
 - **A division by a constant `0` is accepted, and raises at run time.** `x := 1 / 0` is a
   value the compiler can work out, so `zerg` answers at the division rather than leaving the
   program to reach it — the same reasoning that folds a literal in a typed position. The

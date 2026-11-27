@@ -261,6 +261,12 @@ A generic **`enum`** is built, one specialization per application, and a recursi
 `enum Tree[T] { Leaf; Node(T, Tree[T], Tree[T]) }` auto-boxes its own slot the way any recursive type does.
 A variant solves the parameters it **mentions** and the position supplies the rest — `Either.Left(1)` says
 nothing about `Y`, so it is written where the type is, and a construction with no position is _E3156_.
+With `enum Two[A, B] { L(A); R(B) }` and a struct `P`, a list or map literal of such variants joins what
+its elements solve: `[Two.L(P(1)), Two.R(2)]` is a `list[Two[P, int]]`. The elements must agree, in any
+order: once every parameter is solved, an element that answers one differently is _E3036_, naming the
+payload, and `[Two.L(P(1)), Two.L(3)]`, which solves no `B`, is _E3156_. A tuple is not joined, so
+`[(1, Two.L(P(1))), (2, Two.R(2))]` is _E3156_. Like a plain enum's, a generic enum's variant is named
+through its enum: a bare `L(1)` is _E3079_.
 
 A generic **`struct`** is built. The declaration is a **template**, and an application (`Box[int]`) is an
 ordinary type under that name. A construction **solves its own parameters from the arguments**, which is
@@ -277,7 +283,7 @@ where whoever spells it can see it.
 **Recursive and self-referential types** work directly — a `struct Node { next: Node? }`, an
 `enum Expr { Num(int); Add(Expr, Expr) }` — with **no pointer**: the compiler auto-boxes the self-referential
 slot behind a refcounted cell, so such a value copies **by reference** (refcount-shared), not by deep clone.
-What it does not do is free the chain, which is the [Values & Memory](memory.md) reference's own deviation.
+How deep such a value can be freed, copied, compared and printed is the [Values & Memory](memory.md) reference's.
 
 `Either`, `Result[T]`, and `T?` aren't special — they're ordinary stdlib types built on `enum`
 (see [Null-safety & Errors](../code/errors.md)). An `enum`'s **variants share the type's visibility** — a

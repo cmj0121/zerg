@@ -133,8 +133,8 @@ void zrt_pend_free_local(void) {
 }
 
 void zrt_tls_free(zrt_tls *t) {
-	/* an Err a crash left in flight, which no guard took: the coroutine reported it and
-	 * ended, and the bundle is the last thing holding it */
+	/* defensive: every landing already moved its Err out (a reporting one drops it), so
+	 * taken is empty here unless something stashed an Err that never unwound */
 	zrt_err_drop(t->taken);
 	t->taken = (zrt_err){0};
 	free(t->stack);
@@ -222,6 +222,8 @@ void zrt_handler_push(zrt_frame *frame) {
 	frame->dactive = g_tls.dactive;
 	frame->stack_lim = g_tls.stack_lim;
 	frame->overflow_unwind = g_tls.overflow_unwind;
+	frame->unwinding = false;
+	frame->inflight = (zrt_err){0};
 	g_tls.handler = frame;
 }
 
@@ -292,6 +294,55 @@ static void land_drain(const zrt_frame *h) {
 	zrt_stack_land(h);
 }
 
+/* err_below hangs tail under the last cause of e (#483). The cells on that path may be
+ * shared — a `from` cause is the user's own cell, and zrt_err_copy shares it — so each one
+ * is rebuilt, bottom up, as a copy of its Err over the chain below it; none is written to.
+ * The path is the new Err's own `from` chain, so walking it once per level stays short. */
+static zrt_err err_below(zrt_err e, zrt_err tail) {
+	size_t n = 0;
+	for (zrt_err *c = e.cause; c != NULL; c = c->cause) {
+		n++;
+	}
+	while (n > 0) {
+		zrt_err *c = e.cause;
+		for (size_t i = 1; i < n; i++) {
+			c = c->cause;
+		}
+		tail = zrt_err_chain(zrt_err_copy(*c), tail);
+		n--;
+	}
+	return zrt_err_chain(e, tail);
+}
+
+/* abort_take moves the Err this abort carries out of taken and into the frame it unwinds to
+ * (#483). A frame already unwinding holds an earlier Err that has not landed yet: it becomes
+ * the cause of the later one, and the frame then holds the chained Err, so a third abort
+ * chains onto the latest. A guard inside the unwind lands on a frame of its own, through
+ * taken, and leaves this one alone. */
+static void abort_take(zrt_frame *h) {
+	zrt_err e = g_tls.taken;
+	g_tls.taken = (zrt_err){0};
+	if (h->unwinding) {
+		h->inflight = err_below(e, h->inflight);
+	} else {
+		h->inflight = e;
+		h->unwinding = true;
+	}
+}
+
+/* abort_land ends the unwind on h: a guard takes the Err back through taken, and a reporting
+ * frame, which already printed every abort that reached it, gives it back. */
+static void abort_land(zrt_frame *h) {
+	zrt_err e = h->inflight;
+	h->inflight = (zrt_err){0};
+	h->unwinding = false;
+	if (h->catches) {
+		zrt_tls_cur()->taken = e;
+	} else {
+		zrt_err_drop(e);
+	}
+}
+
 /* zrt_unwind_abort is the shared abort core: report the error, then unwind to the
  * innermost handler and longjmp (or exit when none). Both the string zrt_abort and
  * the Err-carrying zrt_raise_err funnel through it; the only difference is whether
@@ -299,12 +350,16 @@ static void land_drain(const zrt_frame *h) {
 static _Noreturn void zrt_unwind_abort(zrt_err e, bool place) {
 	g_tls.darm = NULL; /* an abort before the action's probe (#487) leaves no stale arm */
 	zrt_frame *h = g_tls.handler;
+	if (h != NULL) {
+		abort_take(h);
+	}
 	/* A `guard` handler demotes this abort to a Result value, so it is not an error
 	 * the program failed to handle: land on it WITHOUT reporting the message (the Err
 	 * value carries it). Only a reporting handler (or none) prints the diagnostic. */
 	if (h != NULL && h->catches) {
 		zrt_unwind_to(h->mark);
 		land_drain(h);
+		abort_land(h);
 		longjmp(h->buf, 1);
 	}
 	zrt_report_at(zrt_err_kindname(e.kind), e.msg, place ? zrt_site_here() : NULL);
@@ -317,6 +372,7 @@ static _Noreturn void zrt_unwind_abort(zrt_err e, bool place) {
 		zrt_unwind_to(h->mark);
 		land_drain(h);
 		zrt_tls_cur()->crashing = false;
+		abort_land(h);
 		longjmp(h->buf, 1);
 	}
 	/* no handler installed (e.g. abort before program entry): last resort. Under the
@@ -492,6 +548,13 @@ zrt_err zrt_taken_err(void) {
 	return e;
 }
 
+/* read only while crashing: the crash is still unwinding to the coroutine's outermost frame
+ * (the trampoline's, prev NULL), so its Err is that frame's in-flight one. A guard inside a
+ * crash defer unwinds to a frame of its own, and its Err is not the crash's. */
 zrt_err zrt_taken_err_copy(void) {
-	return zrt_err_copy(g_tls.taken);
+	zrt_frame *f = g_tls.handler;
+	while (f->prev != NULL) {
+		f = f->prev;
+	}
+	return zrt_err_copy(f->inflight);
 }

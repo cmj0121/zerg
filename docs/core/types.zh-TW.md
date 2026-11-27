@@ -224,6 +224,11 @@ enum Either[X, Y] {         # 泛型 sum type
 `enum Tree[T] { Leaf; Node(T, Tree[T], Tree[T]) }` 會像任何遞迴型別一樣把自己那個槽自動裝箱。一個變體解出它
 **提到**的參數,其餘由位置補上——`Either.Left(1)` 對 `Y` 什麼都沒說,所以它寫在型別所在的地方,而沒有位置的
 建構是 _E3156_。
+有了 `enum Two[A, B] { L(A); R(B) }` 與一個 struct `P`,由這種變體組成的 list 或 map literal 會把各元素解出的
+結果合起來:`[Two.L(P(1)), Two.R(2)]` 是一個 `list[Two[P, int]]`。元素必須一致,順序不論:每個參數都解出之後,
+對某個參數給出不同答案的元素是 _E3036_,並指名那個 payload;沒解出 `B` 的 `[Two.L(P(1)), Two.L(3)]` 則是
+_E3156_。tuple 不會被合併,所以 `[(1, Two.L(P(1))), (2, Two.R(2))]` 是 _E3156_。跟一般 enum 的一樣,泛型 enum
+的變體也要透過它的 enum 來指名:裸的 `L(1)` 是 _E3079_。
 
 泛型 **`struct`** 建好了。宣告是一個 **template**,一次應用(`Box[int]`)是一個以那個名字存在的普通型別。
 一次建構**從它自己的引數解出參數**,那是[型別系統](type-system.zh-TW.md)對一次呼叫定的規則,而建構就是一次
@@ -236,7 +241,7 @@ template 卻沒寫引數(`E4094`),以及一個沒有任何欄位型別提到的�
 
 **遞迴與自我參照型別**可直接運作——一個 `struct Node { next: Node? }`、一個 `enum Expr { Num(int); Add(Expr,
 Expr) }`——**不需 pointer**:編譯器把那個自我參照的槽自動裝箱在一個 refcounted cell 之後,所以這種值的複製是**按
-參照**(refcount 共享),不是深拷貝。它不做的是釋放那條鏈,那是[值與記憶體](memory.zh-TW.md)自己那條 deviation。
+參照**(refcount 共享),不是深拷貝。這種值能釋放、複製、比較與印出到多深,由[值與記憶體](memory.zh-TW.md)說明。
 
 其實 `Either`、`Result[T]`、`T?` 並不特殊——它們就是建立在 `enum` 上面的普通 stdlib 型別
 （見 [Null-safety 與錯誤處理](../code/errors.zh-TW.md)）。一個 `enum`

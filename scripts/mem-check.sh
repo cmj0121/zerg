@@ -336,9 +336,7 @@ ZG
 # overflow half. The chain also grows with the rounds, so the difference is the other
 # half — every link the drain walks is freed, or the live count grows with the chain.
 #
-# A map table has no case: a deep map chain cannot be BUILT today. `T.Node(i, {0: t})`
-# overflows in the literal's deep copy (`zg_elemcopy_T`) before any release runs, a
-# recursion on the copy path that is outside this gate's release contract.
+# A map table has its case below the closure's, with the walks that read a deep value.
 case_run deep_enum yes no <<'ZG'
 enum L {
 	Nil
@@ -429,6 +427,105 @@ fn main() {
 		i = i + 1
 	}
 	print f(0)
+}
+ZG
+
+# --- a deep value copied, compared, hashed and printed (#481) ---------------------------
+# The chains above are only built and dropped. These are also READ by an operation that
+# used to recurse once per level: a map literal copies the chain it is handed, and a copy of
+# a map now shares its buffer until written, so the chain behind it is held by count rather
+# than copied — every holder must still give its count back. A derived `==`, a derived
+# `Hash` and the renderer each walk over a stack of their own, which is allocated per walk
+# and must be freed by it. `zerg` only: the seed recurses on each of these and overflows.
+case_run deep_map no no <<'ZG'
+enum T {
+	Leaf
+	Node(int, map[int, T])
+}
+
+fn head(t: T) -> int {
+	return match t {
+		T.Leaf => -1
+		T.Node(v, _) => v
+	}
+}
+
+fn main() {
+	mut t := T.Leaf
+	mut i := 0
+	n := 200000 + rounds() * 100
+	for i < n {
+		t = T.Node(i, {0: t})
+		i = i + 1
+	}
+	u := t
+	print head(u)
+}
+ZG
+
+case_run deep_eq no no <<'ZG'
+#[derive(Eq)]
+enum T {
+	Leaf(int)
+	Node(int, list[T])
+}
+
+fn build(n: int, leaf: int) -> T {
+	mut t := T.Leaf(leaf)
+	mut i := 0
+	for i < n {
+		t = T.Node(i, [t])
+		i = i + 1
+	}
+	return t
+}
+
+fn main() {
+	n := 200000 + rounds() * 100
+	a := build(n, 1)
+	b := build(n, 1)
+	c := build(n, 2)
+	print f"{a == b} {a == c} {a != c}"
+}
+ZG
+
+case_run deep_hash no no <<'ZG'
+#[derive(Eq, Hash)]
+enum T {
+	Leaf
+	Node(int, T)
+}
+
+fn main() {
+	mut t := T.Leaf
+	mut i := 0
+	n := 200000 + rounds() * 100
+	for i < n {
+		t = T.Node(i, t)
+		i = i + 1
+	}
+	mut m: map[T, int] = {:}
+	m[t] = 7
+	print m[t]
+}
+ZG
+
+case_run deep_print no no <<'ZG'
+enum T {
+	Leaf
+	Node(int, list[T])
+}
+
+fn main() {
+	mut t := T.Leaf
+	mut i := 0
+	n := 200000 + rounds() * 100
+	for i < n {
+		t = T.Node(i % 10, [t])
+		i = i + 1
+	}
+	s := str(t)
+	print bytearray(s).len()
 }
 ZG
 
@@ -1812,13 +1909,17 @@ ZG
 # copy is released on every way out — `break` and abort included. The map loop made the same
 # copy and dropped none of them: one per EXECUTION of the loop, so `for k in m` inside a
 # 1,000,000-round loop peaked at 108.8 MB against a 1.4 MB floor. Two loops, one rule.
+#
+# The map is built inside the round. A map copy shares its buffer now (#481), so the loop's
+# copy allocates nothing of its own and a map built once would measure nothing; one built per
+# round is a buffer per round, and the loop's copy holding it past the round is the leak.
 case_run forin_map_copy no no <<'ZG'
 fn main() {
-	mut m: map[str, int] = {"alpha": 1, "beta": 2, "gamma": 3}
 	mut n := 0
 	mut i := 0
 	r := rounds()
 	for i < r {
+		m: map[str, int] = {"alpha": i, "beta": 2, "gamma": 3}
 		for k in m {
 			n = n + 1
 		}
@@ -4325,6 +4426,95 @@ err_case err_force_msg '		o: int? = nil
 		}
 		m := e.message()
 		n = n + size(m)'
+
+# AN ERR RAISED WHILE ANOTHER UNWINDS (#483). The handler the first Err unwinds to keeps it,
+# and the second takes it as its cause: a slot that never let go, or a cause chain copied
+# below a user `from` cause and never released, is one Err a round. A defer that aborts, a
+# drop action that aborts, a third abort chaining onto the second, and a `from` cause the
+# in-flight Err goes below are each read through `unwrap()` and dropped.
+case_run err_unwind_cause no no <<'ZG'
+fn second(n: int) {
+	raise IOError(str(n) + "s")
+}
+
+fn third(n: int) {
+	raise KeyError(str(n) + "t")
+}
+
+fn in_defer(n: int) -> int {
+	defer second(n)
+	raise ValueError(str(n) + "f")
+	return 0
+}
+
+fn twice(n: int) -> int {
+	defer third(n)
+	defer second(n)
+	raise ValueError(str(n) + "f")
+	return 0
+}
+
+fn bang(x: int) {
+	raise IOError(str(x) + "d")
+}
+
+fn in_drop(n: int) -> int {
+	r := Ref(n, bang)
+	raise ValueError(str(n) + "f")
+	return deref(r)
+}
+
+fn mk(n: int) -> int {
+	raise IOError(str(n) + "s") from ValueError(str(n) + "u")
+	return 0
+}
+
+fn reraise(n: int) {
+	match guard { mk(n) } {
+		Either.Left(v) => {
+			print v
+		}
+		Either.Right(e) => {
+			raise e
+		}
+	}
+}
+
+fn with_cause(n: int) -> int {
+	defer reraise(n)
+	raise ValueError(str(n) + "f")
+	return 0
+}
+
+fn size(s: str) -> int {
+	return bytearray(s).len()
+}
+
+fn depth(r: Result[int]) -> int {
+	return match r {
+		Either.Left(v) => v
+		Either.Right(e) => {
+			c := e.unwrap()
+			d := c?.unwrap()
+			size(e.message()) + size(c?.message() ?? "") + size(d?.message() ?? "")
+		}
+	}
+}
+
+fn main() {
+	mut n := 0
+	mut i := 0
+	r := rounds()
+	for i < r {
+		n = n + depth(guard { in_defer(i) })
+		n = n + depth(guard { twice(i) })
+		n = n + depth(guard { in_drop(i) })
+		n = n + depth(guard { with_cause(i) })
+		i = i + 1
+	}
+	print n
+}
+ZG
 
 # --- a literal with no type of its own, at a position that has one (#332) -----------------
 #

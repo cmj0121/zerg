@@ -284,6 +284,11 @@ jobs:
       - name: Every program that is not Zerg, is rejected
         run: make reject
 
+      # The other half of the nesting bound: a program AT it builds, on the 8 MB stack a
+      # reader's shell gives, for every shape a program can nest.
+      - name: Every shape nested to the bound builds and runs on an 8 MB stack
+        run: make nesting
+
       # --- 7b-lib. a C caller of a library ---------------------------------------
       # `--emit lib` writes a header, and this is the only job that compiles C including
       # one, links it against the object, and runs it.

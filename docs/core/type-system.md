@@ -46,7 +46,7 @@ Three **rules**, then three **consequences**, each one step from a rule.
 | **inference is local**             | a type is fixed where it is written; no later use revises it                   |
 | **ambiguity is an error**          | no unique answer and no declared default is a refusal, never a guess           |
 
-Five notes carry the rules into the language:
+These notes carry the rules into the language:
 
 - **The five typeless forms** — a numeric literal (unconstrained it defaults, `int` or `float`,
   `GRAMMAR#literal`), the empty `[]`, the empty `{:}`, `nil`, and an untyped closure parameter
@@ -75,6 +75,15 @@ Five notes carry the rules into the language:
   mention, and **only** where a position exists — a construction with none is _E3156_, naming what the
   variant left unsolved. It sits beside the wrap rule rather than against it: a position may already put a
   value into a carrier, and here it supplies a type the construction could not have known.
+  A list or map literal joins what its variant elements solve, and the elements must agree, so a
+  disagreement is refused whatever the order. A generic call reads such a variant against the parameter
+  type it declares: with the `Two` and `P` of [Types](types.md), `gt[T](t: Two[T, int])` given
+  `Two.L(P(1))` solves `T = P` from `L`. Where a generic call's answer lands still solves nothing:
+  `tp(gk([Two.L(P(7))]))` is _E3156_, though `tp` takes a `Two[P, int]`.
+- **An untyped list literal is typed as a binding types it.** A list literal with no declared type takes
+  the type `xs := […]` gives it wherever it stands — an element of a tuple or of another such list, a
+  `print` or `for` operand — and is refused where the binding would be: `(1, [1, 2.5])` is _E3036_ exactly
+  where `xs := [1, 2.5]` is.
 
 Nothing in this chapter runs ahead of the compiler any more. A spec used as a type is built, parameterized
 or not, and a spec-typed position boxes what is written into it; an untyped closure parameter takes its type

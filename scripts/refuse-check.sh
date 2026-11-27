@@ -1094,6 +1094,31 @@ struct B {
 fn main() { print 1 }
 EOF
 
+# THE SAME CYCLE UNDER A `#[derive]`, between two enums: the derive asks whether a copy is
+# owed before the declaration sweep reaches the cycle, and that walk followed the cycle until
+# the compiler's own stack overflowed.
+expect "$ZERG" enum-cycle-by-value-derived E4026 'no edge of it is a carrier' <<'EOF'
+#[derive(Eq, Hash)]
+enum A { X(int, B, str); E }
+
+#[derive(Eq, Hash)]
+enum B { Y(A, bool); Z(int) }
+
+fn main() { print A.E == A.E }
+EOF
+
+# A struct and an enum holding each other by value under a derive: the same walk, entered
+# from the struct's field rather than from a payload.
+expect "$ZERG" struct-enum-cycle-by-value-derived E4026 'no edge of it is a carrier' <<'EOF'
+#[derive(Eq, Hash)]
+struct W { pub n: int = 0; pub t: Tm; pub s: str = "" }
+
+#[derive(Eq, Hash)]
+enum Tm { Leaf(int); Node(int, W) }
+
+fn main() { print Tm.Leaf(1) == Tm.Leaf(1) }
+EOF
+
 # AND THE SAME CYCLE WITH A CARRIER ON IT IS NOT REFUSED — it is a linked list, and #171
 # builds it. There is no `expect` for that here, because this file is the refusals; what
 # holds the positive half is `codegen/struct_self_recursive` in the corpus, and the two
@@ -2381,9 +2406,9 @@ fn main() {
 EOF
 
 # A VARIANT SOLVES WHAT IT MENTIONS AND THE POSITION SUPPLIES THE REST, so a construction with
-# no position has nothing to decide the specialization. `Lft(1)` solves `X` and no variant of a
-# sum type mentions every parameter — that is what a sum type IS — so `Y` is named as the one
-# the position was going to answer.
+# no position has nothing to decide the specialization. `Side.Lft(1)` solves `X` and no variant of
+# a sum type mentions every parameter — that is what a sum type IS — so `Y` is named as the
+# one the position was going to answer. (A bare `Lft(1)` is not a value: E3079, in reject.)
 
 expect "$ZERG" a-generic-variant-with-no-position E3156 'leaves `Y` unsolved' <<'EOF'
 enum Side[X, Y] {
@@ -4237,13 +4262,18 @@ expect "$ZERG" derive-decode-over-an-applied-generic E4124 'an applied generic t
 import "codec"
 
 #[derive(Encode, Decode)]
+struct Q {
+	pub n: int
+}
+
+#[derive(Encode, Decode)]
 struct B[T] {
 	pub x: T
 }
 
 #[derive(Encode, Decode)]
 struct P {
-	pub b: B[int]
+	pub b: B[Q]
 }
 
 fn main() {

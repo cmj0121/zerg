@@ -27,6 +27,17 @@
  * Load factor 0.75 triggers a rehash that rebuilds `buckets` from `entries` in their
  * existing insertion order, so growth never reorders iteration.
  *
+ * The entries buffer is COPY-ON-WRITE, like a list buffer: it carries a refcount prefix
+ * (zrt_mbuf_hdr), `zrt_map_copy` shares it and bumps the count, and the bucket index is
+ * shared and freed with it. Only `zrt_map_set` writes, and it unshares first: a fresh
+ * buffer, each key/value copied ONE level (a nested map value is itself a share), so a
+ * copy of a deep value costs O(1) and never recurses. The readers — get, index, has,
+ * key_at, val_at — hand out pointers into a possibly shared buffer and do NOT unshare.
+ * That is sound only because the checker refuses a store through a map read (E3012,
+ * StoreThroughValue): every write to a map reaches this file through `zrt_map_set`. A
+ * new write path that bypasses it must call `zrt_map_unshare` first, or it writes
+ * through to every other holder.
+ *
  * Key/val teardown is indirected through a per-instance vtable (`zrt_map_vt`): a POD
  * key or value carries NULL copy/drop (the memcpy fast path); a non-POD value (a Ref,
  * a nested list/map) carries copy/drop thunks the compiler emits. Built-in Hash is
@@ -56,6 +67,61 @@ static void *zrt_map_ekey(zrt_map *m, size_t i) {
 
 static void *zrt_map_eval(zrt_map *m, size_t i) {
 	return m->entries + i * m->entrysz + sizeof(size_t) + zrt_map_pad(m->keysz);
+}
+
+/* zrt_mbuf_hdr is the refcount prefix sitting immediately before `entries`, widened to the
+ * strictest scalar alignment so the first entry after it stays aligned. */
+typedef union {
+	int64_t     rc;
+	long double ld;
+	double      d;
+	long long   ll;
+	void       *p;
+} zrt_mbuf_hdr;
+
+static zrt_mbuf_hdr *mbuf_hdr(const zrt_map *m) {
+	return (zrt_mbuf_hdr *)(void *)(m->entries - sizeof(zrt_mbuf_hdr));
+}
+
+static uint8_t *mbuf_alloc(size_t n, size_t entrysz) {
+	zrt_mbuf_hdr *h = (zrt_mbuf_hdr *)zrt_alloc(sizeof(zrt_mbuf_hdr) + n * entrysz);
+	h->rc = 1;
+	return (uint8_t *)(void *)(h + 1);
+}
+
+void zrt_map_unshare(zrt_map *m) {
+	if (m->entries == NULL || zrt_atomic_load(&mbuf_hdr(m)->rc) == 1) {
+		return;
+	}
+	size_t n = m->len == 0 ? 1 : m->len;
+	uint8_t *e = mbuf_alloc(n, m->entrysz);
+	memcpy(e, m->entries, m->len * m->entrysz);
+	uint8_t *old = m->entries;
+	m->entries = e;
+	if (m->vt->key_copy != NULL || m->vt->val_copy != NULL) {
+		zrt_map src = *m;
+		src.entries = old;
+		for (size_t i = 0; i < m->len; i++) {
+			if (m->vt->key_copy != NULL) {
+				m->vt->key_copy(zrt_map_ekey(m, i), zrt_map_ekey(&src, i));
+			}
+			if (m->vt->val_copy != NULL) {
+				m->vt->val_copy(zrt_map_eval(m, i), zrt_map_eval(&src, i));
+			}
+		}
+	}
+	int64_t *ob = m->buckets;
+	if (m->nbuckets != 0) {
+		m->buckets = (int64_t *)zrt_alloc(m->nbuckets * sizeof(int64_t));
+		memcpy(m->buckets, ob, m->nbuckets * sizeof(int64_t));
+	}
+	m->cap = n;
+	/* release the shared table: another holder still names it, and whichever holder drops
+	 * last frees it */
+	zrt_map tmp = *m;
+	tmp.entries = old;
+	tmp.buckets = ob;
+	zrt_map_drop(&tmp);
 }
 
 void zrt_map_init(zrt_map *m, size_t keysz, size_t valsz, const zrt_map_vt *vt) {
@@ -113,11 +179,13 @@ static void zrt_map_rehash(zrt_map *m, size_t newn) {
  * relocated, not logically duplicated. */
 static void zrt_map_grow_entries(zrt_map *m) {
 	size_t cap = m->cap == 0 ? 8 : m->cap * 2;
-	uint8_t *e = (uint8_t *)zrt_alloc(cap * m->entrysz);
+	uint8_t *e = mbuf_alloc(cap, m->entrysz);
 	if (m->len != 0) {
 		memcpy(e, m->entries, m->len * m->entrysz);
 	}
-	zrt_free(m->entries);
+	if (m->entries != NULL) {
+		zrt_free(mbuf_hdr(m));
+	}
 	m->entries = e;
 	m->cap = cap;
 }
@@ -147,6 +215,7 @@ bool zrt_map_has(zrt_map *m, const void *key) {
 }
 
 void zrt_map_set(zrt_map *m, const void *key, const void *val) {
+	zrt_map_unshare(m);
 	size_t h = m->vt->hash(key);
 	if (m->nbuckets == 0) {
 		zrt_map_rehash(m, 8);
@@ -196,52 +265,26 @@ void *zrt_map_val_at(zrt_map *m, size_t i) {
 }
 
 void zrt_map_copy(zrt_map *dst, const zrt_map *src) {
-	dst->len = src->len;
-	dst->cap = src->len;
-	dst->keysz = src->keysz;
-	dst->valsz = src->valsz;
-	dst->entrysz = src->entrysz;
-	dst->vt = src->vt;
-	dst->nbuckets = src->nbuckets;
-	if (src->len == 0) {
-		dst->entries = NULL;
-		dst->cap = 0;
-	} else {
-		dst->entries = (uint8_t *)zrt_alloc(src->len * src->entrysz);
-		memcpy(dst->entries, src->entries, src->len * src->entrysz);
-		/* deep-copy any non-POD key/val over the shallow bit-copy (a POD side is NULL and
-		 * keeps the memcpy'd bits). A src value's shallow header (e.g. a nested list that
-		 * aliases src's buffer) is overwritten by the fresh deep copy — never dropped, it
-		 * was never owned. */
-		if (dst->vt->key_copy != NULL || dst->vt->val_copy != NULL) {
-			for (size_t i = 0; i < src->len; i++) {
-				if (dst->vt->key_copy != NULL) {
-					dst->vt->key_copy(zrt_map_ekey(dst, i), zrt_map_ekey((zrt_map *)src, i));
-				}
-				if (dst->vt->val_copy != NULL) {
-					dst->vt->val_copy(zrt_map_eval(dst, i), zrt_map_eval((zrt_map *)src, i));
-				}
-			}
-		}
-	}
-	if (src->nbuckets == 0) {
-		dst->buckets = NULL;
-	} else {
-		dst->buckets = (int64_t *)zrt_alloc(src->nbuckets * sizeof(int64_t));
-		memcpy(dst->buckets, src->buckets, src->nbuckets * sizeof(int64_t));
+	*dst = *src;
+	if (src->entries != NULL) {
+		zrt_atomic_add(&mbuf_hdr(src)->rc, 1);
 	}
 }
 
 void zrt_map_drop(zrt_map *m) {
-	if (m->len != 0 && (m->vt->key_drop != NULL || m->vt->val_drop != NULL)) {
+	if (m->entries == NULL) {
+		zrt_free(m->buckets);
+	} else if (zrt_atomic_add(&mbuf_hdr(m)->rc, -1) != 1) {
+		/* another holder still names the table */
+	} else if (m->len != 0 && (m->vt->key_drop != NULL || m->vt->val_drop != NULL)) {
 		/* the drain drops the entries and frees both buffers: a value can be a map whose
 		 * table dies with it, and recursing through that nests a C frame per level */
-		zrt_pend_map(m->entries, m->buckets, m->len, m->entrysz,
+		zrt_pend_map(mbuf_hdr(m), m->entries, m->buckets, m->len, m->entrysz,
 		             (size_t)((uint8_t *)zrt_map_ekey(m, 0) - m->entries),
 		             (size_t)((uint8_t *)zrt_map_eval(m, 0) - m->entries), m->vt);
 		zrt_drain();
 	} else {
-		zrt_free(m->entries);
+		zrt_free(mbuf_hdr(m));
 		zrt_free(m->buckets);
 	}
 	m->entries = NULL;

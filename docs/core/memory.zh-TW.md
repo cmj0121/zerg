@@ -36,8 +36,14 @@ copy-by-value 是語意；編譯器會在安全時省略複製：
 與 5 輪完全相同(`make mem-check`)。
 
 > **[implementation-defined]** **一個值能被釋放到多深。** 釋放不在 C stack 上遞迴:編譯器產生的每一次釋放,都把它
-> 還回去的東西照遞迴拆解會用的順序排空,不論那個值多深或多寬。複製、比較(衍生的 `==` 或 `Hash`)與印出一個很深的值
-> 仍然會遞迴。只剩一個界限,因為**使用者寫的 `drop` 動作**是唯一跑 Zerg 程式碼、也唯一可能 abort 的 drop,所以只有它
+> 還回去的東西照遞迴拆解會用的順序排空,不論那個值多深或多寬。複製一個很深的值、對它做衍生的 `==` 或 `Hash`,
+> 以及印出它,也都不會遞迴。複製是共享:`list` 或 `map` 的 buffer 是 copy-on-write,自動裝箱的 cell 以 refcount
+> 共享。衍生的 `==` 或 `Hash`,以及 `print`、f-string 的洞、`str()` 與 `.debug()`,都用自己的 stack 走訪一個
+> 會觸及自身的型別。仍在 C stack 上遞迴的,是順著值遞迴的程式碼:手寫的 `eq`、`hash`,或其他在一個部分上呼叫
+> 自己的 method 或函式,以及衍生的 `Ord`、`Encode` 或 `Decode` 寫出的本體。它們都受 stack 限制,碰到界限是一次
+> 一般的 `StackOverflowError`([錯誤處理](../code/errors.zh-TW.md))。
+>
+> 釋放只剩一個界限,因為**使用者寫的 `drop` 動作**是唯一跑 Zerg 程式碼、也唯一可能 abort 的 drop,所以只有它
 > 會巢狀:在它裡面做的釋放會在它的下一行之前完成。**一條這種動作的鏈**——payload 裡握著下一個同類 `Ref` 的
 > `Ref(x, f)`——會讓每一節的動作都跑在前一節的動作裡面,深度由 stack 決定。碰到它是一次一般的 abort
 > `StackOverflowError`,在放不下的那一節裡 raise,包住放掉那條鏈之 scope 的 `guard` 接得住它
@@ -122,7 +128,7 @@ bottom-up 建構,沒有辦法讓一個既存的 `Ref` 回頭指向後建的值�
 - **值型別（value type）**——每個 scalar、一個 `struct`、一個 tuple，以及 heap 容器 `list` 與 `map`——都是
   **被複製**的。scalar、`struct`、tuple 以 inline 複製；`list` 或 `map` 則**逐元素**依同一條規則複製。所以
   值型別的兩個名字**永不 alias**：透過其一寫入，只改變那個持有者自己的 copy。
-  `list` 的 buffer 以 **copy-on-write** 實現這個複製 —— 複製時共用它，元素則由**第一個寫入**的持有者複製出來。
+  `list` 或 `map` 的 buffer 以 **copy-on-write** 實現這個複製 —— 複製時共用它，元素則由**第一個寫入**的持有者複製出來。
   這是**實作細節**：沒有任何程式分辨得出來，因為複製發生在另一個持有者可能看見的任何寫入之前。它換到的是：把
   collection 傳給只讀它的函式、或交給一個 coroutine，成本是一次遞增而不是整個 buffer。
 - **Reference-counted 值**——一個 `str`、一個 `chan`、一個 `Ref[T]`，以及**遞迴型別的自動裝箱子節點**——是

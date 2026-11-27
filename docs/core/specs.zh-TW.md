@@ -38,8 +38,9 @@ boxed，具體值就被隱藏、**永遠無法還原**（不能 downcast、不�
 無論其他怎麼變，有兩件事都留在門外：**每個 instance 一個 header**，那會讓每個值為多數程式沒有的使用點付費、而且
 仍然解決不了異質大小；以及 **object-safety 閘**，因為 `#[obj]` 已經據以拒絕的那張表就是同一張。
 
-在一個 boxed 值上，**unary** 操作會 dispatch 到真實型別、可用：它的 spec method，加上 `copy`（產生一個獨立的新
-box——內含 `Ref` 值 refcount-bump）與 `debug`，以及結構性記憶體操作（`del`、傳參、存欄位、送 channel）。但
+在一個 boxed 值上，**unary** 操作會 dispatch 到真實型別、可用：它的 spec method，加上 `debug`，以及結構性記憶體
+操作（`del`、傳參、存欄位、送 channel）。box 是靠繫結來複製的，絕不是靠 method：`g := e` 建出一個獨立的新 box
+（內含 `Ref` 值 refcount-bump），而 `e.copy()` 是 _E3131_，也就是任何型別缺少某個 method 時給的那個診斷。但
 **binary same-type** 操作——`Eq` 的 `==` / `!=`、`Ord` 比較、以及因此的 `Hash` keying——**不可用**：它們的 `other: This`
 運算元正是抹除掉的具體型別，而 `is` 只測身分、絕不把它交回。兩個 boxed 值因此**永遠不能以值比較**。box 一個值是為了
 動態 dispatch 它的 spec method；要比較、排序或當 key，就留著具體型別（monomorphized 的 `[T: S]` bound）。
@@ -68,8 +69,10 @@ box 會 **render**。見證表在 copy 與 drop 旁邊帶著一個 rendering,填
 並列,兩個箱子各自分派到自己那一支。從頭到尾用的都是 `ast.spec_key` 這把鍵:見證表本來就以名字**加上引數**為
 鍵,而成員現在安置在同一把鍵底下。
 
-box 服務不了的三種成員,各自都在呼叫處被拒:**二元同型別**成員是 _E3155_,**泛型方法**是 _E3157_——一張表每個必要成員
-一個槽位,而泛型方法會需要每個型別引數一個——**associated fn** 則是 _E3160_,不論透過 box 還是 spec 本身的名字。
+box 服務不了的三種成員,各自都在呼叫處被拒:**二元同型別**成員是 _E3155_,兩個 box 之間的 `==` 與 `!=`、
+任何把 box 當成部分來比的 `==`(`[e] == [f]`)、以及在 box 的集合上用 `in` 也是(放在 `T: Eq` bound 上的
+box 是 _E4010_);**泛型方法**是 _E3157_——一張表每個必要成員一個槽位,而泛型方法會需要每個型別引數一個——
+**associated fn** 則是 _E3160_,不論透過 box 還是 spec 本身的名字。
 
 concrete bound 的 generic 會在產出的 C 裡 **monomorphize**——編譯器為每個具體型別各生成一份特化版本——而把 `spec`
 當型別用是唯一改用 dynamic dispatch 之處。concrete type 之間**沒有 subtyping**，所以泛型是**不變（invariant）**

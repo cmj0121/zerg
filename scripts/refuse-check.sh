@@ -1107,6 +1107,18 @@ enum B { Y(A, bool); Z(int) }
 fn main() { print A.E == A.E }
 EOF
 
+# A struct and an enum holding each other by value under a derive: the same walk, entered
+# from the struct's field rather than from a payload.
+expect "$ZERG" struct-enum-cycle-by-value-derived E4026 'no edge of it is a carrier' <<'EOF'
+#[derive(Eq, Hash)]
+struct W { pub n: int = 0; pub t: Tm; pub s: str = "" }
+
+#[derive(Eq, Hash)]
+enum Tm { Leaf(int); Node(int, W) }
+
+fn main() { print Tm.Leaf(1) == Tm.Leaf(1) }
+EOF
+
 # AND THE SAME CYCLE WITH A CARRIER ON IT IS NOT REFUSED — it is a linked list, and #171
 # builds it. There is no `expect` for that here, because this file is the refusals; what
 # holds the positive half is `codegen/struct_self_recursive` in the corpus, and the two

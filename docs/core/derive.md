@@ -301,8 +301,10 @@ number `int(v)` reads, including one written `= n`. When any variant carries a p
 **What has no row is refused at the field** (_E4124_): a `rune`, a `float`, a tuple, a fixed array, a
 `map` and a `set` have no row, a `chan`, a `Ref`, a `fn` and a handle are identities rather than values,
 and a declared type delegates only when it has the spec itself. A field whose type is an applied generic
-type, `Box[int]`, encodes through its own `encode`, and its `decode` is refused: `Box.decode(src)` has no
-argument that mentions `T`, so nothing could decide it.
+type, `Box[P]` for a `P` that derives both, encodes through its own `encode`, and its `decode` is
+refused: `Box.decode(src)` has no argument that mentions `T`, so nothing could decide it. A derived
+`Encode` on `Box` asks it of every type argument, so a field of type `Box[int]` is _E4124_ at the
+parent's declaration, since `int` has no `Encode`.
 
 **What `decode` fails on.** Each of these is the `Result`'s failure, never an abort:
 
@@ -316,10 +318,10 @@ argument that mentions `T`, so nothing could decide it.
 Bytes left over after the value are **not** a failure of `decode`: a nested value always has bytes after
 it, so whether the input should end there is the caller's question, answered by `src.remaining()`.
 
-> **[not yet]** On a **generic** type each parameter is bounded by the spec — `impl[T: Encode] Encode for
-Box[T]` — and a built-in type has no impl of it, so `Box[int]` is _E4010_ at the use. Calling a derived
-> `decode` on one is _E4009_: a type parameter is solved from a call's arguments, and `Box.decode(src)` has
-> none that mentions it.
+On a **generic** type each parameter is bounded by the spec — `impl[T: Encode] Encode for Box[T]` — and a
+built-in type has no impl of it, so calling `encode` on a `Box[int]` is _E4010_ at the call. Calling a
+derived `decode` on one is _E4009_: a type parameter is solved from a call's arguments, and
+`Box.decode(src)` has none that mentions it.
 
 When the wire format must differ — a different key, a field deliberately left off the wire —
 **hand-write the impl instead of deriving**; it replaces the generated one, so there is still one

@@ -269,8 +269,9 @@ enum 先把 tag 寫成一個 `int`，再把括號裡的每個 payload 型別依�
 
 **沒有列的形式在欄位處被拒絕**(_E4124_):`rune`、`float`、tuple、固定長度陣列、`map` 與 `set` 沒有列,
 `chan`、`Ref`、`fn` 與 handle 是 identity 而不是值,而宣告型別只有自己具備該 spec 時才能委派。型別是套用後泛型
-型別的欄位,例如 `Box[int]`,經由它自己的 `encode` 編碼,它的 `decode` 則被拒絕:`Box.decode(src)` 沒有任何
-引數提到 `T`,所以無從決定。
+型別的欄位,例如 `Box[P]`(`P` 兩者都 derive),經由它自己的 `encode` 編碼,它的 `decode` 則被拒絕:`Box.decode(src)` 沒有任何
+引數提到 `T`,所以無從決定。`Box` 上 derive 出的 `Encode` 會向每個型別引數要求它,所以型別為 `Box[int]` 的欄位
+在父型別的宣告處是 _E4124_,因為 `int` 沒有 `Encode`。
 
 **`decode` 在哪些輸入上失敗。** 以下每一種都是 `Result` 的失敗,絕不是 abort:
 
@@ -284,9 +285,9 @@ enum 先把 tag 寫成一個 `int`，再把括號裡的每個 payload 型別依�
 值之後剩下的位元組**不是** `decode` 的失敗:巢狀的值後面一定還有位元組,所以輸入是否該在那裡結束,是呼叫端的
 問題,由 `src.remaining()` 回答。
 
-> **[not yet]** 在**泛型**型別上,每個參數都以該 spec 為 bound——`impl[T: Encode] Encode for Box[T]`——而內建
-> 型別沒有它的 impl,所以 `Box[int]` 在使用處是 _E4010_。對它呼叫 derive 出的 `decode` 是 _E4009_:型別參數由
-> 呼叫的引數解出,而 `Box.decode(src)` 沒有任何引數提到它。
+在**泛型**型別上,每個參數都以該 spec 為 bound——`impl[T: Encode] Encode for Box[T]`——而內建型別沒有它的
+impl,所以在 `Box[int]` 上呼叫 `encode` 在呼叫處是 _E4010_。對它呼叫 derive 出的 `decode` 是 _E4009_:型別參數
+由呼叫的引數解出,而 `Box.decode(src)` 沒有任何引數提到它。
 
 當線上格式必須不同——換一個 key、或刻意不把某個欄位放上線——就**手寫 impl 而非 derive**；它取代生成的那一份，
 所以仍是唯一 canonical 實作，仍然沒有 macro。

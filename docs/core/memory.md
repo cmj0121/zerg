@@ -46,8 +46,16 @@ live allocations as five rounds do (`make mem-check`).
 
 > **[implementation-defined]** **How deep a value can be freed.** Freeing does not recurse on the C stack:
 > every release the compiler generates drains whatever it gives back in the order a recursive teardown would
-> use, whatever the value's depth or width. Copying, comparing (a derived `==` or `Hash`) and printing a deep
-> value still recurse. One bound remains, because a **user-written `drop` action** is the only drop that runs
+> use, whatever the value's depth or width. Copying a deep value, a derived `==` or `Hash` over one, and
+> printing one do not recurse either. A copy shares: a `list` or `map` buffer is copy-on-write and an
+> auto-boxed cell is refcount-shared. A derived `==` or `Hash`, and `print`, an f-string hole, `str()` and
+> `.debug()`, walk a type that reaches itself over a stack of their own. What still recurses on the C
+> stack is code that recurses through the value: a hand-written `eq`, `hash` or other method or function
+> that calls itself on a part, and the bodies a derived `Ord`, `Encode` or `Decode` writes. Each is
+> bounded by the stack, and reaching the bound is an ordinary `StackOverflowError`
+> ([Errors](../code/errors.md)).
+>
+> One bound remains in freeing, because a **user-written `drop` action** is the only drop that runs
 > Zerg code and the only one that can abort, so it is the only one that nests: a release made inside it
 > completes before its next line. A **chain of them** — a `Ref(x, f)` whose payload holds the next such `Ref`
 > — runs each link's action inside the previous one, and its depth is bounded by the stack.
@@ -155,8 +163,8 @@ Whether two names share storage is decided by one line, drawn between two disjoi
   this same rule. Two names of a value type therefore **never alias**: writing through one changes only that
   holder's own copy.
 
-  A `list`'s buffer realizes that copy as **copy-on-write** — the copy shares it and the elements are
-  duplicated by whichever holder writes first. That is an **implementation detail**: no program can tell,
+  A `list`'s or a `map`'s buffer realizes that copy as **copy-on-write** — the copy shares it and the
+  elements are duplicated by whichever holder writes first. That is an **implementation detail**: no program can tell,
   because the duplication happens before any write the other holder could see. What it buys is that passing
   a collection to a function that only reads it, or handing one to a coroutine, costs an increment rather
   than the whole buffer.

@@ -236,7 +236,7 @@ template 卻沒寫引數(`E4094`),以及一個沒有任何欄位型別提到的�
 
 **遞迴與自我參照型別**可直接運作——一個 `struct Node { next: Node? }`、一個 `enum Expr { Num(int); Add(Expr,
 Expr) }`——**不需 pointer**:編譯器把那個自我參照的槽自動裝箱在一個 refcounted cell 之後,所以這種值的複製是**按
-參照**(refcount 共享),不是深拷貝。它不做的是釋放那條鏈,那是[值與記憶體](memory.zh-TW.md)自己那條 deviation。
+參照**(refcount 共享),不是深拷貝。這種值能釋放、複製、比較與印出到多深,由[值與記憶體](memory.zh-TW.md)說明。
 
 其實 `Either`、`Result[T]`、`T?` 並不特殊——它們就是建立在 `enum` 上面的普通 stdlib 型別
 （見 [Null-safety 與錯誤處理](../code/errors.zh-TW.md)）。一個 `enum`

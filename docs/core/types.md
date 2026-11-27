@@ -277,7 +277,7 @@ where whoever spells it can see it.
 **Recursive and self-referential types** work directly — a `struct Node { next: Node? }`, an
 `enum Expr { Num(int); Add(Expr, Expr) }` — with **no pointer**: the compiler auto-boxes the self-referential
 slot behind a refcounted cell, so such a value copies **by reference** (refcount-shared), not by deep clone.
-What it does not do is free the chain, which is the [Values & Memory](memory.md) reference's own deviation.
+How deep such a value can be freed, copied, compared and printed is the [Values & Memory](memory.md) reference's.
 
 `Either`, `Result[T]`, and `T?` aren't special — they're ordinary stdlib types built on `enum`
 (see [Null-safety & Errors](../code/errors.md)). An `enum`'s **variants share the type's visibility** — a

@@ -2406,9 +2406,9 @@ fn main() {
 EOF
 
 # A VARIANT SOLVES WHAT IT MENTIONS AND THE POSITION SUPPLIES THE REST, so a construction with
-# no position has nothing to decide the specialization. `Lft(1)` solves `X` and no variant of a
-# sum type mentions every parameter — that is what a sum type IS — so `Y` is named as the one
-# the position was going to answer.
+# no position has nothing to decide the specialization. `Side.Lft(1)` solves `X` and no variant of
+# a sum type mentions every parameter — that is what a sum type IS — so `Y` is named as the
+# one the position was going to answer. (A bare `Lft(1)` is not a value: E3079, in reject.)
 
 expect "$ZERG" a-generic-variant-with-no-position E3156 'leaves `Y` unsolved' <<'EOF'
 enum Side[X, Y] {

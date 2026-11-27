@@ -9734,6 +9734,155 @@ pub fn one() -> int {
 }
 EOF
 
+# A GENERIC ENUM'S VARIANT IS NO DIFFERENT. It used to be read bare as a construction whose
+# arguments solved the enum (`A(1)` built an `M[int]`), and where they did not the reader was
+# told about an unsolved parameter (E3156) or an undefined name (E3069) rather than that the
+# name needs its enum. The sentence names the enum as it is declared — `M.B`, never
+# `M[int].B`, which is not a spelling a reader can write — whether the type came from the
+# arguments, from the position, or from neither, and wherever the bare name stands.
+reject a-bare-generic-variant-solved-by-its-argument E3079 'write `M.A`' seed-gap <<'EOF'
+enum M[T] {
+	A(T)
+	B
+}
+
+fn main() {
+	k := A(1)
+	print 1
+}
+EOF
+
+reject a-bare-generic-variant-at-a-typed-position E3079 'write `Two.L`' seed-gap <<'EOF'
+enum Two[X, Y] {
+	L(X)
+	R(Y)
+}
+
+fn main() {
+	t: Two[int, str] = L(3)
+	print 1
+}
+EOF
+
+reject a-bare-payload-free-generic-variant E3079 'write `M.B`' seed-gap <<'EOF'
+enum M[T] {
+	A(T)
+	B
+}
+
+fn main() {
+	k := B
+	print 1
+}
+EOF
+
+reject a-bare-generic-variant-names-the-enum-not-its-instance E3079 '`B` is a variant of `M`, and a variant is named through its enum — write `M.B`' <<'EOF'
+enum M[T] {
+	A(T)
+	B
+}
+
+fn main() {
+	k: M[int] = B
+	print 1
+}
+EOF
+
+reject a-bare-generic-variant-as-an-argument E3079 'write `M.A`' seed-gap <<'EOF'
+enum M[T] {
+	A(T)
+	B
+}
+
+fn take(m: M[int]) -> int {
+	return 1
+}
+
+fn main() {
+	print take(A(2))
+}
+EOF
+
+reject a-bare-generic-variant-as-a-list-element E3079 'write `M.A`' seed-gap <<'EOF'
+enum M[T] {
+	A(T)
+	B
+}
+
+fn main() {
+	ks: list[M[int]] = [M.A(1), A(2)]
+	print ks.len()
+}
+EOF
+
+# Two generic enums declaring the same variant: the one named is the one the position asks
+# for, the way `a-bare-payload-variant-names-this-files-enum` holds it for two plain ones.
+reject a-bare-generic-variant-two-enums-declare E3079 'write `L1.A`' seed-gap <<'EOF'
+enum L1[T] {
+	A(T)
+	B
+}
+
+enum L2[T] {
+	A(T)
+	C
+}
+
+fn main() {
+	k: L1[int] = A(1)
+	print 1
+}
+EOF
+
+# ANOTHER MODULE'S GENERIC VARIANT is not in this file's scope at all, so the name is undefined
+# — and the sentence says which enum has it and how to reach it, through the module and the
+# enum as declared. A private enum is not reachable, and the sentence says where it lives.
+reject a-bare-generic-variant-of-another-module E3069 '`B` is a variant of `gm.M` — name it through its module (`gm.M.B`)' <<'EOF'
+import "./gm"
+
+fn main() {
+	k: gm.M[int] = B
+	print 1
+}
+--- gm/mod.zg
+pub enum M[T] {
+	A(T)
+	B
+}
+EOF
+
+reject a-bare-generic-variant-call-of-another-module E4016 '`A` is a variant of `gm.M` — name it through its module (`gm.M.A`)' <<'EOF'
+import "./gm"
+
+fn main() {
+	k := A(1)
+	print 1
+}
+--- gm/mod.zg
+pub enum M[T] {
+	A(T)
+	B
+}
+EOF
+
+reject a-bare-generic-variant-of-a-private-enum E4016 '`A` is a variant of `P`, declared in' <<'EOF'
+import "./pm"
+
+fn main() {
+	k := A(1)
+	print pm.one()
+}
+--- pm/mod.zg
+enum P[T] {
+	A(T)
+	B
+}
+
+pub fn one() -> int {
+	return 1
+}
+EOF
+
 # A PATTERN IS TYPED BY ITS SUBJECT, not by the file, so a bare `Chan(n)` against a `Local`
 # that has no `Chan` is the wrong enum's variant when another file declares one — never "no
 # variant named `Chan`". The file-scoped lookup above must not reach this question.

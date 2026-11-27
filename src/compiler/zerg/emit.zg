@@ -12300,7 +12300,7 @@ fn c_eq_refuse(mut &em: Emitter, oper: str, t: ast.Ty) {
 fn c_eq_refuse_part(mut &em: Emitter, oper: str, subject: str, t: ast.Ty) {
 	nm := ast.ty_name(t)
 	if c_is_spec_name(em, c_named_of(t)) {
-		check.chk_at(em, rule.Rule.BinaryOnExistential, c_eq_says(oper, subject, f"a {nm} is a boxed value, and erasure removed the concrete type `Eq` needs — two boxes are never comparable by value (docs/core/specs.md)", "keep the concrete type, or a generic parameter bounded by the spec", "keep the concrete values instead"))
+		c_box_incomparable(em, c_eq_says(oper, subject, f"a {nm} is a boxed value, and erasure removed the concrete type `Eq` needs — two boxes are never comparable by value (docs/core/specs.md)", "keep the concrete type, or a generic parameter bounded by the spec", "keep the concrete values instead"))
 		return
 	}
 	if c_has_no_equality(t) {
@@ -17975,11 +17975,12 @@ fn c_spec_call(mut &em: Emitter, recv: str, meth: str, target: ast.Expr, args: l
 	# is copied as every value is, by binding it (`g := e`), never by a method.
 	raise c_no_method_says(em, meth, recv) if c_sig_row(em, key) < 0
 
-	c_spec_call_check(em, recv, meth, key)
+	return "0" if c_spec_call_check(em, recv, meth, key)
+
 	return f"{c_spec_disp_register(em, recv, meth)}({c_recv_args(em, key, target, args, sb)})"
 }
 
-# c_spec_call_check refuses the one call a witness table has no slot for.
+# c_spec_call_check refuses the one call a witness table has no slot for, and answers whether it did.
 #
 # A BOX OFFERS WHAT DISPATCHES THROUGH `this` ALONE. docs/core/specs.md names three kinds that
 # do not, and one of them can be written here: a member whose other operand is a `This` —
@@ -17993,7 +17994,7 @@ fn c_spec_call(mut &em: Emitter, recv: str, meth: str, target: ast.Expr, args: l
 # type, and this is a refusal of the CALL, where the reader asked for the thing that cannot be
 # done. Until it stood here the answer came from cc — _no member named `eq`_, about generated
 # C, which is the one reporter `make refuse` exists to keep off this path.
-fn c_spec_call_check(mut &em: Emitter, sp: str, meth: str, key: str) {
+fn c_spec_call_check(mut &em: Emitter, sp: str, meth: str, key: str) -> bool {
 	row := c_sig_row(em, key)
 	if em.sig_assoc[row] {
 		c_refuse_assoc_through_instance(em, sp, meth)
@@ -18005,10 +18006,25 @@ fn c_spec_call_check(mut &em: Emitter, sp: str, meth: str, key: str) {
 	mut i := 1
 	for i < em.sig_nparams[row] {
 		pr := c_param_row(em, key, i)
-		raise c_diag(em, rule.Rule.BinaryOnExistential, f"`{meth}` on a {sp} takes another {sp}, and a boxed value is exactly the concrete type that operand needs — erasure removed it, and `is` tests identity rather than supplying it. Two boxed values are never comparable by value: keep the concrete type, or a generic parameter bounded by the spec, to compare, sort or key one (docs/core/specs.md)") if c_named_of(em.pr_ty[pr]) == sp
+		if c_named_of(em.pr_ty[pr]) == sp {
+			c_box_incomparable(em, f"`{meth}` on a {sp} takes another {sp}, and a boxed value is exactly the concrete type that operand needs — erasure removed it, and `is` tests identity rather than supplying it. Two boxed values are never comparable by value: keep the concrete type, or a generic parameter bounded by the spec, to compare, sort or key one (docs/core/specs.md)")
+			return true
+		}
 
 		i = i + 1
 	}
+	return false
+}
+
+# c_box_incomparable reports the one rule both spellings of a comparison reach on a box: two
+# boxed values are never comparable by value, because erasure removed the concrete type the
+# other operand needs. `a.eq(b)` reaches it through the member's signature and `a == b`, `!=`
+# and `in` through the operator; the sentence differs, the rule and its code are one.
+#
+# It RECORDS rather than raises, as the operator half always did, so the member half returns
+# a placeholder the same way and a program with both reports both.
+fn c_box_incomparable(mut &em: Emitter, said: str) {
+	check.chk_at(em, rule.Rule.BinaryOnExistential, said)
 }
 
 # c_spec_disp_register names one member's dispatcher and emits it once.

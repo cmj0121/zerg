@@ -4869,6 +4869,9 @@ fn c_gen_enum_on_demand(mut &em: Emitter, tpl: ast.EnumDecl, applied: str, sol: 
 	mut nokeys: list[str] = []
 	mut novals: list[str] = []
 	su := generic.TySubst(tpl.tparams, sol, nokeys, novals, em.ty_apps, c_place(em))
+	for v in tpl.variants {
+		c_mint_own_apps(em, v.fields, su)
+	}
 	mut notp: list[str] = []
 	ed := ast.EnumDecl(applied, generic.subst_variants(su, tpl.variants), notp, tpl.is_pub, tpl.path, tpl.line, tpl.col, tpl.name_line, tpl.name_col, tpl.end_line, tpl.end_col)
 
@@ -4877,6 +4880,13 @@ fn c_gen_enum_on_demand(mut &em: Emitter, tpl: ast.EnumDecl, applied: str, sol: 
 	# AND ITS TEMPLATE IMPLS, as c_gen_type_on_demand seats a struct's: `M.One(P(7))` minted
 	# `M[P]` in a body, and `impl[T: Sz] Sz for M[T]` was refused as a method it does not have.
 	c_tpl_methods_late(em, applied)
+
+	# a payload's spelled types first, for the reason c_gen_type_on_demand gives a field's
+	for v in ed.variants {
+		for t in v.fields {
+			em.res_decls.append(c_spelled_pre(em, t))
+		}
+	}
 	em.res_decls.append(c_enum_typedef(ed))
 
 	# THE PROTOTYPES BEFORE THE REF-BOX HELPERS, as the declaration sweep places them
@@ -5326,7 +5336,7 @@ fn c_app_is_open(f: ast.File, a: ast.TyApp) -> bool {
 fn c_ty_names_undeclared(f: ast.File, t: ast.Ty) -> bool {
 	nm := c_named_of(t)
 	if nm != "" {
-		return false if c_is_applied(nm)
+		return c_app_names_undeclared(f, nm) if c_is_applied(nm)
 
 		return not c_file_declares_ty(f, nm)
 	}
@@ -5345,6 +5355,17 @@ fn c_ty_names_undeclared(f: ast.File, t: ast.Ty) -> bool {
 		Ty.TTuple(es) => c_tys_name_undeclared(f, es)
 		_ => false
 	}
+}
+
+# c_app_names_undeclared is an applied argument read through its row: `W[Box[T]]` written in
+# `Deep[T]` is open because `Box[T]` is. Taken as closed, the sweep built `W` at `Box[T]`, and
+# that substitution, matched by name, rewrote `Deep`'s own `W[Box[T]]` into `W[Box[Box[T]]]`
+# and so on without end; under another spelling it refused `Box[U]` as a type nobody declared.
+fn c_app_names_undeclared(f: ast.File, nm: str) -> bool {
+	for a in f.ty_apps {
+		return c_tys_name_undeclared(f, a.args) if a.name == nm
+	}
+	return false
 }
 
 fn c_tys_name_undeclared(f: ast.File, ts: list[ast.Ty]) -> bool {
@@ -15913,12 +15934,30 @@ fn c_record_apps(mut &em: Emitter, su: generic.TySubst) {
 # time rather than of the program: a row made by substitution is closed exactly when every
 # argument resolves, and one that does not is a template's own row waiting for its own
 # instantiation.
+#
+# An applied argument is open when ITS arguments are, read through its row: `M[Box[T]]` names a
+# parameter as surely as `M[T]` does, and minting it put `Box[T]` in a typedef cc then refused.
 fn c_args_open(mut &em: Emitter, args: list[ast.Ty]) -> bool {
 	for t in args {
 		nm := c_named_of(t)
+
 		return true if nm != "" and not c_is_applied(nm) and c_ty_kind(em, nm) == TK_NONE and not parser.is_conv(nm) and nm != "Err"
+		return true if nm != "" and c_is_applied(nm) and c_app_args_open(em, nm)
 	}
 	return false
+}
+
+fn c_app_args_open(mut &em: Emitter, nm: str) -> bool {
+	mut args: list[ast.Ty] = []
+	mut found := false
+	for a in em.ty_apps {
+		if a.name == nm {
+			args = a.args
+			found = true
+			break
+		}
+	}
+	return found and c_args_open(em, args)
 }
 
 # c_subst_apps is the recording half on its own: every row put through the substitution, and
@@ -15951,6 +15990,55 @@ fn c_app_recorded(mut &em: Emitter, nm: str) -> bool {
 	return false
 }
 
+# c_mint_own_apps is what a specialization minted on demand is MADE of, minted first. A
+# template's field writes `M[T]` in the template's own parameter names, and the only
+# substitution that knows what that `T` is, is this template's — so its rows are put through it
+# here, one template at a time. Pushing every open row through an instantiated FUNCTION's
+# substitution (c_record_apps) matches by name: `fn mk[U] -> W[U]` mints `W[int]` and never
+# `M[int]`, and the typedef that holds an `M[int]` reached cc naming a type nobody declared.
+#
+# Inner names go first, and each is minted before the typedef that holds it is placed, so the
+# types section reads in declaration order. A row whose arguments stay open is a template's
+# own, waiting for its own instantiation.
+fn c_mint_own_apps(mut &em: Emitter, tys: list[ast.Ty], su: generic.TySubst) {
+	for t in tys {
+		c_mint_own_app(em, t, su)
+	}
+}
+
+fn c_mint_own_app(mut &em: Emitter, t: ast.Ty, su: generic.TySubst) {
+	for p in generic.gen_parts(em.ty_apps, t) {
+		c_mint_own_app(em, p, su)
+	}
+
+	nm := c_named_of(t)
+	return if nm == "" or not c_is_applied(nm)
+
+	mut base := ""
+	mut args: list[ast.Ty] = []
+	for a in em.ty_apps {
+		if a.name == nm {
+			base = a.base
+			args = generic.subst_tys(su, a.args)
+			break
+		}
+	}
+	return if base == "" or c_args_open(em, args)
+
+	key := ast.spec_key(base, args)
+	return if c_name_in(em.inst_tys, key)
+
+	r := c_gen_struct_row(em, base)
+	if r >= 0 {
+		c_gen_type_on_demand(em, em.gen_structs[r], key, args)
+		return
+	}
+	er := c_gen_enum_row(em, base)
+	if er >= 0 {
+		c_gen_enum_on_demand(em, em.gen_enums[er], key, args)
+	}
+}
+
 fn c_gen_type_on_demand(mut &em: Emitter, tpl: ast.StructDecl, applied: str, sol: list[ast.Ty]) {
 	return if c_name_in(em.inst_tys, applied)
 
@@ -15966,10 +16054,19 @@ fn c_gen_type_on_demand(mut &em: Emitter, tpl: ast.StructDecl, applied: str, sol
 	mut nokeys: list[str] = []
 	mut novals: list[str] = []
 	su := generic.TySubst(tpl.tparams, sol, nokeys, novals, em.ty_apps, c_place(em))
+	for fd in tpl.fields {
+		c_mint_own_app(em, fd.ty, su)
+	}
 	sd := ast.StructDecl(applied, generic.subst_fields(su, tpl.fields), tpl.is_pub, tpl.path, tpl.line, tpl.col, [], tpl.name_line, tpl.name_col, tpl.end_line, tpl.end_col, tpl.sealed)
 
 	c_register_struct(em, sd)
 	c_tpl_methods_late(em, applied)
+
+	# what a field SPELLS is declared above the typedef that spells it, as the declaration sweep
+	# does: `p: (T, int)` at `str` names a tuple typedef no other site wrote, and cc refused it
+	for fd in sd.fields {
+		em.res_decls.append(c_spelled_pre(em, fd.ty))
+	}
 	em.res_decls.append(c_struct_typedef(sd))
 
 	# THE SAME THREE THE DECLARATION SWEEP EMITS, under the same condition — a struct that

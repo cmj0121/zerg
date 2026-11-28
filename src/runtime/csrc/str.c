@@ -14,6 +14,7 @@
 #include "zergrt.h"
 
 #include <errno.h>
+#include <math.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -343,7 +344,12 @@ double zrt_parse_float(const char *s) {
 	if (end == s || *end != 0) {
 		zrt_abort_kind(ZRT_ERR_VALUE, "invalid characters while parsing a float");
 	}
-	if (errno == ERANGE) {
+	/* ERANGE IS BOTH DIRECTIONS, and only one of them is out of range. strtod sets it for a
+	 * value past the largest double, answering HUGE_VAL, and also for one below the smallest
+	 * NORMAL double, answering the subnormal or zero nearest it — `5e-324` is a double and
+	 * the literal `5e-324` builds, so refusing the same text read at run time was a rule
+	 * about the C library rather than about the value. */
+	if (errno == ERANGE && (v == HUGE_VAL || v == -HUGE_VAL)) {
 		zrt_abort_kind(ZRT_ERR_OVERFLOW, "float out of range");
 	}
 	return v;

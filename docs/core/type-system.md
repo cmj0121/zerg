@@ -82,8 +82,12 @@ These notes carry the rules into the language:
   `tp(gk([Two.L(P(7))]))` is _E3156_, though `tp` takes a `Two[P, int]`.
 - **An untyped list literal is typed as a binding types it.** A list literal with no declared type takes
   the type `xs := […]` gives it wherever it stands — an element of a tuple or of another such list, a
-  `print` or `for` operand — and is refused where the binding would be: `(1, [1, 2.5])` is _E3036_ exactly
-  where `xs := [1, 2.5]` is.
+  `print` or `for` operand — and is refused where the binding would be: `(1, [1, "s"])` is _E3036_ exactly
+  where `xs := [1, "s"]` is.
+- **A literal's elements meet as an operator's operands do.** A list or map literal with no declared type
+  takes the one type every element fits — the element has it, or is a literal adopting it — so
+  `[1, 2.5]` and `[2.5, 1]` are both `list[float]`, and `[1, f]` is the `[f, 1]` it reads as. An element
+  that fits no such type is _E3036_ in either order.
 
 Nothing in this chapter runs ahead of the compiler any more. A spec used as a type is built, parameterized
 or not, and a spec-typed position boxes what is written into it; an untyped closure parameter takes its type

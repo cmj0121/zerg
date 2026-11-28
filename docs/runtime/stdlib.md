@@ -237,26 +237,29 @@ constructors going in and the accessors coming out, so a caller writes what it m
 a tag it has to keep right. There is no `fields()`: a
 `list[Field]` is not a variant, so a caller writes `mut fs: list[json.Field] = []`.
 
-| Function                                              | Summary                                             |
-| ----------------------------------------------------- | --------------------------------------------------- |
-| `encode(v: Val) -> str`                               | the value as JSON text — one line, fields in order  |
-| `decode(s: str) -> Val`                               | JSON text as a value; **raises** on malformed input |
-| `get(v: Val, key: str) -> Val`                        | the value at `key`, or `Null`                       |
-| `walk(v, a, b) -> Val` / `walk3(v, a, b, c)`          | a two- or three-key path in one call                |
-| `has(v: Val, key: str) -> bool`                       | present, and not `null`                             |
-| `as_str` / `as_int` / `as_list`                       | the payload, or `""` / `0` / `[]`                   |
-| `is_null(v: Val) -> bool`                             | this value is JSON `null`                           |
-| `null()` / `of_str(s)` / `of_list(xs)` / `of_obj(fs)` | build a `Val`                                       |
-| `put(fs, k, v)` / `put_str` / `put_int` / `put_bool`  | append a field to a `list[Field]`                   |
+| Function                                                | Summary                                             |
+| ------------------------------------------------------- | --------------------------------------------------- |
+| `encode(v: Val) -> str`                                 | the value as JSON text — one line, fields in order  |
+| `decode(s: str) -> Val`                                 | JSON text as a value; **raises** on malformed input |
+| `get(v: Val, key: str) -> Val`                          | the value at `key`, or `Null`                       |
+| `walk(v, a, b) -> Val` / `walk3(v, a, b, c)`            | a two- or three-key path in one call                |
+| `has(v: Val, key: str) -> bool`                         | present, and not `null`                             |
+| `as_str` / `as_int` / `as_float` / `as_list`            | the payload, or `""` / `0` / `0.0` / `[]`           |
+| `is_null(v: Val) -> bool`                               | this value is JSON `null`                           |
+| `null()` / `of_str` / `of_float` / `of_list` / `of_obj` | build a `Val`                                       |
+| `put(fs, k, v)` / `put_str` / `put_int` / `put_float`   | append a field to a `list[Field]`; also `put_bool`  |
 
 **The accessors are TOTAL.** Asking a number for its string gives `""`, and asking a non-object for a key
 gives `Null` — deliberate for input that comes from another program, where a field of the wrong shape should
 get a default and a reply rather than an abort. Where a missing field is genuinely fatal, ask `has`. One
 consequence to know: a key present with a `null` reads as **absent**, because `has` is written on `get`.
 
-**Numbers are integers.** `Val` has no float variant, so `decode("1.5")` is `Int(1)` — the fraction and any
-exponent are consumed and **dropped**, not refused. That was the shape the language server needed and it has
-not changed; it is written here because a reader who is not told will find out from a wrong answer.
+**A number is an `Int` or a `Float` by how it is written.** A fraction or an exponent makes it a `Float` —
+`decode("1.5")`, `decode("1e3")` — and a bare run of digits stays an `Int`. `as_float` reads an `Int` as the
+same number, since JSON writes `1` and `1.0` for one value; `as_int` of a `Float` is its default, `0`. A number
+past a float's range raises rather than answering an infinity. `encode` writes a `Float` in the fewest of 15,
+16 and 17 digits that read back as the same float, keeps a `.0` on a whole one so it decodes as a `Float`
+again, and raises on a NaN or an infinity, which JSON has no token for.
 
 **`encode` escapes what JSON reserves and nothing else** — the two delimiters, the five short escapes, and a
 control byte below `0x20` as `\u00XX`. Everything at `0x20` and above passes through, which is what carries

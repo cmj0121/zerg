@@ -137,7 +137,7 @@ fn gen_match_inner(tparams: list[str], mut &sol: list[ast.Ty], decl: ast.Ty, act
 # AN ARRAY'S LENGTH IS NOT A PART. It is part of the type and not a type, so it takes no arm
 # here — two arrays of different lengths bind their element the same way, and the mismatch is
 # reported by the ordinary argument rule against the specialization's own signature.
-fn gen_parts(apps: list[ast.TyApp], t: ast.Ty) -> list[ast.Ty] {
+pub fn gen_parts(apps: list[ast.TyApp], t: ast.Ty) -> list[ast.Ty] {
 	# AN APPLIED NAME'S PARTS ARE ITS ARGUMENTS, and they are not in the tree — the name holds
 	# them. This is the reading half of what `subst_app` writes, and the two are held to each
 	# other by `generic-walks` for exactly this reason: `Box[T]` against `Box[int]` solves `T`

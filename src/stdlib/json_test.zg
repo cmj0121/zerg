@@ -20,9 +20,8 @@
 #   names is asked here, individually, plus the ones it does NOT name, because escaping too
 #   much is as wrong as escaping too little and no gate would notice.
 #
-#   THE ROUND TRIP. `decode(encode(v))` has to give the value back, and the places it does
-#   NOT are stated rather than discovered: a fraction is dropped, and an escape decodes to
-#   the character it stands for.
+#   THE ROUND TRIP. `decode(encode(v))` has to give the value back, and the place it does
+#   NOT is stated rather than discovered: an escape decodes to the character it stands for.
 import (
 	"strings"
 	"testing"
@@ -220,24 +219,32 @@ fn test_decode_surrogate_pair(ctx: testing.Context) {
 	assert as_str(decode("\"\\u65e5\"")) == "日"
 }
 
-# A NUMBER IS AN INTEGER AND THE FRACTION IS DROPPED. This is the module's one silent
-# behaviour and the reason it is stated in the header, at `decode` and in the docs: a caller
-# who reads `1.9` as `1` and is not told will find out from a wrong answer. Asserting it
-# here is what makes it a documented decision rather than an accident nobody measured.
+# A NUMBER IS AN `Int` OR A `Float` BY HOW IT IS WRITTEN. A fraction or an exponent makes it a
+# `Float`; a bare run of digits stays an `Int`, so every position, count and id the language
+# server reads is the `Int` it was. A reader that dropped the fraction answered `1` for `1.9`,
+# which is the silently wrong answer the contract forbids.
 #[test]
-fn test_decode_number_is_an_integer(ctx: testing.Context) {
-	ctx.log("a fraction is consumed and dropped, NOT rounded and NOT refused")
-	assert as_int(decode("1.9")) == 1
-	assert as_int(decode("-1.9")) == -1
-	assert as_int(decode("0.5")) == 0
+fn test_decode_number_by_how_it_is_written(ctx: testing.Context) {
+	ctx.log("a fraction is a Float, and so is an exponent")
+	assert as_float(decode("1.9")) == 1.9
+	assert as_float(decode("-0.25")) == -0.25
+	assert as_float(decode("1e3")) == 1000.0
+	assert as_float(decode("2E+8")) == 200000000.0
+	assert as_float(decode("5e-1")) == 0.5
 
-	ctx.log("an exponent goes the same way — `1e3` is one, not a thousand")
-	assert as_int(decode("1e3")) == 1
-	assert as_int(decode("2E+8")) == 2
+	ctx.log("a Float is not an Int, so as_int is its default")
+	assert as_int(decode("1.9")) == 0
+	assert as_int(decode("1e3")) == 0
 
-	ctx.log("and the tail is CONSUMED, so what follows it still parses")
+	ctx.log("a bare run of digits stays an Int, and as_float reads it as the same number")
+	assert as_int(decode("42")) == 42
+	assert as_int(decode("-7")) == -7
+	assert as_float(decode("42")) == 42.0
+
+	ctx.log("and what follows a number still parses")
 	assert as_list(decode("[1.5, 2]")).len() == 2
-	assert as_int(walk(decode("{\"a\":{\"b\":1.25}}"), "a", "b")) == 1
+	assert as_float(walk(decode("{\"a\":{\"b\":1.25}}"), "a", "b")) == 1.25
+	assert as_float(get(decode("{\"temperature\": 0.7, \"top_p\": 1}"), "temperature")) == 0.7
 }
 
 # --- decode: what it refuses ---------------------------------------------------------------
@@ -271,6 +278,15 @@ fn test_decode_refuses_malformed_input(ctx: testing.Context) {
 	ctx.log("a sign with no digit, and a literal that is only a prefix")
 	testing.assert_raises(guard { decode("-") })
 	testing.assert_raises(guard { decode("tru") })
+
+	ctx.log("a fraction or an exponent with no digit of its own, and a leading point")
+	testing.assert_raises(guard { decode("1.") })
+	testing.assert_raises(guard { decode("1e") })
+	testing.assert_raises(guard { decode("1e+") })
+	testing.assert_raises(guard { decode(".5") })
+
+	ctx.log("a number past a float's range, rather than an infinity nobody wrote")
+	testing.assert_raises(guard { decode("1e400") })
 }
 
 # --- the accessors are TOTAL ----------------------------------------------------------------
@@ -288,6 +304,7 @@ fn test_accessors_are_total() {
 
 	s := decode("\"text\"")
 	assert as_int(s) == 0
+	assert as_float(s) == 0.0
 	assert as_list(s).len() == 0
 
 	empty := decode("{}")
@@ -350,6 +367,7 @@ fn test_round_trip_is_stable() {
 	mut fs: list[Field] = []
 	put_str(fs, "msg", "a \"quoted\" line\nwith\ttabs")
 	put_int(fs, "n", -12)
+	put_float(fs, "t", 0.7)
 	put_bool(fs, "ok", false)
 	put(fs, "xs", of_list([of_str("日本語"), null()]))
 
@@ -359,20 +377,51 @@ fn test_round_trip_is_stable() {
 	# And the text is what a reader would write by hand.
 	assert strings.contains(once, "\"msg\":\"a \\\"quoted\\\" line\\nwith\\ttabs\"")
 	assert strings.contains(once, "\"n\":-12")
+	assert strings.contains(once, "\"t\":0.7")
 	assert strings.contains(once, "\"xs\":[\"日本語\",null]")
 }
 
-# THE TWO PLACES THE ROUND TRIP IS NOT BYTE-IDENTICAL, stated rather than discovered. Both
-# are the decoder normalising, and both are correct — but a caller diffing a transcript
-# needs to know which direction is stable.
+# THE PLACE THE ROUND TRIP IS NOT BYTE-IDENTICAL, stated rather than discovered: the decoder
+# normalises an escape, which is correct — but a caller diffing a transcript needs to know
+# which direction is stable.
 #[test]
-fn test_round_trip_normalises_escapes_and_drops_fractions(ctx: testing.Context) {
+fn test_round_trip_normalises_escapes(ctx: testing.Context) {
 	ctx.log("an escape decodes to its character and re-encodes as UTF-8")
 	assert encode(decode("\"\\u00e9\"")) == "\"é\""
 	assert encode(decode("\"\\u0041\"")) == "\"A\""
+}
 
-	ctx.log("a fraction is gone for good — text to value is lossy, value to text is not")
-	assert encode(decode("1.5")) == "1"
+# A FLOAT GOES OUT AS TEXT THAT READS BACK AS THE SAME FLOAT, in the fewest of 15, 16 and 17
+# digits that do: `0.1` is `0.1`, and `0.1 + 0.2` keeps the digits that tell it apart from 0.3.
+# A whole one keeps its `.0`, so it decodes as a `Float` again and not as an `Int`.
+#[test]
+fn test_encode_float_reads_back(ctx: testing.Context) {
+	ctx.log("the shortest text that reads back")
+	assert encode(of_float(0.1)) == "0.1"
+	assert encode(of_float(0.1 + 0.2)) == "0.30000000000000004"
+	assert encode(of_float(123456789.125)) == "123456789.125"
+	assert encode(of_float(1e-7)) == "1e-07"
+
+	ctx.log("a whole float keeps a point, so it comes back a Float")
+	assert encode(of_float(2.0)) == "2.0"
+	assert encode(of_float(-0.0)) == "-0.0"
+	assert encode(decode("1.0")) == "1.0"
+	assert as_int(decode(encode(of_float(2.0)))) == 0
+
+	ctx.log("every float in this list survives the trip")
+	for x in [0.1, 0.7, 1.7976931348623157e308, 5e-324, -2.5e-10, 3.0] {
+		assert as_float(decode(encode(of_float(x)))) == x
+	}
+}
+
+# JSON HAS NO NaN AND NO INFINITY, so encoding one raises rather than writing a token no reader
+# takes — the same answer `decode` gives text it cannot read.
+#[test]
+fn test_encode_refuses_nan_and_infinity() {
+	z := 0.0
+	testing.assert_raises(guard { encode(of_float(z / z)) })
+	testing.assert_raises(guard { encode(of_float(1.0 / z)) })
+	testing.assert_raises(guard { encode(of_float(-1.0 / z)) })
 }
 
 # --- the module's own helpers ---------------------------------------------------------

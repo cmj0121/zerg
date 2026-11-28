@@ -12,13 +12,11 @@
 # So the promise is made, and the surface was renamed on the way in: `jput_str` had a `j`
 # because there was no namespace to put it in, and now there is.
 #
-## THE ONE THING A CALLER MUST BE TOLD: **numbers are integers**. `Val` has no float variant,
-## so `decode("1.5")` answers `Int(1)` — the fraction and any exponent are consumed and
-## DROPPED, not refused. It is the shape the language server needed (positions, counts and
-## ids are all whole numbers) and refusing instead would have dropped a session over a field
-## nobody read. It stays that way here rather than growing a `Float` variant silently, and it
-## is stated in the module header, at `decode`, and in docs/runtime/stdlib.md, because a
-## reader who is not told will find out from a wrong answer.
+## A NUMBER IS AN `Int` OR A `Float`, by how it is written: a fraction or an exponent makes it a
+## `Float` (`decode("1.5")`, `decode("1e3")`), and a bare run of digits stays an `Int`. A client
+## of an API that sends `temperature: 0.7` gets 0.7 back, not a silently truncated 0 — that is
+## what this module answered while it served only the language server, whose numbers are all
+## positions, counts and ids.
 #
 # A value is one enum and an object is a LIST OF FIELDS rather than a `map[str, Val]`.
 # Two reasons, and the second is the one that decided it: the objects this is used on are a
@@ -35,6 +33,7 @@ pub enum Val {
 	Null
 	Bool(bool)
 	Int(int)
+	Float(float)
 	Str(str)
 	Arr(list[Val])
 	Obj(list[Field])
@@ -159,6 +158,27 @@ pub fn as_int(v: Val) -> int {
 	}
 }
 
+## as_float is the number a `Float` carries, an `Int` read as a float — JSON writes `1` and
+## `1.0` for one number — and 0.0 for anything else.
+##
+## ```zerg
+## json.as_float(json.decode("0.7"))
+## json.as_float(json.decode("2"))
+## json.as_float(json.decode("\"2\""))
+## ```
+## ```output
+## 0.7
+## 2
+## 0
+## ```
+pub fn as_float(v: Val) -> float {
+	return match v {
+		Val.Float(x) => x
+		Val.Int(n)   => float(n)
+		_            => 0.0
+	}
+}
+
 ## as_list is the elements an `Arr` carries, and an empty list for anything else.
 ##
 ## ```zerg
@@ -236,6 +256,21 @@ pub fn of_str(s: str) -> Val {
 	return Val.Str(s)
 }
 
+## of_float is a `Float`. It encodes as text that decodes to the same float, and keeps a `.0`
+## on a whole one so it comes back a `Float` and not an `Int`.
+##
+## ```zerg
+## json.encode(json.of_float(0.1 + 0.2))
+## json.encode(json.of_float(2.0))
+## ```
+## ```output
+## 0.30000000000000004
+## 2.0
+## ```
+pub fn of_float(x: float) -> Val {
+	return Val.Float(x)
+}
+
 ## ```zerg
 ## json.encode(json.of_list([json.of_str("a"), json.null()]))
 ## ```
@@ -276,10 +311,14 @@ pub fn put_str(mut &fs: list[Field], key: str, s: str) {
 	fs.append(Field(key, Val.Str(s)))
 }
 
-## put_int appends an integer field. Integer is the only number this module has — see the
-## header on why `Val` carries no float variant.
+## put_int appends an integer field.
 pub fn put_int(mut &fs: list[Field], key: str, n: int) {
 	fs.append(Field(key, Val.Int(n)))
+}
+
+## put_float appends a float field, written as `of_float` writes it.
+pub fn put_float(mut &fs: list[Field], key: str, x: float) {
+	fs.append(Field(key, Val.Float(x)))
 }
 
 ## put_bool appends a boolean field, rendered `true` or `false` and never quoted.
@@ -310,12 +349,43 @@ pub fn encode(v: Val) -> str {
 
 fn jw(v: Val, mut &out: list[byte]) {
 	match v {
-		Val.Null    => jw_text(out, "null")
-		Val.Bool(b) => jw_bool(out, b)
-		Val.Int(n)  => jw_text(out, strconv.to_string(n, 10))
-		Val.Str(s)  => jw_str(out, s)
-		Val.Arr(xs) => jw_arr(xs, out)
-		Val.Obj(fs) => jw_obj(fs, out)
+		Val.Null     => jw_text(out, "null")
+		Val.Bool(b)  => jw_bool(out, b)
+		Val.Int(n)   => jw_text(out, strconv.to_string(n, 10))
+		Val.Float(x) => jw_text(out, jw_float(x))
+		Val.Str(s)   => jw_str(out, s)
+		Val.Arr(xs)  => jw_arr(xs, out)
+		Val.Obj(fs)  => jw_obj(fs, out)
+	}
+}
+
+# jw_float is the SHORTEST of 15, 16 and 17 significant digits that reads back as `x`: 17 always
+# does, and the shorter ones keep `0.1` from going out as `0.10000000000000001`. A whole value
+# keeps a `.0`, so `decode` answers a `Float` for it again rather than an `Int`.
+#
+# JSON has no NaN and no infinity, so either one RAISES rather than writing a token no reader
+# takes — the same answer `decode` gives text it cannot read.
+fn jw_float(x: float) -> str {
+	raise "json: NaN is not a JSON number" if x != x
+	raise "json: an infinity is not a JSON number" if x - x != 0.0
+
+	mut t := f"{x:.15}"
+	if not jw_reads_back(t, x) {
+		t = f"{x:.16}"
+	}
+	if not jw_reads_back(t, x) {
+		t = f"{x:.17}"
+	}
+	for c in bytearray(t) {
+		return t if c == b'.' or c == b'e'
+	}
+	return t + ".0"
+}
+
+fn jw_reads_back(t: str, x: float) -> bool {
+	return match guard { float(t) } {
+		Either.Left(y)  => y == x
+		Either.Right(_) => false
 	}
 }
 
@@ -415,18 +485,21 @@ fn jw_hex(n: int) -> byte {
 ## decode reads JSON text. It RAISES on malformed input rather than answering a partial
 ## value, so a caller that can carry on writes `guard`.
 ##
-## A NUMBER COMES BACK AS AN INTEGER and a fraction is dropped — `decode("1.5")` is `Int(1)`.
-## See the header. Escapes are decoded, which means a round trip is not byte-identical: the
+## A NUMBER WITH A FRACTION OR AN EXPONENT IS A `Float`, and one without is an `Int` — see the
+## header. A number out of a float's range raises rather than answering an infinity. Escapes are
+## decoded, which means a round trip is not byte-identical: the
 ## text `"\u00e9"` decodes to the character and re-encodes as the UTF-8 bytes, because this
 ## encoder escapes only what JSON requires.
 ##
 ## ```zerg
 ## json.as_int(json.get(json.decode(" { \"n\" : -12 } "), "n"))
+## json.as_float(json.get(json.decode("{\"t\": 0.7}"), "t"))
 ## json.encode(json.decode("\"\\u00e9\\ud83d\\ude00\""))
 ## guard { json.as_int(json.decode("{oops}")) } ?? -1
 ## ```
 ## ```output
 ## -12
+## 0.7
 ## "é😀"
 ## -1
 ## ```
@@ -614,31 +687,75 @@ fn jp_utf8(cp: int, mut &out: list[byte]) {
 	}
 }
 
-# jp_num reads a number and answers an INTEGER — see the header for why a fraction is
-# dropped rather than refused, and where that is written down for a caller to read.
+# jp_num reads a number by JSON's grammar: an optional minus, digits, then an optional fraction
+# and an optional exponent, each of which needs a digit of its own. With neither it is an
+# `Int`; with either it is a `Float`, read from the text it spans by the built-in `float(s)`,
+# whose syntax is the language's literal and takes every JSON number.
 fn jp_num(b: list[byte], mut &pos: list[int]) -> Val {
+	start := pos[0]
 	mut neg := false
 	if b[pos[0]] == b'-' {
 		neg = true
 		pos[0] = pos[0] + 1
 	}
 	mut n := 0
-	mut any := false
-	for pos[0] < b.len() and jp_isdigit(b[pos[0]]) {
-		n = n * 10 + (int(b[pos[0]]) - 48)
-		pos[0] = pos[0] + 1
-		any = true
+	raise "json: a number needs a digit" if jp_digits(b, pos) == 0
+	mut i := start
+	if neg {
+		i = i + 1
 	}
-	raise "json: a number needs a digit" if not any
-	for pos[0] < b.len() and jp_num_tail(b[pos[0]]) {
-		pos[0] = pos[0] + 1
+	for i < pos[0] {
+		n = n * 10 + (int(b[i]) - 48)
+		i = i + 1
 	}
+
+	mut fl := false
+	if pos[0] < b.len() and b[pos[0]] == b'.' {
+		pos[0] = pos[0] + 1
+		raise "json: a fraction needs a digit" if jp_digits(b, pos) == 0
+		fl = true
+	}
+	if pos[0] < b.len() and (b[pos[0]] == b'e' or b[pos[0]] == b'E') {
+		pos[0] = pos[0] + 1
+		if pos[0] < b.len() and (b[pos[0]] == b'+' or b[pos[0]] == b'-') {
+			pos[0] = pos[0] + 1
+		}
+		raise "json: an exponent needs a digit" if jp_digits(b, pos) == 0
+		fl = true
+	}
+
+	return Val.Float(guard { float(jp_text(b, start, pos[0])) } ?? jp_out_of_range()) if fl
 	return Val.Int(-n) if neg
+
 	return Val.Int(n)
 }
 
-fn jp_num_tail(c: byte) -> bool {
-	return jp_isdigit(c) or c == b'.' or c == b'e' or c == b'E' or c == b'+' or c == b'-'
+# jp_text is the bytes `[lo, hi)` as a str — a loop rather than a slice, which the seed that
+# builds the compiler (and its language server, a caller of this module) does not read
+fn jp_text(b: list[byte], lo: int, hi: int) -> str {
+	mut out: list[byte] = []
+	mut i := lo
+	for i < hi {
+		out.append(b[i])
+		i = i + 1
+	}
+	return str(out)
+}
+
+# jp_out_of_range is the one way the text of a well-formed JSON number fails to read: it is
+# past a float's range, and an infinity would be a value nobody wrote
+fn jp_out_of_range() -> float {
+	raise "json: a number is out of a float's range"
+}
+
+# jp_digits steps over a run of digits and answers how many there were
+fn jp_digits(b: list[byte], mut &pos: list[int]) -> int {
+	mut k := 0
+	for pos[0] < b.len() and jp_isdigit(b[pos[0]]) {
+		pos[0] = pos[0] + 1
+		k = k + 1
+	}
+	return k
 }
 
 fn jp_isdigit(c: byte) -> bool {

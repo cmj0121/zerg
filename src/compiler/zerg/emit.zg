@@ -20004,7 +20004,7 @@ fn c_intrinsic_ret(name: str) -> ast.Ty {
 	return ast.Ty.TNil
 }
 
-# c_infer_listlit types a list literal from its FIRST element. An empty one names no
+# c_infer_listlit types a list literal from what its elements MEET at. An empty one names no
 # element type at all, so it stays unknown and takes the type of whatever it initializes.
 fn c_infer_listlit(mut &em: Emitter, elems: list[ast.Expr]) -> ast.Ty {
 	return ast.Ty.TUnknown if elems.len() == 0
@@ -20012,7 +20012,49 @@ fn c_infer_listlit(mut &em: Emitter, elems: list[ast.Expr]) -> ast.Ty {
 	# a first element that leaves a generic enum's parameter open is read with the rest
 	return ast.Ty.TList(c_gen_variant_join(em, elems)) if c_open_variant_base(em, elems[0]) != ""
 
-	return ast.Ty.TList(c_infer(em, elems[0]))
+	return ast.Ty.TList(c_elems_meet(em, elems))
+}
+
+# c_elems_meet is the one type a literal's elements share, met the way an operator's two
+# operands meet (c_infer_binary): an element has that type, or it is a literal adopting it.
+# The candidate is the first element type that EVERY element fits, so `[1, 2.5]` and
+# `[2.5, 1]` are both `list[float]` and `[1, f]` is the `[f, 1]` it reads as — source order
+# is never an input. No type fitting all of them keeps the first element's, and the element
+# that disagrees with it is refused where it is lowered (E3036).
+#
+# Each element is inferred ONCE, and only a type not yet tried is tried against the rest, so
+# a long literal of one type costs one pass.
+fn c_elems_meet(mut &em: Emitter, elems: list[ast.Expr]) -> ast.Ty {
+	mut tys: list[ast.Ty] = []
+	for e in elems {
+		tys.append(c_infer(em, e))
+	}
+
+	mut tried: list[ast.Ty] = []
+	for t in tys {
+		continue if c_is_unknown(t) or c_ty_in(tried, t)
+		tried.append(t)
+		return t if c_all_fit(em, t, elems, tys)
+	}
+	return tys[0]
+}
+
+fn c_ty_in(ts: list[ast.Ty], t: ast.Ty) -> bool {
+	for x in ts {
+		return true if ast.ty_eq(x, t)
+	}
+	return false
+}
+
+# c_all_fit is "every element is `want`, or a literal `want` adopts"
+fn c_all_fit(mut &em: Emitter, want: ast.Ty, elems: list[ast.Expr], tys: list[ast.Ty]) -> bool {
+	mut i := 0
+	for e in elems {
+		ok := ast.ty_eq(tys[i], want) or check.chk_lit_fits(em, want, e)
+		i = i + 1
+		return false if not ok
+	}
+	return true
 }
 
 # c_infer_fill types `[v; N]` from the FILL VALUE and never from the count: the form is a
@@ -23777,7 +23819,7 @@ fn c_map_lit_ty(mut &em: Emitter, ks: list[ast.Expr], vs: list[ast.Expr]) -> ast
 	return ast.Ty.TMap(ast.Ty.TUnknown, ast.Ty.TUnknown) if ks.len() == 0
 	return ast.Ty.TMap(c_infer(em, ks[0]), c_gen_variant_join(em, vs)) if c_open_variant_base(em, vs[0]) != ""
 
-	return ast.Ty.TMap(c_infer(em, ks[0]), c_infer(em, vs[0]))
+	return ast.Ty.TMap(c_elems_meet(em, ks), c_elems_meet(em, vs))
 }
 
 pub fn c_is_maplit(e: ast.Expr) -> bool {

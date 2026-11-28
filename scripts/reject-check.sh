@@ -4309,43 +4309,42 @@ fn main() {
 EOF
 
 # A LIST LITERAL WITH NO DECLARED TYPE FOLLOWS THE BINDING RULE wherever it stands (#481): its
-# first element names the element type, and a later one of another number type is refused as
-# it is in `xs := [1, 2.5]`. In a tuple, a `print` or a `for` the literal used to be built
-# from its elements as they stood, and cc narrowed the 2.5 to 2 with a warning.
-reject a-float-after-an-int-in-a-tuples-list E3036 'element 2 of this list literal is int, and this gives float' <<'EOF'
+# elements meet at one type, and an element that fits none of theirs is refused as it is in
+# `xs := [1, "s"]`. In a tuple, a `print` or a `for` the literal used to be built from its
+# elements as they stood. Both orders are refused (#518): the meet never reads source order.
+reject a-str-after-an-int-in-a-tuples-list E3036 'element 2 of this list literal is int, and this gives str' <<'EOF'
 fn main() {
-	t := (1, [1, 2.5])
+	t := (1, [1, "s"])
 	print t
 }
 EOF
 
-reject a-float-after-an-int-in-a-printed-list E3036 'element 2 of this list literal is int, and this gives float' <<'EOF'
+reject an-int-after-a-str-in-a-printed-list E3036 'element 2 of this list literal is str, and this gives int' <<'EOF'
 fn main() {
-	print [1, 2.5]
+	print ["s", 1]
 }
 EOF
 
-reject a-float-name-after-an-int-in-a-tuples-list E3036 'element 2 of this list literal is int, and this gives float' <<'EOF'
+reject a-float-name-after-an-int-name-in-a-tuples-list E3036 'element 2 of this list literal is int, and this gives float' <<'EOF'
 fn main() {
+	n := 3
 	f := 2.5
-	print (1, [3, f])
+	print (1, [n, f])
 }
 EOF
 
-reject a-byte-after-an-int-in-a-tuples-list E3036 'element 2 of this list literal is int, and this gives byte' <<'EOF'
+reject a-byte-after-an-out-of-range-int-in-a-tuples-list E3036 'element 2 of this list literal is int, and this gives byte' <<'EOF'
 fn main() {
 	b: byte = 7
-	print (1, [3, b])
+	print (1, [300, b])
 }
 EOF
 
-reject a-float-after-an-int-in-a-for-list E3036 'element 2 of this list literal is int, and this gives float' <<'EOF'
+reject a-str-after-an-int-in-a-for-list E3036 'element 2 of this list literal is int, and this gives str' <<'EOF'
 fn main() {
-	mut s := 0.0
-	for e in [1, 2.5] {
-		s = s + float(e)
+	for e in [1, "s"] {
+		print e
 	}
-	print s
 }
 EOF
 

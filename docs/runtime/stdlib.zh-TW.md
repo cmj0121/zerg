@@ -221,24 +221,27 @@ JSON 的讀與寫。它**刻意只有一份實作**:language server 與 logger �
 正確的 tag。沒有 `fields()`:
 `list[Field]` 不是 variant,所以呼叫端自己寫 `mut fs: list[json.Field] = []`。
 
-| 函式                                                  | 摘要                                 |
-| ----------------------------------------------------- | ------------------------------------ |
-| `encode(v: Val) -> str`                               | 值寫成 JSON 文字——單行,欄位照原順序  |
-| `decode(s: str) -> Val`                               | JSON 文字讀成值;格式錯誤會 **raise** |
-| `get(v: Val, key: str) -> Val`                        | `key` 上的值,不存在則 `Null`         |
-| `walk(v, a, b) -> Val` / `walk3(v, a, b, c)`          | 一次走兩層或三層 key                 |
-| `has(v: Val, key: str) -> bool`                       | 存在,而且不是 `null`                 |
-| `as_str` / `as_int` / `as_list`                       | 裡面的東西,否則 `""` / `0` / `[]`    |
-| `is_null(v: Val) -> bool`                             | 這個值是 JSON `null`                 |
-| `null()` / `of_str(s)` / `of_list(xs)` / `of_obj(fs)` | 建一個 `Val`                         |
-| `put(fs, k, v)` / `put_str` / `put_int` / `put_bool`  | 往 `list[Field]` 追加一個欄位        |
+| 函式                                                    | 摘要                                          |
+| ------------------------------------------------------- | --------------------------------------------- |
+| `encode(v: Val) -> str`                                 | 值寫成 JSON 文字——單行,欄位照原順序           |
+| `decode(s: str) -> Val`                                 | JSON 文字讀成值;格式錯誤會 **raise**          |
+| `get(v: Val, key: str) -> Val`                          | `key` 上的值,不存在則 `Null`                  |
+| `walk(v, a, b) -> Val` / `walk3(v, a, b, c)`            | 一次走兩層或三層 key                          |
+| `has(v: Val, key: str) -> bool`                         | 存在,而且不是 `null`                          |
+| `as_str` / `as_int` / `as_float` / `as_list`            | 裡面的東西,否則 `""` / `0` / `0.0` / `[]`     |
+| `is_null(v: Val) -> bool`                               | 這個值是 JSON `null`                          |
+| `null()` / `of_str` / `of_float` / `of_list` / `of_obj` | 建一個 `Val`                                  |
+| `put(fs, k, v)` / `put_str` / `put_int` / `put_float`   | 往 `list[Field]` 追加一個欄位;另有 `put_bool` |
 
 **accessor 都是 TOTAL 的。** 跟數字要字串會得到 `""`,跟非 object 要 key 會得到 `Null`——這對「輸入來自另一個
 程式」是刻意的:形狀不對的欄位應該得到預設值與一個回覆,而不是一個把整個 session 帶走的 abort。真正致命的缺欄位,
 呼叫端自己問 `has`。有一個後果要知道:key 存在但值是 `null` 會被讀成**不存在**,因為 `has` 是寫在 `get` 上的。
 
-**數字是整數。** `Val` 沒有 float variant,所以 `decode("1.5")` 是 `Int(1)`——小數與指數會被吃掉並**丟棄**,
-不是拒絕。這是 language server 需要的形狀,至今沒變;寫在這裡是因為沒被告知的讀者,只會從一個錯的答案得知。
+**數字依寫法是 `Int` 或 `Float`。** 有小數或指數就是 `Float`——`decode("1.5")`、`decode("1e3")`——只有一串數字
+則仍是 `Int`。`as_float` 把 `Int` 讀成同一個數,因為 JSON 的 `1` 與 `1.0` 是同一個值;`Float` 的 `as_int` 是預設值
+`0`。超出 float 範圍的數字會 raise,而不是回答一個無限大。`encode` 用 15、16、17 位數中最少、且讀回仍是同一個
+float 的寫法輸出 `Float`,整數值保留 `.0` 好讓它再 decode 回 `Float`,遇到 NaN 或無限大則 raise,因為 JSON
+沒有對應的 token。
 
 **`encode` 只跳脫 JSON 保留的東西。** 兩個分隔符、五個短跳脫,以及 `0x20` 以下的控制位元組寫成 `\u00XX`。
 `0x20` 以上一律原樣通過,這正是 UTF-8 得以原封不動的原因:多位元組的碼點本來就是合法的 JSON 文字。所以先
